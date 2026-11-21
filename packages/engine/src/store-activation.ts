@@ -60,8 +60,9 @@ import { resolveCollaborationLocation, type CollaborationLocation, type Collabor
 import {
   COLLABORATION_COLUMNS,
   admitCollaborationImage,
-  adoptResolvedBinding,
   beginBindingClaim,
+  clearBindingClaim,
+  readBindingClaim,
   assertCollaborationTargetAdmission,
   assertControlCheckoutScope,
   initializeCollaborationStore,
@@ -1302,17 +1303,34 @@ async function repairOwnRestorePublication(
   }
   if (recorded === null) return null;
   // This IS the generation this request published: finish the post-publication
-  // steps (directory durability and the checkout binding) and serve it.
+  // steps (directory durability and the checkout binding) and serve it. A
+  // PERSISTENT failure keeps returning the SAME named partial — never an ordinary
+  // error — so the operator always sees the published authority and its recovery.
   const location = resolveCollaborationLocation(context);
-  syncDirectoryEntry(dirname(dbPath));
-  writeCollaborationBinding(context, {
-    repoKey: location.repoKey,
-    mode: location.mode,
-    storeId: recorded.storeId,
-    epoch: recorded.epoch,
-    binding: "active",
-  });
-  return readCollaborationAuthority(context);
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: recorded.storeId,
+      epoch: recorded.epoch,
+      binding: "active",
+    });
+    return await readCollaborationAuthority(context);
+  } catch (error) {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `The collaboration authority was PUBLISHED at ${dbPath} (store ${recorded.storeId}, epoch ${recorded.epoch}) but this ` +
+        `retry could not finish binding it (${messageOf(error)}). The database is already in place and is never overwritten: ` +
+        `repair the reported cause (for example a read-only harness directory) and re-run the SAME restore command.`,
+      {
+        phase: "published",
+        authority: { storeId: recorded.storeId, epoch: recorded.epoch, repoKey: location.repoKey, mode: location.mode, path: dbPath },
+        failure: messageOf(error),
+        recovery: "Repair the reported cause, then re-run the same restore command: it repairs the binding and returns the published authority.",
+      },
+    );
+  }
 }
 
 /**
@@ -1542,10 +1560,11 @@ export async function backupRepositoryStores(
     linkSync(privateCollaborationImage, collaborationImagePath);
     linked.push(collaborationImagePath);
   } catch (error) {
-    // Only THIS attempt's credential is ours to remove: a loser must never unlink
-    // the claim a competing winner published.
+    // Ownership: remove the attempt credential only when THIS attempt wrote it, and
+    // only the PUBLIC names this attempt itself linked. Another attempt's claim,
+    // private images or published names are never unlinked.
     if (linked.length === 0) removeOwnedPairClaim(claimPath, attempt);
-    for (const path of [...privatePaths, ...linked]) rmSync(path, { force: true });
+    for (const path of linked) rmSync(path, { force: true });
     for (const path of privatePaths) {
       rmSync(`${path}-wal`, { force: true });
       rmSync(`${path}-shm`, { force: true });
@@ -1631,46 +1650,20 @@ async function resumeInterruptedPair(
   // A missing side is copied again ONLY at the generation the attempt recorded,
   // and an existing side is REUSED exactly as verified: an authority that moved
   // on is a new generation, not a resume.
-  if (!existsSync(paths.executionImagePath)) {
-    // FIRST choice: this attempt's own verified private image, reused byte-for-byte
-    // (a link, never a copy) — the live DB is never re-read for a side the attempt
-    // already froze.
-    if (reusePrivateImage(claim.execution, paths.executionImagePath)) {
-      // reused
-    } else {
-    const copy = await backupStore(context, { out: paths.executionImagePath });
-    if (
-      copy.storeId !== claim.execution.storeId ||
-      copy.epoch !== claim.execution.epoch ||
-      copy.revision !== claim.execution.revision ||
-      copy.catalogRevision !== claim.execution.catalogRevision
-    ) {
+  // A missing side is recreated ONLY from this attempt's own retained private image
+  // (verified, then linked). There is no fallback to the live authority: a pair is
+  // never assembled from bytes the attempt did not itself verify.
+  for (const [side, path, what] of [
+    [claim.execution, paths.executionImagePath, "execution"],
+    [claim.collaboration, paths.collaborationImagePath, "collaboration"],
+  ] as const) {
+    if (existsSync(path)) continue;
+    if (!reusePrivateImage(side, path)) {
       throw incompletePair(
-        `The execution authority is no longer the generation this interrupted attempt recorded (store ${claim.execution.storeId} ` +
-          `epoch ${claim.execution.epoch} revision ${claim.execution.revision}); its missing image cannot be re-created as ` +
-          `that attempt. Pass --out <path> naming a new destination.`,
+        `The interrupted attempt's ${what} image ${path} is missing and its own retained verified image ` +
+        `(${side.privatePath}) is gone, so the attempt cannot be completed. A pair is never re-copied from the live ` +
+        `authority; pass --out <path> naming a new destination and take a fresh backup.`,
       );
-    }
-    }
-  }
-  if (!existsSync(paths.collaborationImagePath)) {
-    if (reusePrivateImage(claim.collaboration, paths.collaborationImagePath)) {
-      // reused
-    } else {
-    await writeCollaborationImage(location.dbPath, paths.collaborationImagePath);
-    const inspection = await inspectCollaborationImage(paths.collaborationImagePath, location);
-    if (
-      inspection.authority.storeId !== claim.collaboration.storeId ||
-      inspection.authority.epoch !== claim.collaboration.epoch ||
-      inspection.authority.revision !== claim.collaboration.revision ||
-      inspection.authority.catalogRevision !== claim.collaboration.catalogRevision
-    ) {
-      rmSync(paths.collaborationImagePath, { force: true });
-      throw incompletePair(
-        `The collaboration authority is no longer the generation this interrupted attempt recorded; its missing image ` +
-          `cannot be re-created as that attempt. Pass --out <path> naming a new destination.`,
-      );
-    }
     }
   }
   // Publication cleans up the attempt's scratch images.
@@ -2197,6 +2190,7 @@ export async function restoreCollaborationBackup(
     // contract: a failure in either is reported as the named published partial.
     syncDirectoryEntry(dir);
     writeCollaborationBinding(context, target);
+    clearBindingClaim(context);
     return await readCollaborationAuthority(context);
   } catch (error) {
     // The database IS published: name the partial and how to finish it, never a
@@ -2353,10 +2347,35 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
       handle.close();
     }
   }
+  // An interrupted ATTEMPT for ANOTHER scope is never discarded by a retargeted
+  // checkout: the claim is evidence of a switch that must be finished or removed
+  // deliberately.
+  const claim = readBindingClaim(context);
+  if (claim !== null && (claim.repoKey !== location.repoKey || claim.mode !== location.mode)) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `An interrupted activation claim for repository ${claim.repoKey} (${claim.mode}) is recorded in this checkout, which now ` +
+        `resolves to ${location.repoKey} (${location.mode}). A mismatched attempt is never discarded or replaced silently: ` +
+        `finish that activation under its own scope or remove the claim deliberately (mstar path resolve). Nothing was ` +
+        `created or changed.`,
+    );
+  }
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {
-    await adoptResolvedBinding(context, location, authority);
-    return authority;
+    // The standard: an ACTIVE authority is NEVER adopted by `store init` — not on
+    // the first attempt, not on a later one. Only a finalized binding proves this
+    // checkout owns it; otherwise the explicit activation that published it (or
+    // the recorded restore) is the one supported way to acquire the binding.
+    const binding = readCollaborationBinding(context);
+    if (binding !== null && binding.state === "active" && binding.storeId === authority.storeId) return authority;
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout holds no finalized binding for the ACTIVE collaboration authority store ${authority.storeId} at ` +
+        `${location.dbPath}, and store init never adopts an active authority. Acquire the binding through the verb that ` +
+        `published it: mstar store collaboration activate --manifest <cutover-manifest> --operator <name> (reviewed cutover) ` +
+        `or mstar store activate --manifest <applied-manifest> --operator <name> (file-era import), or restore its verified ` +
+        `pair. Nothing was adopted or changed.`,
+    );
   }
   const published = await writeCollaborationStage(location, ({ db, authority: current }) => {
     if (current.state === "active") return current;
@@ -2390,8 +2409,15 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
     }
     return { ...current, state: "active" as const };
   });
-  // The binding is adopted AFTER the publication commits, outside the transaction.
-  await adoptResolvedBinding(context, location, published);
+  // This checkout CREATED that fresh generation (no authority pre-existed), so it
+  // records its own binding directly; nothing is adopted from another checkout.
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: published.storeId,
+    epoch: published.epoch,
+    binding: "active",
+  });
   return published;
 }
 
@@ -3153,6 +3179,7 @@ export async function activateStore(
       epoch: published.epoch,
       binding: "active",
     });
+    clearBindingClaim(context);
     return { ...published, replayed: true };
   }
 
@@ -3344,6 +3371,7 @@ export async function activateStore(
       epoch: activated.epoch,
       binding: "active",
     });
+    clearBindingClaim(context);
     return activated;
   }).catch((error: unknown) => {
     // Nothing was published: the checkout keeps the binding it had before this

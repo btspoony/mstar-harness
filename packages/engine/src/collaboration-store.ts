@@ -1386,6 +1386,15 @@ export function readBindingClaim(context: StoreContext): BindingClaim | null {
   };
 }
 
+/** Remove this attempt's claim once its generation is finalized. */
+export function clearBindingClaim(context: StoreContext): void {
+  try {
+    rmSync(bindingClaimPath(context), { force: true });
+  } catch {
+    // scratch removal is best-effort
+  }
+}
+
 /** Write this attempt's claim and return the rollback that removes it. Never touches the primary binding. */
 export function beginBindingClaim(
   context: StoreContext,
@@ -1458,68 +1467,6 @@ function claimProvenByLane(db: StoreDb, authority: CollaborationAuthority, claim
     }
   }
   return false;
-}
-
-/**
- * Adopt or finalize this checkout's binding for the authority the bootstrap or a
- * supported verb resolved. This is the ONE supported adoption point: a fresh
- * replacement clone (no binding) and an interrupted activation (a `claimed`
- * binding for the same generation) both acquire/refresh the ACTIVE binding here,
- * deliberately. A binding for a DIFFERENT store is never adopted by drift.
- */
-export async function adoptResolvedBinding(
-  context: StoreContext,
-  location: CollaborationLocation,
-  authority: CollaborationAuthority,
-): Promise<void> {
-  const binding = readCollaborationBinding(context);
-  if (binding !== null && binding.storeId !== authority.storeId) {
-    throw new StoreError(
-      "collaboration.stale-binding",
-      `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` +
-        `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by ` +
-        `drift; inspect it with mstar path resolve. Nothing was modified.`,
-    );
-  }
-  if (binding !== null && binding.state === "active") return;
-  // An interrupted ATTEMPT may leave a claim. It is promoted ONLY when the lane
-  // itself records the authorized publication at exactly that generation; a bare
-  // claim (an aborted or forged attempt) is dropped and never becomes a binding.
-  const claim = readBindingClaim(context);
-  if (claim === null) {
-    if (authority.state !== "active") return;
-    writeCollaborationBinding(context, {
-      repoKey: location.repoKey,
-      mode: location.mode,
-      storeId: authority.storeId,
-      epoch: authority.epoch,
-      binding: "active",
-    });
-    return;
-  }
-  const proven = await readCollaborationStage(location, ({ db }) => claimProvenByLane(db, authority, claim));
-  if (!proven) {
-    // Without the recorded publication the claim proves nothing: drop it, and an
-    // ACTIVE lane with no binding still refuses (it is never a fresh clone).
-    rmSync(bindingClaimPath(context), { force: true });
-    if (authority.state === "active") {
-      throw new StoreError(
-        "collaboration.stale-binding",
-        `An interrupted activation claim for store ${claim.storeId} epoch ${claim.epoch} is not backed by any recorded ` +
-          `publication in the lane at ${location.dbPath}, so it cannot be promoted. Re-run the activation that publishes this ` +
-          `generation (or bind the checkout deliberately); nothing was adopted.`,
-      );
-    }
-    return;
-  }
-  writeCollaborationBinding(context, {
-    repoKey: location.repoKey,
-    mode: location.mode,
-    storeId: authority.storeId,
-    epoch: authority.epoch,
-    binding: "active",
-  });
-  rmSync(bindingClaimPath(context), { force: true });
 }
 
 /**

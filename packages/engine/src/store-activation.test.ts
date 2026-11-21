@@ -29,6 +29,7 @@ import {
   readCollaborationAuthority,
   readCollaborationBinding,
   readCollaborationStage,
+  writeCollaborationBinding,
   writeCollaborationStage,
 } from "./collaboration-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -1810,7 +1811,7 @@ describe("collaboration lifecycle", () => {
     expect(lane).toEqual({ issues: { n: 0 } });
   });
 
-  test("a fresh replacement clone adopts the published lane only through the supported init path", async () => {
+  test("an unbound clone refuses store init on every attempt and never adopts an active authority", async () => {
     const repoKey = `fixture-replacement-${repoSequence++}`;
     const origin = repoWorkspaceWithKey("replacement-origin-", repoKey);
     (await initializeStore(origin.context)).close();
@@ -1818,28 +1819,275 @@ describe("collaboration lifecycle", () => {
     await captureOne(origin, "op-origin-capture");
 
     // A replacement clone: same repository, its own execution store, no binding.
-    // An ACTIVE authority with no binding is NOT fresh, so an ordinary verb
-    // refuses until the checkout acquires the binding deliberately.
+    // The standard forbids auto-adoption on the FIRST and every LATER init.
     const clone = repoWorkspaceWithKey("replacement-clone-", repoKey);
     (await initializeStore(clone.context)).close();
-    await expect(captureOne(clone, "op-clone-before-adoption")).rejects.toMatchObject({
+    await expect(ensureCollaborationAuthority(clone.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(ensureCollaborationAuthority(clone.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(captureOne(clone, "op-clone-before-adoption")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // No binding was written by any refused attempt.
+    expect(existsSync(join(clone.harness, "collaboration-binding.json"))).toBe(false);
+    // The lane stayed untouched by the refused clone.
+    const lane = await readCollaborationStage(resolveCollaborationLocation(origin.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 1 } });
+  });
+
+  test("an unfenced legacy owner is refused before it reaches the repository lane", async () => {
+    const fixture = repoWorkspace("binding-legacy-owner-");
+    await ensureCollaborationAuthority(fixture.context);
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
+    store.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Legacy owner row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'legacy-owner')",
+      )
+      .run();
+    store.close();
+
+    await expect(
+      captureIssue(
+        fixture.context,
+        {
+          projectId: "_default",
+          title: "Refused by the legacy owner",
+          kind: "bug",
+          severity: "high",
+          impact: "the lane must not be reachable",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/legacy-owner.md",
+          rootCauseKey: "legacy-owner",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-legacy-owner",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-legacy-owner", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a retargeted checkout never adopts another repository's authority", async () => {
+    const bound = repoWorkspaceWithKey("binding-retarget-a-", `fixture-retarget-a-${repoSequence++}`);
+    await ensureCollaborationAuthority(bound.context);
+    const otherId = `fixture-retarget-b-${repoSequence++}`;
+    const other = repoWorkspaceWithKey("binding-retarget-b-", otherId);
+    await ensureCollaborationAuthority(other.context);
+
+    // The bound checkout's config now names the OTHER repository.
+    writeFileSync(join(bound.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${otherId}\n`);
+    await expect(ensureCollaborationAuthority(bound.context)).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });
-    // The supported init/activate path adopts it explicitly…
-    const adopted = await ensureCollaborationAuthority(clone.context);
-    expect(readCollaborationBinding(clone.context)).toMatchObject({ state: "active", storeId: adopted.storeId });
-    // …and then ordinary verbs work.
-    await captureOne(clone, "op-clone-capture");
-
-    // The clone's capture reached the shared lane (one issue, a second occurrence).
-    const lane = await readCollaborationStage(resolveCollaborationLocation(clone.context), ({ db }) => ({
+    await expect(
+      captureIssue(
+        bound.context,
+        {
+          projectId: "_default",
+          title: "Refused after a retarget",
+          kind: "bug",
+          severity: "high",
+          impact: "a bound checkout never drifts",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/retarget.md",
+          rootCauseKey: "retarget",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-retarget",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-retarget", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The other repository's lane was not written by the refused checkout.
+    const lane = await readCollaborationStage(resolveCollaborationLocation(other.context), ({ db }) => ({
       issues: db.prepare("select count(*) as n from issues").get(),
-      occurrences: db.prepare("select count(*) as n from occurrences").get(),
     }));
-    expect(lane).toEqual({ issues: { n: 1 }, occurrences: { n: 2 } });
-    // The binding exists because the INIT path recorded it — a read never does.
-    expect(existsSync(join(clone.harness, "collaboration-binding.json"))).toBe(true);
+    expect(lane).toEqual({ issues: { n: 0 } });
   });
+
+
+  test("an unfenced legacy owner is refused before it reaches the repository lane", async () => {
+    const fixture = repoWorkspace("binding-legacy-owner-");
+    await ensureCollaborationAuthority(fixture.context);
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
+    store.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Legacy owner row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'legacy-owner')",
+      )
+      .run();
+    store.close();
+
+    await expect(
+      captureIssue(
+        fixture.context,
+        {
+          projectId: "_default",
+          title: "Refused by the legacy owner",
+          kind: "bug",
+          severity: "high",
+          impact: "the lane must not be reachable",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/legacy-owner.md",
+          rootCauseKey: "legacy-owner",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-legacy-owner",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-legacy-owner", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a retargeted checkout never adopts another repository's authority", async () => {
+    const bound = repoWorkspaceWithKey("binding-retarget-a-", `fixture-retarget-a-${repoSequence++}`);
+    await ensureCollaborationAuthority(bound.context);
+    const otherId = `fixture-retarget-b-${repoSequence++}`;
+    const other = repoWorkspaceWithKey("binding-retarget-b-", otherId);
+    await ensureCollaborationAuthority(other.context);
+
+    // The bound checkout's config now names the OTHER repository.
+    writeFileSync(join(bound.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${otherId}\n`);
+    await expect(ensureCollaborationAuthority(bound.context)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    await expect(
+      captureIssue(
+        bound.context,
+        {
+          projectId: "_default",
+          title: "Refused after a retarget",
+          kind: "bug",
+          severity: "high",
+          impact: "a bound checkout never drifts",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/retarget.md",
+          rootCauseKey: "retarget",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-retarget",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-retarget", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The other repository's lane was not written by the refused checkout.
+    const lane = await readCollaborationStage(resolveCollaborationLocation(other.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+
+  test("an unfenced legacy owner is refused before it reaches the repository lane", async () => {
+    const fixture = repoWorkspace("binding-legacy-owner-");
+    await ensureCollaborationAuthority(fixture.context);
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
+    store.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Legacy owner row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'legacy-owner')",
+      )
+      .run();
+    store.close();
+
+    await expect(
+      captureIssue(
+        fixture.context,
+        {
+          projectId: "_default",
+          title: "Refused by the legacy owner",
+          kind: "bug",
+          severity: "high",
+          impact: "the lane must not be reachable",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/legacy-owner.md",
+          rootCauseKey: "legacy-owner",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-legacy-owner",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-legacy-owner", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a retargeted checkout never adopts another repository's authority", async () => {
+    const bound = repoWorkspaceWithKey("binding-retarget-a-", `fixture-retarget-a-${repoSequence++}`);
+    await ensureCollaborationAuthority(bound.context);
+    const otherId = `fixture-retarget-b-${repoSequence++}`;
+    const other = repoWorkspaceWithKey("binding-retarget-b-", otherId);
+    await ensureCollaborationAuthority(other.context);
+
+    // The bound checkout's config now names the OTHER repository.
+    writeFileSync(join(bound.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${otherId}\n`);
+    await expect(ensureCollaborationAuthority(bound.context)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    await expect(
+      captureIssue(
+        bound.context,
+        {
+          projectId: "_default",
+          title: "Refused after a retarget",
+          kind: "bug",
+          severity: "high",
+          impact: "a bound checkout never drifts",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/retarget.md",
+          rootCauseKey: "retarget",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-retarget",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-retarget", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The other repository's lane was not written by the refused checkout.
+    const lane = await readCollaborationStage(resolveCollaborationLocation(other.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
 
   test("a reviewed file-era import stages the lane and publishes it with a single epoch bump", async () => {
     const fixture = repoWorkspace("collab-file-era-");
@@ -2236,7 +2484,6 @@ describe("repository backup pair", () => {
     expect(readFileSync(`${out}.execution.db`, "utf8")).toBe("a competing attempt's execution image\n");
     expect(existsSync(out)).toBe(false);
     expect(existsSync(`${out}.collaboration.db`)).toBe(false);
-    expect(readdirSync(dirname(out)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   test("overlapping attempts never publish a pair with a missing image", async () => {
@@ -2288,8 +2535,16 @@ describe("repository backup pair", () => {
 
     const second = repoWorkspaceWithKey("clone-b-", repoKey);
     (await initializeStore(second.context)).close();
-    // A clone acquires the shared lane's binding through the supported init path.
-    await ensureCollaborationAuthority(second.context);
+    // The clone is already bound to the shared lane's authority (adoption is a
+    // separate, explicit verb); this case is about cross-root history.
+    const shared = await readCollaborationStage(resolveCollaborationLocation(first.context), ({ authority }) => authority);
+    writeCollaborationBinding(second.context, {
+      repoKey: shared.repoKey,
+      mode: shared.mode,
+      storeId: shared.storeId,
+      epoch: shared.epoch,
+      binding: "active",
+    });
     const out = join(second.harness, "archived", "recovery", "pair.json");
     const receipt = await backupRepositoryStores(second.context, { out });
     expect(receipt.collaboration.authority.storeId).toBe((await ensureCollaborationAuthority(second.context)).storeId);
@@ -2693,7 +2948,7 @@ describe("control-checkout binding states", () => {
     expect(existsSync(join(fixture.harness, "collaboration-binding.json"))).toBe(false);
   });
 
-  test("a claim backed by the recorded publication is finalized by the supported init", async () => {
+  test("a claim backed by the recorded publication is finalized by the explicit activation replay", async () => {
     const fixture = await stagedFixture("binding-claim-proven-");
     const activation = await activateStore(fixture.context, fixture.apply, attestation());
     const location = resolveCollaborationLocation(fixture.context);
@@ -2707,7 +2962,11 @@ describe("control-checkout binding states", () => {
       epoch: activation.epoch,
     });
     await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    const adopted = await ensureCollaborationAuthority(fixture.context);
+    // store init refuses (never adopts)…
+    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // …and the explicit activation replay, which verifies the recorded publication
+    // and the current repo/mode/store/epoch, finalizes it.
+    const adopted = await activateStore(fixture.context, fixture.apply, attestation());
     expect(adopted.storeId).toBe(activation.storeId);
     expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: activation.storeId, epoch: activation.epoch });
     expect(existsSync(join(fixture.harness, "collaboration-binding.claim.json"))).toBe(false);
@@ -2746,16 +3005,58 @@ describe("control-checkout binding states", () => {
     expect(existsSync(join(fixture.harness, "collaboration-binding.claim.json"))).toBe(false);
   });
 
-  test("an active authority with no binding is refused until the supported init adopts it", async () => {
-    const repoKey = `fixture-adoption-${repoSequence++}`;
-    const origin = repoWorkspaceWithKey("adoption-origin-", repoKey);
-    (await initializeStore(origin.context)).close();
-    await ensureCollaborationAuthority(origin.context);
-    const clone = repoWorkspaceWithKey("adoption-clone-", repoKey);
-    (await initializeStore(clone.context)).close();
-    await expect(openCollaborationStore(clone.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    await ensureCollaborationAuthority(clone.context);
-    expect((await openCollaborationStore(clone.context, "read")).authority.state).toBe("active");
+});
+
+describe("switch safety", () => {
+  /** A checkout with both authorities and its binding recorded by the creating verb. */
+  async function boundWorkspace(name: string): Promise<Fixture> {
+    const fixture = repoWorkspace(name);
+    (await initializeStore(fixture.context)).close();
+    await ensureCollaborationAuthority(fixture.context);
+    return fixture;
+  }
+
+  test("an interrupted first switch plus an origin change refuses every init and keeps the claim", async () => {
+    const repoA = `fixture-switch-a-${repoSequence++}`;
+    const a = repoWorkspaceWithKey("switch-a-", repoA);
+    (await initializeStore(a.context)).close();
+    const authorityA = await ensureCollaborationAuthority(a.context);
+    // The first switch to B starts (claim for A), then the origin changes to B.
+    beginBindingClaim(a.context, { repoKey: authorityA.repoKey, mode: authorityA.mode, storeId: authorityA.storeId, epoch: authorityA.epoch });
+    const repoB = `fixture-switch-b-${repoSequence++}`;
+    writeFileSync(join(a.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoB}\n`);
+    const b = repoWorkspaceWithKey("switch-b-", repoB);
+    (await initializeStore(b.context)).close();
+    await ensureCollaborationAuthority(b.context);
+
+    // FIRST and SECOND init both refuse; the mismatched claim is never discarded.
+    await expect(ensureCollaborationAuthority(a.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(ensureCollaborationAuthority(a.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(existsSync(join(a.harness, "collaboration-binding.claim.json"))).toBe(true);
+    // Ordinary access to B's lane is refused too (no binding was adopted).
+    await expect(readCollaborationAuthority(a.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // A's own binding is untouched.
+    expect(readCollaborationBinding(a.context)).toMatchObject({ state: "active", storeId: authorityA.storeId });
+  });
+
+  test("a mismatched claim is never promoted and leaves the previous binding unchanged", async () => {
+    const fixture = await boundWorkspace("binding-mismatched-claim-");
+    const before = readFileSync(join(fixture.harness, "collaboration-binding.json"));
+    const location = resolveCollaborationLocation(fixture.context);
+    const live = await readCollaborationStage(location, ({ authority }) => authority);
+    // A claim naming ANOTHER generation: unproven by the lane, so never promoted.
+    beginBindingClaim(fixture.context, { repoKey: location.repoKey, mode: location.mode, storeId: `${live.storeId}-other`, epoch: live.epoch + 5 });
+    // The checkout still owns the live generation, so the bootstrap serves it — but
+    // the mismatched claim is neither promoted nor replaced, and the primary
+    // binding is byte-identical.
+    const authority = await ensureCollaborationAuthority(fixture.context);
+    expect(authority.storeId).toBe(live.storeId);
+    expect(readFileSync(join(fixture.harness, "collaboration-binding.json"))).toEqual(before);
+    const claim = JSON.parse(readFileSync(join(fixture.harness, "collaboration-binding.claim.json"), "utf8")) as {
+      storeId: string;
+      epoch: number;
+    };
+    expect(claim).toMatchObject({ storeId: `${live.storeId}-other`, epoch: live.epoch + 5 });
   });
 });
 
@@ -2773,6 +3074,10 @@ describe("pair attempt ownership and restore repair", () => {
     const receipt = await backupRepositoryStores(fixture.context, { out });
     const verifiedExecution = readFileSync(pairImage(receipt, "execution"));
     writeAttemptClaim(out, receipt);
+    // The crash window: the collaboration side was never published, and the
+    // attempt's own verified private image for it is retained beside the pair.
+    const claim = JSON.parse(readFileSync(`${out}.pair-attempt.json`, "utf8")) as { collaboration: { privatePath: string } };
+    copyFileSync(pairImage(receipt, "collaboration"), claim.collaboration.privatePath);
     rmSync(out, { force: true });
     rmSync(pairImage(receipt, "collaboration"), { force: true });
 
@@ -2813,6 +3118,79 @@ describe("pair attempt ownership and restore repair", () => {
     expect(statSync(pairImage(resumed, "collaboration")).ino).toBe(privateInode);
     expect(existsSync(claim.collaboration.privatePath)).toBe(false);
     expect(existsSync(`${out}.pair-attempt.json`)).toBe(false);
+  });
+
+
+  test("a failing attempt never unlinks another attempt's claim or files", async () => {
+    const fixture = await pairFixture("attempt-foreign-claim-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    mkdirSync(dirname(out), { recursive: true });
+    // A foreign attempt's evidence: its claim, its private image and its published
+    // execution name.
+    const foreignClaim = {
+      version: 1,
+      attempt: "foreign-attempt",
+      takenAt: "2026-11-21T00:00:00.000Z",
+      execution: { name: basename(`${out}.execution.db`), privatePath: `${out}.foreign-execution.private.tmp`, sha256: "a".repeat(64), storeId: "store-foreign", epoch: 1, revision: 1, catalogRevision: 0 },
+      collaboration: { name: basename(`${out}.collaboration.db`), privatePath: `${out}.foreign-collaboration.private.tmp`, sha256: "b".repeat(64), storeId: "store-foreign", epoch: 1, revision: 1, catalogRevision: 0 },
+    };
+    writeFileSync(`${out}.pair-attempt.json`, `${JSON.stringify(foreignClaim, null, 2)}\n`);
+    writeFileSync(`${out}.foreign-execution.private.tmp`, "foreign execution bytes\n");
+    writeFileSync(`${out}.foreign-collaboration.private.tmp`, "foreign collaboration bytes\n");
+
+    // This attempt cannot publish (the destination is occupied by foreign evidence)
+    // and its failure path must leave every foreign file intact.
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    expect(readFileSync(`${out}.pair-attempt.json`, "utf8")).toContain("foreign-attempt");
+    expect(readFileSync(`${out}.foreign-execution.private.tmp`, "utf8")).toBe("foreign execution bytes\n");
+    expect(readFileSync(`${out}.foreign-collaboration.private.tmp`, "utf8")).toBe("foreign collaboration bytes\n");
+  });
+
+  test("a resume with no retained original refuses instead of re-copying from the live authority", async () => {
+    const fixture = await pairFixture("attempt-missing-original-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    writeAttemptClaim(out, receipt);
+    // The collaboration side was never published AND its retained private image is
+    // gone: the attempt cannot be completed from its own verified bytes.
+    rmSync(out, { force: true });
+    rmSync(pairImage(receipt, "collaboration"), { force: true });
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/cannot be completed/);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(false);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("a persistently failing post-publication step keeps returning the same named partial", async () => {
+    const fixture = await pairFixture("restore-repeat-partial-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+
+    const realWrite = collaborationStore.writeCollaborationBinding;
+    const spy = spyOn(collaborationStore, "writeCollaborationBinding").mockImplementation(() => {
+      throw new Error("simulated persistent binding failure");
+    });
+    try {
+      const first = await restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      const second = await restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      // Both attempts report the SAME named partial (published authority + recovery),
+      // never a generic error and never a create-only conflict.
+      expect(first).toMatchObject({ code: "collaboration.operation-partial" });
+      expect(second).toMatchObject({ code: "collaboration.operation-partial" });
+      expect((second as { details?: unknown }).details).toMatchObject({ phase: "published", authority: expect.objectContaining({ path: target }) });
+    } finally {
+      spy.mockRestore();
+    }
+    const repaired = await restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() });
+    expect(repaired.state).toBe("active");
+    void realWrite;
   });
 
   test("overlapping attempts: one winner, and a loser never unlinks the winner's credential", async () => {
