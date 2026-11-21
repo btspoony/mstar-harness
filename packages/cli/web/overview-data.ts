@@ -21,7 +21,7 @@
  */
 import type { OverviewDTO, OverviewMember, ReadEnvelope, ReadProjection } from "@mstar-harness/engine";
 
-import { asEnvelope, refusalMessage } from "./read-envelope";
+import { asEnvelope, collaborationGap, refusalMessage } from "./read-envelope";
 import {
   overviewModel,
   type Copy,
@@ -73,17 +73,17 @@ export function overviewCopy(copy: Copy): OverviewCopy {
  * own.
  */
 export function overviewFromEnvelope(envelope: ReadEnvelope<OverviewDTO>): OverviewModel {
-  const observation = envelope.collaboration;
+  const gap = collaborationGap(envelope);
   // A page may only present collaboration facts at all when the observation is
   // complete. `null` is a legacy envelope that discloses no observation (kept
   // compatible); an explicit partial/unavailable one downgrades every member it
   // answered, while projection-backed execution data stays usable.
   const data =
-    observation === null || observation.completeness === "complete"
+    gap === null
       ? envelope.data
       : undisclosedCollaborationMembers(
           envelope.data,
-          `The collaboration observation is ${observation.completeness} (${observation.code}); its members are not disclosed.`,
+          `The collaboration observation is ${gap.completeness} (${gap.code}); its members are not disclosed.`,
         );
   return overviewModel(data, { projection: envelope.projection satisfies ReadProjection });
 }
@@ -117,8 +117,9 @@ export function overviewOutcome(
         model: overviewFromEnvelope(result.envelope),
         // The footer states the STORE revision. `projection.generation` is a different
         // field in the same envelope and drifts from it, so the footer disagreed with
-        // every other screen's revision.
-        revision: result.envelope.storeRevision,
+        // every other screen's revision. A revision is a collaboration fact: an
+        // incomplete observation cannot vouch for it, so it is suppressed, not relabelled.
+        revision: collaborationGap(result.envelope) === null ? result.envelope.storeRevision : null,
       };
     case "error":
       return { kind: "failed", message: result.message };

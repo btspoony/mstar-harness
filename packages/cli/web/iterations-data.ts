@@ -18,7 +18,7 @@
  */
 import type { IterationDTO, IterationListDTO, ReadEnvelope } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
 import {
   iterationDetailModel,
   iterationListModel,
@@ -87,11 +87,16 @@ export async function readIterations(
 ): Promise<
   { status: "ready"; envelope: ReadEnvelope<IterationListDTO> } | { status: "error"; message: string }
 > {
-  return readAllListPages<IterationListDTO>(
+  const result = await readAllListPages<IterationListDTO>(
     fetchImpl,
     (offset) => iterationsPath(projectId, offset),
     signal,
   );
+  if (result.status !== "ready") return result;
+  // Membership, attribution and the total are catalog facts: a read the
+  // collaboration authority did not vouch for is not an iteration list.
+  const gap = requiredCollaborationRefusal(result.envelope);
+  return gap === null ? result : { status: "error", message: gap };
 }
 
 /** One record read. A `null` payload stays inside its envelope for the model to judge. */
@@ -116,6 +121,10 @@ export async function readIterationDetail(
     if (envelope === null) {
       return { status: "error", message: "The iteration read answered with something that is not a read envelope." };
     }
+    // The iteration itself is a catalog row: without a complete observation a
+    // null payload cannot be called absent.
+    const gap = requiredCollaborationRefusal(envelope);
+    if (gap !== null) return { status: "error", message: gap };
     return { status: "ready", envelope };
   } catch {
     return { status: "error", message: UNREACHABLE };

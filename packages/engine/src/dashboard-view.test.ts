@@ -251,9 +251,21 @@ describe("dashboard collaboration disclosure", () => {
   });
 
   test("a credential-shaped value in a refusal is redacted", () => {
-    const typed = dashboardFailure(new Error("transport refused token=sk-live-123 for the provider"));
-    expect(typed.message).not.toContain("sk-live-123");
-    expect(typed.message).toContain("{REDACTED}");
+    for (const [scheme, secret] of [
+      ["Bearer", "sk-live-bearer"],
+      ["Basic", "dXNlcjpwYXNz"],
+      ["Token", "tok-live-123"],
+    ] as const) {
+      const typed = dashboardFailure(new Error(`Authorization: ${scheme} ${secret}`));
+      expect(typed.message).not.toContain(secret);
+      expect(typed.message).toContain("{REDACTED}");
+    }
+    // A scheme-led credential without the header label is redacted too.
+    const bare = dashboardFailure(new Error("provider refused Bearer sk-live-456"));
+    expect(bare.message).not.toContain("sk-live-456");
+    expect(bare.message).toContain("{REDACTED}");
+    const keyed = dashboardFailure(new Error("transport refused token=sk-live-123"));
+    expect(keyed.message).not.toContain("sk-live-123");
   });
 
   test("an execution-only list keeps its rows and discloses the optional gap", async () => {

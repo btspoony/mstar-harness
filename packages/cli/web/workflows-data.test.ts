@@ -88,6 +88,31 @@ describe("the list read", () => {
     expect(html).not.toContain('data-ms-absence="empty"');
   });
 
+  test("an unavailable optional catalog does not fail the workflow list", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([row()], 1),
+          collaboration: {
+            scope: { kind: "query", key: "workflows" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflows(gapped);
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    // The rows are execution data; the optional catalog association is disclosed,
+    // not fatal, and no collaboration counter is claimed.
+    expect(result.envelope.data.items.map((item) => item.id)).toContain("issue-project-move");
+    expect(result.envelope.collaboration?.completeness).toBe("unavailable");
+    expect(workflowsOutcome(result).kind).toBe("ready");
+  });
+
   test("truncation is disclosed from the store's total, not the item count", () => {
     const html = renderList([row()], 120);
     expect(html).toContain("Showing 1 of 120");

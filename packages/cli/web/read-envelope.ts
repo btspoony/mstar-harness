@@ -43,6 +43,31 @@ export function refusalMessage(body: unknown, status: number): string {
 export const UNREACHABLE =
   "The dashboard could not reach its local server. Check that the dashboard is running, then reload.";
 
+/**
+ * The named gap of an EXPLICITLY incomplete collaboration observation, or `null`
+ * when the observation is complete or the envelope discloses none (a legacy
+ * transport). `null` is "not disclosed", never "healthy".
+ */
+export function collaborationGap(
+  envelope: ReadEnvelope<unknown>,
+): { completeness: "partial" | "unavailable"; code: string } | null {
+  const collaboration: ReadEnvelope<unknown>["collaboration"] | undefined = envelope.collaboration;
+  if (collaboration === null || collaboration === undefined || collaboration.completeness === "complete") return null;
+  return { completeness: collaboration.completeness, code: collaboration.code };
+}
+
+/**
+ * A read whose rows require collaboration must fail closed on an explicit gap:
+ * the transport established a complete observation or these rows are not
+ * authoritative, so they are never presented as a successful list.
+ */
+export function requiredCollaborationRefusal(envelope: ReadEnvelope<unknown>): string | null {
+  const gap = collaborationGap(envelope);
+  return gap === null
+    ? null
+    : `The collaboration authority answered ${gap.completeness} (${gap.code}), so this read is not authoritative. Reload to read it again.`;
+}
+
 /** A list view's payload: rows in a page window, plus the store's unpaged count. */
 type ListPayload = { items: unknown[]; total: number };
 

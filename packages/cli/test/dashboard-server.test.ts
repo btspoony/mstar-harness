@@ -414,6 +414,24 @@ describe("API over a real store", () => {
     }
   });
 
+  test("a refusal never echoes an authorization credential from the request path", async () => {
+    // The detail id reaches a lower-level issue refusal, which the HTTP error body
+    // publishes. A conventional authorization value must be redacted with its scheme.
+    for (const [scheme, secret] of [
+      ["Bearer", "sk-live-bearer"],
+      ["Basic", "dXNlcjpwYXNz"],
+      ["Token", "tok-live-123"],
+    ] as const) {
+      const id = `x%20Authorization:%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+  });
+
   test("stale projection is disclosed in the envelope, never hidden", async () => {
     const { dir, context } = await workspace("stale-projection-");
     await declareWorkflow(context, "wf-stale-projection");

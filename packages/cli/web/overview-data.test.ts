@@ -241,11 +241,14 @@ describe("dashboard collaboration disclosure", () => {
     return completeness === "partial" ? { ...base, code: "catalog.discovery.missing-plan" } : base;
   };
 
-  test("a partial observation does not render its count as healthy", () => {
+  test("a partial observation does not render its count or revision as healthy", () => {
+    // The envelope carries a real numeric storeRevision; the incomplete observation
+    // means neither that revision nor the residual count may be presented.
     const partial = { ...envelope(counts), collaboration: observation("partial") };
     const outcome = overviewOutcome({ status: "ready", envelope: partial });
     expect(outcome.kind).toBe("ready");
     if (outcome.kind !== "ready") return;
+    expect(outcome.revision).toBeNull();
     if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
     expect(outcome.model.residuals.reason).toContain("catalog.discovery.missing-plan");
     // Projection-backed execution data stays usable.

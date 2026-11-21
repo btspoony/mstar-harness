@@ -122,6 +122,17 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
 
 const query = { filters: { ...DEFAULT_ISSUE_FILTERS }, offset: 0 };
 
+/** An explicit partial observation, as a source that could not prove its scope reports. */
+const partialObservation = {
+  scope: { kind: "query" as const, key: "issues" },
+  completeness: "partial" as const,
+  asOf: "2026-11-21T00:00:00.000Z",
+  authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+  revision: 3,
+  catalogRevision: 1,
+  code: "collaboration.observation-incomplete",
+};
+
 const renderList = (items: IssuePage["items"], total = items.length, projectionBlock = projection, applied = query): string => {
   const outcome = issuesOutcome({ status: "ready", envelope: listEnvelope(items, total, projectionBlock) }, applied);
   if (outcome.kind !== "ready") throw new Error("expected a ready list");
@@ -168,6 +179,19 @@ describe("the list read", () => {
     expect(path).toContain("severity=critical");
     expect(path).toContain("limit=50");
     expect(path).toContain("offset=50");
+  });
+
+  test("a required collaboration gap is a failed read, not rows", async () => {
+    const gapped = (async () =>
+      new Response(JSON.stringify({ ...listEnvelope([summary()], 1), collaboration: partialObservation }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await readIssues(gapped, query);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(issuesOutcome(result, query).kind).toBe("failed");
   });
 
   test("outcome 1 — a healthy read becomes a listed page", () => {
@@ -282,6 +306,26 @@ describe("the detail read", () => {
       })) as unknown as typeof fetch;
     const result = await readIssueDetail(refused, "I-1");
     expect(result).toEqual({ status: "error", message: "the store is staged" });
+    expect(issueDetailOutcome(result).kind).toBe("failed");
+  });
+
+  test("a required collaboration gap is a failure, never an absence", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: detail(),
+          storeRevision: 1224,
+          catalogRevision: 9,
+          projection,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readIssueDetail(gapped, "I-000870");
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
     expect(issueDetailOutcome(result).kind).toBe("failed");
   });
 
