@@ -2526,7 +2526,8 @@ export function resolvePrReviewTier(input: ResolvePrReviewTierInput): PrReviewTi
 }
 
 // ---------------------------------------------------------------------------
-// thread gate — §5.3a unresolved conversation gate
+// why: the §5.3a merge gate is parsed and decided here, so the parser, the
+// decision and the digest stay in one section.
 // ---------------------------------------------------------------------------
 
 /** One review thread as GitHub's `reviewThreads` connection reports it. */

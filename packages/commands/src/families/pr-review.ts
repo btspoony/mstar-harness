@@ -473,7 +473,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
     }
     if (verb === "thread-gate") {
-      // `gh` resolves the repository from its working directory, so an
+      // why: `gh` resolves the repository from its working directory, so an
       // undeclared workspace would read the HOST checkout's pull request.
       const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the pull request whose review threads are read" });
       if (unnamedRepository !== undefined) return unnamedRepository;
