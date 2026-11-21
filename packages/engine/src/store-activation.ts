@@ -944,14 +944,49 @@ const COLLABORATION_CLAIM_KEY = "collaboration-cutover-claim";
  * - `acknowledged`: a standalone marker (no execution half) or a composite whose
  *   `result_json.acknowledgedAt` instant landed.
  * - `declined`: a composite whose deterministic refusal is recorded instead of an
- *   effect (`{ declined: ... }`). The execution side deliberately keeps that as
- *   terminal state, so a decline is settled history, never an outstanding effect
- *   — treating it as one would block every future repository backup.
+ *   effect, in the exact shape the decline producer writes and under its OWN
+ *   effect key. The execution side deliberately keeps that as terminal state, so a
+ *   well-formed decline is settled history — never an outstanding effect, because
+ *   treating one as outstanding would block every future repository backup.
  * - `unacknowledged`: a committed effect whose acknowledgement never landed (the
  *   supported two-transaction window).
- * - `unreadable`: no parseable receipt/decline, so the row proves nothing.
+ * - `unreadable`: anything that is neither a receipt nor a STRUCTURALLY VALID,
+ *   currently owned decline. A malformed, partial, foreign or hand-assembled
+ *   decline proves nothing, so it is unconfirmed rather than historical success.
  */
 type EffectState = "acknowledged" | "declined" | "unacknowledged" | "unreadable";
+
+/** The exact keys of the stored decline document (`{ declined: { …cause, at } }`). */
+const DECLINE_KEYS = ["at", "code", "details", "message"];
+/** The exact keys of a stored effect document (`{ receipt, acknowledgedAt }`). */
+const EFFECT_KEYS = ["acknowledgedAt", "receipt"];
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Exactly these keys, nothing more and nothing less. */
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const present = Object.keys(value).sort();
+  return present.length === keys.length && keys.every((key, index) => present[index] === key);
+}
+
+/**
+ * A decline is settled history only when it is the shape the producer writes AND
+ * the row still owns it: a composite key (execution store, epoch, request hash)
+ * plus the recording instant. Anything else is unconfirmed.
+ */
+function isOwnedDecline(row: Record<string, unknown>, declined: unknown): boolean {
+  if (!isPlainRecord(declined) || !hasExactKeys(declined, DECLINE_KEYS)) return false;
+  if (typeof declined.code !== "string" || declined.code.trim() === "") return false;
+  if (typeof declined.message !== "string" || declined.message.trim() === "") return false;
+  if (typeof declined.at !== "string" || Number.isNaN(Date.parse(declined.at))) return false;
+  if (declined.details !== null && !isPlainRecord(declined.details)) return false;
+  if (typeof row.execution_store_id !== "string" || row.execution_store_id === "") return false;
+  if (typeof row.execution_epoch !== "number" || !Number.isSafeInteger(row.execution_epoch)) return false;
+  if (typeof row.request_hash !== "string" || row.request_hash === "") return false;
+  return true;
+}
 
 function effectStateOf(row: Record<string, unknown>): EffectState {
   if (row.key_space !== "composite") return "acknowledged";
@@ -963,10 +998,12 @@ function effectStateOf(row: Record<string, unknown>): EffectState {
   } catch {
     return "unreadable";
   }
-  if (parsed === null || typeof parsed !== "object") return "unreadable";
-  if ("declined" in parsed && parsed.declined !== null && typeof parsed.declined === "object") return "declined";
-  if (!("receipt" in parsed) || parsed.receipt === null || typeof parsed.receipt !== "object") return "unreadable";
-  return "acknowledgedAt" in parsed && typeof parsed.acknowledgedAt === "string" ? "acknowledged" : "unacknowledged";
+  if (!isPlainRecord(parsed)) return "unreadable";
+  // A decline document carries exactly one key; a receipt document exactly two.
+  if (hasExactKeys(parsed, ["declined"])) return isOwnedDecline(row, parsed.declined) ? "declined" : "unreadable";
+  if (!hasExactKeys(parsed, EFFECT_KEYS)) return "unreadable";
+  if (!isPlainRecord(parsed.receipt)) return "unreadable";
+  return typeof parsed.acknowledgedAt === "string" ? "acknowledged" : "unacknowledged";
 }
 
 /** One lane operation row as the quiescence and causal-boundary checks read it. */
@@ -1014,13 +1051,16 @@ function assertLaneQuiescent(operations: readonly LaneOperation[], where: string
   }
 }
 
+/** The operation columns the quiescence view reads: the key, the revisions and the receipt body. */
+const LANE_OPERATION_COLUMNS = "key_space, operation_id, execution_store_id, execution_epoch, request_hash, result_json";
+
 /** The live lane's operation rows, read through its own read admission. */
 async function liveLaneOperations(context: StoreContext): Promise<LaneOperation[]> {
   const location = resolveCollaborationLocation(context);
   return readCollaborationStage(location, ({ db }) =>
     (
       db
-        .prepare("select key_space, operation_id, execution_store_id, execution_epoch, result_json from collaboration_operations order by operation_id")
+        .prepare(`select ${LANE_OPERATION_COLUMNS} from collaboration_operations order by operation_id`)
         .all() as Array<Record<string, unknown>>
     ).map((row) => ({
       keySpace: String(row.key_space),
@@ -1135,7 +1175,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
     for (const table of Object.keys(COLLABORATION_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
     const operations = (
       db
-        .prepare("select key_space, operation_id, execution_store_id, execution_epoch, result_json from collaboration_operations order by operation_id")
+        .prepare(`select ${LANE_OPERATION_COLUMNS} from collaboration_operations order by operation_id`)
         .all() as Array<Record<string, unknown>>
     ).map((row) => ({
       keySpace: String(row.key_space),

@@ -1893,6 +1893,76 @@ describe("repository backup pair", () => {
     }
   });
 
+  test("a malformed decline is unconfirmed history: the pair and the restore both refuse it", async () => {
+    const malformed: ReadonlyArray<{ label: string; row: Record<string, unknown>; requestHash?: string }> = [
+      // A partial decline (no instant) is not the shape the producer writes.
+      { label: "op-partial-decline", row: { declined: { code: "issue.scope-refused", message: "seat", details: null } } },
+      // An extra field nobody writes: hand-assembled, not recorded history.
+      {
+        label: "op-extra-key-decline",
+        row: { declined: { code: "issue.scope-refused", message: "seat", details: null, at: "2026-11-21T00:00:00.000Z", reason: "x" } },
+      },
+      // A structurally valid decline the row no longer owns (no request identity).
+      {
+        label: "op-unowned-decline",
+        row: { declined: { code: "issue.scope-refused", message: "seat", details: null, at: "2026-11-21T00:00:00.000Z" } },
+        requestHash: "",
+      },
+    ];
+
+    for (const shape of malformed) {
+      const fixture = await pairedWorkspace(`pair-bad-decline-${shape.label}`);
+      const out = join(fixture.harness, "archived", "recovery", "pair.json");
+      await writeCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => {
+        db.prepare(
+          "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+            "result_json, collaboration_revision, catalog_revision, committed_at) " +
+            "values ('composite', ?, 'store-other', 1, ?, ?, 0, 0, ?)",
+        ).run(shape.label, shape.requestHash ?? "hash", JSON.stringify(shape.row), "2026-11-21T00:00:00.000Z");
+      });
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({
+        code: "collaboration.backup-incomplete",
+      });
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(new RegExp(`${shape.label}: unreadable`));
+      expect(existsSync(out)).toBe(false);
+    }
+
+    // The same row in a PUBLISHED pair is refused by the restore's boundary: a
+    // malformed decline never travels as settled history.
+    const fixture = await pairedWorkspace("pair-restore-bad-decline-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const image = new DatabaseSync(receipt.collaboration.path);
+    try {
+      image
+        .prepare(
+          "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+            "result_json, collaboration_revision, catalog_revision, committed_at) " +
+            "values ('composite', 'op-bad-decline-image', 'store-other', 1, 'hash', ?, 0, 0, ?)",
+        )
+        .run(JSON.stringify({ declined: { code: "x" } }), "2026-11-21T00:00:00.000Z");
+    } finally {
+      image.close();
+    }
+    const patched = {
+      ...receipt,
+      collaboration: {
+        ...receipt.collaboration,
+        counts: {
+          ...receipt.collaboration.counts,
+          collaboration_operations: receipt.collaboration.counts.collaboration_operations + 1,
+        },
+      },
+    };
+    writeFileSync(receipt.manifestPath, `${JSON.stringify(patched, null, 2)}\n`);
+    const location = resolveCollaborationLocation(fixture.context);
+    const liveBytes = readFileSync(location.dbPath);
+    await expect(
+      restoreCollaborationBackup(fixture.context, patched, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toThrow(/neither a receipt nor a recorded refusal/);
+    expect(readFileSync(location.dbPath)).toEqual(liveBytes);
+  });
+
   test("a reservation that starts during the copy refuses the pair and the retry succeeds", async () => {
     const fixture = await pairedWorkspace("pair-reservation-race-");
     const out = join(fixture.harness, "archived", "recovery", "pair.json");
