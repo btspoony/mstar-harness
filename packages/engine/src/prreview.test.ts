@@ -566,7 +566,7 @@ describe("summary_md is an optional seat narrative", () => {
   });
 });
 
-describe("thread gate (§5.3a)", () => {
+describe("thread gate (\u00a75.3a)", () => {
   const page = (nodes: unknown[], pageInfo: Record<string, unknown> = { hasNextPage: false, endCursor: null }, headRefOid: string | null = "abcdef0123456") => ({
     data: { repository: { pullRequest: { headRefOid, reviewThreads: { pageInfo, nodes } } } },
   });
