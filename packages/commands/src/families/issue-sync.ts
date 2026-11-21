@@ -40,7 +40,6 @@ import {
   identityConflict,
   ingestRecords,
   isOlderInstant,
-  openStore,
   PUSH_DIRECTION,
   planPushItem,
   readItem,
@@ -55,6 +54,7 @@ import {
   resolveRepoRoot,
   selectPushCandidates,
   SyncError,
+  type CollaborationAuthority,
   type IngestEntry,
   type IngestReport,
   type LinearBinding,
@@ -65,6 +65,7 @@ import {
   type StoreDb,
   type PushResult,
   type RunLease,
+  withCollaborationWrite,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -86,6 +87,7 @@ const applySchema = z.object({
   forceAdopt: z.array(z.string()).optional(),
   release: z.array(z.string()).optional(),
   takeRun: z.boolean().optional(),
+  run: z.string().optional(),
   harness: z.string().optional(),
 });
 const ingestSchema = z.object({
@@ -108,11 +110,12 @@ const flags: Record<keyof Input, string> = {
   forceAdopt: "--force-adopt <localId>",
   release: "--release <localId>",
   takeRun: "--take-run",
+  run: "--run <runId>",
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
   pending: ["project", "harness"],
-  apply: ["project", "results", "adopt", "forceAdopt", "release", "takeRun", "harness"],
+  apply: ["project", "results", "adopt", "forceAdopt", "release", "takeRun", "run", "harness"],
   ingest: ["project", "records", "harness"],
 };
 const required: Record<Verb, (keyof Input)[]> = {
@@ -187,6 +190,8 @@ const RECOVERY: Record<string, string> = {
     "This local id is not an issue in this store. Capture it first, then re-run `mstar issue-sync pending --project <project-id>`.",
   "linear.write-refused":
     "The remote refused this item; the cause is the tool's own words. Nothing was recorded as applied, so the item stays retryable: address the cause in Linear (a missing label, state or permission) and re-run `mstar issue-sync pending --project <project-id>`.",
+  "collaboration.mode-unavailable":
+    "This verb delivers to Linear, and the repository holds local authority only. Set mode=mirror in the repository's .mstarc [collaboration] block, initialize/activate that collaboration store through the reviewed cutover, then re-run. Nothing was written.",
   "store.not-active":
     "Activate the store first: `mstar store upgrade --operator <name>`, then re-run.",
   "store.not-initialized":
@@ -310,6 +315,34 @@ function pushContextFor(target: Target, runId: string | undefined): PushContext 
 }
 
 /**
+ * note: One sync effect on the collaboration authority. The writer takes
+ * `BEGIN IMMEDIATE`, re-verifies the repository binding and active state under
+ * the lock, and commits; the ledger and ingest verbs below never open a
+ * transaction of their own, so every row they write and its receipt share this
+ * one commit.
+ */
+function syncWrite<T>(
+  harnessDir: string,
+  apply: (db: StoreDb, authority: CollaborationAuthority) => T,
+): Promise<T> {
+  return withCollaborationWrite({ harnessDir }, ({ db, authority }) => apply(db, authority));
+}
+
+/**
+ * note: Only a `mirror` repository delivers to Linear. `local` holds the same
+ * authority over the same rows and never pushes or ingests remote data, so the
+ * two modes stay distinguishable at the verb that would have sent something.
+ */
+function requireMirror(authority: CollaborationAuthority): void {
+  if (authority.mode !== "mirror") {
+    throw refused(
+      "collaboration.mode-unavailable",
+      "this repository's collaboration mode is " + JSON.stringify(authority.mode) + ", which holds local authority only: it never pushes to or ingests from Linear",
+    );
+  }
+}
+
+/**
  * Read a JSON argument: a file path, or `-` for stdin. An unreadable path or a
  * body that is not JSON is a USAGE refusal naming the flag - the caller
  * mistyped it, and no store work has happened yet.
@@ -354,9 +387,8 @@ type PendingReport = {
  */
 async function runPending(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  try {
-    const db = handle.db;
+  return syncWrite(target.harnessDir, (db, authority) => {
+    requireMirror(authority);
     // why: One run per binding, claimed before any candidate work. `pending` does not
     // release it: the lease covers the caller's tool calls as much as this
     // process, and `apply` is what ends the run.
@@ -388,9 +420,7 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
       else report.unresolved.push({ localId: outcome.localId, cause: outcome.cause });
     }
     return envelope(id, report);
-  } finally {
-    handle.close();
-  }
+  });
 }
 
 /**
@@ -627,14 +657,18 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const takeRun = input.takeRun === true;
   assertOperatorVerbsAgree(adoptions, released, forcedAdopt);
+  const namedRun = typeof input.run === "string" ? input.run.trim() : undefined;
+  if (namedRun !== undefined && takeRun) {
+    throw new UsageError(
+      "--run names the run these results continue; --take-run replaces the holder instead. Pass one of them",
+    );
+  }
 
   const target = await resolveTarget(invocation, input);
   const parsed = parseResults(await readJsonArgument(invocation, input.results, "--results"));
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  let run: RunLease | null = null;
   let borrowedLease = false;
-  try {
-    const db = handle.db;
+  return syncWrite(target.harnessDir, (db, authority) => {
+    requireMirror(authority);
     // why: the ownership preflight below must see the identities this invocation
     // already validates, so every operator verb is checked before it, not after.
     const adoptedIdentities = new Map<string, string>();
@@ -648,11 +682,32 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     assertReleaseTargets(db, target.bindingId, released);
 
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
+    // why: `--run` is how a caller proves its raw results belong to the run `pending`
+    // handed back. Results naming another run belong to an earlier or foreign
+    // attempt, and recording them here would adopt a generation this binding
+    // never opened.
+    if (namedRun !== undefined) {
+      if (held === null) {
+        throw refused(
+          "sync.run-held",
+          "no run holds " + target.bindingId + " now, so --run " + JSON.stringify(namedRun) +
+            " continues nothing. Run `mstar issue-sync pending --project " + target.projectId + "` and pass the runId it returns",
+        );
+      }
+      if (held.runId !== namedRun) {
+        throw refused(
+          "sync.run-held",
+          "--run " + JSON.stringify(namedRun) + " does not name the run holding " + target.bindingId + " now (" +
+            JSON.stringify(held.runId) + ", started " + held.startedAt + "). These results belong to another run: apply the " +
+            "runId the current `pending` returned, or `--take-run` once you confirmed that holder is dead",
+        );
+      }
+    }
     // why: the preflight answers whether this batch was admitted ONLY through adoption
     // coverage, i.e. it runs under a lease this invocation did not acquire; that lease
     // belongs to its holder and must survive this call.
     borrowedLease = assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
-    run =
+    const active =
       takeRun || held === null
         ? acquireRun(db, {
             bindingId: target.bindingId,
@@ -663,11 +718,11 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
             takeRun,
           })
         : held;
-    const push = pushContextFor(target, run.runId);
+    const push = pushContextFor(target, active.runId);
     const report: ApplyReport = {
       projectId: target.projectId,
       bindingId: target.bindingId,
-      runId: run.runId,
+      runId: active.runId,
       adopted: [],
       released: [],
       // why: an operator who adopted a residue needs to know the newer holder still
@@ -677,7 +732,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
     };
 
-
     // why: Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
     // identity and forgets the previous one's proof, so the next `pending`
     // converges this item's content onto the adopted issue instead of reporting
@@ -685,7 +739,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     for (const { localId, reference } of adoptions) {
       const adopted = adoptItem(db, target.bindingId, localId, reference, {
         force: forcedAdopt.has(localId),
-        runId: run.runId,
+        runId: active.runId,
       });
       report.adopted.push({ localId, externalId: adopted.externalId });
     }
@@ -712,23 +766,18 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       else if (outcome.outcome === "unconfirmed") report.counts.unconfirmed += 1;
       else report.counts.refused += 1;
     }
-    return envelope(id, report);
-  } finally {
-    // why: The run ends on EVERY exit, and only when this run still holds it: a run a
-    // takeover replaced names a token the successor does not carry, and a lease
-    // merely borrowed for adoption coverage belongs to its holder, so neither is
-    // deleted here.
-    if (run !== null && !borrowedLease) {
-      try {
-        releaseRun(handle.db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: run.runId });
-      } catch {
-        // why: A release that cannot land must not mask the outcome that produced it.
-      }
+    // The run ends in the commit that recorded its results, and only when this
+    // run still holds it: a run a takeover replaced names a token the successor
+    // does not carry, and a lease merely borrowed for adoption coverage belongs
+    // to its holder, so neither is deleted here. A batch that refuses before
+    // this point rolls back whole, so the run a `pending` opened stays held and
+    // the same results can be re-sent under its id.
+    if (!borrowedLease) {
+      releaseRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: active.runId });
     }
-    handle.close();
-  }
+    return envelope(id, report);
+  });
 }
-
 /**
  * Validate a listing the caller fetched. Unlike `--results`, an ill-formed
  * listing is the caller's own defect and nothing has been written yet, so it is
@@ -801,10 +850,10 @@ type IngestEnvelope = IngestReport & {
 async function runIngest(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
   const records = parseRecords(await readJsonArgument(invocation, input.records, "--records"));
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  try {
+  return syncWrite(target.harnessDir, (db, authority) => {
+    requireMirror(authority);
     const report = ingestRecords(
-      handle.db,
+      db,
       { bindingId: target.bindingId, identity: target.identity, mapping: target.binding.mapping },
       records,
     );
@@ -822,9 +871,7 @@ async function runIngest(id: string, input: Input, invocation: InvocationContext
       },
     };
     return envelope(id, data);
-  } finally {
-    handle.close();
-  }
+  });
 }
 
 export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {

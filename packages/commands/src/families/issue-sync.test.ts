@@ -7,14 +7,19 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   bindProject,
+  initializeCollaborationStore,
   initializeStore,
-  openStore,
+  openCollaborationStore,
   readItem,
   readRun,
+  resolveCollaborationLocation,
+  withCollaborationWrite,
   PUSH_DIRECTION,
   type ProviderItem,
   type StoreDb,
@@ -23,16 +28,22 @@ import { executeCommand } from "../definitions.js";
 import type { InvocationContext } from "../types.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-sync-command-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
 const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
 const savedSystem = process.env.GIT_CONFIG_NOSYSTEM;
+let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(() => {
   // why: The fixture's own git config decides; a developer's global identity must not.
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
   process.env.GIT_CONFIG_NOSYSTEM = "1";
+  // The collaboration store is user-level, so the resolver's home is the fixture's.
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 });
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
   else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
   if (savedSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
@@ -41,7 +52,8 @@ afterAll(() => {
 });
 
 const PROJECT = "p-mirror";
-const REPO = "acme/widgets";
+/** Each fixture's origin appends its own directory name, so no two share a collaboration store. */
+const REPO_PREFIX = "acme/widgets";
 const AUTHOR = "Ada Lovelace <ada@example.com>";
 const BINDING = "linear:" + PROJECT;
 const LOCAL_IDS = ["I-000101", "I-000102", "I-000103"];
@@ -62,6 +74,7 @@ function git(repo: string, args: string[]): void {
 }
 
 type Fixture = {
+  repo: string;
   repoRoot: string;
   harnessDir: string;
   context: InvocationContext;
@@ -75,17 +88,24 @@ type Fixture = {
  * store that binds one Linear project and holds three local issues — the state
  * an operator reaches after project bind and three captures.
  */
-async function fixture(name: string, options: { enabled?: boolean; bind?: boolean; email?: string } = {}): Promise<Fixture> {
+async function fixture(
+  name: string,
+  options: { enabled?: boolean; bind?: boolean; email?: string; collaborationMode?: "local" | "mirror" } = {},
+): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const repoRoot = join(dir, "repo");
   mkdirSync(repoRoot, { recursive: true });
   git(repoRoot, ["init", "-q"]);
-  git(repoRoot, ["remote", "add", "origin", "git@github.com:" + REPO + ".git"]);
+  const repo = REPO_PREFIX + "-" + basename(dir);
+  git(repoRoot, ["remote", "add", "origin", "git@github.com:" + repo + ".git"]);
   git(repoRoot, ["config", "user.name", "Ada Lovelace"]);
   git(repoRoot, ["config", "user.email", options.email ?? "ada@example.com"]);
   writeFileSync(
     join(repoRoot, ".mstarc"),
-    "[linear]\nenabled=" + (options.enabled === false ? "false" : "true") + "\nmode=mirror\nworkspace=acme\nteam=ENG\n",
+    "[linear]\nenabled=" + (options.enabled === false ? "false" : "true") + "\nmode=mirror\nworkspace=acme\nteam=ENG\n" +
+      // The repository delivers to Linear, so its collaboration authority is the
+      // mirror mode; the ledger and the issues live in that lane.
+      "[collaboration]\nmode=" + (options.collaborationMode ?? "mirror") + "\n",
   );
   const harnessDir = join(repoRoot, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -95,15 +115,28 @@ async function fixture(name: string, options: { enabled?: boolean; bind?: boolea
       "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Mirror', 'projects', ?, 'now', 'now')",
     )
     .run(PROJECT, PROJECT + "/roadmap.md");
-  for (const [index, localId] of LOCAL_IDS.entries()) {
-    handle.db
-      .prepare(
+  handle.close();
+  const collaboration = resolveCollaborationLocation({ harnessDir });
+  await initializeCollaborationStore(collaboration);
+  const staged = new DatabaseSync(collaboration.dbPath);
+  try {
+    staged.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    staged.close();
+  }
+  await withCollaborationWrite({ harnessDir }, ({ db }) => {
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Mirror', 'projects', ?, 'now', 'now')",
+    ).run(PROJECT, PROJECT + "/roadmap.md");
+    for (const [index, localId] of LOCAL_IDS.entries()) {
+      db.prepare(
         "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
           " values (?, ?, ?, ?, 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
-      )
-      .run(localId, PROJECT, "Issue " + localId, index === 1 ? "risk" : "bug", "sync-issue-" + localId);
-  }
-  handle.close();
+      ).run(localId, PROJECT, "Issue " + localId, index === 1 ? "risk" : "bug", "sync-issue-" + localId);
+    }
+  });
   if (options.bind !== false) {
     await bindProject(
       { harnessDir },
@@ -119,6 +152,7 @@ async function fixture(name: string, options: { enabled?: boolean; bind?: boolea
     signal: new AbortController().signal,
   };
   return {
+    repo,
     repoRoot,
     harnessDir,
     context: { ...base, effects: { ...UNUSED_EFFECTS } },
@@ -126,7 +160,9 @@ async function fixture(name: string, options: { enabled?: boolean; bind?: boolea
       return { ...base, effects: { ...UNUSED_EFFECTS, readInput: async () => payload } };
     },
     async read<T>(fn: (db: StoreDb) => T): Promise<T> {
-      const opened = await openStore({ harnessDir }, "read");
+      // The ledger and the issues are the collaboration authority's; the project
+      // binding still lives in the execution store until project governance moves.
+      const opened = await openCollaborationStore({ harnessDir }, "read");
       try {
         return fn(opened.db);
       } finally {
@@ -136,18 +172,16 @@ async function fixture(name: string, options: { enabled?: boolean; bind?: boolea
   };
 }
 
-function markerOf(localId: string, overrides: { repo?: string; author?: string } = {}): string {
-  return (
-    "<!-- mstar-sync: repo=" + (overrides.repo ?? REPO) + "; local=" + localId + "; author=" + (overrides.author ?? AUTHOR) + " -->"
-  );
+function markerOf(repo: string, localId: string, overrides: { author?: string } = {}): string {
+  return "<!-- mstar-sync: repo=" + repo + "; local=" + localId + "; author=" + (overrides.author ?? AUTHOR) + " -->";
 }
 
 /** note:  What a Linear tool would return for one listed issue mirroring a local id. */
-function record(externalId: string, localId: string, overrides: Partial<ProviderItem> = {}): ProviderItem {
+function record(f: Fixture, externalId: string, localId: string, overrides: Partial<ProviderItem> = {}): ProviderItem {
   return {
     externalId,
     title: "Issue " + localId,
-    description: "## Impact\n\nimpact body\n\n## Acceptance\n\nacceptance body\n\n" + markerOf(localId),
+    description: "## Impact\n\nimpact body\n\n## Acceptance\n\nacceptance body\n\n" + markerOf(f.repo, localId),
     state: "Todo",
     priority: "2",
     labels: ["bug"],
@@ -181,7 +215,7 @@ describe("pending", () => {
     expect(result.status).toBe("ok");
     const data = result.data;
     expect(data.binding).toEqual({ provider: "linear", workspace: "acme", team: "ENG", remoteProject: "Remote" });
-    expect(data.identity).toEqual({ repo: REPO, author: AUTHOR });
+    expect(data.identity).toEqual({ repo: f.repo, author: AUTHOR });
     expect(typeof data.runId).toBe("string");
     expect(data.skipped).toEqual([]);
     expect(data.unresolved).toEqual([]);
@@ -189,7 +223,7 @@ describe("pending", () => {
 
     const first = data.items[0];
     expect(first).toMatchObject({ localId: "I-000101", operation: "create", externalId: null });
-    expect(first.marker).toBe(markerOf("I-000101"));
+    expect(first.marker).toBe(markerOf(f.repo, "I-000101"));
     expect(first.payload).toMatchObject({ title: "Issue I-000101", priority: 2, state: "Todo", labels: ["bug"] });
     expect(typeof first.requestHash).toBe("string");
     // why: The marker is the LAST line of what the tool writes: that is the key a
@@ -499,6 +533,74 @@ describe("apply", () => {
   });
 });
 
+describe("mirror stale run", () => {
+  test("--run continues the exact run `pending` returned", async () => {
+    const f = await fixture("run-correlated");
+    const pending = await run("pending", {}, f.context);
+    const accepted = await run(
+      "apply",
+      {
+        results: bodyFile(f, "correlated.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-51" }]),
+        run: pending.data.runId,
+      },
+      f.context,
+    );
+    expect(accepted.status).toBe("ok");
+    expect(accepted.data.runId).toBe(pending.data.runId);
+    expect(accepted.data.counts.applied).toBe(1);
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-51" });
+    // The run ended with the apply that named it.
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+  });
+
+  test("results naming an earlier or foreign run are refused, and nothing is recorded", async () => {
+    const f = await fixture("run-stale");
+    const pending = await run("pending", {}, f.context);
+    const stale = await run(
+      "apply",
+      {
+        results: bodyFile(f, "stale.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-52" }]),
+        run: "run-from-an-earlier-attempt",
+      },
+      f.context,
+    );
+    expect(stale.status).toBe("refused");
+    expect(stale.code).toBe("sync.run-held");
+    // The refusal names the run that WOULD accept these results.
+    expect(stale.message).toContain(pending.data.runId);
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
+    // The pending run still holds the direction: a refused apply never ends it.
+    const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
+    expect(held?.runId).toBe(pending.data.runId);
+  });
+
+  test("--run with no run holding the binding refuses instead of continuing a guess", async () => {
+    const f = await fixture("run-absent");
+    const result = await run("apply", { results: bodyFile(f, "empty.json", []), run: "nobody" }, f.context);
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sync.run-held");
+    expect(result.message).toContain("continues nothing");
+  });
+
+  test("--run and --take-run are contradictory flags", async () => {
+    const f = await fixture("run-contradiction");
+    await run("pending", {}, f.context);
+    const result = await run("apply", { results: bodyFile(f, "none.json", []), run: "x", takeRun: true }, f.context);
+    expect(result.status).toBe("usage");
+    expect(result.message).toContain("--take-run");
+  });
+
+  test("a mirror command refuses a local-mode repository", async () => {
+    const f = await fixture("run-local-mode", { collaborationMode: "local" });
+    const result = await run("pending", {}, f.context);
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("collaboration.mode-unavailable");
+    expect(result.message).toContain("local");
+    // Nothing was planned: the local authority never pushes.
+    expect(await rowOf(f, "I-000101")).toBeNull();
+  });
+});
+
 describe("ingest", () => {
   test("one record per bucket, and no local issue is written", async () => {
     const f = await fixture("ingest-buckets");
@@ -512,17 +614,17 @@ describe("ingest", () => {
     );
     const before = await f.read((db) => db.prepare("select id, title, updated_at from issues order by id").all());
     const records = [
-      record("LIN-31", "I-000101"),
-      record("LIN-32", "I-000102", { title: "edited in Linear" }),
-      record("LIN-33", "I-000103", { description: "body\n\n" + markerOf("I-000103", { author: "Bo <bo@example.test>" }) }),
-      record("LIN-34", "I-999999", { description: "body\n\n" + markerOf("I-999999") }),
-      record("LIN-35", "I-000101", { description: "## Impact\n\nno marker at all" }),
-      record("LIN-36", "I-000101", { description: "body\n\n<!-- mstar-sync: acme/ENG/store-alpha/I-000101 -->" }),
+      record(f, "LIN-31", "I-000101"),
+      record(f, "LIN-32", "I-000102", { title: "edited in Linear" }),
+      record(f, "LIN-33", "I-000103", { description: "body\n\n" + markerOf(f.repo, "I-000103", { author: "Bo <bo@example.test>" }) }),
+      record(f, "LIN-34", "I-999999", { description: "body\n\n" + markerOf(f.repo, "I-999999") }),
+      record(f, "LIN-35", "I-000101", { description: "## Impact\n\nno marker at all" }),
+      record(f, "LIN-36", "I-000101", { description: "body\n\n<!-- mstar-sync: acme/ENG/store-alpha/I-000101 -->" }),
     ];
     const result = await run("ingest", { records: "-" }, f.withStdin(JSON.stringify(records)));
     expect(result.status).toBe("ok");
     expect(result.data.counts).toEqual({ associated: 1, drift: 1, foreign: 1, orphan: 1, unmanaged: 2 });
-    expect(result.data.identity).toEqual({ repo: REPO, author: AUTHOR });
+    expect(result.data.identity).toEqual({ repo: f.repo, author: AUTHOR });
     expect(result.data.associated).toEqual([
       { localId: "I-000101", externalId: "LIN-31", url: "https://linear.app/acme/issue/LIN-31" },
     ]);
@@ -545,7 +647,7 @@ describe("ingest", () => {
       { results: bodyFile(f, "confirmed.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-41" }]) },
       f.context,
     );
-    const converged = record("LIN-41", "I-000101");
+    const converged = record(f, "LIN-41", "I-000101");
     const first = await run("ingest", { records: bodyFile(f, "converged.json", [converged]) }, f.context);
     expect(first.data.counts).toEqual({ associated: 1, drift: 0, foreign: 0, orphan: 0, unmanaged: 0 });
     const edited = await run(

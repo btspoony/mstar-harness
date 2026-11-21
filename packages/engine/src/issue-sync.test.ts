@@ -3,11 +3,16 @@
  * proof for the sync ledger state machine.
  * Run with `bun test packages/engine/src/issue-sync.test.ts`.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import { busyTimeoutMs, connect, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   acquireRun,
   claimItem,
@@ -28,15 +33,64 @@ import {
 } from "./issue-sync.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-sync-test-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
 
+/**
+ * The collaboration store is user-level, so the resolver's home must be this
+ * fixture and never the operator's.
+ */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
+});
+
+/** A synthetic checkout whose git origin names the collaboration authority. */
 function context(name: string): StoreContext {
-  return { harnessDir: mkdtempSync(join(ROOT, name)) };
+  const checkoutRoot = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Sync Ledger Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "sync@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
+    cwd: checkoutRoot,
+  });
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = join(checkoutRoot, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  return { harnessDir, checkoutRoot };
 }
 
-async function openedStore(name: string): Promise<{ db: StoreDb; close: () => void }> {
-  const handle = await initializeStore(context(name));
-  const db = handle.db;
+/** Flip the staged record to active: this plan ships no public activator. */
+function activate(dbPath: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The ledger fixture: one active collaboration authority holding the project row
+ * and the three local issues a binding can address. `db` is the case's own
+ * writable connection for seeding and assertions; the TRANSPORT owns the ledger
+ * transaction, so a case that needs one opens it with `withCollaborationWrite`.
+ */
+async function openedStore(name: string): Promise<{ context: StoreContext; db: StoreDb; close: () => void }> {
+  const storeContext = context(name);
+  const location = resolveCollaborationLocation(storeContext);
+  await initializeCollaborationStore(location);
+  activate(location.dbPath);
+  // A fixture connection, not a lane writer: it keeps the lane's rollback journal
+  // so the store stays admissible to `withCollaborationWrite`.
+  const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-t', 'T', 'projects', 'p-t/roadmap.md', 'now', 'now')",
   ).run();
@@ -45,7 +99,7 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
       " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?)",
   );
   for (const id of ["I-000301", "I-000302", "I-000303"]) insertIssue.run(id, `sync-issue-${id}`);
-  return { db, close: () => handle.close() };
+  return { context: storeContext, db, close: () => db.close() };
 }
 
 const KEY = { bindingId: "linear:p-t", direction: "import" as const, localId: "I-000301" };
@@ -79,7 +133,9 @@ function rowOf(db: StoreDb): { item_state: string; revision: number; updated_at:
 }
 
 function receiptCount(db: StoreDb): number {
-  return (db.prepare("select count(*) as n from store_operations").get() as { n: number }).n;
+  return (db.prepare("select count(*) as n from collaboration_operations where key_space = 'standalone'").get() as {
+    n: number;
+  }).n;
 }
 
 /**
@@ -124,7 +180,7 @@ function failingReceipts(db: StoreDb): StoreDb {
     exec: (sql: string) => db.exec(sql),
     close: () => db.close(),
     prepare: (sql: string) => {
-      if (sql.trim().startsWith("insert into store_operations")) {
+      if (sql.trim().startsWith("insert into collaboration_operations")) {
         return {
           run: () => {
             throw new Error("simulated crash before the receipt committed");
@@ -136,23 +192,6 @@ function failingReceipts(db: StoreDb): StoreDb {
       return db.prepare(sql);
     },
   } as unknown as StoreDb;
-}
-
-/** Count the transaction statements a verb issues through this handle. */
-function transactionLog(db: StoreDb): { db: StoreDb; log: string[] } {
-  const log: string[] = [];
-  return {
-    log,
-    db: {
-      exec: (sql: string) => {
-        const verb = sql.trim().toLowerCase();
-        if (verb.startsWith("begin") || verb === "commit" || verb === "rollback") log.push(verb);
-        db.exec(sql);
-      },
-      prepare: (sql: string) => db.prepare(sql),
-      close: () => db.close(),
-    } as unknown as StoreDb,
-  };
 }
 
 describe("sync state machine transitions", () => {
@@ -238,44 +277,92 @@ describe("sync state machine transitions", () => {
   });
 });
 
-describe("transaction ownership (one transaction per verb)", () => {
-  test("each mutating verb opens exactly one begin and commits exactly once", async () => {
-    const { db, close } = await openedStore("tx-log");
-    const { db: logged, log } = transactionLog(db);
-    planItem(logged, PLAN);
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    markApplied(logged, { ...KEY, operationId: "op-tx-apply" });
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    const pushKey = { ...KEY, direction: "push" as const };
-    planItem(logged, { ...PLAN, ...pushKey, operationId: "op-tx-push-plan" });
-    markApplied(logged, { ...pushKey, operationId: "op-tx-push-apply", externalId: "EXT-2" });
-    log.length = 0;
-    markUnconfirmed(logged, { ...pushKey, operationId: "op-tx-unconfirmed" });
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    writeCursor(logged, { ...KEY, cursor: "cur-tx", operationId: "op-tx-cur" });
-    expect(log).toEqual(["begin immediate", "commit"]);
+describe("transaction ownership (the collaboration writer owns the transaction)", () => {
+  test("an effect cannot take the transaction control the writer owns", async () => {
+    const { context: store, db, close } = await openedStore("tx-control");
+    await expect(
+      withCollaborationWrite(store, ({ db: guarded }) => guarded.exec("begin immediate")),
+    ).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(
+      withCollaborationWrite(store, ({ db: guarded }) => guarded.prepare("commit").run()),
+    ).rejects.toMatchObject({ code: "store.corrupt" });
+    // Neither refusal wrote anything.
+    expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+    expect(receiptCount(db)).toBe(0);
     close();
   });
 
   test("a failing receipt rolls the ledger row back, so the retry is not a one-way door", async () => {
-    const { db, close } = await openedStore("tx-rollback");
-    expect(() => planItem(failingReceipts(db), PLAN)).toThrow(/simulated crash/);
+    const { context: store, db, close } = await openedStore("tx-rollback");
+    await expect(
+      withCollaborationWrite(store, ({ db: guarded }) => planItem(failingReceipts(guarded), PLAN)),
+    ).rejects.toThrow(/simulated crash/);
     // The row did not advance, and no receipt exists.
     expect(rowOf(db)).toBeUndefined();
     expect(receiptCount(db)).toBe(0);
     // The retry with the SAME operationId succeeds instead of being refused.
-    expect(planItem(db, PLAN).itemState).toBe("pending");
+    expect((await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN))).itemState).toBe("pending");
     expect(receiptCount(db)).toBe(1);
 
-    expect(() => markApplied(failingReceipts(db), { ...KEY, operationId: "op-tx-applied" })).toThrow(/simulated crash/);
+    await expect(
+      withCollaborationWrite(store, ({ db: guarded }) =>
+        markApplied(failingReceipts(guarded), { ...KEY, operationId: "op-tx-applied" }),
+      ),
+    ).rejects.toThrow(/simulated crash/);
     expect(rowOf(db)?.item_state).toBe("pending");
     expect(rowOf(db)?.revision).toBe(1);
     // The same operationId now lands, because no orphan receipt blocks it.
-    expect(markApplied(db, { ...KEY, operationId: "op-tx-applied" }).itemState).toBe("applied");
+    expect(
+      (await withCollaborationWrite(store, ({ db: guarded }) => markApplied(guarded, { ...KEY, operationId: "op-tx-applied" })))
+        .itemState,
+    ).toBe("applied");
     expect(rowOf(db)?.item_state).toBe("applied");
+    close();
+  });
+});
+
+describe("collaboration mirror binding", () => {
+  test("one ledger effect advances the collaboration revision once, and a replay does not", async () => {
+    const { context: store, db, close } = await openedStore("binding-revision");
+    const revisionOf = (): number =>
+      (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+    expect(revisionOf()).toBe(0);
+
+    const planned = await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN));
+    expect(revisionOf()).toBe(1);
+    const replay = await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN));
+    expect(replay).toEqual(planned);
+    expect(revisionOf()).toBe(1);
+    await withCollaborationWrite(store, ({ db: guarded }) =>
+      markApplied(guarded, { ...KEY, operationId: "op-binding-apply" }),
+    );
+    expect(revisionOf()).toBe(2);
+    close();
+  });
+
+  test("an operation id another collaboration domain recorded refuses a reused ledger payload", async () => {
+    const { context: store, db, close } = await openedStore("binding-operation");
+    db.prepare(
+      "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
+        " values ('standalone', 'shared-operation', 'issue-domain-hash', '{}', '2026-11-21T00:00:00.000Z')",
+    ).run();
+    await expect(
+      withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, { ...PLAN, operationId: "shared-operation" })),
+    ).rejects.toMatchObject({ code: "sync.operation-conflict" });
+    expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+    close();
+  });
+
+  test("a ledger effect refuses an authority stamp this repository cannot prove", async () => {
+    const { context: store, db, close } = await openedStore("binding-stamp");
+    await expect(
+      withCollaborationWrite(
+        store,
+        ({ db: guarded }) => planItem(guarded, PLAN),
+        { repoKey: "github.com/acme/other", mode: "local", storeId: "foreign", epoch: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(receiptCount(db)).toBe(0);
     close();
   });
 });
