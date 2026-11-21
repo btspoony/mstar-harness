@@ -14,7 +14,7 @@ export type MilestoneAssignment = { projectId: string; milestoneId: string | nul
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: Disposition; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty" | "milestone.not-empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.not-empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
@@ -73,8 +73,10 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     const transitions: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
     if (!transitions[row.status].includes(nextStatus)) fail("milestone.invalid-transition", `Cannot transition ${row.status} to ${nextStatus}.`);
     if (nextStatus === "delivered") {
-      const counts = db.prepare("select count(*) as total, sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { total:number; open:number|null };
-      if (!counts.total) fail("milestone.empty", "An empty milestone cannot be delivered.");
+      // Contract §Gates: a complete observation that proves zero open issues
+      // passes — including a milestone that links none; any open row keeps the
+      // refusal. Missing/unavailable authority refuses before this point.
+      const counts = db.prepare("select sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { open: number | null };
       if (counts.open) fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
     }
     const name = update.name === undefined ? row.name : update.name.trim();

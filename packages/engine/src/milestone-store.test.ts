@@ -86,7 +86,6 @@ describe("milestone store", () => {
     let current=added.storeRevision;
     const activated=await updateMilestone(context,projectId,added.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     expect(activated).toMatchObject({revision:2,storeRevision:current+1,changed:true}); current=activated.storeRevision;
-    await expect(updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:current})).rejects.toMatchObject({code:"milestone.empty"});
     issue("I-MILESTONE-1","open",added.milestoneId);
     current=revision();
     await expect(updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:current})).rejects.toMatchObject({code:"milestone.open-issues"});
@@ -166,5 +165,25 @@ describe("milestone store", () => {
     db.prepare("update issues set disposition='resolved' where id='I-MILESTONE-DELIVERY'").run();
     const delivered=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
     expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
+  });
+  test("milestone store: an empty milestone delivers on a complete observation, and an unavailable one refuses", async () => {
+    const before=revision();
+    const empty=await addMilestone(context,{projectId,name:"Empty delivery",target:null,ordinal:10},{operationId:crypto.randomUUID(),expectedStoreRevision:before});
+    const activated=await updateMilestone(context,projectId,empty.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:empty.storeRevision});
+    // A complete observation proves zero linked issues, so delivery passes; the
+    // rollup keeps reporting an empty milestone, not a missing one.
+    expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({totalIssues:0,openIssues:0});
+    const delivered=await updateMilestone(context,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
+    expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
+    expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({status:"delivered",totalIssues:0,openIssues:0,resolvedIssues:0,otherRetiredIssues:0});
+
+    // An unavailable observation is not an empty one: the same delivery refuses.
+    const staged=checkout("milestone-store-delivery-staged");
+    mkdirSync(staged.harnessDir!,{recursive:true});
+    await initializeCollaborationStore(resolveCollaborationLocation(staged));
+    await expect(updateMilestone(staged,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-active"});
+    const missing=checkout("milestone-store-delivery-missing");
+    mkdirSync(missing.harnessDir!,{recursive:true});
+    await expect(updateMilestone(missing,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-initialized"});
   });
 });
