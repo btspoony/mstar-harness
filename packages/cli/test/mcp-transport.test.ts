@@ -15,9 +15,12 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 async function withClient(
   definitions: readonly CommandDefinition[],
   run: (client: Client, cwd: string) => Promise<void>,
-  options: { controlRoot?: string } = {},
+  options: { controlRoot?: string; cwd?: string } = {},
 ) {
-  const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
+  // A caller-provided cwd is the caller's fixture (e.g. its Git checkout): the
+  // server only points the invocation context at it and never cleans it up.
+  const owned = options.cwd === undefined;
+  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
   const server = new McpServer({ name: "isolated-command-server", version: "1.0.0" });
   const client = new Client({ name: "independent-command-consumer", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
@@ -34,7 +37,7 @@ async function withClient(
   } finally {
     await client.close();
     await server.close();
-    rmSync(cwd, { recursive: true, force: true });
+    if (owned) rmSync(cwd, { recursive: true, force: true });
   }
 }
 
@@ -421,8 +424,8 @@ generated_at: 2026-01-02
    * The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
    * README index read. The dsh-native tool that used to carry it is gone, so
    * these are the product regressions on the SURVIVING route: the folded MCP
-   * action. Complete catalog passes, an unregistered knowledge body fails, and a
-   * store that cannot answer refuses instead of reading as complete.
+   * action. A missing authority refuses with the lane's own code, a complete
+   * catalog passes, and an unregistered knowledge body fails with its path.
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
@@ -438,25 +441,45 @@ generated_at: 2026-01-02
       arguments: { action: "validate", docPath: join(knowledgeDir, "good.md"), knowledgeDir },
     }));
     try {
+      // The invocation cwd IS the fixture's Git checkout: the completeness
+      // verdict is the checkout's configured knowledge root, while the store
+      // root stays pinned to its `.mstar`.
       await withClient([definition("compound.validate")], async (client) => {
-        // No authority yet: the completeness gate must REFUSE (any of the
-        // catalog-availability refusals) — never read the missing authority as
-        // a complete catalog, and the retired README reader is not a fallback.
+        // No authority yet: the completeness gate refuses with the missing
+        // lane's own code — never a directory mismatch or a content gap
+        // standing in for the absent authority.
         const missing = await validate(client);
         expect(missing).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
-        const refusedCodes = catalogCodes(missing);
-        expect(
-          refusedCodes.some((code) =>
-            ["collaboration.not-initialized", "compound.catalog.unavailable", "compound.catalog.knowledge-dir-mismatch", "catalog.discovery.missing-document"].includes(code),
-          ),
-        ).toBe(true);
-        expect(refusedCodes).not.toContain("store.not-initialized");
-        expect(refusedCodes).not.toContain("compound.index.retired");
-        expect(refusedCodes).not.toContain("compound.scope.outside");
-      }, { controlRoot: harness });
-      // The complete/gap phases of this action assert the in-repo knowledge
-      // layout, which the harness-scoped control root used here cannot
-      // express; compound-cli.test.ts owns that contract on the CLI surface.
+        expect(catalogCodes(missing)).toContain("collaboration.not-initialized");
+        expect(catalogCodes(missing)).not.toContain("compound.catalog.knowledge-dir-mismatch");
+        expect(catalogCodes(missing)).not.toContain("catalog.discovery.missing-document");
+        expect(catalogCodes(missing)).not.toContain("compound.catalog.unavailable");
+        expect(catalogCodes(missing)).not.toContain("store.not-initialized");
+        expect(catalogCodes(missing)).not.toContain("compound.index.retired");
+        expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
+      }, { controlRoot: harness, cwd: root });
+
+      // Both authorities, exactly as `store init` leaves them, then the one
+      // body the knowledge root carries is registered.
+      const context = { harnessDir: harness };
+      (await initializeStore(context)).close();
+      await ensureCollaborationAuthority(context);
+      await registerCatalogEntity(context, {
+        kind: "document", id: "doc-good", title: "Good doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
+      }, { operationId: "fixture-catalog-register", actor: "compound" });
+
+      await withClient([definition("compound.validate")], async (client) => {
+        // Every knowledge body registered → complete, and the doc is in scope.
+        const complete = await validate(client);
+        expect(complete).toMatchObject({ status: "ok", data: { ok: true, violations: [] } });
+
+        // A body with no catalog row is a gap the query reports by path.
+        writeFileSync(join(knowledgeDir, "unregistered.md"), KNOWLEDGE_GOOD);
+        const gap = await validate(client);
+        expect(catalogCodes(gap)).toContain("catalog.discovery.missing-document");
+        if (gap.status === "ok") throw new Error("expected a catalog gap refusal");
+        expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
+      }, { controlRoot: harness, cwd: root });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
