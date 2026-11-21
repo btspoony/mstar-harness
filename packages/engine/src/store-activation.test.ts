@@ -2944,9 +2944,9 @@ describe("control-checkout binding states", () => {
     // The checkout's OWN binding is removed, leaving only an interrupted claim.
     rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
     beginBindingClaim(fixture.context, { repoKey: location.repoKey, mode: location.mode, storeId: live.storeId, epoch: live.epoch });
-    // A claim is attempt evidence, never a binding: an ACTIVE authority with no
-    // binding is stale, and `store init` will not promote an unproven claim…
-    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // A claim is attempt evidence, never a binding. A read is unbound-tolerant,
+    // but `store init` will not promote an unproven claim…
+    expect((await readCollaborationAuthority(fixture.context)).storeId).toBe(live.storeId);
     await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     // …and it leaves no primary binding behind.
     expect(existsSync(join(fixture.harness, "collaboration-binding.json"))).toBe(false);
@@ -2965,7 +2965,7 @@ describe("control-checkout binding states", () => {
       storeId: activation.storeId,
       epoch: activation.epoch,
     });
-    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(openCollaborationStore(fixture.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     // store init refuses (never adopts)…
     await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     // …and the explicit activation replay, which verifies the recorded publication
@@ -3017,7 +3017,7 @@ describe("switch safety", () => {
     const location = resolveCollaborationLocation(fixture.context);
     const live = await readCollaborationStage(location, ({ authority }) => authority);
     rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
-    const error = (await openCollaborationStore(fixture.context, "read").then(
+    const error = (await openCollaborationStore(fixture.context, "write").then(
       () => null,
       (failure: unknown) => failure as { code?: string; message: string },
     ));
@@ -3389,7 +3389,7 @@ describe("explicit adoption verb", () => {
     (await initializeStore(clone.context)).close();
 
     // Ordinary access refuses until adoption.
-    await expect(openCollaborationStore(clone.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(openCollaborationStore(clone.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     const adoption = await adoptCollaborationBinding(clone.context, { expectStoreId: activation.storeId });
     expect(adoption.adopted).toBe(true);
     expect(adoption.authority.storeId).toBe(activation.storeId);
@@ -3418,7 +3418,7 @@ describe("explicit adoption verb", () => {
     const created = await ensureCollaborationAuthority(origin.context);
     const clone = repoWorkspaceWithKey("adopt-init-clone-", repoKey);
     (await initializeStore(clone.context)).close();
-    await expect(openCollaborationStore(clone.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(openCollaborationStore(clone.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
     const adoption = await adoptCollaborationBinding(clone.context, { expectStoreId: created.storeId });
     expect(adoption.adopted).toBe(true);

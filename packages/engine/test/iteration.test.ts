@@ -35,6 +35,7 @@
  * execution suites.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,6 +52,7 @@ import {
 import type { SnapshotDoc } from "../src/iteration.js";
 import { readDeclaredNodeFloor, readJson } from "../src/core.js";
 import { registerCatalogEntity, type CatalogOperation } from "../src/catalog.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 import {
   bindExecutionSession,
@@ -364,10 +366,16 @@ describe("evaluatePostMergeCloseFromExecutionAuthority — a terminal workflow's
   test("the gate reports the held lease, and the public recover release clears it", async () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-phase6-lease-"));
     try {
+      execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+      writeFileSync(
+        join(root, ".mstarc"),
+        `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+      );
       const harnessDir = join(root, ".mstar");
       mkdirSync(harnessDir, { recursive: true });
       const context: StoreContext = { harnessDir };
       (await initializeStore(context)).close();
+      await ensureCollaborationAuthority(context);
       const workflowId = "wf-phase6-held-lease";
       const planId = "plan-phase6-held-lease";
       const holderId = "coordinator-phase6-holder";

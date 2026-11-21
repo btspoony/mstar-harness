@@ -44,7 +44,7 @@ import {
   refreshProjections,
 } from "./projection.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-projection-"));
@@ -62,16 +62,25 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** The private staged collaboration record flipped to active (fixture only). */
+/** Publish the staged lane and this checkout's binding, as real activation does. */
 function activateCollaboration(context: StoreContext): void {
-  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 afterEach(() => {
   delete process.env.MSTAR_PROJECTION_CHURN_PATH;

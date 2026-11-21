@@ -99,6 +99,7 @@ const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "store.collaboration.apply",
   "store.collaboration.activate",
   "store.collaboration.restore",
+  "store.collaboration.adopt",
 ]);
 
 /**

@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueError, moveIssue, type CaptureInput, type IssueReceipt } from "./issue.js";
+import { registerCatalogEntity } from "./catalog.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
 import { initializeStore, MIGRATIONS, openStore, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-move-"));
@@ -38,7 +42,12 @@ function capture(projectId: string, occurrenceKey: string, keys = triple): Captu
   };
 }
 function revision(): number {
-  return (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    return (lane.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+  } finally {
+    lane.close();
+  }
 }
 function issueRow(id: string): { project_id: string; identity_key: string; milestone_id: string | null; revision: number } {
   return db.prepare("select project_id, identity_key, milestone_id, revision from issues where id = ?").get(id) as {
@@ -49,18 +58,26 @@ function issueRow(id: string): { project_id: string; identity_key: string; miles
   };
 }
 function operation(operationId: string): unknown {
-  return db.prepare("select 1 from store_operations where operation_id = ?").get(operationId);
+  return db.prepare("select 1 from collaboration_operations where operation_id = ?").get(operationId);
 }
 
 beforeAll(async () => {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   mkdirSync(context.harnessDir, { recursive: true });
-  db = (await initializeStore(context)).db;
+  (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
+  db = new DatabaseSync(resolveCollaborationLocation(context).dbPath) as unknown as StoreDb;
   for (const id of [projectA, projectB]) {
-    db.prepare(
-      "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')",
-    ).run(id, id, `${id}/roadmap.md`);
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id, title: id, rootKind: "projects", relativePath: `${id}/roadmap.md` },
+      { operationId: `register-${id}`, actor: "issue-move.test" },
+    );
   }
   movedIssue = await captureIssue(context, capture(projectA, "occ-moved"), { actor: "project-manager", operationId: "capture-moved" });
   const milestone = await addMilestone(

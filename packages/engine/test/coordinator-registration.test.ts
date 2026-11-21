@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listPendingCatalogRegistrations } from "../src/catalog-registration.js";
 import { registerShippedCatalogExecution } from "../src/execution-registration.js";
 import { readExecutionState, type ExecutionContext } from "../src/execution-store.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "mstar-coordinator-registration-"));
@@ -12,8 +14,14 @@ const root = mkdtempSync(join(tmpdir(), "mstar-coordinator-registration-"));
 async function fixture(name: string): Promise<{ harnessDir: string; context: StoreContext; planId: string; execution: ExecutionContext }> {
   const harnessDir = mkdtempSync(join(root, name));
   mkdirSync(join(harnessDir, ".mstar"), { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: harnessDir, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(harnessDir, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${harnessDir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const context: StoreContext = { harnessDir };
   (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
   const planId = "fixture-plan";
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
   writeFileSync(join(harnessDir, "plans", `${planId}.md`), `# Fixture plan\n\n**plan_id:** ${planId}\n`);

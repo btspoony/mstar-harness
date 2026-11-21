@@ -11157,13 +11157,15 @@ function readCollaborationBinding(context) {
 }
 async function assertControlCheckoutScope(context, location) {
   if (existsSync16(storeDbPath(context))) {
-    const legacy = await connect(storeDbPath(context), "read", busyTimeoutMs()).catch(() => {
-      return;
+    const legacy = await openStore(context, "read").catch((error) => {
+      if (error instanceof StoreError2 && error.code === "store.not-initialized")
+        return;
+      throw error;
     });
     if (legacy !== undefined) {
       try {
-        if (readCollaborationFence(legacy) === null) {
-          const held = heldCollaborationTables(legacy);
+        if (readCollaborationFence(legacy.db) === null) {
+          const held = heldCollaborationTables(legacy.db);
           if (held.length > 0) {
             throw new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
           }
@@ -11206,7 +11208,9 @@ async function openCollaborationStore(context, mode, expected) {
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    await assertControlBinding(context, location, handle.authority);
+    await assertControlCheckoutScope(context, location);
+    if (mode === "write")
+      await assertControlBinding(context, location, handle.authority);
   } catch (error) {
     handle.close();
     throw error;
@@ -12381,7 +12385,7 @@ function storeDirectWriteRefusal(targetPath) {
   return authorityViolation(STORE_DIRECT_WRITE_CODE, `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` + "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " + "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " + "register|update`");
 }
 function registerRetiredRefusal(storeRevision) {
-  return authorityViolation(REGISTER_RETIRED_CODE, "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " + `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` + "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused");
+  return authorityViolation(REGISTER_RETIRED_CODE, "project registers are retired migration history — the repository collaboration database (revision " + `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` + "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused");
 }
 function authorityUnavailableRefusal(route, authority = "the issue authority", write = "register write") {
   return authorityViolation(STORE_AUTHORITY_UNAVAILABLE_CODE, `${authority} could not be read ([${route.code}] ${route.message}) — the ${write} is refused ` + "rather than applied against an unreadable authority; no older-runtime or JSON fallback exists");

@@ -9,9 +9,11 @@ import {
   createExecutionWorkflow,
   initializeCollaborationStore,
   initializeStore,
+  readCollaborationAuthority,
   readExecutionState,
   registerCatalogEntity,
   resolveCollaborationLocation,
+  writeCollaborationBinding,
   type WorkflowEntry,
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
@@ -73,6 +75,7 @@ async function workspace(prefix: string): Promise<string> {
   } finally {
     lane.close();
   }
+  writeCollaborationBinding({ harnessDir }, await readCollaborationAuthority({ harnessDir }));
   return harnessDir;
 }
 

@@ -38,7 +38,7 @@ import {
 } from "./catalog.js";
 import { captureProjectionSources, PROJECTION_FORMAT_VERSION } from "./projection.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-projection-sources-"));
@@ -94,6 +94,7 @@ async function fixture(name: string): Promise<Fixture> {
   } finally {
     lane.close();
   }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
   return {
     workspace,
     harness,

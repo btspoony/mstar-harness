@@ -8,6 +8,7 @@
  *
  * Run with `bun test packages/engine/src/catalog-import.test.ts`.
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +26,8 @@ import {
   type CatalogImportPlan,
 } from "./catalog-import.js";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
+import { openCollaborationStore } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-import-"));
@@ -38,11 +41,18 @@ type Fixture = { context: StoreContext; workspace: string; harness: string };
 /** A temp workspace with a real `.mstar` harness root and an active store. */
 async function freshWorkspace(name: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(workspace, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${workspace.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore({ harnessDir: harness });
+  const context: StoreContext = { harnessDir: harness };
+  const handle = await initializeStore(context);
   handle.close();
-  return { context: { harnessDir: harness }, workspace, harness };
+  await ensureCollaborationAuthority(context);
+  return { context, workspace, harness };
 }
 
 /**
@@ -51,7 +61,7 @@ async function freshWorkspace(name: string): Promise<Fixture> {
  * database rather than from a returned receipt.
  */
 async function catalogRows(context: StoreContext): Promise<{ entities: number; links: number }> {
-  const handle = await openStore(context, "write");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const entities = handle.db.prepare("select count(*) as n from catalog_entities").get() as { n: number };
     const links = handle.db.prepare("select count(*) as n from catalog_links").get() as { n: number };

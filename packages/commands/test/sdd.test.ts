@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionState,
   registerCatalogEntity,
@@ -51,6 +52,10 @@ function evidenceWorkspace(root: string) {
   writeFileSync(join(primary, "source.txt"), "source\n");
   git(["add", "."], primary);
   git(["commit", "-q", "-m", "fixture"], primary);
+  writeFileSync(
+    join(primary, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${primary.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const control = join(root, "control");
   git(["worktree", "add", "-q", "-b", "control/plan", control], primary);
   const feature = join(root, "feature");
@@ -96,6 +101,7 @@ function evidenceWorkspace(root: string) {
 async function seedResolvedAuthority(harness: string): Promise<void> {
   const context = { harnessDir: harness };
   (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
   await registerCatalogEntity(
     context,
     { kind: "plan", id: "plan", title: "plan", rootKind: "plans", relativePath: "plans/plan.md" },

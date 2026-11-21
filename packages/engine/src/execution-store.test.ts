@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import * as nodeOs from "node:os";
 import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { assertExecutionSessionCurrent, resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
@@ -230,6 +230,7 @@ async function freshStore(label: string): Promise<{ context: StoreContext; epoch
     } finally {
       db.close();
     }
+    writeCollaborationBinding(context, await readCollaborationAuthority(context));
     return { context, epoch: handle.epoch };
   } finally {
     handle.close();
@@ -2359,7 +2360,11 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     // §2.3: binding writes no session file, and the control root holds nothing
     // beside the store.
     expect(existsSync(join(context.harnessDir, "workflows"))).toBe(false);
-    expect(readdirSync(context.harnessDir).filter((name) => !name.startsWith("store.db"))).toEqual([]);
+    expect(
+      readdirSync(context.harnessDir).filter(
+        (name) => !name.startsWith("store.db") && name !== "collaboration-binding.json",
+      ),
+    ).toEqual([]);
 
     // The coordinator reads any plan of its workflow, with the plan token it
     // passes back as CAS.
@@ -2916,6 +2921,7 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
   } finally {
     collaborationDb.close();
   }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
   const initialized = await readExecutionState(context);
   await registerCatalogEntity(
     context,

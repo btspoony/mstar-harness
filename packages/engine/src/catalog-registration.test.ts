@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as storeDb from "./store-db.js";
 import { getCatalog } from "./catalog.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   abortCatalogExecution,
@@ -53,13 +53,21 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const location = resolveCollaborationLocation(context);
     await initializeCollaborationStore(location);
     const lane = new DatabaseSync(location.dbPath);
+    let storeId = "";
+    let epoch = 0;
     try {
       lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
         new Date().toISOString(),
       );
+      const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+        | { store_id?: unknown; authority_epoch?: unknown }
+        | undefined;
+      if (typeof row?.store_id === "string") storeId = row.store_id;
+      if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
     } finally {
       lane.close();
     }
+    writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
     setArtifactStore(createFsStore(harnessDir));
     const workflowId = `wf-${name}`;
     return {

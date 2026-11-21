@@ -44,7 +44,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogLinkInput } from "./catalog.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   listPendingCatalogRegistrations,
@@ -96,16 +96,25 @@ async function collaborationLane(workspace: string): Promise<void> {
   // safe identifier because every fixture name is a lower-case slug.
   const repoId = workspace.split("/").pop()!.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
   writeFileSync(join(workspace, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId.replace(/^[^a-z0-9]/, "x")}\n`);
-  const location = resolveCollaborationLocation({ harnessDir: join(workspace, ".mstar") });
+  const context: StoreContext = { harnessDir: join(workspace, ".mstar") };
+  const location = resolveCollaborationLocation(context);
   await initializeCollaborationStore(location);
   const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 const TS = "2026-09-21T00:00:00.000Z";

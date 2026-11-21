@@ -55,6 +55,7 @@ import {
   publicationCause,
   readAppliedMigrations,
   readCollaborationFence,
+  openStore,
   removeStagingFiles,
   storeDbPath,
   syncDirectoryEntry,
@@ -1680,11 +1681,25 @@ export async function adoptCollaborationBinding(
  */
 export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
   if (existsSync(storeDbPath(context))) {
-    const legacy = await connect(storeDbPath(context), "read", busyTimeoutMs()).catch(() => undefined);
+    // Use the retrying read open: a same-process writer's deferred sidecar
+    // cleanup can report a transient SQLITE_CANTOPEN for an intact store, and
+    // silently skipping the fence would admit a legacy owner.
+    const legacy = await openStore(context, "read").catch((error: unknown) => {
+      // The execution lane is a separate domain: a missing or corrupt execution
+      // store never makes the collaboration lane unusable. Only an opened store
+      // with collaboration rows can prove a legacy owner.
+      if (
+        error instanceof StoreError &&
+        (error.code === "store.not-initialized" || error.code === "store.corrupt")
+      ) {
+        return undefined;
+      }
+      throw error;
+    });
     if (legacy !== undefined) {
       try {
-        if (readCollaborationFence(legacy) === null) {
-          const held = heldCollaborationTables(legacy);
+        if (readCollaborationFence(legacy.db) === null) {
+          const held = heldCollaborationTables(legacy.db);
           if (held.length > 0) {
             throw new StoreError(
               "collaboration.cutover-required",
@@ -1779,10 +1794,11 @@ export async function openCollaborationStore(
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    // The control checkout's own binding is proved before any handle escapes: an
-    // unfenced legacy owner or a retargeted/ foreign checkout never reads this
-    // repository's lane.
-    await assertControlBinding(context, location, handle.authority);
+    // A read only proves this checkout is not a retargeted/foreign owner; a
+    // replacement clone with no binding may read and adopts on its first write.
+    // A write additionally proves the binding before any handle escapes.
+    await assertControlCheckoutScope(context, location);
+    if (mode === "write") await assertControlBinding(context, location, handle.authority);
   } catch (error) {
     handle.close();
     throw error;

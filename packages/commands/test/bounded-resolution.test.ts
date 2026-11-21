@@ -29,6 +29,7 @@ import {
   createExecutionWorkflow,
   createFsStore,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   executionContextFor,
   initializeStore,
   openStore,
@@ -229,8 +230,13 @@ async function issueStoreContext(): Promise<{ root: string; harness: string; con
   // why: The harness root is fixed at the Git main worktree's `.mstar`: the issue
   // verbs resolve the store from cwd, so the fixture is a real repo.
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   mkdirSync(harness, { recursive: true });
   await (await initializeStore({ harnessDir: harness })).close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { root, harness, context: testContext(root) };
 }
 
@@ -260,8 +266,14 @@ async function activeNotesContext(): Promise<{ root: string; harness: string; wo
   roots.push(root);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const storeContext = { harnessDir: harness };
   (await initializeStore(storeContext)).close();
+  await ensureCollaborationAuthority(storeContext);
   const authority = await readExecutionState(storeContext);
   const workflow = "wf-bounded-notes";
   const sessionId = "coordinator-bounded-notes";

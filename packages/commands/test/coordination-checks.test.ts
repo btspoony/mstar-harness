@@ -14,6 +14,7 @@ import {
   readExecutionState,
   initializeStore,
   evaluatePostMergeCloseFromExecutionAuthority,
+  ensureCollaborationAuthority,
   registerCatalogEntity,
   type CatalogOperation,
   type WorkflowSnapshot,
@@ -27,6 +28,11 @@ afterEach(() => {
 function tempRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "coordination-checks-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    path.join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   return root;
 }
 function context(cwd: string, controlRoot: string | null = null): InvocationContext {
@@ -70,6 +76,7 @@ async function activeWorkflow(cwd: string, workflowId: string, rowDone = false, 
   // root creation token back instead of re-initializing.
   const initialized = { token: (await readExecutionState(storeContext)).token };
   store.close();
+  await ensureCollaborationAuthority(storeContext);
   const planId = `plan-${workflowId}`;
   await registerCatalogEntity(storeContext, {
     kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md`,

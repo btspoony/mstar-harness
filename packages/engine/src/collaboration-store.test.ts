@@ -35,6 +35,7 @@ import {
   probeCollaborationAuthority,
   readCollaborationAuthority,
   withCollaborationWrite,
+  writeCollaborationBinding,
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
@@ -117,25 +118,53 @@ function makeRepo(origin: string): string {
   return dir;
 }
 
+/** Fixture contexts by resolved lane path, so `activate` can record the binding. */
+const contextsByDbPath = new Map<string, StoreContext>();
+
 function contextAt(root: string): StoreContext {
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
-  return { harnessDir, checkoutRoot: root };
+  const context = { harnessDir, checkoutRoot: root };
+  try {
+    const location = resolveCollaborationLocation(context);
+    contextsByDbPath.set(location.dbPath, context);
+  } catch {
+    // A fixture testing an unresolved scope never reaches activation.
+  }
+  return context;
 }
 
 function locationAt(root: string): CollaborationLocation {
   return resolveCollaborationLocation(contextAt(root));
 }
 
-/** Flip the staged record to active: this plan ships no public activator. */
+/** Publish the staged lane and the owning checkout's binding. */
 function activate(dbPath: string): void {
   const db = new DatabaseSync(dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
+  }
+  const context = contextsByDbPath.get(dbPath);
+  if (context !== undefined) {
+    const location = resolveCollaborationLocation(context);
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId,
+      epoch,
+      binding: "active",
+    });
   }
 }
 

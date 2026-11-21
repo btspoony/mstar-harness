@@ -8,6 +8,8 @@ import { readCatalogCompleteness } from "../src/iteration.js";
 import { resolveProcessHarnessDir } from "../src/coordination.js";
 import { upgradeStoreMinimal } from "../src/execution-minimal-import.js";
 import { readExecutionState } from "../src/execution-store.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
+import { openCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "../src/collaboration-store.js";
 import { initializeStore, openStore, upgradeStore, type StoreContext } from "../src/store-db.js";
 
 const roots: string[] = [];
@@ -19,10 +21,15 @@ async function activeWorkspace(): Promise<{ root: string; context: StoreContext;
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-root-selection-")));
   roots.push(root);
   execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const context = { harnessDir: join(root, ".mstar") };
   mkdirSync(context.harnessDir);
   const created = await initializeStore(context);
   created.close();
+  await ensureCollaborationAuthority(context);
   mkdirSync(join(context.harnessDir, "plans"));
   writeFileSync(join(context.harnessDir, "plans", "alternative.md"), "# Alternative plan\n");
   await registerCatalogEntity(
@@ -38,18 +45,20 @@ async function authorityFacts(context: StoreContext) {
   const authority = await readExecutionState(context);
   const catalog = await listCatalog(context);
   const handle = await openStore(context, "read");
+  const collaboration = await openCollaborationStore(context, "read");
   try {
     return {
       storeId: authority.storeId,
       epoch: authority.epoch,
       root: authority.data.root,
       workflowIds: authority.data.workflows.map((workflow) => workflow.state.id),
-      revisions: readCatalogStoreVersionsOn(handle.db),
+      revisions: readCatalogStoreVersionsOn(collaboration.db),
       catalogRows: catalog.items.map(({ kind, id, title, relativePath, revision }) => ({ kind, id, title, relativePath, revision })),
       catalogTotal: catalog.total,
     };
   } finally {
     handle.close();
+    collaboration.close();
   }
 }
 
@@ -73,6 +82,9 @@ describe("explicit store-root selection", () => {
     expect(existsSync(selected.harnessDir)).toBe(shape === "empty");
     if (shape === "empty") expect(readdirSync(selected.harnessDir)).toEqual([]);
 
+    // The selected checkout shares the repository's collaboration lane but has
+    // no binding of its own yet; adopt it before the execution-only recovery.
+    writeCollaborationBinding(selected, await readCollaborationAuthority(selected));
     // The supported empty-workspace upgrade creates even a missing selected
     // directory, then initializes/activates that store, not the alternative.
     const recovered = await upgradeStoreMinimal({ context: selected, operator: "fixture-operator", operationId: "recover-selected" });
@@ -95,6 +107,7 @@ describe("explicit store-root selection", () => {
     } finally {
       own.close();
     }
+    await ensureCollaborationAuthority(selected);
     writeFileSync(join(selected.harnessDir, "plans", "selected.md"), "# Selected plan\n\n**plan_id:** selected\n");
     await registerCatalogEntity(
       selected,

@@ -23,6 +23,7 @@
  * per-test temporary root — no mocked database and no fixture-written verdict.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ import { readExecutionAuthority } from "./execution-read.js";
 import { existsSync } from "node:fs";
 import { initializeExecutionAuthority, readExecutionState } from "./execution-store.js";
 import { captureProjectionSources } from "./projection.js";
-import { backupStore } from "./store-activation.js";
+import { backupStore, ensureCollaborationAuthority } from "./store-activation.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import {
@@ -47,6 +48,11 @@ type Fixture = { root: string; harnessDir: string; context: StoreContext };
 /** A temp workspace shaped like a real one: a harness root under its own dir. */
 function workspace(prefix: string): Fixture {
   const root = mkdtempSync(join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   return { root, harnessDir, context: { harnessDir } };
@@ -56,6 +62,7 @@ function workspace(prefix: string): Fixture {
 async function activeStore(fx: Fixture): Promise<void> {
   const handle = await initializeStore(fx.context);
   handle.close();
+  await ensureCollaborationAuthority(fx.context);
 }
 
 /** Flip the recorded authority state directly; the store keeps its data. */
@@ -232,6 +239,7 @@ describe("execution-route \u2014 the migration importer entry points stay reacha
     // surface — which is exactly why the absent-store refusal must name the
     // importer as the second recovery path.
     expect(await refusalOf(() => initializeExecutionAuthority(fx.context))).toMatchObject({ code: "execution.not-empty" });
+    await ensureCollaborationAuthority(fx.context);
     const imported = await upgradeStoreMinimal({ context: fx.context, operator: "fixture-operator", operationId: "route-import" });
     expect(imported.authorityState).toBe("active");
     const state = await readExecutionState(fx.context);

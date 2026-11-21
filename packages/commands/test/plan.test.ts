@@ -12,8 +12,10 @@ import {
   initializeCollaborationStore,
   initializeStore,
   listIssues,
+  readCollaborationAuthority,
   readExecutionAuthority,
   resolveCollaborationLocation,
+  writeCollaborationBinding,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { getPlanCommandDefinitions } from "../src/families/plan.js";
@@ -343,6 +345,7 @@ async function residualFixture(
     } finally {
       db.close();
     }
+    writeCollaborationBinding(storeContext, await readCollaborationAuthority(storeContext));
   }
   const initialized = await readExecutionAuthority(storeContext);
   const identity = { source: "local" as const, sessionId: "runtime-coordinator", workflowId: workflow, role: "coordinator" as const };

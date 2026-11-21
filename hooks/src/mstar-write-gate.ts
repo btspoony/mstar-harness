@@ -12,11 +12,10 @@
 // write is refused (`store.direct-write-refused`), and a project register is
 // routed through the DB-aware authority check — refused as
 // `project.register.retired` while the issue store is the active findings
-// authority, refused as `store.authority-unavailable` when that authority
-// cannot be read at all (below-floor runtime / missing `node:sqlite`
-// capability / corrupt / drifted / busy), and shape-validated only while no
-// store or a staged store leaves the register the live authority (issue
-// contract §7: before activation new findings still go to the register). The
+// authority, and refused as `store.authority-unavailable` in every other
+// lane state (below-floor runtime / missing `node:sqlite` capability /
+// corrupt / drifted / busy / staged / absent): no pre-activation register
+// permission or shape-validation-only path exists. The
 // runtime floor is read from the ACTUAL runtime (engine `detectStoreRuntime`
 // — the Bun global first, never Bun's emulated `process.versions.node`) and
 // asserted in-process: this hook is spawned as native `node`, so it needs the
@@ -196,7 +195,7 @@ function storeDirectWriteRefusal(targetPath: string): ValidationResult {
 function registerRetiredRefusal(storeRevision: number | null): ValidationResult {
   return authorityViolation(
     REGISTER_RETIRED_CODE,
-    "project registers are retired migration history \u2014 the issue store ({HARNESS_DIR}/store.db, revision " +
+    "project registers are retired migration history \u2014 the repository collaboration database (revision " +
       `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
   );

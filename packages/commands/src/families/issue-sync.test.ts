@@ -14,10 +14,12 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   initializeCollaborationStore,
   openCollaborationStore,
+  readCollaborationAuthority,
   readItem,
   readRun,
   resolveCollaborationLocation,
   withCollaborationWrite,
+  writeCollaborationBinding,
   PUSH_DIRECTION,
   type ProviderItem,
   type StoreDb,
@@ -126,6 +128,7 @@ async function fixture(
   } finally {
     staged.close();
   }
+  writeCollaborationBinding({ harnessDir }, await readCollaborationAuthority({ harnessDir }));
   await withCollaborationWrite({ harnessDir }, ({ db }) => {
     db.prepare(
       "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Mirror', 'projects', ?, 'now', 'now')",

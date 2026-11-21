@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bindExecutionSession, createExecutionWorkflow, executionContextFor, initializeStore, mutateExecutionPlan, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
+import { bindExecutionSession, createExecutionWorkflow, ensureCollaborationAuthority, executionContextFor, initializeStore, mutateExecutionPlan, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -92,8 +92,13 @@ describe("validation command family", () => {
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "initial"], { cwd });
     const harness = path.join(cwd, ".mstar");
     mkdirSync(harness, { recursive: true });
+    writeFileSync(
+      path.join(cwd, ".mstarc"),
+      `[collaboration]\nmode=local\nrepo_id=fixture-${cwd.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+    );
     const storeContext = { harnessDir: harness };
     (await initializeStore(storeContext)).close();
+    await ensureCollaborationAuthority(storeContext);
     const initialized = await readExecutionAuthority(storeContext);
     await registerCatalogEntity(storeContext, { kind: "plan", id: "plan-synthetic-secondary", title: "Synthetic secondary plan", rootKind: "plans", relativePath: "plans/plan-synthetic-secondary.md" }, { operationId: "catalog-synthetic-secondary", actor: "test" });
     const identity = { source: "local" as const, sessionId: "coordinator-synthetic", role: "coordinator" as const, workflowId: "workflow-synthetic" };

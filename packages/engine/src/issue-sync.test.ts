@@ -11,7 +11,7 @@ import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { busyTimeoutMs, connect, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   acquireRun,
@@ -68,16 +68,25 @@ function context(name: string): StoreContext {
   return { harnessDir, checkoutRoot };
 }
 
-/** Flip the staged record to active: this plan ships no public activator. */
-function activate(dbPath: string): void {
-  const db = new DatabaseSync(dbPath);
+/** Publish the staged lane and this checkout's binding, as real activation does. */
+function activate(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 /**
@@ -90,7 +99,7 @@ async function openedStore(name: string): Promise<{ context: StoreContext; db: S
   const storeContext = context(name);
   const location = resolveCollaborationLocation(storeContext);
   await initializeCollaborationStore(location);
-  activate(location.dbPath);
+  activate(storeContext);
   // A fixture connection, not a lane writer: it keeps the lane's rollback journal
   // so the store stays admissible to `withSyncWrite`.
   const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });

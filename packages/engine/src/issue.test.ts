@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
 import { readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -93,16 +93,25 @@ function ctx(name: string) {
   return { harnessDir, checkoutRoot };
 }
 
-/** Flip the staged record to active: this plan ships no public activator. */
-function activate(dbPath: string): void {
-  const db = new DatabaseSync(dbPath);
+/** Publish the staged lane and this checkout's binding, as real activation does. */
+function activate(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 /** Initialize this context's collaboration authority without activating it. */
@@ -113,7 +122,7 @@ async function stagedIssueStore(context: StoreContext): Promise<void> {
 /** The collaboration authority the issue verbs read and write. */
 async function activeIssueStore(context: StoreContext): Promise<void> {
   await stagedIssueStore(context);
-  activate(resolveCollaborationLocation(context).dbPath);
+  activate(context);
 }
 
 /** One fixture effect on the collaboration authority. */
@@ -1076,7 +1085,12 @@ describe("issue dispositions, revisions, and relations", () => {
     await expect(reopenIssue(context, created.issueId, { reason }, {
       operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
     })).rejects.toMatchObject({ code: "issue.revision-conflict" });
-    expect(await getIssue(context, created.issueId)).toEqual(detail);
+    const again = await getIssue(context, created.issueId);
+    // A read's observation time is not state: the persisted detail must match.
+    expect({ ...again, collaboration: { ...again.collaboration, asOf: "same" } }).toEqual({
+      ...detail,
+      collaboration: { ...detail.collaboration, asOf: "same" },
+    });
   });
 
   test("duplicate and superseded require a canonical issue", async () => {

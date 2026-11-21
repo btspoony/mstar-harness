@@ -36,7 +36,7 @@ import {
   type ActivationAttestation,
 } from "./store-activation.js";
 import { readHarnessVersion } from "./core.js";
-import { replaceRoadmapAuthority } from "./roadmap-store.js";
+
 import { historicalStore } from "./store-migration-fixtures.js";
 import {
   MIGRATIONS,
@@ -79,7 +79,10 @@ function makeRepo(origin: string, mode = "local"): string {
   git(dir, "config", "user.name", "Cutover Test");
   git(dir, "config", "user.email", "cutover@example.test");
   git(dir, "config", "remote.origin.url", origin);
-  writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=${mode}\n`);
+  writeFileSync(
+    join(dir, ".mstarc"),
+    `[collaboration]\nmode=${mode}\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   return dir;
 }
 
@@ -162,14 +165,14 @@ const ROADMAP_CONTENT =
   "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
 
 /**
- * A real SCHEMA-19 combined source (the pre-cutover schema): collaboration rows,
+ * A real SCHEMA-20 combined source (the pre-cutover schema): collaboration rows,
  * a catalog pin with its cross-domain foreign key, a recorded session and an
  * execution row. The fence must advance it to the current schema inside its own
  * transaction.
  */
-function seedSchema19Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
+function seedSchema20Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
   const context = contextAt(repo);
-  const db = historicalStore(context.harnessDir, 19);
+  const db = historicalStore(context.harnessDir, 20);
   try {
     db.exec(`
 insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
@@ -286,24 +289,42 @@ values ('issue-op-legacy', 'legacy-request-hash', '{"issueId":"I-000001","revisi
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
 values ('restore-attempt:customer-request', 'customer-hash', '{"issueId":"I-000002","revision":2,"storeRevision":7,"created":false}', '2026-11-21T00:00:01.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
-values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":20}}', '2026-11-21T00:00:02.000Z');
+values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":19}}', '2026-11-21T00:00:02.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
 values ('upgrade-op', 'upgrade-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-imported"],"skipped":[],"dispositions":[],"sourceDigest":"source-digest","inputDigest":"input-digest"}', '2026-11-21T00:00:03.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
 values ('upgrade-op-old', 'upgrade-old-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-historical"],"skipped":[],"dispositions":[],"sourceDigest":"historical-digest"}', '2026-11-21T00:00:07.000Z');
 update issue_counter set next_value = 3 where id = 1;
 `);
+    const roadmapResult = {
+      projectId: "p-one",
+      revision: 1,
+      contentHash: createHash("sha256").update(ROADMAP_CONTENT).digest("hex"),
+      storeRevision: 7,
+      outcome: "committed",
+      provenance: null,
+    };
+    const roadmapReplayKey = createHash("sha256")
+      .update(
+        JSON.stringify({
+          domain: "roadmap-content-authority",
+          projectId: "p-one",
+          declaredProjectRevision: 1,
+          declaredRoadmapRevision: "absent",
+          contentHash: roadmapResult.contentHash,
+          provenance: null,
+        }),
+      )
+      .digest("hex");
+    db.prepare(
+      "insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)",
+    ).run("roadmap-op", roadmapReplayKey, JSON.stringify(roadmapResult), "2026-11-21T00:00:04.000Z");
     storeId = handle.storeId;
   } finally {
     handle.close();
   }
-  // A real roadmap write records the producer's own persisted receipt shape
-  // (outcome + nullable provenance), which the classifier must recognize.
-  await replaceRoadmapAuthority(
-    context,
-    { projectId: "p-one", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: ROADMAP_CONTENT },
-    { operationId: "roadmap-op", actor: "cutover-test" },
-  );
+  // The source is a combined store built below the cutover; its roadmap row is
+  // part of the seeded SQL, never a collaboration-lane write.
   const counters = await openStore(context, "write");
   try {
     counters.db.exec("update store_meta set revision = 7, catalog_revision = 3 where id = 1");
@@ -1396,12 +1417,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(replanned.manifestId).toBe(manifest.manifestId);
   });
 
-  test("the fence advances a schema-19 source and preserves pins, history and execution rows", async () => {
+  test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
-    const source = seedSchema19Source(repo);
+    const source = seedSchema20Source(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: 19, revision: 7, catalogRevision: 3 });
+    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: 20, revision: 7, catalogRevision: 3 });
 
     const pinQuery = `select ${source.pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`;
     const before = await openStore(source.context, "read");
@@ -1414,7 +1435,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       .all() as Array<{ id: string; disposition: string; revision: number }>;
     before.close();
     expect(pinsBefore).toHaveLength(1);
-    expect(pinsForeignKeysBefore).toHaveLength(2);
+    expect(pinsForeignKeysBefore).toHaveLength(0);
 
     expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("verified");
     const receipt = await activateCollaborationCutover(
@@ -1423,7 +1444,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       cutoverOptions(source.context, manifest.source),
     );
     expect(receipt.phase).toBe("active");
-    expect(receipt.source.schemaVersion).toBe(19);
+    expect(receipt.source.schemaVersion).toBe(20);
 
     // The source advanced through migration 20 inside the fence transaction.
     const after = await openStore(source.context, "read");
@@ -1432,7 +1453,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       expect(schema.v).toBe(MIGRATIONS.length);
       expect(readCollaborationFence(after.db)).toMatchObject({
         manifestId: manifest.manifestId,
-        sourceSchemaVersion: 19,
+        sourceSchemaVersion: 20,
         sourceRevision: 7,
         sourceCatalogRevision: 3,
       });
@@ -1462,7 +1483,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
 
   test("a fence commit failure is reported as unconfirmed, never as unchanged", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-commit-unconfirmed.git");
-    const source = seedSchema19Source(repo);
+    const source = seedSchema20Source(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1495,9 +1516,9 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect((await cutoverState(location)).authority.state).toBe("staged");
   });
 
-  test("a failed fence rolls the schema-19 source back and publishes nothing", async () => {
+  test("a failed fence rolls the schema-20 source back and publishes nothing", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
-    const source = seedSchema19Source(repo);
+    const source = seedSchema20Source(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1533,10 +1554,10 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     const restored = await openStore(source.context, "read");
     try {
       const schema = restored.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
-      expect(schema.v).toBe(19);
+      expect(schema.v).toBe(20);
       expect(readCollaborationFence(restored.db)).toBeNull();
       expect(restored.db.prepare(pinQuery).all()).toEqual(pinsBefore);
-      expect(restored.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toHaveLength(2);
+      expect(restored.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toHaveLength(0);
       expect(restored.db.prepare("select id, disposition from issues order by id").all()).toEqual(issuesBefore);
     } finally {
       restored.close();

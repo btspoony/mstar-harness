@@ -8,12 +8,16 @@ import {
   createExecutionWorkflow,
   encodeExecutionSessionRef,
   executionContextFor,
+  initializeCollaborationStore,
   initializeStore,
   mutateExecutionPlan,
+  readCollaborationAuthority,
   readExecutionPlan,
   readExecutionState,
   registerCatalogEntity,
+  resolveCollaborationLocation,
   storeDbPath,
+  writeCollaborationBinding,
   type ExecutionCaller,
   type ExecutionIdentity,
   type ExecutionPlanView,
@@ -84,9 +88,24 @@ async function buildFixture(label: string): Promise<{
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
+  writeFileSync(
+    join(repoRoot, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${repoRoot.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const store = await initializeStore(context);
   const initialized = { token: (await readExecutionState(context)).token };
   store.close();
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);
   writeText(join(repoRoot, ".mstar", COMPASS_REF), "---\nstatus: active\nplans:\n  - p-1\ntargetBranch: main\n---\n");

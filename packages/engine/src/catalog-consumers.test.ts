@@ -36,7 +36,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { findRegisteredWorkflow, validateStatus } from "./status.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { execFileSync } from "node:child_process";
 import * as nodeOs from "node:os";
@@ -77,14 +77,23 @@ function workspace(name: string, originSlug = name): { root: string; harness: st
   return { root, harness, context: { harnessDir: harness } };
 }
 
-/** The private staged record flipped to active: this plan ships no public activator. */
+/** Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
-  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 /** One initialized (active) store on both lanes with the harness artifact store pinned. */
@@ -468,6 +477,15 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     const replacement = workspace("clone-replacement", "shared-plan-repo");
     expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
     expect(existsSync(join(replacement.harness, "plans", "plan-clone.md"))).toBe(false);
+    // A replacement clone reads unbound; its first write requires adoption.
+    const replacementAuthority = await readCollaborationAuthority(replacement.context);
+    writeCollaborationBinding(replacement.context, {
+      repoKey: replacementAuthority.repoKey,
+      mode: replacementAuthority.mode,
+      storeId: replacementAuthority.storeId,
+      epoch: replacementAuthority.epoch,
+      binding: "active",
+    });
 
     const read = await getCatalog(replacement.context, { kind: "plan", id: "plan-clone" });
     expect(read.entity).toMatchObject({ rootKind: "plans", relativePath: "plan-clone.md", present: false });

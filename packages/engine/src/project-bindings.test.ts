@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
 import { captureIssue, listIssues } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
 import { bindProject, BindingError, readProjectBinding } from "./project.js";
@@ -46,14 +46,23 @@ function checkout(name: string): { root: string; context: StoreContext } {
   return { root, context: { harnessDir } };
 }
 
-/** The private staged record flipped to active: this plan ships no public activator. */
+/** Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
-  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     db.close();
   }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 async function workspace(name: string, projects: string[] = ["proj-a"]): Promise<StoreContext> {
