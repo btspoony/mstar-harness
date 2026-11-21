@@ -53,8 +53,9 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     recovery: "Install the GitHub CLI and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
   });
   if (code === undefined) {
-    // why: consumers read the recovery from `details.recovery` (the channel
-    // refusalEnvelope fills), so the unexpected-failure path publishes there too.
+    // why: refusalEnvelope cannot build an `error` envelope, so this path puts
+    // the hint in `message` for text readers and mirrors it at
+    // `details.recovery`, where refusal consumers look.
     const hint = "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.";
     return {
       version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1,
