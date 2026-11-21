@@ -1,10 +1,14 @@
 export type { RoadmapContent } from "./roadmap-content.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
-import { readCollaborationObservation, type CompleteCollaborationObservation } from "./issue.js";
 
 export type RoadmapExpected = number | "absent";
 export type RoadmapOperation = { operationId: string; actor?: string };

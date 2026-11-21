@@ -190,7 +190,7 @@ const CREDENTIAL = new RegExp(
 );
 
 /** A scheme-led credential that appears without a labelled key (`refused Bearer …`). */
-const AUTH_VALUE = new RegExp(`\\b${AUTH_SCHEME}\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "g");
+const AUTH_VALUE = new RegExp(`\\b(${AUTH_SCHEME})\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "gi");
 
 /** One Digest parameter: `name=value`, quoted or unquoted. */
 const DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`;
@@ -202,7 +202,7 @@ const DIGEST_VALUE = new RegExp(
 );
 
 /** A Digest value without its label. */
-const DIGEST_BARE = new RegExp(`\\bDigest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "g");
+const DIGEST_BARE = new RegExp(`\\b(Digest)\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
 
 function sanitizeFailureMessage(message: string): string {
   const home = homedir();
@@ -215,6 +215,6 @@ function sanitizeFailureMessage(message: string): string {
   return withoutHome
     .replace(DIGEST_VALUE, "$1$2{REDACTED}")
     .replace(CREDENTIAL, "$1$2{REDACTED}")
-    .replace(DIGEST_BARE, "Digest {REDACTED}")
+    .replace(DIGEST_BARE, "$1 {REDACTED}")
     .replace(AUTH_VALUE, "$1 {REDACTED}");
 }

@@ -11,9 +11,15 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { openCollaborationStore, withCollaborationWrite, type CollaborationStoreHandle } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CollaborationStoreHandle,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
 import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
-import type { CollaborationObservation, CollaborationScope } from "./project.js";
 
 
 /**
@@ -1114,36 +1120,6 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
-/** The complete arm of a collaboration observation: the only arm an in-domain read builds. */
-export type CompleteCollaborationObservation = Extract<CollaborationObservation, { completeness: "complete" }>;
-
-/**
- * The complete observation of one domain read: the scope, the authority and the
- * revision counters read INSIDE the caller's own open handle, so the evidence a
- * consumer receives and the rows it stamps are one snapshot. It lives here
- * rather than in `project.ts` so `project.ts` and `catalog.ts` can share it
- * without adding a runtime module cycle (`project -> status -> issue`).
- */
-export function readCollaborationObservation(
-  handle: CollaborationStoreHandle,
-  scope: CollaborationScope,
-): CompleteCollaborationObservation {
-  const asOf = new Date().toISOString();
-  const meta = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
-    | { revision?: unknown; catalog_revision?: unknown }
-    | undefined;
-  const revision = meta?.revision;
-  const catalogRevision = meta?.catalog_revision;
-  if (typeof revision !== "number" || typeof catalogRevision !== "number") {
-    throw new StoreError(
-      "collaboration.unreadable",
-      "The collaboration authority has no readable revision counters; this read cannot state the snapshot it answered at.",
-    );
-  }
-  const { repoKey, mode, storeId, epoch } = handle.authority;
-  return { scope, completeness: "complete", asOf, authority: { repoKey, mode, storeId, epoch }, revision, catalogRevision };
-}
-
 /** The canonical scope key of one issue page: the filters with the applied bounds. */
 function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
   return {
@@ -1214,7 +1190,9 @@ export async function listIssues(
     // lane is created complete.
     assertIssueStoreActive(db);
     const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
-    const storeRevision = readMeta(db).revision;
+    // The page revision is the observation's own counter: no second query of
+    // the same row can disagree with the proof it publishes.
+    const storeRevision = collaboration.revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const spanRow = db
       .prepare(`select count(distinct project_id) as n from issues ${where}`)

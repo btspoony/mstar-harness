@@ -172,7 +172,7 @@ describe("status command family", () => {
         collaboration?: { scope?: { kind?: string; key?: string }; completeness?: string; asOf?: string; revision?: number };
       };
       expect(data.collaboration).toMatchObject({
-        scope: { kind: "query", key: "open-issues:*" },
+        scope: { kind: "repository", key: "open-issues:repository" },
         completeness: "complete",
         revision: 0,
       });

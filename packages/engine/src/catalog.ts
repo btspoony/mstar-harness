@@ -36,10 +36,14 @@ import {
   resolveTrackedResultDir,
 } from "./path.js";
 import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
 import { type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
-import { readCollaborationObservation, type CompleteCollaborationObservation } from "./issue.js";
-import type { CollaborationScope } from "./project.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)

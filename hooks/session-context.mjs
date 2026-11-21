@@ -18,10 +18,10 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename as basename4, dirname as dirname5, join as join7, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync4, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve5 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync as existsSync5, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
 import { existsSync as existsSync6, readFileSync as readFileSync6, readdirSync as readdirSync2, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname7, join as join9, resolve as resolve10, sep as sep3 } from "node:path";
 import { existsSync as existsSync8, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync9, realpathSync as realpathSync6, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
@@ -386,9 +386,6 @@ function validateSnapshotCoordination(value, what = "coordination") {
     }
   }
   return violations;
-}
-function vocabularyMap(values) {
-  return Object.fromEntries(values.map((value) => [value, true]));
 }
 function ok(value, message) {
   assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
@@ -3890,9 +3887,9 @@ function spaceThenNonSpace(effects, ok, nok) {
   }
 }
 function readJson(filePath) {
-  if (!existsSync4(filePath))
+  if (!existsSync3(filePath))
     return {};
-  const content = readFileSync5(filePath, "utf8").trim();
+  const content = readFileSync4(filePath, "utf8").trim();
   if (!content)
     return {};
   try {
@@ -3904,9 +3901,9 @@ function readJson(filePath) {
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
-    const candidate = resolve6(dir, "package.json");
+    const candidate = resolve5(dir, "package.json");
     try {
-      const pkg = JSON.parse(readFileSync5(candidate, "utf8"));
+      const pkg = JSON.parse(readFileSync4(candidate, "utf8"));
       if (pkg.name === "morning-star")
         return candidate;
     } catch {}
@@ -3925,9 +3922,9 @@ function readDeclaredNodeFloor() {
   const candidates = [];
   let dir = moduleDir;
   for (let depth = 0;depth < 6; depth += 1) {
-    candidates.push(join7(dir, "..", "package.json"), join7(dir, "package.json"));
+    candidates.push(join6(dir, "..", "package.json"), join6(dir, "package.json"));
     if (depth === 1)
-      candidates.push(join7(dir, "packages", "engine", "package.json"));
+      candidates.push(join6(dir, "packages", "engine", "package.json"));
     const parent = dirname5(dir);
     if (parent === dir)
       break;
@@ -3938,7 +3935,7 @@ function readDeclaredNodeFloor() {
   for (const manifestPath of [...new Set(candidates)]) {
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync5(manifestPath, "utf8"));
+      parsed = JSON.parse(readFileSync4(manifestPath, "utf8"));
     } catch {
       continue;
     }
@@ -3968,6 +3965,9 @@ function readMainWorktree(cwd) {
     return null;
   }
   return { root: parsed.root, branch: parsed.branch };
+}
+function vocabularyMap(values) {
+  return Object.fromEntries(values.map((value) => [value, true]));
 }
 function violation4(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
@@ -4584,7 +4584,7 @@ function executionToken(kind, storeId, epoch, key, revision) {
   return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
 }
 function corrupt(detail) {
-  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
+  return new StoreError2("store.corrupt", `${detail}; the execution authority cannot be verified`);
 }
 function readStoreIdentity(db) {
   const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
@@ -4963,10 +4963,10 @@ function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
     warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
+    throw new StoreError2("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
   if (floor !== null && compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
+    throw new StoreError2("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {
@@ -4977,12 +4977,12 @@ async function loadSqliteDriver() {
     return mod;
   } catch (error) {
     assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
-    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
+    throw new StoreError2("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
 function storeDbPath(context) {
   if (!context?.harnessDir)
-    throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
+    throw new StoreError2("store.corrupt", "StoreContext.harnessDir is required");
   const root = resolve18(context.harnessDir);
   return join21(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
@@ -4991,12 +4991,12 @@ function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
 function refuseOpenFailure(error, dbPath, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
-  if (error instanceof StoreError)
+  if (error instanceof StoreError2)
     throw error;
   if (isBusyError(error)) {
-    throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
+    throw new StoreError2("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
   }
-  throw new StoreError("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
+  throw new StoreError2("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
 }
 function isBusyError(error) {
   const err = error;
@@ -5005,7 +5005,7 @@ function isBusyError(error) {
 function busyAware(db, path, timeout) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError2("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -5058,7 +5058,7 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   if (stats?.isFile())
     return;
   const observed = stats === undefined ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})` : stats.isSymbolicLink() ? "it is a symbolic link" : "it is not a regular file";
-  throw new StoreError("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
+  throw new StoreError2("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
 }
 function isWalFormatDatabase(header, bytes) {
   if (bytes < DATABASE_HEADER_BYTES)
@@ -5122,7 +5122,7 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
   }
   const fail = (message) => {
     db.close();
-    throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
+    throw new StoreError2("store.corrupt", `${message} (opening ${dbPath})`);
   };
   try {
     db.exec(`pragma busy_timeout=${timeout}`);
@@ -5162,7 +5162,7 @@ function isRecord(value) {
 function parseStoredRecord(text, what) {
   const parsed = typeof text === "string" ? JSON.parse(text) : undefined;
   if (!isRecord(parsed))
-    throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+    throw new StoreError2("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
   return parsed;
 }
 function normalizeLegacyCoordination(legacy) {
@@ -5231,7 +5231,7 @@ function readLeaseCutover(db) {
   for (const row of rows) {
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
     if (!isRecord(raw)) {
-      throw new StoreError("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
+      throw new StoreError2("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
     }
     leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
   }
@@ -5299,7 +5299,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     const workflowId = String(row.workflow_id ?? "");
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
     if (!isRecord(raw)) {
-      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
     }
     const claim = raw;
     if (claim.status === "released")
@@ -5312,7 +5312,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       continue;
     const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
     if (planRow === undefined) {
-      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
+      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
     }
     if (attestation === undefined) {
       pendingHolders.add(holder);
@@ -5324,7 +5324,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant !== null && cutoverInstant !== null && claimedInstant <= attestedInstant && attestedInstant <= cutoverInstant;
     if (!settled) {
-      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
+      throw new StoreError2("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
     }
     const tombstone = {
       ...claim,
@@ -5346,24 +5346,24 @@ function readAppliedMigrations(db, tolerateMissingTable) {
   if (!present?.n) {
     if (tolerateMissingTable)
       return [];
-    throw new StoreError("store.corrupt", "The store database has no schema_version table");
+    throw new StoreError2("store.corrupt", "The store database has no schema_version table");
   }
   let rows;
   try {
     rows = db.prepare("select version, name, checksum from schema_version order by version").all();
   } catch (error) {
-    throw new StoreError("store.corrupt", `schema_version is unreadable: ${error.message}`);
+    throw new StoreError2("store.corrupt", `schema_version is unreadable: ${error.message}`);
   }
   return rows.map((row) => {
     if (typeof row.version !== "number" || !Number.isInteger(row.version) || typeof row.name !== "string" || typeof row.checksum !== "string") {
-      throw new StoreError("store.corrupt", "schema_version contains a malformed row");
+      throw new StoreError2("store.corrupt", "schema_version contains a malformed row");
     }
     return { version: row.version, name: row.name, checksum: row.checksum };
   });
 }
 function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
   if (applied.length === 0) {
-    throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
+    throw new StoreError2("store.corrupt", "The store database exists but no migrations are recorded");
   }
   let max = 0;
   for (let i = 0;i < applied.length; i++) {
@@ -5378,10 +5378,10 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
       for (const migration of migrations)
         if (migration.version > supportedMax)
           supportedMax = migration.version;
-      throw new StoreError("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
+      throw new StoreError2("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
     }
     if (row.version !== i + 1) {
-      throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
+      throw new StoreError2("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
     }
     max = row.version;
   }
@@ -5390,7 +5390,7 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
 function readStoreMeta(db) {
   const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
   if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
+    throw new StoreError2("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
   }
   return {
     storeId: row.store_id,
@@ -5412,11 +5412,11 @@ function readExecutionMeta(db, schemaVersion) {
   const present = presentExecutionTables(db);
   const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
   if (missing.length > 0) {
-    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
+    throw new StoreError2("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
   }
   const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
   if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
+    throw new StoreError2("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
   }
   return {
     protocolVersion: row.protocol_version,
@@ -5431,7 +5431,7 @@ function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
 function isTransientReadOpenFailure(error, dbPath) {
-  if (error instanceof StoreError)
+  if (error instanceof StoreError2)
     return false;
   if (!isRawCantOpen(error))
     return false;
@@ -5443,7 +5443,7 @@ async function openStore(context, mode, options = {}) {
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync15(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve18(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+    throw new StoreError2("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve18(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -5543,7 +5543,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
   if (err)
     throw err[0];
   return res;
-}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS, PROVENANCE_KINDS, TERMINAL, init_issue, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS2, CatalogError, init_catalog, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, init_catalog, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL, init_issue, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 # Tracked results live under .agents/ and .mstarc declares the layout.
 .mstar/
 `, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
@@ -5556,7 +5556,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
 !.agents/specs/**
 !.agents/adr/
 !.agents/adr/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS2, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS2, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError2, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -6677,248 +6677,11 @@ var init_engine = __esm(() => {
     GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
     HASH_RE = /^sha256:[0-9a-f]{64}$/;
   });
-  init_audit = __esm2(() => {
-    init_path();
-    AUDIT_PRIORITIES = ["P1", "P2", "P3"];
-    AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
-    AUDIT_RISKS = ["LOW", "MED", "HIGH"];
-    AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
-    AUDIT_CATEGORIES = [
-      "bug",
-      "security",
-      "perf",
-      "tests",
-      "tech-debt",
-      "migration",
-      "dx",
-      "docs",
-      "direction"
-    ];
-    WHOLE_MATCH_PATTERNS = [
-      { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
-      { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-      { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
-      { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
-      { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
-      { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-      { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
-      { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
-    ];
-    VALUE_PATTERNS = [
-      {
-        typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
-        re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
-      }
-    ];
-    NEVER_COMMIT_FILENAMES = [
-      { type: "env-file", re: /^\.env/i },
-      { type: "private-key-file", re: /\.(?:pem|key)$/i },
-      { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
-      { type: "credentials-json", re: /^credentials\.json$/i },
-      { type: "service-account-json", re: /^service-account\.json$/i },
-      { type: "git-credentials", re: /^\.?git-credentials$/i }
-    ];
-    CI_IAC_LEAK_SHAPES = [
-      {
-        kind: "actions-plaintext-env",
-        description: "GitHub Actions env assignment with plaintext literal",
-        re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
-      },
-      {
-        kind: "actions-secret-echo",
-        description: "echo of a GitHub Actions secrets context value",
-        re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
-      },
-      {
-        kind: "dockerfile-credential-env",
-        description: "Dockerfile ENV/ARG with credential-looking name",
-        re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
-      },
-      {
-        kind: "terraform-hardcoded-password",
-        description: "Terraform hardcoded password attribute",
-        re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
-      }
-    ];
-    SAFE_PLACEHOLDER_SHAPES = [
-      /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
-      /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
-      /os\.environ(?:\.get)?\(?\s*["']/g
-    ];
-    SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
-    ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
-    LOCKFILE_NAMES = [
-      "package-lock.json",
-      "pnpm-lock.yaml",
-      "yarn.lock",
-      "bun.lock",
-      "bun.lockb",
-      "Cargo.lock",
-      "poetry.lock",
-      "uv.lock",
-      "Gemfile.lock",
-      "composer.lock"
-    ];
-    AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
-    AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
-    DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
-    LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-  });
-  init_issue = __esm2(() => {
-    init_audit();
-    init_collaboration_store();
-    init_store_db();
-    ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
-    ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
-    TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
-    ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
-    ISSUE_PAYLOAD_SCHEMAS = {
-      CaptureInput: {
-        projectId: { required: true, type: "string", description: "Project identifier" },
-        title: { required: true, type: "string", description: "Finding title" },
-        kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
-        severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
-        impact: { required: true, type: "string", description: "User or system impact" },
-        acceptance: { required: true, type: "string", description: "Acceptance condition" },
-        owner: { required: false, type: "string", description: "Optional owner" },
-        sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-        rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-        acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-        occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-        sourceKind: { required: true, type: "string", description: "Source category" },
-        location: { required: true, type: "string", description: "Source location" },
-        observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-        evidence: { required: true, type: "string[]", description: "Evidence strings" },
-        discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-      },
-      OccurrenceInput: {
-        sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-        rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-        acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-        occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-        sourceKind: { required: true, type: "string", description: "Source category" },
-        location: { required: true, type: "string", description: "Source location" },
-        observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-        evidence: { required: true, type: "string[]", description: "Evidence strings" },
-        discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-      },
-      IssueTriage: {
-        reason: { required: true, type: "string", description: "Reason for triage change" },
-        kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
-        severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
-        title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
-        impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
-        acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
-        owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
-      },
-      ClosureEvidence: {
-        reason: { required: true, type: "string", description: "Reason for closure" },
-        references: {
-          required: false,
-          requiredWhen: ["resolved", "obsolete"],
-          type: "string[]",
-          description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
-          minItems: 1,
-          itemsNonblank: true
-        },
-        scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
-        canonicalIssueId: {
-          required: false,
-          requiredWhen: ["duplicate", "superseded"],
-          type: "string | null",
-          nullable: true,
-          description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
-        },
-        alignmentRef: {
-          required: false,
-          requiredWhen: ["resolved", "waived"],
-          type: "string",
-          description: "Authority alignment reference; required for resolved/waived closure"
-        }
-      },
-      IssueReopen: {
-        reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
-      },
-      IssueMove: {
-        projectId: {
-          required: true,
-          type: "string",
-          description: "Target project; must be a registered catalog project",
-          nonblankWhenPresent: true
-        },
-        reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true }
-      },
-      IssueLink: {
-        relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
-        issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
-        kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
-        target: { required: false, type: "string", description: "Provenance target; required with kind" }
-      },
-      PlanProgress: {
-        status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
-        summary: { required: true, type: "string", description: "Current progress or blocker summary" },
-        evidence_paths: {
-          required: true,
-          type: "string[]",
-          description: "Canonical absolute artifact paths for this plan",
-          itemsNonblank: true
-        },
-        track_branches: {
-          required: false,
-          type: "string[]",
-          description: "Reported L2 track branches",
-          itemsNonblank: true
-        }
-      }
-    };
-    ISSUE_ACTIONS = {
-      add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
-      list: { payload: null, read: true, cas: false, disposition: null },
-      show: { payload: null, read: true, cas: false, disposition: null },
-      occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
-      triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
-      close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
-      reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
-      move: { payload: "IssueMove", read: false, cas: true, disposition: null },
-      waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
-      duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
-      supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
-      link: { payload: "IssueLink", read: false, cas: true, disposition: null },
-      export: { payload: null, read: true, cas: false, disposition: null }
-    };
-    ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
-    IssueError = class IssueError extends Error {
-      code;
-      details = {};
-      constructor(code, message) {
-        super(`[${code}] ${message}`);
-        this.name = "IssueError";
-        this.code = code;
-      }
-    };
-    DISPOSITIONS = vocabularyMap(ISSUE_DISPOSITIONS);
-    ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
-    ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
-    RELATIONS = {
-      related: true,
-      blocks: true,
-      "duplicate-of": true,
-      "superseded-by": true
-    };
-    PROVENANCE_KINDS = {
-      plan: true,
-      iteration: true,
-      pr: true,
-      report: true
-    };
-    TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
-  });
   init_catalog = __esm2(() => {
     init_path();
     init_git_probe();
     init_collaboration_store();
     init_store_db();
-    init_issue();
     ENTITY_KINDS = {
       project: true,
       iteration: true,
@@ -6949,7 +6712,7 @@ var init_engine = __esm(() => {
       archived: true,
       superseded: true
     };
-    RELATIONS2 = {
+    RELATIONS = {
       "belongs-to": true,
       documents: true,
       "spec-ref": true,
@@ -10272,6 +10035,242 @@ var init_engine = __esm(() => {
     ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
     ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
   });
+  init_audit = __esm2(() => {
+    init_path();
+    AUDIT_PRIORITIES = ["P1", "P2", "P3"];
+    AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
+    AUDIT_RISKS = ["LOW", "MED", "HIGH"];
+    AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
+    AUDIT_CATEGORIES = [
+      "bug",
+      "security",
+      "perf",
+      "tests",
+      "tech-debt",
+      "migration",
+      "dx",
+      "docs",
+      "direction"
+    ];
+    WHOLE_MATCH_PATTERNS = [
+      { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
+      { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+      { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+      { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+      { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+      { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
+      { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
+      { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
+    ];
+    VALUE_PATTERNS = [
+      {
+        typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
+        re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
+      }
+    ];
+    NEVER_COMMIT_FILENAMES = [
+      { type: "env-file", re: /^\.env/i },
+      { type: "private-key-file", re: /\.(?:pem|key)$/i },
+      { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
+      { type: "credentials-json", re: /^credentials\.json$/i },
+      { type: "service-account-json", re: /^service-account\.json$/i },
+      { type: "git-credentials", re: /^\.?git-credentials$/i }
+    ];
+    CI_IAC_LEAK_SHAPES = [
+      {
+        kind: "actions-plaintext-env",
+        description: "GitHub Actions env assignment with plaintext literal",
+        re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
+      },
+      {
+        kind: "actions-secret-echo",
+        description: "echo of a GitHub Actions secrets context value",
+        re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
+      },
+      {
+        kind: "dockerfile-credential-env",
+        description: "Dockerfile ENV/ARG with credential-looking name",
+        re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
+      },
+      {
+        kind: "terraform-hardcoded-password",
+        description: "Terraform hardcoded password attribute",
+        re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
+      }
+    ];
+    SAFE_PLACEHOLDER_SHAPES = [
+      /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
+      /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
+      /os\.environ(?:\.get)?\(?\s*["']/g
+    ];
+    SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
+    ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
+    LOCKFILE_NAMES = [
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "bun.lock",
+      "bun.lockb",
+      "Cargo.lock",
+      "poetry.lock",
+      "uv.lock",
+      "Gemfile.lock",
+      "composer.lock"
+    ];
+    AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
+    AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+    DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
+    LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  });
+  init_issue = __esm2(() => {
+    init_audit();
+    init_collaboration_store();
+    init_store_db();
+    ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
+    ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
+    TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
+    ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
+    ISSUE_PAYLOAD_SCHEMAS = {
+      CaptureInput: {
+        projectId: { required: true, type: "string", description: "Project identifier" },
+        title: { required: true, type: "string", description: "Finding title" },
+        kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
+        severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
+        impact: { required: true, type: "string", description: "User or system impact" },
+        acceptance: { required: true, type: "string", description: "Acceptance condition" },
+        owner: { required: false, type: "string", description: "Optional owner" },
+        sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+        rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+        acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+        occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+        sourceKind: { required: true, type: "string", description: "Source category" },
+        location: { required: true, type: "string", description: "Source location" },
+        observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+        evidence: { required: true, type: "string[]", description: "Evidence strings" },
+        discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+      },
+      OccurrenceInput: {
+        sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+        rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+        acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+        occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+        sourceKind: { required: true, type: "string", description: "Source category" },
+        location: { required: true, type: "string", description: "Source location" },
+        observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+        evidence: { required: true, type: "string[]", description: "Evidence strings" },
+        discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+      },
+      IssueTriage: {
+        reason: { required: true, type: "string", description: "Reason for triage change" },
+        kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
+        severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
+        title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
+        impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+        acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
+        owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
+      },
+      ClosureEvidence: {
+        reason: { required: true, type: "string", description: "Reason for closure" },
+        references: {
+          required: false,
+          requiredWhen: ["resolved", "obsolete"],
+          type: "string[]",
+          description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
+          minItems: 1,
+          itemsNonblank: true
+        },
+        scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
+        canonicalIssueId: {
+          required: false,
+          requiredWhen: ["duplicate", "superseded"],
+          type: "string | null",
+          nullable: true,
+          description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
+        },
+        alignmentRef: {
+          required: false,
+          requiredWhen: ["resolved", "waived"],
+          type: "string",
+          description: "Authority alignment reference; required for resolved/waived closure"
+        }
+      },
+      IssueReopen: {
+        reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
+      },
+      IssueMove: {
+        projectId: {
+          required: true,
+          type: "string",
+          description: "Target project; must be a registered catalog project",
+          nonblankWhenPresent: true
+        },
+        reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true }
+      },
+      IssueLink: {
+        relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+        issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+        kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+        target: { required: false, type: "string", description: "Provenance target; required with kind" }
+      },
+      PlanProgress: {
+        status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+        summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+        evidence_paths: {
+          required: true,
+          type: "string[]",
+          description: "Canonical absolute artifact paths for this plan",
+          itemsNonblank: true
+        },
+        track_branches: {
+          required: false,
+          type: "string[]",
+          description: "Reported L2 track branches",
+          itemsNonblank: true
+        }
+      }
+    };
+    ISSUE_ACTIONS = {
+      add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
+      list: { payload: null, read: true, cas: false, disposition: null },
+      show: { payload: null, read: true, cas: false, disposition: null },
+      occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
+      triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
+      close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
+      reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+      move: { payload: "IssueMove", read: false, cas: true, disposition: null },
+      waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
+      duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
+      supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
+      link: { payload: "IssueLink", read: false, cas: true, disposition: null },
+      export: { payload: null, read: true, cas: false, disposition: null }
+    };
+    ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
+    IssueError = class IssueError extends Error {
+      code;
+      details = {};
+      constructor(code, message) {
+        super(`[${code}] ${message}`);
+        this.name = "IssueError";
+        this.code = code;
+      }
+    };
+    DISPOSITIONS = vocabularyMap(ISSUE_DISPOSITIONS);
+    ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
+    ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
+    RELATIONS2 = {
+      related: true,
+      blocks: true,
+      "duplicate-of": true,
+      "superseded-by": true
+    };
+    PROVENANCE_KINDS = {
+      plan: true,
+      iteration: true,
+      pr: true,
+      report: true
+    };
+    TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
+  });
   init_persist_payload_schemas = __esm2(() => {
     WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
       version: { required: true, type: "number", description: "Root artifact version." },
@@ -10332,7 +10331,6 @@ var init_engine = __esm(() => {
     init_coordination_write();
     init_collaboration_store();
     init_status();
-    init_issue();
     DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
     FindingsEvidenceError = class FindingsEvidenceError extends Error {
       code;
@@ -10750,7 +10748,7 @@ var init_engine = __esm(() => {
   init_store_db = __esm2(() => {
     init_coordination();
     init_core();
-    StoreError = class StoreError extends Error {
+    StoreError2 = class StoreError2 extends Error {
       code;
       details;
       constructor(code, message, details) {
@@ -11064,7 +11062,6 @@ var init_engine = __esm(() => {
   });
   init_collaboration_store();
   init_roadmap_content();
-  init_issue();
   init_roadmap_content();
   init_core();
   init_mstarc();
@@ -11311,9 +11308,9 @@ var init_engine = __esm(() => {
   KINDS = vocabularyMap(ISSUE_KINDS);
   SEVERITIES = vocabularyMap(ISSUE_SEVERITIES);
   CREDENTIAL = new RegExp(`\\b(token|secret|credential|password|passphrase|api[-_]?key|authorization)\\b(\\s*[=:]\\s*)(?:${AUTH_SCHEME}\\s+)?(?:"[^"]*"|'[^']*'|\\S+)`, "gi");
-  AUTH_VALUE = new RegExp(`\\b${AUTH_SCHEME}\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "g");
+  AUTH_VALUE = new RegExp(`\\b(${AUTH_SCHEME})\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "gi");
   DIGEST_VALUE = new RegExp(`\\b(authorization)\\b(\\s*[=:]\\s*)Digest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
-  DIGEST_BARE = new RegExp(`\\bDigest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "g");
+  DIGEST_BARE = new RegExp(`\\b(Digest)\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
   init_store_migrate();
   init_store_activation();
   init_coordination_write();

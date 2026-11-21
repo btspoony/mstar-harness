@@ -310,9 +310,16 @@ describe("API over a real store", () => {
     expect(envelope.data.items.map((row) => row.id)).toEqual(before.items.map((row) => row.id));
     expect(envelope.storeRevision).toBe(before.storeRevision);
 
-    // Read-only: the authoritative rows and revisions are unchanged after the GET.
+    // Read-only: the authoritative rows and revisions are unchanged after the
+    // GET. `asOf` is each read's own observation instant, so it is the one
+    // field a before/after comparison must normalize away.
     const after = await listIssues(context, {});
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    const evidence = (page: Awaited<ReturnType<typeof listIssues>>): string => {
+      const copy = JSON.parse(JSON.stringify(page)) as { collaboration?: { asOf?: unknown } };
+      if (copy.collaboration !== undefined) delete copy.collaboration.asOf;
+      return JSON.stringify(copy);
+    };
+    expect(evidence(after)).toBe(evidence(before));
   });
 
   test("GET /api/issues/:id answers the detail DTO; unknown id is a structured 404", async () => {
@@ -421,8 +428,24 @@ describe("API over a real store", () => {
       ["Bearer", "sk-live-bearer"],
       ["Basic", "dXNlcjpwYXNz"],
       ["Token", "tok-live-123"],
+      ["bearer", "sk-live-mixed-case"],
+      ["bAsIc", "dXNlcjpwYXNzMixlZA=="],
+      ["toKeN", "tok-live-mixed"],
     ] as const) {
       const id = `x%20Authorization:%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+    // An UNLABELLED, mixed-case scheme carries a credential too.
+    for (const [scheme, secret] of [
+      ["bearer", "sk-live-bare"],
+      ["toKeN", "tok-live-bare"],
+    ] as const) {
+      const id = `x%20refused%20${scheme}%20${secret}`;
       const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
       expect(res.status).toBe(404);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };

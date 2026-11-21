@@ -99,16 +99,14 @@ export interface FakeJobSnapshot extends JobDoneSnapshot {
  * write the real home. One home per test process, removed on exit.
  */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), 'dsh-mstar-home-'))
-let fixtureHomeSpy: { mockRestore(): void } | undefined
-beforeAll(() => {
-  fixtureHomeSpy = spyOn(nodeOs, 'homedir').mockImplementation(() => FIXTURE_HOME)
-})
-afterAll(() => {
-  // Restore the shared module's homedir: a leaked spy would point every later
-  // test file at this (deleted) directory and make the suite order-dependent.
-  fixtureHomeSpy?.mockRestore()
-  rmSync(FIXTURE_HOME, { recursive: true, force: true })
-})
+// Bun shares this helper module across test FILES: a per-file beforeAll/afterAll
+// would restore the spy (or delete its target) while another file still runs,
+// handing it the real home. The home therefore lives for the whole process and
+// is restored/removed only on exit.
+if (nodeOs.homedir() !== FIXTURE_HOME) {
+  spyOn(nodeOs, 'homedir').mockImplementation(() => FIXTURE_HOME)
+}
+process.on('exit', () => rmSync(FIXTURE_HOME, { recursive: true, force: true }))
 
 /** One repository identity per fixture root (its temp basename is unique). */
 function fixtureRepoId(root: string): string {
@@ -1194,7 +1192,7 @@ function ensureFixtureRepo(harnessDir: string): void {
   gitInit(root)
   const mstarc = join(root, '.mstarc')
   if (existsSync(mstarc)) return
-  const slug = basename(root)
+  const slug = `${basename(dirname(root))}-${basename(root)}`
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^[^a-z0-9]+/, '')

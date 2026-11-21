@@ -265,10 +265,18 @@ describe("dashboard collaboration disclosure", () => {
       expect(typed.message).not.toContain(secret);
       expect(typed.message).toContain("{REDACTED}");
     }
-    // A scheme-led credential without the header label is redacted too.
-    const bare = dashboardFailure(new Error("provider refused Bearer sk-live-456"));
-    expect(bare.message).not.toContain("sk-live-456");
-    expect(bare.message).toContain("{REDACTED}");
+    // A scheme-led credential without the header label is redacted too — in any
+    // scheme capitalization (a bare lower-case `bearer` must not escape).
+    for (const [scheme, secret] of [
+      ["bearer", "sk-live-456"],
+      ["bAsIc", "dXNlcjpwYXNz"],
+      ["toKeN", "tok-live-mixed"],
+      ["dIgEsT", "nonce=abc"],
+    ] as const) {
+      const bare = dashboardFailure(new Error(`provider refused ${scheme} ${secret}`));
+      expect(bare.message).not.toContain(secret);
+      expect(bare.message).toContain("{REDACTED}");
+    }
     // A Digest value is a parameter list: every parameter is redacted with it.
     const digest = dashboardFailure(
       new Error('Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"'),

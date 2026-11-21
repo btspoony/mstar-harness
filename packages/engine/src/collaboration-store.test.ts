@@ -1179,6 +1179,23 @@ describe("collaboration host authority", () => {
     });
   });
 
+  test("a rejected storage component is unavailable, never a missing database", async () => {
+    const repo = makeRepo("https://github.com/acme/host-rejected.git");
+    const context = contextAt(repo);
+    await ensureCollaborationAuthority(context);
+    const dbPath = locationAt(repo).dbPath;
+    // A dangling symlink in the storage chain hides the database from a plain
+    // existence test while admission rejects the component itself.
+    const component = dirname(dirname(dbPath));
+    rmSync(component, { recursive: true, force: true });
+    symlinkSync(join(ROOT, "does-not-exist"), component);
+
+    const probe = await probeCollaborationAuthority(context);
+    expect(probe).toMatchObject({ kind: "unavailable", code: "collaboration.unreadable" });
+    if (probe.kind !== "unavailable") throw new Error("expected unavailable");
+    expect(probe.message).toContain("storage component is a symbolic link");
+  });
+
   test("an unresolved identity or unsupported mode is unavailable, never absent", async () => {
     const originless = join(ROOT, `repo-host-originless-${sequence++}`);
     mkdirSync(originless, { recursive: true });

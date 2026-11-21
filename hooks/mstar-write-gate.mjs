@@ -3,7 +3,7 @@
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync as readFileSync3, statSync as statSync2, writeSync } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve5 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve6 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { execFileSync } from "node:child_process";
@@ -17,10 +17,10 @@ import { homedir } from "node:os";
 import { join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync4, mkdirSync as mkdirSync2, readFileSync as readFileSync5, renameSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename as basename4, dirname as dirname5, join as join7, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync4, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve5 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync as existsSync5, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
 import { existsSync as existsSync6, readFileSync as readFileSync6, readdirSync as readdirSync2, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname7, join as join9, resolve as resolve10, sep as sep3 } from "node:path";
 import { existsSync as existsSync8, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync9, realpathSync as realpathSync6, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
@@ -811,288 +811,17 @@ var init_coordination_write = __esm(() => {
   GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   HASH_RE = /^sha256:[0-9a-f]{64}$/;
 });
-var AUDIT_PRIORITIES;
-var AUDIT_EFFORTS;
-var AUDIT_RISKS;
-var AUDIT_CONFIDENCES;
-var AUDIT_CATEGORIES;
-var WHOLE_MATCH_PATTERNS;
-var VALUE_PATTERNS;
-var NEVER_COMMIT_FILENAMES;
-var CI_IAC_LEAK_SHAPES;
-var SAFE_PLACEHOLDER_SHAPES;
-var SAFE_PLACEHOLDER_VALUES;
-var ACTIONS_ENV_KEY;
-var LOCKFILE_NAMES;
-var AUDIT_FINGERPRINT_RE;
-var AUDIT_SEVERITY_ORDER;
-var DEFAULT_IGNORABLE_RE;
-var LONE_SURROGATE_RE;
-var init_audit = __esm(() => {
-  init_path();
-  AUDIT_PRIORITIES = ["P1", "P2", "P3"];
-  AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
-  AUDIT_RISKS = ["LOW", "MED", "HIGH"];
-  AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
-  AUDIT_CATEGORIES = [
-    "bug",
-    "security",
-    "perf",
-    "tests",
-    "tech-debt",
-    "migration",
-    "dx",
-    "docs",
-    "direction"
-  ];
-  WHOLE_MATCH_PATTERNS = [
-    { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
-    { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-    { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
-    { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
-    { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
-    { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-    { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
-    { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
-  ];
-  VALUE_PATTERNS = [
-    {
-      typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
-      re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
-    }
-  ];
-  NEVER_COMMIT_FILENAMES = [
-    { type: "env-file", re: /^\.env/i },
-    { type: "private-key-file", re: /\.(?:pem|key)$/i },
-    { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
-    { type: "credentials-json", re: /^credentials\.json$/i },
-    { type: "service-account-json", re: /^service-account\.json$/i },
-    { type: "git-credentials", re: /^\.?git-credentials$/i }
-  ];
-  CI_IAC_LEAK_SHAPES = [
-    {
-      kind: "actions-plaintext-env",
-      description: "GitHub Actions env assignment with plaintext literal",
-      re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
-    },
-    {
-      kind: "actions-secret-echo",
-      description: "echo of a GitHub Actions secrets context value",
-      re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
-    },
-    {
-      kind: "dockerfile-credential-env",
-      description: "Dockerfile ENV/ARG with credential-looking name",
-      re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
-    },
-    {
-      kind: "terraform-hardcoded-password",
-      description: "Terraform hardcoded password attribute",
-      re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
-    }
-  ];
-  SAFE_PLACEHOLDER_SHAPES = [
-    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
-    /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
-    /os\.environ(?:\.get)?\(?\s*["']/g
-  ];
-  SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
-  ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
-  LOCKFILE_NAMES = [
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "bun.lock",
-    "bun.lockb",
-    "Cargo.lock",
-    "poetry.lock",
-    "uv.lock",
-    "Gemfile.lock",
-    "composer.lock"
-  ];
-  AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
-  AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
-  DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
-  LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-});
-function vocabularyMap(values) {
-  return Object.fromEntries(values.map((value) => [value, true]));
-}
-var ISSUE_KINDS;
-var ISSUE_SEVERITIES;
-var TERMINAL_DISPOSITIONS;
-var ISSUE_DISPOSITIONS;
-var ISSUE_PAYLOAD_SCHEMAS;
-var ISSUE_ACTIONS;
-var ISSUE_ACTION_NAMES;
-var IssueError;
-var DISPOSITIONS;
-var ISSUE_KIND_MAP;
-var ISSUE_SEVERITY_MAP;
-var RELATIONS;
-var PROVENANCE_KINDS;
-var TERMINAL;
-var init_issue = __esm(() => {
-  init_audit();
-  init_collaboration_store();
-  init_store_db();
-  ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
-  ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
-  TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
-  ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
-  ISSUE_PAYLOAD_SCHEMAS = {
-    CaptureInput: {
-      projectId: { required: true, type: "string", description: "Project identifier" },
-      title: { required: true, type: "string", description: "Finding title" },
-      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
-      severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
-      impact: { required: true, type: "string", description: "User or system impact" },
-      acceptance: { required: true, type: "string", description: "Acceptance condition" },
-      owner: { required: false, type: "string", description: "Optional owner" },
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    OccurrenceInput: {
-      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
-      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
-      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
-      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
-      sourceKind: { required: true, type: "string", description: "Source category" },
-      location: { required: true, type: "string", description: "Source location" },
-      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
-      evidence: { required: true, type: "string[]", description: "Evidence strings" },
-      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
-    },
-    IssueTriage: {
-      reason: { required: true, type: "string", description: "Reason for triage change" },
-      kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
-      severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
-      title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
-      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
-      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
-      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
-    },
-    ClosureEvidence: {
-      reason: { required: true, type: "string", description: "Reason for closure" },
-      references: {
-        required: false,
-        requiredWhen: ["resolved", "obsolete"],
-        type: "string[]",
-        description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
-        minItems: 1,
-        itemsNonblank: true
-      },
-      scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
-      canonicalIssueId: {
-        required: false,
-        requiredWhen: ["duplicate", "superseded"],
-        type: "string | null",
-        nullable: true,
-        description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
-      },
-      alignmentRef: {
-        required: false,
-        requiredWhen: ["resolved", "waived"],
-        type: "string",
-        description: "Authority alignment reference; required for resolved/waived closure"
-      }
-    },
-    IssueReopen: {
-      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
-    },
-    IssueMove: {
-      projectId: {
-        required: true,
-        type: "string",
-        description: "Target project; must be a registered catalog project",
-        nonblankWhenPresent: true
-      },
-      reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true }
-    },
-    IssueLink: {
-      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
-      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
-      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
-      target: { required: false, type: "string", description: "Provenance target; required with kind" }
-    },
-    PlanProgress: {
-      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
-      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
-      evidence_paths: {
-        required: true,
-        type: "string[]",
-        description: "Canonical absolute artifact paths for this plan",
-        itemsNonblank: true
-      },
-      track_branches: {
-        required: false,
-        type: "string[]",
-        description: "Reported L2 track branches",
-        itemsNonblank: true
-      }
-    }
-  };
-  ISSUE_ACTIONS = {
-    add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
-    list: { payload: null, read: true, cas: false, disposition: null },
-    show: { payload: null, read: true, cas: false, disposition: null },
-    occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
-    triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
-    close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
-    reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
-    move: { payload: "IssueMove", read: false, cas: true, disposition: null },
-    waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
-    duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
-    supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
-    link: { payload: "IssueLink", read: false, cas: true, disposition: null },
-    export: { payload: null, read: true, cas: false, disposition: null }
-  };
-  ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
-  IssueError = class IssueError extends Error {
-    code;
-    details = {};
-    constructor(code, message) {
-      super(`[${code}] ${message}`);
-      this.name = "IssueError";
-      this.code = code;
-    }
-  };
-  DISPOSITIONS = vocabularyMap(ISSUE_DISPOSITIONS);
-  ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
-  ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
-  RELATIONS = {
-    related: true,
-    blocks: true,
-    "duplicate-of": true,
-    "superseded-by": true
-  };
-  PROVENANCE_KINDS = {
-    plan: true,
-    iteration: true,
-    pr: true,
-    report: true
-  };
-  TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
-});
 var ENTITY_KINDS;
 var ROOT_KINDS;
 var DOCUMENT_KINDS;
 var LIFECYCLES;
-var RELATIONS2;
+var RELATIONS;
 var CatalogError;
 var init_catalog = __esm(() => {
   init_path();
   init_git_probe();
   init_collaboration_store();
   init_store_db();
-  init_issue();
   ENTITY_KINDS = {
     project: true,
     iteration: true,
@@ -1123,7 +852,7 @@ var init_catalog = __esm(() => {
     archived: true,
     superseded: true
   };
-  RELATIONS2 = {
+  RELATIONS = {
     "belongs-to": true,
     documents: true,
     "spec-ref": true,
@@ -7990,9 +7719,9 @@ var init_micromark_extension_gfm = __esm(() => {
   init_dev20();
 });
 function readJson(filePath) {
-  if (!existsSync4(filePath))
+  if (!existsSync3(filePath))
     return {};
-  const content = readFileSync5(filePath, "utf8").trim();
+  const content = readFileSync4(filePath, "utf8").trim();
   if (!content)
     return {};
   try {
@@ -8004,9 +7733,9 @@ function readJson(filePath) {
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
-    const candidate = resolve6(dir, "package.json");
+    const candidate = resolve5(dir, "package.json");
     try {
-      const pkg = JSON.parse(readFileSync5(candidate, "utf8"));
+      const pkg = JSON.parse(readFileSync4(candidate, "utf8"));
       if (pkg.name === "morning-star")
         return candidate;
     } catch {}
@@ -8025,9 +7754,9 @@ function readDeclaredNodeFloor() {
   const candidates = [];
   let dir = moduleDir;
   for (let depth = 0;depth < 6; depth += 1) {
-    candidates.push(join7(dir, "..", "package.json"), join7(dir, "package.json"));
+    candidates.push(join6(dir, "..", "package.json"), join6(dir, "package.json"));
     if (depth === 1)
-      candidates.push(join7(dir, "packages", "engine", "package.json"));
+      candidates.push(join6(dir, "packages", "engine", "package.json"));
     const parent = dirname5(dir);
     if (parent === dir)
       break;
@@ -8038,7 +7767,7 @@ function readDeclaredNodeFloor() {
   for (const manifestPath of [...new Set(candidates)]) {
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync5(manifestPath, "utf8"));
+      parsed = JSON.parse(readFileSync4(manifestPath, "utf8"));
     } catch {
       continue;
     }
@@ -8143,6 +7872,276 @@ var init_dispatch = __esm(() => {
   ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
   ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
   ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
+});
+var AUDIT_PRIORITIES;
+var AUDIT_EFFORTS;
+var AUDIT_RISKS;
+var AUDIT_CONFIDENCES;
+var AUDIT_CATEGORIES;
+var WHOLE_MATCH_PATTERNS;
+var VALUE_PATTERNS;
+var NEVER_COMMIT_FILENAMES;
+var CI_IAC_LEAK_SHAPES;
+var SAFE_PLACEHOLDER_SHAPES;
+var SAFE_PLACEHOLDER_VALUES;
+var ACTIONS_ENV_KEY;
+var LOCKFILE_NAMES;
+var AUDIT_FINGERPRINT_RE;
+var AUDIT_SEVERITY_ORDER;
+var DEFAULT_IGNORABLE_RE;
+var LONE_SURROGATE_RE;
+var init_audit = __esm(() => {
+  init_path();
+  AUDIT_PRIORITIES = ["P1", "P2", "P3"];
+  AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
+  AUDIT_RISKS = ["LOW", "MED", "HIGH"];
+  AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
+  AUDIT_CATEGORIES = [
+    "bug",
+    "security",
+    "perf",
+    "tests",
+    "tech-debt",
+    "migration",
+    "dx",
+    "docs",
+    "direction"
+  ];
+  WHOLE_MATCH_PATTERNS = [
+    { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
+    { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+    { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+    { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+    { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+    { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
+    { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
+    { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
+  ];
+  VALUE_PATTERNS = [
+    {
+      typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
+      re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
+    }
+  ];
+  NEVER_COMMIT_FILENAMES = [
+    { type: "env-file", re: /^\.env/i },
+    { type: "private-key-file", re: /\.(?:pem|key)$/i },
+    { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
+    { type: "credentials-json", re: /^credentials\.json$/i },
+    { type: "service-account-json", re: /^service-account\.json$/i },
+    { type: "git-credentials", re: /^\.?git-credentials$/i }
+  ];
+  CI_IAC_LEAK_SHAPES = [
+    {
+      kind: "actions-plaintext-env",
+      description: "GitHub Actions env assignment with plaintext literal",
+      re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
+    },
+    {
+      kind: "actions-secret-echo",
+      description: "echo of a GitHub Actions secrets context value",
+      re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
+    },
+    {
+      kind: "dockerfile-credential-env",
+      description: "Dockerfile ENV/ARG with credential-looking name",
+      re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
+    },
+    {
+      kind: "terraform-hardcoded-password",
+      description: "Terraform hardcoded password attribute",
+      re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
+    }
+  ];
+  SAFE_PLACEHOLDER_SHAPES = [
+    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
+    /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
+    /os\.environ(?:\.get)?\(?\s*["']/g
+  ];
+  SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
+  ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
+  LOCKFILE_NAMES = [
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "Cargo.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Gemfile.lock",
+    "composer.lock"
+  ];
+  AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
+  AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+  DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
+  LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+});
+function vocabularyMap(values) {
+  return Object.fromEntries(values.map((value) => [value, true]));
+}
+var ISSUE_KINDS;
+var ISSUE_SEVERITIES;
+var TERMINAL_DISPOSITIONS;
+var ISSUE_DISPOSITIONS;
+var ISSUE_PAYLOAD_SCHEMAS;
+var ISSUE_ACTIONS;
+var ISSUE_ACTION_NAMES;
+var IssueError;
+var DISPOSITIONS;
+var ISSUE_KIND_MAP;
+var ISSUE_SEVERITY_MAP;
+var RELATIONS2;
+var PROVENANCE_KINDS;
+var TERMINAL;
+var init_issue = __esm(() => {
+  init_audit();
+  init_collaboration_store();
+  init_store_db();
+  ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
+  ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
+  TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
+  ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
+  ISSUE_PAYLOAD_SCHEMAS = {
+    CaptureInput: {
+      projectId: { required: true, type: "string", description: "Project identifier" },
+      title: { required: true, type: "string", description: "Finding title" },
+      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
+      severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
+      impact: { required: true, type: "string", description: "User or system impact" },
+      acceptance: { required: true, type: "string", description: "Acceptance condition" },
+      owner: { required: false, type: "string", description: "Optional owner" },
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    OccurrenceInput: {
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    IssueTriage: {
+      reason: { required: true, type: "string", description: "Reason for triage change" },
+      kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
+      severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
+      title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
+      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
+      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
+    },
+    ClosureEvidence: {
+      reason: { required: true, type: "string", description: "Reason for closure" },
+      references: {
+        required: false,
+        requiredWhen: ["resolved", "obsolete"],
+        type: "string[]",
+        description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
+        minItems: 1,
+        itemsNonblank: true
+      },
+      scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
+      canonicalIssueId: {
+        required: false,
+        requiredWhen: ["duplicate", "superseded"],
+        type: "string | null",
+        nullable: true,
+        description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
+      },
+      alignmentRef: {
+        required: false,
+        requiredWhen: ["resolved", "waived"],
+        type: "string",
+        description: "Authority alignment reference; required for resolved/waived closure"
+      }
+    },
+    IssueReopen: {
+      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
+    },
+    IssueMove: {
+      projectId: {
+        required: true,
+        type: "string",
+        description: "Target project; must be a registered catalog project",
+        nonblankWhenPresent: true
+      },
+      reason: { required: true, type: "string", description: "Reason for moving the issue; nonblank", nonblankWhenPresent: true }
+    },
+    IssueLink: {
+      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+      target: { required: false, type: "string", description: "Provenance target; required with kind" }
+    },
+    PlanProgress: {
+      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+      evidence_paths: {
+        required: true,
+        type: "string[]",
+        description: "Canonical absolute artifact paths for this plan",
+        itemsNonblank: true
+      },
+      track_branches: {
+        required: false,
+        type: "string[]",
+        description: "Reported L2 track branches",
+        itemsNonblank: true
+      }
+    }
+  };
+  ISSUE_ACTIONS = {
+    add: { payload: "CaptureInput", read: false, cas: false, disposition: null },
+    list: { payload: null, read: true, cas: false, disposition: null },
+    show: { payload: null, read: true, cas: false, disposition: null },
+    occurrence: { payload: "OccurrenceInput", read: false, cas: false, disposition: null },
+    triage: { payload: "IssueTriage", read: false, cas: true, disposition: null },
+    close: { payload: "ClosureEvidence", read: false, cas: true, disposition: "resolved" },
+    reopen: { payload: "IssueReopen", read: false, cas: true, disposition: null },
+    move: { payload: "IssueMove", read: false, cas: true, disposition: null },
+    waive: { payload: "ClosureEvidence", read: false, cas: true, disposition: "waived" },
+    duplicate: { payload: "ClosureEvidence", read: false, cas: true, disposition: "duplicate" },
+    supersede: { payload: "ClosureEvidence", read: false, cas: true, disposition: "superseded" },
+    link: { payload: "IssueLink", read: false, cas: true, disposition: null },
+    export: { payload: null, read: true, cas: false, disposition: null }
+  };
+  ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
+  IssueError = class IssueError extends Error {
+    code;
+    details = {};
+    constructor(code, message) {
+      super(`[${code}] ${message}`);
+      this.name = "IssueError";
+      this.code = code;
+    }
+  };
+  DISPOSITIONS = vocabularyMap(ISSUE_DISPOSITIONS);
+  ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
+  ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
+  RELATIONS2 = {
+    related: true,
+    blocks: true,
+    "duplicate-of": true,
+    "superseded-by": true
+  };
+  PROVENANCE_KINDS = {
+    plan: true,
+    iteration: true,
+    pr: true,
+    report: true
+  };
+  TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
 });
 var WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA;
 var STATUS_V2_PAYLOAD_SCHEMA;
@@ -8555,7 +8554,6 @@ var init_project = __esm(() => {
   init_coordination_write();
   init_collaboration_store();
   init_status();
-  init_issue();
   DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
   FindingsEvidenceError = class FindingsEvidenceError extends Error {
     code;
@@ -9470,10 +9468,10 @@ function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
     warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
+    throw new StoreError2("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
   if (floor !== null && compareVersions(info.version, floor) < 0) {
-    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
+    throw new StoreError2("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {
@@ -9484,12 +9482,12 @@ async function loadSqliteDriver() {
     return mod;
   } catch (error) {
     assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
-    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
+    throw new StoreError2("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
 function storeDbPath(context) {
   if (!context?.harnessDir)
-    throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
+    throw new StoreError2("store.corrupt", "StoreContext.harnessDir is required");
   const root = resolve18(context.harnessDir);
   return join21(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
@@ -9498,12 +9496,12 @@ function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
 function refuseOpenFailure(error, dbPath, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
-  if (error instanceof StoreError)
+  if (error instanceof StoreError2)
     throw error;
   if (isBusyError(error)) {
-    throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
+    throw new StoreError2("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
   }
-  throw new StoreError("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
+  throw new StoreError2("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
 }
 function isBusyError(error) {
   const err = error;
@@ -9512,7 +9510,7 @@ function isBusyError(error) {
 function busyAware(db, path, timeout) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError2("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -9565,7 +9563,7 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   if (stats?.isFile())
     return;
   const observed = stats === undefined ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})` : stats.isSymbolicLink() ? "it is a symbolic link" : "it is not a regular file";
-  throw new StoreError("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
+  throw new StoreError2("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
 }
 function isWalFormatDatabase(header, bytes) {
   if (bytes < DATABASE_HEADER_BYTES)
@@ -9629,7 +9627,7 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
   }
   const fail = (message) => {
     db.close();
-    throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
+    throw new StoreError2("store.corrupt", `${message} (opening ${dbPath})`);
   };
   try {
     db.exec(`pragma busy_timeout=${timeout}`);
@@ -9669,7 +9667,7 @@ function isRecord(value) {
 function parseStoredRecord(text, what) {
   const parsed = typeof text === "string" ? JSON.parse(text) : undefined;
   if (!isRecord(parsed))
-    throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+    throw new StoreError2("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
   return parsed;
 }
 function normalizeLegacyCoordination(legacy) {
@@ -9738,7 +9736,7 @@ function readLeaseCutover(db) {
   for (const row of rows) {
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
     if (!isRecord(raw)) {
-      throw new StoreError("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
+      throw new StoreError2("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
     }
     leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
   }
@@ -9806,7 +9804,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     const workflowId = String(row.workflow_id ?? "");
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
     if (!isRecord(raw)) {
-      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
     }
     const claim = raw;
     if (claim.status === "released")
@@ -9819,7 +9817,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       continue;
     const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
     if (planRow === undefined) {
-      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
+      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
     }
     if (attestation === undefined) {
       pendingHolders.add(holder);
@@ -9831,7 +9829,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant !== null && cutoverInstant !== null && claimedInstant <= attestedInstant && attestedInstant <= cutoverInstant;
     if (!settled) {
-      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
+      throw new StoreError2("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
     }
     const tombstone = {
       ...claim,
@@ -9853,24 +9851,24 @@ function readAppliedMigrations(db, tolerateMissingTable) {
   if (!present?.n) {
     if (tolerateMissingTable)
       return [];
-    throw new StoreError("store.corrupt", "The store database has no schema_version table");
+    throw new StoreError2("store.corrupt", "The store database has no schema_version table");
   }
   let rows;
   try {
     rows = db.prepare("select version, name, checksum from schema_version order by version").all();
   } catch (error) {
-    throw new StoreError("store.corrupt", `schema_version is unreadable: ${error.message}`);
+    throw new StoreError2("store.corrupt", `schema_version is unreadable: ${error.message}`);
   }
   return rows.map((row) => {
     if (typeof row.version !== "number" || !Number.isInteger(row.version) || typeof row.name !== "string" || typeof row.checksum !== "string") {
-      throw new StoreError("store.corrupt", "schema_version contains a malformed row");
+      throw new StoreError2("store.corrupt", "schema_version contains a malformed row");
     }
     return { version: row.version, name: row.name, checksum: row.checksum };
   });
 }
 function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
   if (applied.length === 0) {
-    throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
+    throw new StoreError2("store.corrupt", "The store database exists but no migrations are recorded");
   }
   let max = 0;
   for (let i = 0;i < applied.length; i++) {
@@ -9885,10 +9883,10 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
       for (const migration of migrations)
         if (migration.version > supportedMax)
           supportedMax = migration.version;
-      throw new StoreError("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
+      throw new StoreError2("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
     }
     if (row.version !== i + 1) {
-      throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
+      throw new StoreError2("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
     }
     max = row.version;
   }
@@ -9925,7 +9923,7 @@ function readCollaborationFence(db) {
   const text = (value) => typeof value === "string" && value !== "";
   const count = (value) => typeof value === "number" && Number.isInteger(value);
   if (!text(row.manifest_id) || !text(row.manifest_digest) || !text(row.source_store_id) || !count(row.source_epoch) || !count(row.source_schema_version) || !count(row.source_revision) || !count(row.source_catalog_revision) || !text(row.target_store_id) || !count(row.target_epoch) || !text(row.backup_path) || !text(row.fenced_at)) {
-    throw new StoreError("store.corrupt", "collaboration_cutover holds a malformed fence record; the cutover evidence cannot be verified. Nothing was modified; recover the store from its verified pre-fence backup.");
+    throw new StoreError2("store.corrupt", "collaboration_cutover holds a malformed fence record; the cutover evidence cannot be verified. Nothing was modified; recover the store from its verified pre-fence backup.");
   }
   return {
     manifestId: row.manifest_id,
@@ -9944,7 +9942,7 @@ function readCollaborationFence(db) {
 function readStoreMeta(db) {
   const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
   if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
+    throw new StoreError2("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
   }
   return {
     storeId: row.store_id,
@@ -9966,11 +9964,11 @@ function readExecutionMeta(db, schemaVersion) {
   const present = presentExecutionTables(db);
   const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
   if (missing.length > 0) {
-    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
+    throw new StoreError2("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
   }
   const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
   if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
+    throw new StoreError2("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
   }
   return {
     protocolVersion: row.protocol_version,
@@ -9985,7 +9983,7 @@ function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
 function isTransientReadOpenFailure(error, dbPath) {
-  if (error instanceof StoreError)
+  if (error instanceof StoreError2)
     return false;
   if (!isRawCantOpen(error))
     return false;
@@ -9997,7 +9995,7 @@ async function openStore(context, mode, options = {}) {
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync15(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve18(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+    throw new StoreError2("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve18(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -10048,7 +10046,7 @@ function publicationCause(error) {
   return causeCode === "" || message.includes(causeCode) ? message : `${causeCode}: ${message}`;
 }
 var DEFAULT_BUSY_TIMEOUT_MS = 5000;
-var StoreError;
+var StoreError2;
 var RUNTIME_GLOBAL;
 var MAX_BUSY_TIMEOUT_MS = 2147483647;
 var DATABASE_HEADER_BYTES = 100;
@@ -10853,7 +10851,7 @@ var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
   init_core();
-  StoreError = class StoreError extends Error {
+  StoreError2 = class StoreError2 extends Error {
     code;
     details;
     constructor(code, message, details) {
@@ -10937,13 +10935,13 @@ function messageOf2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function unreadable(dbPath, detail, cause) {
-  return new StoreError("collaboration.unreadable", `The collaboration store at ${dbPath} is not readable: ${detail}. Nothing was modified; a missing or broken ` + `store is created by the fresh initializer, and lost data is recovered from a verified backup pair.`, cause === undefined ? undefined : { cause });
+  return new StoreError2("collaboration.unreadable", `The collaboration store at ${dbPath} is not readable: ${detail}. Nothing was modified; a missing or broken ` + `store is created by the fresh initializer, and lost data is recovered from a verified backup pair.`, cause === undefined ? undefined : { cause });
 }
 function busyRefusal(dbPath) {
-  return new StoreError("store.busy", `Another writer held the collaboration store at ${dbPath} past the bounded wait (${busyTimeoutMs()}ms). ` + `Retry when the competing writer is done; no write was accepted.`);
+  return new StoreError2("store.busy", `Another writer held the collaboration store at ${dbPath} past the bounded wait (${busyTimeoutMs()}ms). ` + `Retry when the competing writer is done; no write was accepted.`);
 }
 function asRefusal(dbPath, error) {
-  if (error instanceof StoreError) {
+  if (error instanceof StoreError2) {
     if (error.code.startsWith("collaboration.") || PASS_THROUGH_STORE_CODES[error.code] === true)
       return error;
     return unreadable(dbPath, error.message, error.code);
@@ -10953,13 +10951,13 @@ function asRefusal(dbPath, error) {
   return unreadable(dbPath, messageOf2(error));
 }
 function notInitialized(dbPath) {
-  return new StoreError("collaboration.not-initialized", `No collaboration store exists at ${dbPath}. Create this scope with the fresh initializer ` + `("mstar store init") or the reviewed collaboration apply/activate sequence; nothing was created.`);
+  return new StoreError2("collaboration.not-initialized", `No collaboration store exists at ${dbPath}. Create this scope with the fresh initializer ` + `("mstar store init") or the reviewed collaboration apply/activate sequence; nothing was created.`);
 }
 function notActive(dbPath, state) {
-  return new StoreError("collaboration.not-active", `The collaboration store at ${dbPath} is ${state}, not active. Only an active authority admits reads or ` + `writes; complete the reviewed collaboration apply/activate sequence for this scope, then retry. ` + `Nothing was created or modified.`);
+  return new StoreError2("collaboration.not-active", `The collaboration store at ${dbPath} is ${state}, not active. Only an active authority admits reads or ` + `writes; complete the reviewed collaboration apply/activate sequence for this scope, then retry. ` + `Nothing was created or modified.`);
 }
 function staleBinding(dbPath, recorded, expected) {
-  return new StoreError("collaboration.stale-binding", `The collaboration store at ${dbPath} records repository ${recorded.repoKey} mode ${recorded.mode}` + `${recorded.storeId === undefined ? "" : ` store ${recorded.storeId} epoch ${String(recorded.epoch)}`}, ` + `which does not match ${expected}. Re-resolve this scope with "mstar path resolve"; a store is never ` + `re-bound by editing its selection, and an old write is never retried against a new authority.`);
+  return new StoreError2("collaboration.stale-binding", `The collaboration store at ${dbPath} records repository ${recorded.repoKey} mode ${recorded.mode}` + `${recorded.storeId === undefined ? "" : ` store ${recorded.storeId} epoch ${String(recorded.epoch)}`}, ` + `which does not match ${expected}. Re-resolve this scope with "mstar path resolve"; a store is never ` + `re-bound by editing its selection, and an old write is never retried against a new authority.`);
 }
 function assertRegularTarget(dbPath) {
   try {
@@ -11051,7 +11049,7 @@ function assertCurrentSchema(db, dbPath) {
 function readMeta2(db) {
   const record = db.prepare("select repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision " + "from collaboration_meta where id = 1").get();
   if (record === undefined || typeof record.repository_key !== "string" || record.mode !== "local" && record.mode !== "mirror" || typeof record.store_id !== "string" || record.authority_state !== "staged" && record.authority_state !== "active" || typeof record.authority_epoch !== "number" || typeof record.revision !== "number" || typeof record.catalog_revision !== "number") {
-    throw new StoreError("collaboration.unreadable", "collaboration_meta is missing or malformed; the repository binding cannot be verified. Nothing was modified.");
+    throw new StoreError2("collaboration.unreadable", "collaboration_meta is missing or malformed; the repository binding cannot be verified. Nothing was modified.");
   }
   return {
     repoKey: record.repository_key,
@@ -11143,16 +11141,16 @@ function readCollaborationBinding(context) {
     const code = error !== null && typeof error === "object" && "code" in error ? String(error.code) : "";
     if (code === "ENOENT")
       return null;
-    throw new StoreError("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} exists but cannot be read (${code || "unknown"}); this checkout ` + `cannot be proven to belong to the authority it would use, so it is never treated as fresh. Repair the file or ` + `re-record the binding with the supported authority verb. Nothing was modified.`);
+    throw new StoreError2("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} exists but cannot be read (${code || "unknown"}); this checkout ` + `cannot be proven to belong to the authority it would use, so it is never treated as fresh. Repair the file or ` + `re-record the binding with the supported authority verb. Nothing was modified.`);
   }
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new StoreError("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} is not readable JSON; this checkout cannot be proven to belong ` + `to the authority it would use, so it is never treated as a fresh clone. Repair the file or re-record the binding ` + `with the supported authority verb. Nothing was modified.`);
+    throw new StoreError2("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} is not readable JSON; this checkout cannot be proven to belong ` + `to the authority it would use, so it is never treated as a fresh clone. Repair the file or re-record the binding ` + `with the supported authority verb. Nothing was modified.`);
   }
   if (parsed === null || typeof parsed !== "object" || parsed.version !== 2 || parsed.state !== "claimed" && parsed.state !== "active" || typeof parsed.repoKey !== "string" || parsed.mode !== "local" && parsed.mode !== "mirror" || typeof parsed.storeId !== "string" || typeof parsed.epoch !== "number") {
-    throw new StoreError("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} is malformed, so this checkout cannot be proven to belong to the ` + `authority it would use. Re-record it deliberately with the supported authority verb (store init / store activate) ` + `or restore the recorded binding; nothing was read or modified.`);
+    throw new StoreError2("collaboration.stale-binding", `The collaboration binding at ${bindingPath(context)} is malformed, so this checkout cannot be proven to belong to the ` + `authority it would use. Re-record it deliberately with the supported authority verb (store init / store activate) ` + `or restore the recorded binding; nothing was read or modified.`);
   }
   const binding = parsed;
   return { ...binding, boundAt: typeof binding.boundAt === "string" ? binding.boundAt : "" };
@@ -11167,7 +11165,7 @@ async function assertControlCheckoutScope(context, location) {
         if (readCollaborationFence(legacy) === null) {
           const held = heldCollaborationTables(legacy);
           if (held.length > 0) {
-            throw new StoreError("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
+            throw new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
           }
         }
       } finally {
@@ -11179,7 +11177,7 @@ async function assertControlCheckoutScope(context, location) {
   if (binding === null || binding.state !== "active")
     return;
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
-    throw new StoreError("collaboration.stale-binding", `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` + `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` + `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`);
+    throw new StoreError2("collaboration.stale-binding", `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` + `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` + `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`);
   }
 }
 async function assertControlBinding(context, location, authority) {
@@ -11188,12 +11186,12 @@ async function assertControlBinding(context, location, authority) {
   const binding = recorded !== null && recorded.state === "active" ? recorded : null;
   if (binding === null) {
     if (authority.state === "active") {
-      throw new StoreError("collaboration.stale-binding", `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` + `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` + `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` + `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` + `so it is not the recovery. Nothing was modified.`);
+      throw new StoreError2("collaboration.stale-binding", `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` + `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` + `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` + `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` + `so it is not the recovery. Nothing was modified.`);
     }
     return;
   }
   if (binding.storeId !== authority.storeId) {
-    throw new StoreError("collaboration.stale-binding", `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` + `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by drift; ` + `inspect it with mstar path resolve. Nothing was modified.`);
+    throw new StoreError2("collaboration.stale-binding", `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` + `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by drift; ` + `inspect it with mstar path resolve. Nothing was modified.`);
   }
 }
 async function openCollaborationStore(context, mode, expected) {
@@ -11229,24 +11227,14 @@ function probeRefusal(error) {
 }
 async function probeCollaborationAuthority(context) {
   try {
-    assertStoreRuntimeSupported();
-  } catch (error) {
-    return { kind: "unavailable", ...probeRefusal(error) };
-  }
-  let location;
-  try {
-    location = resolveCollaborationLocation(context);
-  } catch (error) {
-    return { kind: "unavailable", ...probeRefusal(error) };
-  }
-  if (!existsSync16(location.dbPath)) {
-    return { kind: "absent", code: "collaboration.not-initialized", message: notInitialized(location.dbPath).message };
-  }
-  try {
     return { kind: "active", authority: await readCollaborationAuthority(context) };
   } catch (error) {
     const refusal = probeRefusal(error);
-    return refusal.code === "collaboration.not-active" ? { kind: "staged", ...refusal } : { kind: "unavailable", ...refusal };
+    if (refusal.code === "collaboration.not-initialized")
+      return { kind: "absent", ...refusal };
+    if (refusal.code === "collaboration.not-active")
+      return { kind: "staged", ...refusal };
+    return { kind: "unavailable", ...refusal };
   }
 }
 var COLLABORATION_SCHEMA_SQL = `
@@ -11781,7 +11769,6 @@ var init_collaboration_store = __esm(() => {
 });
 init_collaboration_store();
 init_roadmap_content();
-init_issue();
 init_roadmap_content();
 init_core();
 init_mstarc();
@@ -12320,10 +12307,10 @@ var KINDS = vocabularyMap(ISSUE_KINDS);
 var SEVERITIES = vocabularyMap(ISSUE_SEVERITIES);
 var AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)";
 var CREDENTIAL = new RegExp(`\\b(token|secret|credential|password|passphrase|api[-_]?key|authorization)\\b(\\s*[=:]\\s*)(?:${AUTH_SCHEME}\\s+)?(?:"[^"]*"|'[^']*'|\\S+)`, "gi");
-var AUTH_VALUE = new RegExp(`\\b${AUTH_SCHEME}\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "g");
+var AUTH_VALUE = new RegExp(`\\b(${AUTH_SCHEME})\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "gi");
 var DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`;
 var DIGEST_VALUE = new RegExp(`\\b(authorization)\\b(\\s*[=:]\\s*)Digest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
-var DIGEST_BARE = new RegExp(`\\bDigest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "g");
+var DIGEST_BARE = new RegExp(`\\b(Digest)\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
 init_store_migrate();
 init_store_activation();
 init_coordination_write();
@@ -12495,7 +12482,7 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve5(isAbsolute3(rawPath) ? rawPath : join5(cwd, rawPath));
+    const targetPath = resolve6(isAbsolute3(rawPath) ? rawPath : join5(cwd, rawPath));
     let landed;
     try {
       landed = landedPathOf(targetPath);

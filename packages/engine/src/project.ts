@@ -49,15 +49,17 @@ import { createHash } from "node:crypto";
 import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   openCollaborationStore,
+  readCollaborationObservation,
   withCollaborationWrite,
+  type CollaborationObservation,
   type CollaborationStamp,
+  type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import {
   normalizeSeverity,
   validateResidual,
   type ResidualEntry,
 } from "./status.js";
-import { readCollaborationObservation, type CompleteCollaborationObservation } from "./issue.js";
 
 /** Roadmap file name inside `projects/<id>/`: legacy layout reference and transport candidate, never a live writer target. */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
@@ -227,40 +229,11 @@ export function validateProjectRegister(doc: unknown): GateResult {
 }
 
 /**
- * The scope a collaboration observation covers (contract §Read/Completeness).
- * The plan key is the exact stable plan catalog id; the repository identity is
- * the observation's `authority.repoKey`, never re-derived from a path.
+ * The collaboration read contract types are owned by `collaboration-store.ts`
+ * (beside the handle that builds them) and re-exported here for the existing
+ * domain imports.
  */
-export type CollaborationScope = Readonly<{
-  kind: "repository" | "project" | "plan" | "milestone" | "query";
-  key: string;
-}>;
-
-/**
- * One scoped read of the collaboration authority. `complete` is the only
- * observation a gate may decide on; `partial`/`unavailable` are declared so a
- * consumer can disclose a gap instead of reading it as an empty result.
- * `asOf` is when the local snapshot was established, never a file mtime.
- */
-export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
-  (
-    | {
-        completeness: "complete";
-        asOf: string;
-        authority: CollaborationStamp;
-        revision: number;
-        catalogRevision: number;
-      }
-    | {
-        completeness: "partial";
-        asOf: string;
-        authority: CollaborationStamp;
-        revision: number;
-        catalogRevision: number;
-        code: string;
-      }
-    | { completeness: "unavailable"; asOf: null; authority: null; code: string }
-  );
+export type { CollaborationObservation, CollaborationScope } from "./collaboration-store.js";
 
 /** A complete plan-scoped findings observation: the open local issues it read. */
 export type FindingsObservation = Extract<CollaborationObservation, { completeness: "complete" }> &

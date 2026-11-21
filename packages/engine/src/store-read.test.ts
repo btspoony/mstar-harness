@@ -997,6 +997,11 @@ describe("collaboration rollup snapshot", () => {
     expect(scoped.data.byProject).toEqual({ "proj-b": 4 });
     expect(scoped.data.recent.map((issue) => issue.projectId)).toEqual(["proj-b", "proj-b", "proj-b", "proj-b"]);
     expect(scoped.storeRevision).toBe(whole.storeRevision);
+    // The proof names the actual selection: one summary proof can never stand
+    // for both the repository rollup and a project filter.
+    expect(whole.collaboration?.scope).toEqual({ kind: "repository", key: "open-issues:repository" });
+    expect(scoped.collaboration?.scope).toEqual({ kind: "project", key: "proj-b" });
+    expect(scoped.collaboration?.scope).not.toEqual(whole.collaboration?.scope);
 
     await registerProject(context, "proj-empty");
     const zero = await withStoreRead(context, queryOpenIssueRollup("proj-empty"));

@@ -123,7 +123,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
         by_severity: { critical: 0, high: 1, medium: 0, low: 0, nit: 0 },
         by_project: { _default: 1 },
         // Additive evidence: the scope and instant that answered the totals.
-        collaboration: { completeness: "complete", scope: { kind: "query", key: "open-issues:*" } },
+        collaboration: { completeness: "complete", scope: { kind: "repository", key: "open-issues:repository" } },
       });
     });
   });
