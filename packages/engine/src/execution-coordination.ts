@@ -27,6 +27,7 @@ import {
   isPlainObject,
   validatePlanProgress,
   type CompletionRecord,
+  type FindingsCleanupMode,
   type PlanPrepareConfig,
   type PreparedCoordination,
 } from "./coordination-write.js";
@@ -36,14 +37,17 @@ import {
   assertFeatureCheckout,
   assertIntegrationCheckout,
   assertViolationFree,
-  catalogPinFactsOn,
+  bindingFactsOn,
   captureGitProofWitness,
+  catalogFactsOn,
   gitObjectExists,
   gitRead,
   integrationProof,
   planAreaRoots,
+  readCatalogFacts,
   revalidateGitProofWitness,
   selectCatalogPinOn,
+  type CatalogFacts,
   type GitProofWitness,
 } from "./coordination.js";
 import {
@@ -128,6 +132,7 @@ import {
   type CompositeKey,
 } from "./collaboration-operations.js";
 import { parseAssignmentBranchForms } from "./dispatch.js";
+import { findingsCleanupGate, observePlanFindings, type FindingsObservation } from "./project.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -138,7 +143,7 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { readStoreAuthority, storeDbPath } from "./store-db.js";
+import { storeDbPath } from "./store-db.js";
 import {
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -147,7 +152,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
-import { normalizeSeverity, type PlanRow } from "./status.js";
+import type { PlanRow } from "./status.js";
 
 /** The same closed direct-coordinator operation union is used on both routes. */
 export type CoordinationOperation = PlanCoordinationOperation;
@@ -794,6 +799,11 @@ export async function prepareExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  // The catalog facts come from their own (collaboration) source, before the
+  // execution transaction: freezing the observed revision is an observed
+  // selection, never a cross-file atomic claim. A missing/staged catalog keeps
+  // the row's prior pin untouched below.
+  const catalogFacts = await readCatalogFacts(controlHarnessRoot(context), resolved.read.planId);
   return withExecutionPlanOperation<ExecutionPlanView>(
     context,
     resolved,
@@ -811,7 +821,7 @@ export async function prepareExecutionPlan(
         validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
       }
     },
-    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at),
+    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts),
     (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx),
   );
 }
@@ -876,6 +886,7 @@ function writePreparedConfig(
   witness: ExecutionPlanWitness,
   tx: ExecutionTransaction,
   at: string,
+  catalogFacts: CatalogFacts,
 ): ExecutionRead<ExecutionPlanView> {
   const { planId, workflowId } = read;
   const plan = witness.view.plan as PlanRow;
@@ -887,13 +898,28 @@ function writePreparedConfig(
     (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
   assertCatalogExecutionCommittedOn(tx.db, workflowId);
   const sealed = readExecutionSealedInput(tx, workflowId, planId);
-  if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
-    throw new ExecutionPinConflictError(
-      `plan ${planId}'s recorded catalog identity belongs to another store`,
-      { workflow_id: workflowId, plan_id: planId, store_id: tx.storeId },
-    );
+  // The catalog side is the collaboration lane's; the binding is the execution
+  // lane's own row. Neither is read through the other's connection.
+  const catalogActive = catalogFacts.store === "active" && catalogFacts.storeId !== null;
+  if (catalogActive && sealed.pin !== null) {
+    // A new pin names the collaboration store that owns the catalog; a
+    // historical pin names the combined store this execution row kept as its
+    // own identity. Any third identity is foreign and refuses.
+    if (sealed.pin.store_id !== catalogFacts.storeId && sealed.pin.store_id !== tx.storeId) {
+      throw new ExecutionPinConflictError(
+        `plan ${planId}'s recorded catalog identity belongs to another store`,
+        { workflow_id: workflowId, plan_id: planId, store_id: catalogFacts.storeId },
+      );
+    }
   }
-  const pin = selectCatalogPinOn(catalogPinFactsOn(tx.db, tx.storeId, workflowId, planId), sealed.inputHash);
+  const pin = catalogActive
+    ? selectCatalogPinOn(
+        { ...catalogFacts, binding: bindingFactsOn(tx.db, workflowId, planId) },
+        sealed.inputHash,
+      )
+    // No readable catalog: prepare preserves the recorded pin instead of
+    // clearing lineage it cannot verify.
+    : sealed.pin;
   const metadata: Record<string, unknown> = { ...storedMetadata };
   if (nextWorktree !== undefined) metadata.worktree_path = nextWorktree;
   if (nextBranch !== undefined) metadata.working_branch = nextBranch;
@@ -1647,6 +1673,8 @@ function applyCompletion(input: {
   record: CompletionRecord;
   scope: PlanScope | null;
   at: string;
+  /** The accepted complete findings observation (no issue payload bodies). */
+  findings: FindingsObservation & { mode: FindingsCleanupMode };
   what: string;
 }): void {
   const { tx, witness, planId, record, at, what } = input;
@@ -1657,6 +1685,10 @@ function applyCompletion(input: {
     metadata.worktree_path = input.scope.worktreePath;
     metadata.working_branch = input.scope.workingBranch;
   }
+  // Completion evidence: the exact scope, authority stamp, revisions, snapshot
+  // time and completeness the findings decision was accepted against. The open
+  // findings keep only id+severity — never an issue body.
+  metadata.completion_findings = input.findings;
   writeCoordinationBlock(tx, witness, {
     block: { ...storedCoordinationOf(witness.view), completion: record },
     state: { ...plan, status: "Done", metadata },
@@ -1820,47 +1852,73 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
 }
 
 /**
- * §4.1 the findings-cleanup gate of one row, on the transaction the caller
- * ALREADY owns: the authoritative open issues linked to the plan are read
- * through this transaction's own handle, so an issue captured after the
- * preflight refuses the completion instead of being judged against a stale
- * list. The mode is the row's effective configuration. Only the SHARED gate's
- * decision table is reused; the read is this handle's, and it fails closed on a
- * staged or unreadable store.
+ * §Read/Completeness and Gates the completion findings proof: the complete
+ * scoped observation and the plan's effective cleanup mode. The observation is
+ * taken before the execution transaction and recorded on the completion row;
+ * the transaction never reads collaboration SQL and never claims the predicate
+ * is atomic.
  */
-function assertFindingsClosedOn(tx: ExecutionTransaction, planId: string, prepared: PreparedCoordination): void {
-  const meta = readStoreAuthority(tx.db);
-  if (meta.authorityState !== "active") {
-    throw new CoordinationError(
-      "coordination.store",
-      "The plan cannot proceed: the issue store authority is unreadable; inspect the store with mstar status validate.",
-      {
-        authority_state: typeof meta.authorityState === "string" ? meta.authorityState : "unreadable",
-        plan_id: planId,
-        findings_cleanup: prepared.findings_cleanup,
-      },
-    );
-  }
-  const rows = tx.db
-    .prepare(
-      "select issues.id as id, issues.severity as severity from issues " +
-        "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
-        "where issues.disposition = 'open' order by issues.id asc",
-    )
-    .all(planId) as Array<{ id: string; severity: string }>;
-  const mode = prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual";
-  const blocking = rows.filter((row) => normalizeSeverity(row.severity) === "critical" || mode === "zero-residual");
-  if (blocking.length === 0) return;
-  throw new CoordinationError(
+type CompletionFindingsProof = {
+  observation: FindingsObservation;
+  mode: FindingsCleanupMode;
+};
+
+/** The completion refusal when the observation's own decision blocks it. */
+function findingsOpenRefusal(planId: string, proof: CompletionFindingsProof): CoordinationError {
+  const blocking = proof.observation.open.filter(
+    (row) => row.severity === "critical" || proof.mode === "zero-residual",
+  );
+  return new CoordinationError(
     "coordination.findings-open",
     "The plan cannot proceed while findings are open; close them with mstar plan issue-close.",
     {
       blocking: blocking.map((row) => `${row.id} (${row.severity})`),
       plan_id: planId,
-      findings_cleanup: mode,
+      findings_cleanup: proof.mode,
       findings: blocking.map((row) => row.id),
     },
   );
+}
+
+/**
+ * §Read/Completeness the pre-commit applicability re-sample: the complete
+ * observation that authorized completion must still name the same authority,
+ * scope and revision. A known changed stamp/scope/revision refuses as stale so
+ * the caller repeats the same completion against a current complete
+ * observation. This runs before the execution transaction — the transaction
+ * itself never reads collaboration.
+ */
+async function assertFindingsObservationCurrent(
+  context: ExecutionContext,
+  observed: FindingsObservation,
+): Promise<void> {
+  const current = await observePlanFindings(context, observed.scope.key);
+  const sameAuthority =
+    current.authority.repoKey === observed.authority.repoKey &&
+    current.authority.mode === observed.authority.mode &&
+    current.authority.storeId === observed.authority.storeId &&
+    current.authority.epoch === observed.authority.epoch;
+  const sameScope =
+    current.scope.kind === observed.scope.kind && current.scope.key === observed.scope.key;
+  if (!sameAuthority || !sameScope || current.revision !== observed.revision) {
+    throw new CoordinationError(
+      "coordination.version-conflict",
+      "The collaboration findings observation changed before the completion transaction; repeat the same completion with the same semantic id so it is judged against a current complete observation.",
+      {
+        plan_id: observed.scope.key,
+        observed: {
+          asOf: observed.asOf,
+          authority: observed.authority,
+          revision: observed.revision,
+        },
+        current: {
+          asOf: current.asOf,
+          authority: current.authority,
+          revision: current.revision,
+        },
+      },
+    );
+  }
 }
 
 /** Test-only hook to observe the preflight→commit gap of a DB completion. */
@@ -1906,9 +1964,10 @@ export function setCompleteWitnessGapForTest(callback: (() => void) | undefined)
  *
  * §4.1/§7 every external Git read and every evidence hash happens before SQLite
  * ownership, and the Git witnesses they produced are re-read immediately before
- * the commit; `assertFindingsClosed` is re-run through this transaction's own
- * handle so an issue opened in the window refuses instead of committing a stale
- * decision.
+ * the commit. The findings decision is a complete collaboration observation
+ * taken before that transaction and re-sampled for a changed stamp/scope/
+ * revision just before it; the transaction itself reads no collaboration SQL and
+ * records the accepted proof on the completion row.
  */
 export async function completeExecutionPlan(
   context: ExecutionContext,
@@ -1927,17 +1986,22 @@ export async function completeExecutionPlan(
     requestHash,
   });
   if (replayed !== null) return replayed;
-  // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot and
-  // capture the Git witnesses before SQLite ownership. `completeWitnessGap`
-  // observes the gap between this captured proof and the commit, where the frame
-  // re-validates every witness, re-derives the route/policy pair from its own
-  // snapshot and re-checks the authoritative issues.
+  // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot,
+  // capture the Git witnesses and the complete findings observation before
+  // SQLite ownership. `completeWitnessGap` observes the gap between this
+  // captured proof and the commit, where the frame re-validates every witness
+  // and re-derives the route/policy pair from its own snapshot.
   const witnesses = await captureCompletionWitnesses(context, resolved.read, operation);
-  // §4.1 the completion race seam fires HERE — after the external witnesses are
-  // captured and BEFORE the committing `BEGIN IMMEDIATE` opens — so a regression can
-  // land an independent workflow-header, issue-store or Git mutation in the real gap
-  // the write frame then re-reads and re-validates.
+  // §4.1/§Read-Completeness the completion race seam fires HERE — after the
+  // external witnesses are captured and BEFORE the committing `BEGIN IMMEDIATE`
+  // opens — so a regression can land an independent workflow-header, Git or
+  // collaboration mutation in the real gap the write frame then re-reads and
+  // re-validates.
   completeWitnessGapForTest?.();
+  // The findings observation that authorized this completion must still name the
+  // same authority/scope/revision; a known drift refuses as stale instead of
+  // committing a decision taken against an older snapshot.
+  await assertFindingsObservationCurrent(context, witnesses.findings.observation);
   return withExecutionPlanOperation<ExecutionPlanView>(
     context,
     resolved,
@@ -1958,6 +2022,7 @@ type CompletionWitnesses = {
   git: readonly GitProofWitness[];
   planAreas: readonly string[];
   evidenceRefs: CompletionEvidenceRefs;
+  findings: CompletionFindingsProof;
 };
 
 /**
@@ -1986,12 +2051,19 @@ async function captureCompletionWitnesses(
   const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
+  // §Read/Completeness and Gates: ONE complete plan-local observation decides
+  // the findings gate before SQLite ownership; an open critical (or any open
+  // issue under zero-residual) refuses here, and an unavailable lane refuses
+  // through the observation's own named code instead of reading as "no findings".
+  const gate = await findingsCleanupGate(context, read.planId, { mode: prepared.findings_cleanup });
+  const findings: CompletionFindingsProof = { observation: gate.collaboration, mode: prepared.findings_cleanup };
+  if (!gate.ok) throw findingsOpenRefusal(read.planId, findings);
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
   assertEvidenceInsidePlanArea(planAreas, evidence.evidence_refs);
   const evidenceRefs = completionEvidenceRefs(evidence);
   // A report-only row consults no Git and records no fulfilment payload: its
   // registered completion_policy is a registration-time declaration (§1).
-  if (route === "report-only") return { git: [], planAreas, evidenceRefs };
+  if (route === "report-only") return { git: [], planAreas, evidenceRefs, findings };
   const scope = planScopeOf(before.data, read.planId);
   if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, read.planId);
@@ -2005,7 +2077,7 @@ async function captureCompletionWitnesses(
       );
     }
     assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, read.planId);
-    return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs };
+    return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs, findings };
   }
   const anchors = integrationAnchors(snapshot, read.planId);
   const checkout = assertIntegrationCheckout(anchors, read.planId);
@@ -2015,6 +2087,7 @@ async function captureCompletionWitnesses(
   return {
     planAreas,
     evidenceRefs,
+    findings,
     git: [
       captureGitProofWitness(scope.worktreePath),
       captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged"),
@@ -2108,12 +2181,33 @@ function completeInTransaction(
     // never inferred or discarded by completion.
     requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
   }
-  // §4.1 the authoritative findings gate on THIS transaction's handle: an issue
-  // captured after the preflight refuses the completion instead of being judged
-  // against a stale list. (The Git witnesses were already re-validated by the
-  // frame's commit-boundary preflight, which runs after the race seam.)
-  assertFindingsClosedOn(tx, planId, prepared);
-  applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
+  // The observation was decided before the execution transaction; only the
+  // plan's effective mode is re-read here. A mode changed in the proof gap means
+  // the recorded decision was taken under a different policy — refuse as stale
+  // rather than commit it.
+  if (prepared.findings_cleanup !== witnesses.findings.mode) {
+    throw new CoordinationError(
+      "coordination.version-conflict",
+      "The plan's findings-cleanup mode changed before the completion transaction; repeat the same completion with the same semantic id so it is judged against the current policy.",
+      {
+        plan_id: planId,
+        observed: witnesses.findings.mode,
+        current: prepared.findings_cleanup,
+        as_of: witnesses.findings.observation.asOf,
+        collaboration_revision: witnesses.findings.observation.revision,
+      },
+    );
+  }
+  applyCompletion({
+    tx,
+    witness,
+    planId,
+    record,
+    scope,
+    at,
+    findings: { ...witnesses.findings.observation, mode: witnesses.findings.mode },
+    what: `plan ${planId} coordination`,
+  });
   const settled = readExecutionPlanWitness(tx, read);
   return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
 }

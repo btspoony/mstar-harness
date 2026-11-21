@@ -46,9 +46,12 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
-import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
-import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
-import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
+import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
+import {
+  openCollaborationStore,
+  withCollaborationWrite,
+  type CollaborationStamp,
+} from "./collaboration-store.js";
 import {
   normalizeSeverity,
   validateResidual,
@@ -223,79 +226,167 @@ export function validateProjectRegister(doc: unknown): GateResult {
 }
 
 /**
- * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
- * issue-governance cutover G2a): the authoritative input is the issue store
- * (`store.db`) — every OPEN issue linked to the plan through `provenance`
- * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows
- * retain the scoped default), recorded by a plan-scoped operation.
- * The legacy register is never consulted at runtime; `validateProjectRegister`
- * remains a migration-only validator.
+ * The scope a collaboration observation covers (contract §Read/Completeness).
+ * The plan key is the exact stable plan catalog id; the repository identity is
+ * the observation's `authority.repoKey`, never re-derived from a path.
+ */
+export type CollaborationScope = Readonly<{
+  kind: "repository" | "project" | "plan" | "milestone" | "query";
+  key: string;
+}>;
+
+/**
+ * One scoped read of the collaboration authority. `complete` is the only
+ * observation a gate may decide on; `partial`/`unavailable` are declared so a
+ * consumer can disclose a gap instead of reading it as an empty result.
+ * `asOf` is when the local snapshot was established, never a file mtime.
+ */
+export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
+  (
+    | {
+        completeness: "complete";
+        asOf: string;
+        authority: CollaborationStamp;
+        revision: number;
+        catalogRevision: number;
+      }
+    | {
+        completeness: "partial";
+        asOf: string;
+        authority: CollaborationStamp;
+        revision: number;
+        catalogRevision: number;
+        code: string;
+      }
+    | { completeness: "unavailable"; asOf: null; authority: null; code: string }
+  );
+
+/** A complete plan-scoped findings observation: the open local issues it read. */
+export type FindingsObservation = Extract<CollaborationObservation, { completeness: "complete" }> &
+  Readonly<{ open: readonly { id: string; severity: Severity }[] }>;
+
+/**
+ * One complete plan-local findings observation (contract §Read/Completeness and
+ * Gates): every OPEN **local** issue linked to the plan through `provenance`
+ * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows retain
+ * the scoped default), read from the collaboration lane in ONE snapshot.
+ *
+ * Fail-closed: a missing (`collaboration.not-initialized`), corrupt
+ * (`collaboration.unreadable`) or staged (`collaboration.not-active`) authority
+ * refuses — an unreadable lane is never "no findings". A mirrored external row
+ * is not a local finding; the gate counts the work this repo owes.
+ */
+export async function observePlanFindings(context: StoreContext, planId: string): Promise<FindingsObservation> {
+  if (typeof planId !== "string" || planId.trim() === "") {
+    throw new Error("observePlanFindings requires a non-empty plan id");
+  }
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    const db = handle.db;
+    // One deferred read snapshot: the revision stamped on the observation and
+    // the rows it was evaluated against come from the same instant.
+    db.exec("begin");
+    try {
+      const asOf = new Date().toISOString();
+      const meta = db
+        .prepare("select revision, catalog_revision from collaboration_meta where id = 1")
+        .get() as { revision?: unknown; catalog_revision?: unknown } | undefined;
+      const revision = meta?.revision;
+      const catalogRevision = meta?.catalog_revision;
+      if (typeof revision !== "number" || typeof catalogRevision !== "number") {
+        throw new StoreError(
+          "collaboration.unreadable",
+          "The collaboration authority has no readable revision counters; the findings observation cannot be established.",
+        );
+      }
+      const rows = db
+        .prepare(
+          "select issues.id as id, issues.severity as severity from issues " +
+            "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
+            "where issues.disposition = 'open' and issues.provider = 'local' order by issues.id asc",
+        )
+        .all(planId) as Array<{ id: string; severity: string }>;
+      return {
+        scope: { kind: "plan", key: planId },
+        completeness: "complete",
+        asOf,
+        authority: {
+          repoKey: handle.authority.repoKey,
+          mode: handle.authority.mode,
+          storeId: handle.authority.storeId,
+          epoch: handle.authority.epoch,
+        },
+        revision,
+        catalogRevision,
+        open: rows.map((row) => ({ id: row.id, severity: normalizeSeverity(row.severity) as Severity })),
+      };
+    } finally {
+      db.exec("commit");
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The findings decision table (status-and-residuals.md § Findings cleanup
+ * modes; issue-governance cutover G2a), applied to one observation.
  *
  * `zero-residual`: every open linked issue is a violation — a disposition is a
  * separate authorized act (contract §4), so an open issue cannot ride along.
  * `allow-residual` (default): open issues are fine unless an unresolved
  * Critical remains.
+ */
+function findingsGateDecision(
+  observation: FindingsObservation,
+  mode: FindingsCleanupMode,
+): GateResult {
+  const violations: ValidationResult[] = [];
+  for (const row of observation.open) {
+    const label = row.id;
+    if (row.severity === "critical") {
+      violations.push(
+        mode === "zero-residual"
+          ? violation(
+              "high",
+              "findings.zero-residual-critical",
+              `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
+            )
+          : violation("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`),
+      );
+    } else if (mode === "zero-residual") {
+      violations.push(
+        violation(
+          "medium",
+          "findings.zero-residual-open-issue",
+          `${label}: an open issue cannot remain under zero-residual \u2014 close it through the authorized disposition path before handoff`,
+        ),
+      );
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
+ * issue-governance cutover G2a): the authoritative input is the collaboration
+ * lane's issue rows. The gate returns the complete observation it decided on so
+ * a consumer (completion evidence) can record the accepted scope, stamp,
+ * revision and snapshot time; the legacy register is never consulted at
+ * runtime (`validateProjectRegister` remains a migration-only validator).
  *
- * Fail-closed: the authority must be readable AND active, or the gate throws
- * — a missing (`store.not-initialized`), corrupt (`store.corrupt`) or staged
- * (`store.not-active`) store is never read as "no findings".
+ * An unreadable, missing or staged authority refuses through
+ * `observePlanFindings` — a mismatched or unavailable lane is never an empty
+ * findings list.
  */
 export async function findingsCleanupGate(
   context: StoreContext,
   planId: string,
   opts?: { mode?: FindingsCleanupMode },
-): Promise<GateResult> {
-  if (typeof planId !== "string" || planId.trim() === "") {
-    throw new Error("findingsCleanupGate requires a non-empty plan id");
-  }
-  const mode = opts?.mode ?? "allow-residual";
-  const handle = await openStore(context, "read");
-  try {
-    const db = handle.db;
-    const meta = readStoreAuthority(db);
-    if (meta.authorityState !== "active") {
-      throw new IssueError(
-        "store.not-active",
-        `The issue store is ${typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
-      );
-    }
-    assertIssueProvenanceSchema(db);
-    const rows = db
-      .prepare(
-        "select issues.id as id, issues.severity as severity from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
-          // A mirrored external row is not a local finding: this gate counts the
-          // work this repo owes, and an imported Linear issue is not that.
-          "where issues.disposition = 'open' and issues.provider = 'local' order by issues.id asc",
-      )
-      .all(planId) as Array<{ id: string; severity: string }>;
-    const violations: ValidationResult[] = [];
-    for (const row of rows) {
-      const label = row.id;
-      if (normalizeSeverity(row.severity) === "critical") {
-        violations.push(
-          mode === "zero-residual"
-            ? violation(
-                "high",
-                "findings.zero-residual-critical",
-                `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
-              )
-            : violation("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`),
-        );
-      } else if (mode === "zero-residual") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-open-issue",
-            `${label}: an open issue cannot remain under zero-residual \u2014 close it through the authorized disposition path before handoff`,
-          ),
-        );
-      }
-    }
-    return { ok: violations.length === 0, violations };
-  } finally {
-    handle.close();
-  }
+): Promise<GateResult & { collaboration: FindingsObservation }> {
+  const observation = await observePlanFindings(context, planId);
+  const decision = findingsGateDecision(observation, opts?.mode ?? "allow-residual");
+  return { ...decision, collaboration: observation };
 }
 
 /**

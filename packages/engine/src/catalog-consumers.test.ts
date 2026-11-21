@@ -36,7 +36,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { findRegisteredWorkflow, validateStatus } from "./status.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { execFileSync } from "node:child_process";
 import * as nodeOs from "node:os";
@@ -137,17 +137,15 @@ function planRow(overrides: Record<string, unknown> = {}, metadata: Record<strin
 /** The pin the authorized `prepare` records for a row: the current catalog identity. */
 async function pinFor(context: StoreContext, row: unknown, planId = PLAN_ID): Promise<CatalogExecutionPin> {
   const detail = await getCatalog(context, { kind: "plan", id: planId });
-  const handle = await openStore(context, "read");
-  try {
-    return {
-      store_id: handle.storeId,
-      entity_revision: detail.entity.revision,
-      document_hash: executionInputHash(row, planId),
-      relation_hash: "0".repeat(64),
-    };
-  } finally {
-    handle.close();
-  }
+  // The catalog identity is owned by the collaboration lane after the cutover;
+  // the pin names that store, not the execution one.
+  const authority = await readCollaborationAuthority(context);
+  return {
+    store_id: authority.storeId,
+    entity_revision: detail.entity.revision,
+    document_hash: executionInputHash(row, planId),
+    relation_hash: "0".repeat(64),
+  };
 }
 
 /** The exact row shape an execution consumer reads: the pin lives in metadata. */
@@ -294,6 +292,23 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
     expect(report.ok).toBe(false);
     expect(report.gaps).toEqual([]);
     expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
+  });
+
+  test("catalog pin: a workspace with no collaboration identity keeps the recorded pin and discloses store-absent", async () => {
+    // No Git repository and no repository_id: there is no collaboration scope to
+    // read. Pin consumption must not refuse or clear the recorded lineage.
+    const harness = mkdtempSync(join(ROOT, "pin-no-identity-"));
+    const pin = {
+      store_id: "store-unknown",
+      entity_revision: 1,
+      document_hash: executionInputHash(planRow(), PLAN_ID),
+      relation_hash: "0".repeat(64),
+    };
+    const state = await readExecutionCatalogPin(pinRead({ harnessDir: harness }, pinnedRow(planRow(), pin)));
+    expect(state.store).toBe("absent");
+    expect(state.source).toBe("row");
+    expect(state.pin).toEqual(pin);
+    expect(state.conflict).toBeNull();
   });
 });
 

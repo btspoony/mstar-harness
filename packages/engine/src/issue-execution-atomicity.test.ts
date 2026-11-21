@@ -26,10 +26,12 @@ import { tmpdir } from "node:os";
 import * as nodeOs from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { CompletionEvidence } from "./coordination-write.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   initializeCollaborationStore,
   openCollaborationStore,
+  readCollaborationAuthority,
   withCollaborationWrite,
   type CollaborationStamp,
 } from "./collaboration-store.js";
@@ -47,6 +49,7 @@ import {
   closeIssueOn,
   getIssue,
   linkIssueOn,
+  linkIssueScoped,
   reopenIssue,
   reopenIssueOn,
   listIssues,
@@ -61,9 +64,21 @@ import {
   readExecutionState,
   withExecutionTransaction,
   type ExecutionCaller,
+  type ExecutionContext,
+  type ExecutionPlanView,
+  type ExecutionReceipt,
   type ExecutionSessionRef,
+  type ExecutionToken,
 } from "./execution-store.js";
-import { deriveResidualEntries, mutateExecutionPlan, progressExecutionPlan } from "./execution-coordination.js";
+import {
+  completeExecutionPlan,
+  deriveResidualEntries,
+  mutateExecutionPlan,
+  prepareExecutionPlan,
+  progressExecutionPlan,
+  setCompleteWitnessGapForTest,
+} from "./execution-coordination.js";
+import { resolveSddDir } from "./path.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
@@ -1438,5 +1453,213 @@ describe("collaboration composite residual", () => {
     expect(refused.code).toBe("collaboration.operation-partial");
     expect(detailsOf(refused)).toMatchObject({ phase: "prepared", cause_code: "collaboration.stale-binding" });
     expect(await issueFacts(fixture.context)).toMatchObject({ issues: 0, composite: 0 });
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Completion findings — the observation is taken before the execution
+ * transaction, and its accepted proof is recorded on the completed row
+ * ------------------------------------------------------------------------ */
+
+const COMPLETION_PLAN = "plan-findings-completion";
+const COMPLETION_WORKFLOW = "wf-findings-completion";
+const COMPLETION_TS = "2026-11-21T00:00:00.000Z";
+
+/**
+ * A standalone development plan prepared and progressed to `InProgress`, with
+ * real QC/acceptance bodies in its plan area. Both lanes are active, so the
+ * completion's findings observation has a readable collaboration authority.
+ */
+async function completionFixture(
+  name: string,
+  findingsCleanup: "zero-residual" | "allow-residual" = "allow-residual",
+): Promise<{
+  context: StoreContext;
+  planContext: ExecutionContext;
+  session: ExecutionSessionRef;
+  planId: string;
+  token: () => Promise<ExecutionToken>;
+  complete: (operationId: string) => Promise<ExecutionReceipt<ExecutionPlanView>>;
+}> {
+  const fixture = checkout(name);
+  const { root, harnessDir, context } = fixture;
+  (await initializeStore(context)).close();
+  await initializeCollaborationStore(collaborationLocation(context));
+  activate(collaborationLocation(context).dbPath);
+  const initialized = await readExecutionState(context);
+  const worktreePath = join(root, "wt-completion-findings");
+  git(root, ["worktree", "add", "-q", "-b", `feature/${COMPLETION_PLAN}`, worktreePath]);
+  writeFileSync(join(worktreePath, "slice.txt"), "reviewed slice\n");
+  git(worktreePath, ["add", "-A"]);
+  git(worktreePath, ["-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-q", "-m", "feat: slice"]);
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const caller: ExecutionCaller = { sessionId: `coordinator-${name}`, role: "coordinator", workflowId: COMPLETION_WORKFLOW };
+  const created = await createExecutionWorkflow({ harnessDir, caller }, {
+    entry: { id: COMPLETION_WORKFLOW, type: "plan", started_at: COMPLETION_TS, dir: `workflows/${COMPLETION_WORKFLOW}` } as WorkflowEntry,
+    snapshot: {
+      schema_version: 1,
+      id: COMPLETION_WORKFLOW,
+      type: "plan",
+      status: "running",
+      started_at: COMPLETION_TS,
+      updated_at: COMPLETION_TS,
+      phase: "phase-2-execute",
+      project: "harness",
+      delivery_kind: "development",
+      branch: { base: "main", source: `feature/${COMPLETION_PLAN}`, target: "main" },
+      execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+      plans: [{ id: COMPLETION_PLAN, title: `Plan ${COMPLETION_PLAN}`, file: `plans/${COMPLETION_PLAN}.md`, status: "Todo" }],
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${name}`,
+  });
+  const session = (
+    await bindExecutionSession({ harnessDir, caller }, {
+      workflowId: COMPLETION_WORKFLOW,
+      expected: created.data.workflows[0]!.workflowToken,
+      operationId: `bind-${name}`,
+    })
+  ).data;
+  const planContext: ExecutionContext = { ...context, caller };
+  const token = async (): Promise<ExecutionToken> =>
+    (await readExecutionPlan(planContext, session, COMPLETION_PLAN)).token;
+  await prepareExecutionPlan(planContext, {
+    operationId: `prepare-${name}`,
+    session,
+    expected: await token(),
+    planId: COMPLETION_PLAN,
+    operation: {
+      kind: "prepare",
+      config: { worktreePath, workingBranch: `feature/${COMPLETION_PLAN}`, findingsCleanup },
+    },
+  });
+  await progressExecutionPlan(planContext, {
+    operationId: `progress-${name}`,
+    session,
+    expected: await token(),
+    planId: COMPLETION_PLAN,
+    operation: { kind: "progress", progress: { status: "InProgress", summary: "reviewed", evidence_paths: [] } },
+  });
+  const sddDir = resolveSddDir(harnessDir, COMPLETION_PLAN);
+  mkdirSync(sddDir, { recursive: true });
+  const bodies = { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), acceptance: join(sddDir, "acceptance.md") };
+  writeFileSync(bodies.qc, "reviewed QC body\n");
+  writeFileSync(bodies.consolidated, "consolidated QC body\n");
+  writeFileSync(bodies.acceptance, "acceptance verdict body\n");
+  const evidence: CompletionEvidence = {
+    source_sha: sourceSha,
+    review_base: baseSha,
+    review_head: sourceSha,
+    qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
+    acceptance: { gate: "pm-acceptance", decision: "pass", report: bodies.acceptance },
+  };
+  return {
+    context,
+    planContext,
+    session,
+    planId: COMPLETION_PLAN,
+    token,
+    complete: async (operationId: string) =>
+      completeExecutionPlan(planContext, {
+        operationId,
+        session,
+        expected: await token(),
+        planId: COMPLETION_PLAN,
+        operation: { kind: "complete", evidence },
+      }),
+  };
+}
+
+describe("collaboration findings observation \u2014 completion evidence", () => {
+  test("collaboration findings observation: an open critical refuses completion and leaves the row unchanged", async () => {
+    const fixture = await completionFixture("completion-findings-open");
+    const issue = await captureIssue(fixture.context, baseInput({ severity: "critical", occurrenceKey: "completion-critical" }), {
+      operationId: "cap-completion-critical",
+      actor: ACTOR,
+    });
+    await linkIssueScoped(fixture.context, issue.issueId, { kind: "plan", target: fixture.planId }, {
+      operationId: "link-completion-critical",
+      actor: ACTOR,
+      expectedRevision: issue.revision,
+    });
+
+    const refusal = await refusalOf(() => fixture.complete("complete-findings-open"));
+    expect(refusal.code).toBe("coordination.findings-open");
+    expect(detailsOf(refusal).findings).toEqual([issue.issueId]);
+    expect(detailsOf(refusal).findings_cleanup).toBe("allow-residual");
+    expect((await readExecutionPlan(fixture.planContext, fixture.session, fixture.planId)).data.plan.status).toBe("InProgress");
+  });
+
+  test("collaboration findings observation: a findings change in the proof gap refuses as stale", async () => {
+    const fixture = await completionFixture("completion-findings-stale");
+    let seamRan = false;
+    // The seam runs after the observation and before the execution transaction:
+    // another collaboration write advances the lane revision in that gap.
+    setCompleteWitnessGapForTest(() => {
+      seamRan = true;
+      const db = new DatabaseSync(collaborationLocation(fixture.context).dbPath);
+      try {
+        db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+      } finally {
+        db.close();
+      }
+    });
+    try {
+      const refusal = await refusalOf(() => fixture.complete("complete-findings-stale"));
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("coordination.version-conflict");
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+    expect((await readExecutionPlan(fixture.planContext, fixture.session, fixture.planId)).data.plan.status).toBe("InProgress");
+  });
+
+  test("collaboration findings observation: a legitimate completion records the accepted observation", async () => {
+    const fixture = await completionFixture("completion-findings-recorded");
+    const receipt = await fixture.complete("complete-findings-recorded");
+    expect(receipt.data.plan.status).toBe("Done");
+
+    const metadata = receipt.data.plan.metadata as Record<string, unknown>;
+    const recorded = metadata.completion_findings as Record<string, unknown>;
+    expect(recorded.scope).toEqual({ kind: "plan", key: fixture.planId });
+    expect(recorded.completeness).toBe("complete");
+    expect(recorded.mode).toBe("allow-residual");
+    expect(recorded.open).toEqual([]);
+    expect(recorded.asOf).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(Number.isInteger(recorded.revision)).toBe(true);
+    expect(Number.isInteger(recorded.catalogRevision)).toBe(true);
+    expect((recorded.authority as Record<string, unknown>).storeId).toBe(
+      (await readCollaborationAuthority(fixture.context)).storeId,
+    );
+  });
+
+  test("collaboration findings observation: zero-residual blocks an open medium and passes once it is legitimately zero", async () => {
+    const fixture = await completionFixture("completion-findings-zero", "zero-residual");
+    const issue = await captureIssue(fixture.context, baseInput({ occurrenceKey: "completion-zero" }), {
+      operationId: "cap-completion-zero",
+      actor: ACTOR,
+    });
+    await linkIssueScoped(fixture.context, issue.issueId, { kind: "plan", target: fixture.planId }, {
+      operationId: "link-completion-zero",
+      actor: ACTOR,
+      expectedRevision: issue.revision,
+    });
+
+    const refusal = await refusalOf(() => fixture.complete("complete-findings-zero-open"));
+    expect(refusal.code).toBe("coordination.findings-open");
+    expect(detailsOf(refusal).findings_cleanup).toBe("zero-residual");
+    expect(detailsOf(refusal).findings).toEqual([issue.issueId]);
+
+    // A disposition is a separate authorized act; once it is closed the plan's
+    // own scope is a legitimate zero and completion records that observation.
+    await withCollaborationWrite(fixture.context, (handle) => {
+      handle.db.prepare("update issues set disposition = 'resolved' where id = ?").run(issue.issueId);
+      handle.db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    });
+    const receipt = await fixture.complete("complete-findings-zero-closed");
+    expect(receipt.data.plan.status).toBe("Done");
+    const metadata = receipt.data.plan.metadata as Record<string, unknown>;
+    expect((metadata.completion_findings as Record<string, unknown>).mode).toBe("zero-residual");
   });
 });

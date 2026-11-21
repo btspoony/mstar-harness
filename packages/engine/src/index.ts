@@ -329,6 +329,9 @@ export {
 } from "./iteration.js";
 export type {
   BindingErrorCode,
+  CollaborationObservation,
+  CollaborationScope,
+  FindingsObservation,
   ProjectBinding,
   ProjectBindingMutation,
   ProjectBindingRead,
@@ -350,6 +353,7 @@ export {
   bindProject,
   findingsCleanupGate,
   listProjectReferenceFiles,
+  observePlanFindings,
   readProjectBinding,
   validateProjectRegister,
   validateRoadmap,
