@@ -152,13 +152,13 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.3a Unresolved conversation gate（HARD — 先于 head 对账，独立于 `pr_merge_policy`）
 
-- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread（人类与 bot 都算，**不按 merge class 过滤**），执行 `mstar pr-review thread-gate --pr <n>`（查询形状见 `mstar-audit/references/pr-review.md` § Thread lifecycle 的 `reviewThreads` GraphQL）；`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。
-- **门**：未解决项 > 0 时**不得 merge**——owner 批准、`ship it`、CI 绿、§5.3 谓词成立都不能替代本 gate；本 gate 不因 thread 被归在 §5.2 第 3 项而免检。
+- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread，执行 `mstar pr-review thread-gate --pr <n>`（它读取每条 thread 的作者、`path:line` 与首条评论，分页耗尽即拒绝）；人类与 bot 都算，**不按 merge class 过滤**，`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。
+- **门**：未解决项 > 0 时**不得 merge**，唯一出口是「恢复路径」的逐条 waive + 两次确认，或全部 resolve——owner 批准、`ship it`、CI 绿、§5.3 谓词成立都不能替代本 gate；本 gate 不因 thread 被归在 §5.2 第 4 项而免检。
 - **清单**：PM 必须逐条列出 `author.login`、`path:line`、首条评论要点（bot 报告有 merge class 时一并给出），不得只报数量或以「有些评论」概括。
-- **两次确认**：展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、新 thread 或清单变化 → 前一次确认作废，重新枚举并重走两次确认；确认结果写入 `--confirm` 文件（`{head, confirmations: 2, threads: [<thread id>...]}`）并由同一条命令复验，复验不通过即无授权。
+- **两次确认**：存在未解决项时（clean 枚举按 §5.2 第 4 项直接通过，不需用户确认），展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、新 thread 或清单变化 → 前一次确认作废并重走；确认结果写入 `--confirm` 文件（`{head, confirmations: 2, threads: [<thread id>...]}`），**merge 前最后一步必须重跑同一条命令复验**——新 thread 或新 head 使复验失败即无授权。
 - **waive 粒度**：笼统的「合并」「可以了」不构成 waive；waive 必须逐条点名（thread id 或 `path:line` + 作者），且点名的是**该 thread**——只点名 head 或 surface 的 waive 不适用本 gate。
 - **恢复路径**：修复后 resolve（或由 reviewer/bot 自行 resolve）即通过；用户逐条书面 waive 且经上述两次确认亦通过——两者之外没有第三种出路。
-- **`owner-gated`**：owner 自行 merge 时 PM 无法拦截，但 PM **不得**把未解决项记为 resolved，也不得在 Phase 6 关闭前丢弃该清单；由 PM 执行的 merge（含 owner 书面批准后的执行）一律先过本 gate。
+- **`owner-gated`**：owner 自行 merge 时 PM 无法拦截，但 PM **不得**把未解决项记为 resolved，也不得丢弃清单；由 PM 执行的 merge（含 owner 书面批准后的执行）一律先过本 gate。owner 在确认前自行 merge → Phase 6 仍按「verified merge 已发生」进入，入口记录该 head 上的未解决 thread 清单与**实际处置**（逐条 resolved-in-fact / still-open，不得写成已确认或已 waive），保留到 close；这不豁免下一次 merge 的 gate。
 
 **Merge 前的 head 对账（可执行，不是谓词的复述）**：执行 merge 的前一步，取 `gh pr view <n> --json headRefOid`，与该 policy 的授权证据绑定的 head 逐字比较：
 

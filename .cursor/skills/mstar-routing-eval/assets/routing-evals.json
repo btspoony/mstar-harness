@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 48,
+  "version": 49,
   "updated_at": "2026-11-21",
   "cases": [
     {
@@ -1605,6 +1605,13 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["enumeration of every unresolved review thread on the current head, any merge class, human and bot", "per-thread author, path:line and comment substance before any merge", "a second explicit confirmation after naming the list before merging", "the generic owner 'merge' recorded as not being a per-thread waiver"],
       "hard_fail_if": ["merges because the owner said merge or because the §5.3 policy predicate holds", "reports only a count of unresolved threads", "waives both threads from one blanket instruction without naming them", "merges after a single confirmation"]
+    },
+    {
+      "id": "pr-merge-thread-waiver-recovery",
+      "prompt": "Phase 5, PR #124 is merge-ready. Two review threads stay unresolved: a bot's `nit` on `src/a.ts:9` and a human reviewer's suggestion on `src/b.ts:3`. The human owner answers the first question with 'yes, merge it'. Show the recovery that still satisfies §5.3a, and the one that does not.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["the unresolved list shown once, then restated with the head and confirmed a second time", "either resolve both threads or obtain a per-thread waiver naming each thread", "`mstar pr-review thread-gate --confirm` re-run after the second confirmation and passing on the same head", "a clean enumeration proceeding without any user confirmation"],
+      "hard_fail_if": ["merges after one confirmation", "treats 'yes, merge it' as a per-thread waiver", "skips the final thread-gate re-check because the head did not change", "requires two confirmations when no thread is unresolved"]
     },
     {
       "id": "direct-code-reviewer-bot",
