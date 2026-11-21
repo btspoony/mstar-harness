@@ -1,12 +1,31 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
 import { initializeCollaborationStore, initializeStore, openStore, resolveCollaborationLocation } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope } from "./support/cli-assertions";
+
+/**
+ * Both the in-process reads and the spawned CLI resolve the collaboration lane
+ * through the user home: pin it to a private root and restore it afterwards.
+ */
+const HOME_ROOT = mkdtempSync(join(tmpdir(), "status-cli-home-"));
+const PRIOR_HOME = process.env.HOME;
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  process.env.HOME = HOME_ROOT;
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  if (PRIOR_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = PRIOR_HOME;
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
 
 // ---------------------------------------------------------------------------
 // mstar status validate — v2 root + workflow snapshot (audit-004 cutover)

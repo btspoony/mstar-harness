@@ -1219,13 +1219,16 @@ export async function listCatalog(
           `order by catalog_entities.kind asc, catalog_entities.title asc, catalog_entities.id asc limit ? offset ?`,
       )
       .all(...params, limit, offset) as EntityRow[];
+    // The page's incident links belong to the same snapshot as its rows, total
+    // and revision: read them inside this transaction, before it commits.
+    const links = incidentLinks(
+      db,
+      rows.map((row) => ({ kind: row.kind, id: row.id })),
+    );
     db.exec("commit");
     return {
       items: rows.map((row) => toCatalogEntity(row, roots)),
-      links: incidentLinks(
-        db,
-        rows.map((row) => ({ kind: row.kind, id: row.id })),
-      ),
+      links,
       total: total.n,
       storeRevision,
       collaboration,

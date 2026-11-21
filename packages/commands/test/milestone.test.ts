@@ -1,7 +1,8 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
 import {
   ensureCollaborationAuthority,
@@ -14,8 +15,19 @@ import { executeCommand } from "../src/index.js";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import type { InvocationContext } from "../src/types.js";
 
+/** Collaboration lanes created here live under a private home, never the operator's. */
+const HOME_ROOT = mkdtempSync(join(tmpdir(), "commands-milestone-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+
 const root = mkdtempSync(join(tmpdir(), "commands-milestone-"));
-afterAll(() => rmSync(root,{recursive:true,force:true}));
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(root, { recursive: true, force: true });
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
 /**
  * A checkout that owns its collaboration lane: milestone authority is the

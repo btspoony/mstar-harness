@@ -171,7 +171,13 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
       // `content` is the same read's validated parse of `roadmap.contentMarkdown`,
       // a projection of the stored record rather than a second authority (A02).
-      return success(id, { projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content: read.roadmap === null ? null : read.content });
+      return success(id, {
+        projectId: read.projectId,
+        projectRevision: read.projectRevision,
+        roadmap: read.roadmap,
+        content: read.roadmap === null ? null : read.content,
+        collaboration: read.collaboration,
+      });
     }
     if (verb === "import") {
       if (input.apply) {

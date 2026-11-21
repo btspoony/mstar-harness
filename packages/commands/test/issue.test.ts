@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import * as nodeOs from "node:os";
 import path from "node:path";
 import { ensureCollaborationAuthority, initializeStore, ISSUE_ACTION_NAMES, openStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
@@ -9,11 +9,25 @@ import { failure as milestoneFailure } from "../src/families/milestone.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
 
+/**
+ * Every collaboration lane this file creates belongs under a private home: a
+ * test never writes into the operator's `~/.mstar/repos`.
+ */
+const HOME_ROOT = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 async function testContext(): Promise<InvocationContext> {
-  const root = mkdtempSync(path.join(os.tmpdir(), "commands-issue-"));
+  const root = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-"));
   roots.push(root);
   const harness = path.join(root, ".mstar");
   execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });

@@ -380,8 +380,16 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.",
               );
         } catch (error) {
-          const code = engineCode(error, "findings.cleanup-refused");
-          return refused("status.findings-cleanup", code || "findings.cleanup-refused", messageOf(error), undefined, "Correct the reported findings-cleanup problem, then rerun mstar status findings-cleanup <plan-id>.");
+          // The engine's own code, structured details and recovery are the
+          // refusal contract: forward them, defaulting only when it supplied none.
+          const facts = engineErrorFacts(error);
+          return refused(
+            "status.findings-cleanup",
+            facts.code ?? "findings.cleanup-refused",
+            messageOf(error),
+            facts.details,
+            facts.recovery ?? "Correct the reported findings-cleanup problem, then rerun mstar status findings-cleanup <plan-id>.",
+          );
         }
       },
     }),
@@ -405,8 +413,14 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             collaboration: envelope.collaboration,
           });
         } catch (error) {
-          const code = engineCode(error, "issue.store-refused");
-          return refused("status.tech-debt", code || "issue.store-refused", messageOf(error), undefined, "Correct the reported issue-store problem, then run mstar status tech-debt.");
+          const facts = engineErrorFacts(error);
+          return refused(
+            "status.tech-debt",
+            facts.code ?? "issue.store-refused",
+            messageOf(error),
+            facts.details,
+            facts.recovery ?? "Correct the reported issue-store problem, then run mstar status tech-debt.",
+          );
         }
       },
     }),

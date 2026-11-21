@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
@@ -550,6 +551,14 @@ describe("catalog and roadmap command families", () => {
       expect(observation(shownCatalog.data).scope).toEqual({ kind: "query", key: "catalog:project:proj" });
     }
 
+    const shownRoadmap = await roadmap["roadmap.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+    expect(shownRoadmap.status).toBe("ok");
+    if (shownRoadmap.status === "ok") {
+      expect(observation(shownRoadmap.data).scope).toEqual({ kind: "project", key: "proj" });
+      // Existing show fields are preserved alongside the evidence.
+      expect(shownRoadmap.data).toMatchObject({ projectId: "proj", projectRevision: 1, roadmap: null, content: null });
+    }
+
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));
     expect(exported.status).toBe("ok");
     if (exported.status === "ok") {
@@ -577,6 +586,60 @@ describe("catalog and roadmap command families", () => {
       // No fabricated record: the refusal names its own code and carries the
       // complete observation the read established.
       expect(observation(missing.details).scope).toEqual({ kind: "project", key: "not-registered" });
+    }
+  });
+
+  test("collaboration command evidence: a catalog page reads links in the same snapshot as its rows", async () => {
+    const { cwd, harness } = await activeFixture("catalog-link-snapshot");
+    await registerCatalogEntity({ harnessDir: harness }, {
+      kind: "document", id: "doc-late", title: "Late doc", documentKind: "spec", rootKind: "specs", relativePath: "doc-late.md",
+    }, { operationId: "late-doc", actor: "test" });
+    const lanePath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
+
+    // Deterministic interleave: the newer link commits at the instant the page's
+    // rows read finishes and its transaction commits. A page that reads its
+    // links after that commit answers the newer revision; one that reads them
+    // inside its own snapshot cannot.
+    const realPrepare = DatabaseSync.prototype.prepare;
+    const realExec = DatabaseSync.prototype.exec;
+    let sawPageRows = false;
+    let injected = false;
+    const commitLateLink = () => {
+      if (injected) return;
+      injected = true;
+      const writer = new DatabaseSync(lanePath);
+      try {
+        writer.exec("pragma busy_timeout=2000");
+        writer.prepare(
+          "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id) values ('project', 'proj', 'documents', 'document', 'doc-late')",
+        ).run();
+        writer.prepare("update collaboration_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
+      } finally {
+        writer.close();
+      }
+    };
+    const prepareSpy = spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql.includes("from catalog_entities") && sql.includes("order by catalog_entities.kind")) sawPageRows = true;
+      return realPrepare.call(this, sql);
+    });
+    const execSpy = spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      const result = realExec.call(this, sql);
+      if (sawPageRows && sql.trim().toLowerCase() === "commit") commitLateLink();
+      return result;
+    });
+    try {
+      const listed = await catalog["catalog.list"]!.execute({ harness }, invocation(cwd));
+      expect(listed.status).toBe("ok");
+      if (listed.status !== "ok") return;
+      expect(injected).toBe(true);
+      const page = listed.data as { links: unknown[]; storeRevision: number; collaboration: { revision: number } };
+      // The page answered before the link committed: no late link, and the
+      // evidence names the revision its rows were actually read at.
+      expect(page.links).toEqual([]);
+      expect(page.collaboration.revision).toBe(page.storeRevision);
+    } finally {
+      execSpy.mockRestore();
+      prepareSpy.mockRestore();
     }
   });
 

@@ -80,7 +80,9 @@ describe("roadmap-authority transactional domain", () => {
   test("distinguishes a known project without authority from valid zero-goal content", async () => {
     const context = await freshProject("project-empty");
     const before = await readRoadmapAuthority(context, "project-empty");
-    expect(before).toEqual({ projectId: "project-empty", projectRevision: 1, roadmap: null });
+    const { collaboration: beforeEvidence, ...beforeRead } = before;
+    expect(beforeRead).toEqual({ projectId: "project-empty", projectRevision: 1, roadmap: null });
+    expect(beforeEvidence.completeness).toBe("complete");
     const emptyGoals = `---\nproject_id: project-empty\ntitle: Empty goals\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nStill valid content.\n`;
     await replaceRoadmapAuthority(context, {
       projectId: "project-empty", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: emptyGoals,
