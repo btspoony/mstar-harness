@@ -1446,6 +1446,7 @@ export async function backupRepositoryStores(
   const privateCollaborationImage = join(dirname(collaborationImagePath), `.${basename(collaborationImagePath)}.${attempt}.tmp`);
   const privatePaths = [privateExecutionImage, privateCollaborationImage];
   const linked: string[] = [];
+  let claimWritten = false;
 
   let execution: BackupReceipt | undefined;
   let collaborationInspection: CollaborationImageInspection | undefined;
@@ -1514,6 +1515,7 @@ export async function backupRepositoryStores(
       takenAt: new Date().toISOString(),
       execution: {
         name: basename(executionImagePath),
+        privatePath: privateExecutionImage,
         sha256: sha256Bytes(readFileSync(privateExecutionImage)),
         storeId: execution!.storeId,
         epoch: execution!.epoch,
@@ -1522,6 +1524,7 @@ export async function backupRepositoryStores(
       },
       collaboration: {
         name: basename(collaborationImagePath),
+        privatePath: privateCollaborationImage,
         sha256: sha256Bytes(readFileSync(privateCollaborationImage)),
         storeId: collaborationInspection!.authority.storeId,
         epoch: collaborationInspection!.authority.epoch,
@@ -1530,6 +1533,7 @@ export async function backupRepositoryStores(
       },
     };
     publishPairClaim(claimPath, claim);
+    claimWritten = true;
 
     // Publish both images create-only: a link either creates this attempt's name
     // or fails, so a competitor's image is never overwritten or adopted.
@@ -1550,7 +1554,11 @@ export async function backupRepositoryStores(
       ? error
       : incompletePair(`The pair could not be published (${messageOf(error)}).`);
   } finally {
-    for (const path of privatePaths) rmSync(path, { force: true });
+    // The verified private images are the resume evidence once the claim exists:
+    // they are kept until the manifest (the commit) publishes, and removed then.
+    if (!claimWritten || existsSync(manifestPath)) {
+      for (const path of privatePaths) rmSync(path, { force: true });
+    }
   }
 
   const collaborationImage: CollaborationBackupImage = {
@@ -1567,6 +1575,7 @@ export async function backupRepositoryStores(
   };
   publishPairManifest(manifestPath, receipt);
   rmSync(claimPath, { force: true });
+  for (const path of privatePaths) rmSync(path, { force: true });
   return receipt;
 }
 
@@ -1623,6 +1632,12 @@ async function resumeInterruptedPair(
   // and an existing side is REUSED exactly as verified: an authority that moved
   // on is a new generation, not a resume.
   if (!existsSync(paths.executionImagePath)) {
+    // FIRST choice: this attempt's own verified private image, reused byte-for-byte
+    // (a link, never a copy) — the live DB is never re-read for a side the attempt
+    // already froze.
+    if (reusePrivateImage(claim.execution, paths.executionImagePath)) {
+      // reused
+    } else {
     const copy = await backupStore(context, { out: paths.executionImagePath });
     if (
       copy.storeId !== claim.execution.storeId ||
@@ -1636,8 +1651,12 @@ async function resumeInterruptedPair(
           `that attempt. Pass --out <path> naming a new destination.`,
       );
     }
+    }
   }
   if (!existsSync(paths.collaborationImagePath)) {
+    if (reusePrivateImage(claim.collaboration, paths.collaborationImagePath)) {
+      // reused
+    } else {
     await writeCollaborationImage(location.dbPath, paths.collaborationImagePath);
     const inspection = await inspectCollaborationImage(paths.collaborationImagePath, location);
     if (
@@ -1652,7 +1671,10 @@ async function resumeInterruptedPair(
           `cannot be re-created as that attempt. Pass --out <path> naming a new destination.`,
       );
     }
+    }
   }
+  // Publication cleans up the attempt's scratch images.
+  for (const side of [claim.execution, claim.collaboration]) rmSync(side.privatePath, { force: true });
   const executionCopy = await inspectBackupCopy(paths.executionImagePath).catch((error: unknown) => {
     throw incompletePair(
       `The interrupted pair's execution image ${paths.executionImagePath} cannot be verified (${messageOf(error)}); nothing ` +
@@ -1705,9 +1727,53 @@ type PairAttemptClaim = {
   version: 1;
   attempt: string;
   takenAt: string;
-  execution: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
-  collaboration: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
+  execution: {
+    name: string;
+    privatePath: string;
+    sha256: string;
+    storeId: string;
+    epoch: number;
+    revision: number;
+    catalogRevision: number;
+  };
+  collaboration: {
+    name: string;
+    privatePath: string;
+    sha256: string;
+    storeId: string;
+    epoch: number;
+    revision: number;
+    catalogRevision: number;
+  };
 };
+
+/**
+ * Reuse the attempt's retained PRIVATE image for one side: it must be the exact
+ * bytes the credential names, and it is LINKED into the public name (same inode),
+ * so a resume never re-copies an image the attempt already verified.
+ */
+function reusePrivateImage(side: PairAttemptClaim["execution"], publicPath: string): boolean {
+  if (!existsSync(side.privatePath)) return false;
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(side.privatePath);
+  } catch {
+    return false;
+  }
+  if (!stats.isFile() || stats.size === 0) return false;
+  if (sha256Bytes(readFileSync(side.privatePath)) !== side.sha256) {
+    throw incompletePair(
+      `The attempt's retained private image ${side.privatePath} no longer matches the digest this attempt verified, so it ` +
+        `cannot be reused. Remove it and pass --out <path> naming a new destination; nothing was published.`,
+    );
+  }
+  try {
+    linkSync(side.privatePath, publicPath);
+  } catch (error) {
+    throw incompletePair(`The verified private image could not be published at ${publicPath} (${messageOf(error)}).`);
+  }
+  return true;
+}
 
 /** Remove the attempt credential only when this attempt wrote it. */
 function removeOwnedPairClaim(path: string, attempt: string): void {
@@ -1750,6 +1816,7 @@ function requirePairAttemptClaim(path: string): PairAttemptClaim {
     const side = value as Record<string, unknown>;
     return (
       typeof side.name === "string" &&
+      typeof side.privatePath === "string" &&
       typeof side.sha256 === "string" &&
       /^[0-9a-f]{64}$/.test(side.sha256) &&
       typeof side.storeId === "string" &&
@@ -2110,11 +2177,14 @@ export async function restoreCollaborationBackup(
       }
       throw incompletePair(`The restored image could not be published at ${dbPath} (${messageOf(error)}).`);
     }
+    // The canonical name now exists: from this point EVERY step is
+    // post-publication and must be resumable/repairable, never a generic failure.
     staged = true;
-    syncDirectoryEntry(dir);
   } finally {
-    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${stagingPath}${suffix}`, { force: true });
+    // Staging scratch cleanup is best-effort and never decides the outcome; a
+    // failure here is handled by the post-publication path below.
     try {
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${stagingPath}${suffix}`, { force: true });
       rmdirSync(stagingDir);
     } catch {
       // an empty private staging directory is inert scratch
@@ -2123,9 +2193,9 @@ export async function restoreCollaborationBackup(
   if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
   const target = { repoKey: location.repoKey, mode: location.mode, storeId: newStoreId, epoch: nextEpoch, binding: "active" as const };
   try {
-    // This checkout now owns the restored generation; persist the binding before
-    // the final read proves it (a binding mismatch would otherwise refuse the
-    // generation this same call just published).
+    // Directory durability and the checkout binding are part of the publication
+    // contract: a failure in either is reported as the named published partial.
+    syncDirectoryEntry(dir);
     writeCollaborationBinding(context, target);
     return await readCollaborationAuthority(context);
   } catch (error) {
@@ -2285,10 +2355,10 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
   }
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {
-    adoptResolvedBinding(context, location, authority);
+    await adoptResolvedBinding(context, location, authority);
     return authority;
   }
-  return writeCollaborationStage(location, ({ db, authority: current }) => {
+  const published = await writeCollaborationStage(location, ({ db, authority: current }) => {
     if (current.state === "active") return current;
     const evidence =
       scalar(db, "select count(*) as n from cutover_publications") +
@@ -2318,10 +2388,11 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
           `mstar path resolve before retrying. Nothing was written.`,
       );
     }
-    const published = { ...current, state: "active" as const };
-    adoptResolvedBinding(context, location, published);
-    return published;
+    return { ...current, state: "active" as const };
   });
+  // The binding is adopted AFTER the publication commits, outside the transaction.
+  await adoptResolvedBinding(context, location, published);
+  return published;
 }
 
 

@@ -58,6 +58,7 @@ import {
   removeStagingFiles,
   storeDbPath,
   syncDirectoryEntry,
+  tableNamesOn,
   validateAppliedMigrations,
   walShapedStoreFile,
   type Migration,
@@ -1337,6 +1338,128 @@ export function writeCollaborationBinding(
   }
 }
 
+/** The ATTEMPT-scoped claim path: never the primary binding file. */
+function bindingClaimPath(context: StoreContext): string {
+  return join(context.harnessDir, "collaboration-binding.claim.json");
+}
+
+/**
+ * An interrupted attempt's claim: the generation it intended to publish. It is
+ * kept OUTSIDE the primary binding, so a refused or crashed activation never
+ * overwrites the checkout's real binding; only a proven claim is promoted.
+ */
+export type BindingClaim = Readonly<{
+  version: 1;
+  repoKey: string;
+  mode: CollaborationMode;
+  storeId: string;
+  epoch: number;
+  claimedAt: string;
+}>;
+
+/** The recorded attempt claim, or `null`. A malformed claim is evidence of a damaged attempt, never a binding. */
+export function readBindingClaim(context: StoreContext): BindingClaim | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(bindingClaimPath(context), "utf8"));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const claim = parsed as Record<string, unknown>;
+  if (
+    claim.version !== 1 ||
+    typeof claim.repoKey !== "string" ||
+    (claim.mode !== "local" && claim.mode !== "mirror") ||
+    typeof claim.storeId !== "string" ||
+    typeof claim.epoch !== "number"
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    repoKey: claim.repoKey,
+    mode: claim.mode,
+    storeId: claim.storeId,
+    epoch: claim.epoch,
+    claimedAt: typeof claim.claimedAt === "string" ? claim.claimedAt : "",
+  };
+}
+
+/** Write this attempt's claim and return the rollback that removes it. Never touches the primary binding. */
+export function beginBindingClaim(
+  context: StoreContext,
+  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch">,
+): () => void {
+  const path = bindingClaimPath(context);
+  mkdirSync(dirname(path), { recursive: true });
+  const body: BindingClaim = {
+    version: 1,
+    repoKey: authority.repoKey,
+    mode: authority.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    claimedAt: nowRfc3339(),
+  };
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  return () => {
+    try {
+      rmSync(path, { force: true });
+      syncDirectoryEntry(dirname(path));
+    } catch {
+      // The claim is attempt scratch; removing it is best-effort.
+    }
+  };
+}
+
+/**
+ * Prove an interrupted claim against the LANE before promoting it: the authority
+ * must be ACTIVE at exactly the claimed generation, and the lane must record the
+ * publication that produced it — an active cutover publication or a file-era
+ * activation phase row naming that store and epoch. `store init` therefore cannot
+ * promote a claim that no authorized publication backs.
+ */
+function claimProvenByLane(db: StoreDb, authority: CollaborationAuthority, claim: BindingClaim): boolean {
+  if (authority.state !== "active") return false;
+  if (authority.storeId !== claim.storeId || authority.epoch !== claim.epoch) return false;
+  const tables = tableNamesOn(db);
+  if (tables.has("cutover_publications")) {
+    const publication = db
+      .prepare(
+        "select target_store_id, target_epoch from cutover_publications where phase = 'active' " +
+          "and target_store_id = ? and target_epoch = ? limit 1",
+      )
+      .get(claim.storeId, claim.epoch) as Record<string, unknown> | undefined;
+    if (publication !== undefined) return true;
+  }
+  if (tables.has("collaboration_operations")) {
+    const rows = db
+      .prepare(
+        "select result_json from collaboration_operations where key_space = 'standalone' and operation_id like 'migration:activated:%'",
+      )
+      .all() as Array<{ result_json?: unknown }>;
+    for (const row of rows) {
+      if (typeof row.result_json !== "string") continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.result_json);
+      } catch {
+        continue;
+      }
+      if (parsed === null || typeof parsed !== "object") continue;
+      const record = parsed as Record<string, unknown>;
+      if (record.storeId === claim.storeId && record.epoch === claim.epoch) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Adopt or finalize this checkout's binding for the authority the bootstrap or a
  * supported verb resolved. This is the ONE supported adoption point: a fresh
@@ -1344,11 +1467,11 @@ export function writeCollaborationBinding(
  * binding for the same generation) both acquire/refresh the ACTIVE binding here,
  * deliberately. A binding for a DIFFERENT store is never adopted by drift.
  */
-export function adoptResolvedBinding(
+export async function adoptResolvedBinding(
   context: StoreContext,
   location: CollaborationLocation,
   authority: CollaborationAuthority,
-): void {
+): Promise<void> {
   const binding = readCollaborationBinding(context);
   if (binding !== null && binding.storeId !== authority.storeId) {
     throw new StoreError(
@@ -1358,7 +1481,13 @@ export function adoptResolvedBinding(
         `drift; inspect it with mstar path resolve. Nothing was modified.`,
     );
   }
-  if (binding === null || binding.state === "claimed") {
+  if (binding !== null && binding.state === "active") return;
+  // An interrupted ATTEMPT may leave a claim. It is promoted ONLY when the lane
+  // itself records the authorized publication at exactly that generation; a bare
+  // claim (an aborted or forged attempt) is dropped and never becomes a binding.
+  const claim = readBindingClaim(context);
+  if (claim === null) {
+    if (authority.state !== "active") return;
     writeCollaborationBinding(context, {
       repoKey: location.repoKey,
       mode: location.mode,
@@ -1366,41 +1495,31 @@ export function adoptResolvedBinding(
       epoch: authority.epoch,
       binding: "active",
     });
+    return;
   }
-}
-
-/**
- * Write this attempt's CLAIM and return the rollback that restores the checkout's
- * previous binding byte-for-byte. Ordinary readers ignore a `claimed` binding, so
- * a refused activation cannot leave a foreign binding that a normal verb accepts;
- * a crash leaves only the attempt-scoped claim, which the supported verb finalizes
- * or the rollback path removes.
- */
-export function beginBindingClaim(
-  context: StoreContext,
-  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch">,
-): () => void {
-  const path = bindingPath(context);
-  let prior: string | null = null;
-  try {
-    prior = readFileSync(path, "utf8");
-  } catch {
-    prior = null;
-  }
-  writeCollaborationBinding(context, { ...authority, binding: "claimed" });
-  return () => {
-    try {
-      if (prior === null) {
-        rmSync(path, { force: true });
-      } else {
-        writeFileSync(path, prior, { mode: 0o600 });
-      }
-      syncDirectoryEntry(dirname(path));
-    } catch {
-      // Restoring the prior binding is best-effort evidence hygiene; the claim is
-      // already ignored by ordinary readers either way.
+  const proven = await readCollaborationStage(location, ({ db }) => claimProvenByLane(db, authority, claim));
+  if (!proven) {
+    // Without the recorded publication the claim proves nothing: drop it, and an
+    // ACTIVE lane with no binding still refuses (it is never a fresh clone).
+    rmSync(bindingClaimPath(context), { force: true });
+    if (authority.state === "active") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `An interrupted activation claim for store ${claim.storeId} epoch ${claim.epoch} is not backed by any recorded ` +
+          `publication in the lane at ${location.dbPath}, so it cannot be promoted. Re-run the activation that publishes this ` +
+          `generation (or bind the checkout deliberately); nothing was adopted.`,
+      );
     }
-  };
+    return;
+  }
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    binding: "active",
+  });
+  rmSync(bindingClaimPath(context), { force: true });
 }
 
 /**

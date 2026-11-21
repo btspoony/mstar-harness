@@ -24,6 +24,7 @@ import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import * as collaborationStore from "./collaboration-store.js";
 import {
   initializeCollaborationStore,
+  beginBindingClaim,
   openCollaborationStore,
   readCollaborationAuthority,
   readCollaborationBinding,
@@ -407,6 +408,7 @@ function writeAttemptClaim(out: string, receipt: RepositoryBackupReceipt): void 
         takenAt: "2026-11-21T00:00:00.000Z",
         execution: {
           name: receipt.execution.backupPath,
+          privatePath: `${out}.execution.private.tmp`,
           sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "execution"))).digest("hex"),
           storeId: receipt.execution.storeId,
           epoch: receipt.execution.epoch,
@@ -415,6 +417,7 @@ function writeAttemptClaim(out: string, receipt: RepositoryBackupReceipt): void 
         },
         collaboration: {
           name: receipt.collaboration.path,
+          privatePath: `${out}.collaboration.private.tmp`,
           sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "collaboration"))).digest("hex"),
           storeId: receipt.collaboration.authority.storeId,
           epoch: receipt.collaboration.authority.epoch,
@@ -2675,24 +2678,39 @@ describe("control-checkout binding states", () => {
     return fixture;
   }
 
-  test("an attempt-scoped claim is ignored by ordinary readers until it is finalized", async () => {
+  test("an attempt-scoped claim is never the checkout's binding, and an unproven one is not promoted", async () => {
     const fixture = await boundWorkspace("binding-claim-ignored-");
     const location = resolveCollaborationLocation(fixture.context);
     const live = await readCollaborationStage(location, ({ authority }) => authority);
-    writeFileSync(
-      join(fixture.harness, "collaboration-binding.json"),
-      `${JSON.stringify(
-        { version: 2, state: "claimed", repoKey: location.repoKey, mode: location.mode, storeId: live.storeId, epoch: live.epoch + 1, boundAt: "2026-11-21T00:00:00.000Z" },
-        null,
-        2,
-      )}\n`,
-    );
-    // A claim is attempt evidence, not this checkout's binding: a reader treats it
-    // as absent (and an ACTIVE authority with no binding is stale, never fresh).
+    // The checkout's OWN binding is removed, leaving only an interrupted claim.
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+    beginBindingClaim(fixture.context, { repoKey: location.repoKey, mode: location.mode, storeId: live.storeId, epoch: live.epoch });
+    // A claim is attempt evidence, never a binding: an ACTIVE authority with no
+    // binding is stale, and `store init` will not promote an unproven claim…
     await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    // The supported bootstrap finalizes the claim.
-    await ensureCollaborationAuthority(fixture.context);
-    expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: live.storeId });
+    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // …and it leaves no primary binding behind.
+    expect(existsSync(join(fixture.harness, "collaboration-binding.json"))).toBe(false);
+  });
+
+  test("a claim backed by the recorded publication is finalized by the supported init", async () => {
+    const fixture = await stagedFixture("binding-claim-proven-");
+    const activation = await activateStore(fixture.context, fixture.apply, attestation());
+    const location = resolveCollaborationLocation(fixture.context);
+    // The crash window: the publication and its activation phase row landed, the
+    // final binding write did not; only the attempt claim remains.
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+    beginBindingClaim(fixture.context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: activation.storeId,
+      epoch: activation.epoch,
+    });
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    const adopted = await ensureCollaborationAuthority(fixture.context);
+    expect(adopted.storeId).toBe(activation.storeId);
+    expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: activation.storeId, epoch: activation.epoch });
+    expect(existsSync(join(fixture.harness, "collaboration-binding.claim.json"))).toBe(false);
   });
 
   test("a refused activation restores this checkout's previous binding exactly", async () => {
@@ -2723,8 +2741,9 @@ describe("control-checkout binding states", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "store.migration-source-changed" });
-    // The prior binding is restored byte-for-byte; no foreign claim survives.
+    // The primary binding was NEVER overwritten, and no attempt claim survives.
     expect(readFileSync(join(fixture.harness, "collaboration-binding.json"))).toEqual(before);
+    expect(existsSync(join(fixture.harness, "collaboration-binding.claim.json"))).toBe(false);
   });
 
   test("an active authority with no binding is refused until the supported init adopts it", async () => {
@@ -2768,6 +2787,31 @@ describe("pair attempt ownership and restore repair", () => {
     expect(afterStats.mtimeMs).toBe(survivorStats.mtimeMs);
     expect(existsSync(pairImage(resumed, "collaboration"))).toBe(true);
     // The credential is scratch: the manifest is the commit.
+    expect(existsSync(`${out}.pair-attempt.json`)).toBe(false);
+  });
+
+
+  test("a resumed attempt reuses the retained verified private image instead of re-copying", async () => {
+    const fixture = await pairFixture("attempt-private-reuse-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    // Reconstruct the crash window: the credential exists, the COLLABORATION side
+    // was never linked into its public name, and its verified private image is
+    // retained beside the destination.
+    writeAttemptClaim(out, receipt);
+    const claim = JSON.parse(readFileSync(`${out}.pair-attempt.json`, "utf8")) as {
+      collaboration: { privatePath: string };
+    };
+    copyFileSync(pairImage(receipt, "collaboration"), claim.collaboration.privatePath);
+    rmSync(out, { force: true });
+    rmSync(pairImage(receipt, "collaboration"), { force: true });
+
+    const privateInode = statSync(claim.collaboration.privatePath).ino;
+    const resumed = await backupRepositoryStores(fixture.context, { out });
+    // The private image was LINKED, not re-copied: the published name carries the
+    // private image's own inode (a copy would have a new one).
+    expect(statSync(pairImage(resumed, "collaboration")).ino).toBe(privateInode);
+    expect(existsSync(claim.collaboration.privatePath)).toBe(false);
     expect(existsSync(`${out}.pair-attempt.json`)).toBe(false);
   });
 
