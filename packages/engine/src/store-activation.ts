@@ -76,6 +76,7 @@ import {
 import { ACTIVATION_PROTOCOL_VERSION, readDeclaredNodeFloor, writeJson } from "./core.js";
 import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
 import {
+  heldCollaborationTables,
   insertMigrationPhaseRow,
   migrationManifestHash,
   readMigrationPhaseRow,
@@ -919,17 +920,105 @@ type CollaborationCounts = Readonly<Record<string, number>>;
 type CollaborationImageInspection = Readonly<{
   authority: CollaborationAuthority;
   counts: CollaborationCounts;
-  /** Every recorded operation row: kind, execution store/epoch and receipt revision. */
+  /**
+   * Every recorded operation row: its key space, execution store/epoch, receipt
+   * revisions and — for a composite effect — whether its execution half ever
+   * acknowledged it. A confirmed effect whose acknowledgement never landed is a
+   * supported state (`acknowledgedAt: null`), and a pair must never freeze it.
+   */
   operations: readonly Readonly<{
     keySpace: string;
     operationId: string;
     executionStoreId: string | null;
     executionEpoch: number | null;
+    acknowledged: boolean;
   }>[];
 }>;
 
 /** The cutover's single claim slot: a pending activation, never a restore state. */
 const COLLABORATION_CLAIM_KEY = "collaboration-cutover-claim";
+
+/**
+ * Whether one operation row's composite effect was acknowledged by its execution
+ * root. A standalone row has no execution half, so it is always "acknowledged";
+ * a composite row is acknowledged only once its `result_json.acknowledgedAt`
+ * carries the instant (a confirmed effect whose acknowledgement write failed is
+ * the supported unacknowledged state).
+ */
+function acknowledgementOf(row: Record<string, unknown>): boolean {
+  if (row.key_space !== "composite") return true;
+  const raw = row.result_json;
+  if (typeof raw !== "string") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  return parsed !== null && typeof parsed === "object" && "acknowledgedAt" in parsed && typeof parsed.acknowledgedAt === "string";
+}
+
+/** One lane operation row as the quiescence and causal-boundary checks read it. */
+type LaneOperation = {
+  keySpace: string;
+  operationId: string;
+  executionStoreId: string | null;
+  executionEpoch: number | null;
+  acknowledged: boolean;
+};
+
+/**
+ * A lane frozen mid-activation: the cutover's single claim slot is still held, so
+ * the authority is between verified, fenced and active. No pair and no restore
+ * may treat that generation as settled.
+ */
+function assertNoPendingClaim(operations: readonly LaneOperation[], where: string): void {
+  const claim = operations.find((row) => row.keySpace === "standalone" && row.operationId === COLLABORATION_CLAIM_KEY);
+  if (claim !== undefined) {
+    throw incompletePair(
+      `The collaboration authority ${where} holds a pending cutover claim, so it was frozen mid-activation. Resume or ` +
+        `abandon that activation before taking a pair.`,
+    );
+  }
+}
+
+/**
+ * The REQUIRED quiescent causal boundary of a repository PAIR: beyond the claim
+ * slot, the lane may hold no composite effect whose execution half never
+ * acknowledged it. An unacknowledged effect is a supported state — the execution
+ * commit and its acknowledgement are two transactions — but freezing it into a
+ * pair would publish a generation whose two halves disagree, so the pair is
+ * refused until the owning verb's replay repairs it.
+ */
+function assertLaneQuiescent(operations: readonly LaneOperation[], where: string): void {
+  assertNoPendingClaim(operations, where);
+  const unacknowledged = operations.filter((row) => row.keySpace === "composite" && !row.acknowledged);
+  if (unacknowledged.length > 0) {
+    throw incompletePair(
+      `The collaboration authority ${where} holds ${unacknowledged.length} confirmed composite effect(s) whose execution ` +
+        `half never acknowledged them (${unacknowledged.map((row) => row.operationId).join(", ")}). Replay each owning verb so ` +
+        `its acknowledgement lands, then take the pair against a quiescent authority.`,
+    );
+  }
+}
+
+/** The live lane's operation rows, read through its own read admission. */
+async function liveLaneOperations(context: StoreContext): Promise<LaneOperation[]> {
+  const location = resolveCollaborationLocation(context);
+  return readCollaborationStage(location, ({ db }) =>
+    (
+      db
+        .prepare("select key_space, operation_id, execution_store_id, execution_epoch, result_json from collaboration_operations order by operation_id")
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      keySpace: String(row.key_space),
+      operationId: String(row.operation_id),
+      executionStoreId: typeof row.execution_store_id === "string" ? row.execution_store_id : null,
+      executionEpoch: typeof row.execution_epoch === "number" ? row.execution_epoch : null,
+      acknowledged: acknowledgementOf(row),
+    })),
+  );
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -1034,13 +1123,14 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
     for (const table of Object.keys(COLLABORATION_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
     const operations = (
       db
-        .prepare("select key_space, operation_id, execution_store_id, execution_epoch from collaboration_operations order by operation_id")
+        .prepare("select key_space, operation_id, execution_store_id, execution_epoch, result_json from collaboration_operations order by operation_id")
         .all() as Array<Record<string, unknown>>
     ).map((row) => ({
       keySpace: String(row.key_space),
       operationId: String(row.operation_id),
       executionStoreId: typeof row.execution_store_id === "string" ? row.execution_store_id : null,
       executionEpoch: typeof row.execution_epoch === "number" ? row.execution_epoch : null,
+      acknowledged: acknowledgementOf(row),
     }));
     return {
       authority: {
@@ -1097,12 +1187,19 @@ function assertNoOutstandingComposite(handle: { db: StoreDb }): void {
 /**
  * `backupRepositoryStores` — the verified PAIR.
  *
- * Both domains are copied with their own SQLite snapshot (`VACUUM INTO`), each
- * copy is re-opened and verified against its own bytes, and both authorities
- * must hold the SAME generation before and after the two copies. Only then is
- * the manifest published, create-only, naming the two verified images. A
- * changed authority, an unverifiable image or a pending composite is reported
- * as `collaboration.backup-incomplete` with nothing named as a backup.
+ * Preconditions, all proved before anything is published: the selected execution
+ * root holds no prepared composite; the live lane holds no pending cutover claim
+ * and no composite effect whose execution half never acknowledged it; and the
+ * collaboration authority is ACTIVE. Both domains are then copied with their own
+ * SQLite snapshot (`VACUUM INTO`) into PRIVATE, uniquely owned image files, each
+ * re-opened and verified against its own bytes. Both authorities must hold the
+ * SAME generation — identity, epoch, revision AND catalog revision — before and
+ * after the copies, and the verified images must describe exactly that
+ * generation. Only then are the two images linked into their canonical names and
+ * the manifest published, both create-only. A concurrent attempt that wins any
+ * of those names is refused; this attempt removes only the files it created and
+ * never another attempt's image. Every refusal is `collaboration.backup-incomplete`
+ * with nothing named as a backup.
  */
 export async function backupRepositoryStores(
   context: StoreContext,
@@ -1130,8 +1227,9 @@ export async function backupRepositoryStores(
   }
   const location = resolveCollaborationLocation(context);
 
-  // Both authorities' generation BEFORE either copy: a pair is only coherent
-  // when both domains held one generation across the whole window.
+  // The quiescent causal boundary BEFORE either copy: no prepared composite in
+  // this execution root, and no unacknowledged or mid-activation state in the
+  // lane. A pair is taken of a settled generation or not at all.
   const executionBefore = await openStore(context, "read").then((handle) => {
     try {
       const meta = readMetaRow(handle.db);
@@ -1148,13 +1246,23 @@ export async function backupRepositoryStores(
         `ACTIVE authority only. Publish it with its own activation first.`,
     );
   }
+  assertLaneQuiescent(await liveLaneOperations(context), `at ${location.dbPath}`);
+
+  // This attempt's own image names: private scratch beside the canonical
+  // destinations. Nothing else ever writes or removes them, so a concurrent
+  // attempt can never delete this attempt's bytes (or vice versa).
+  const attempt = `${process.pid}-${randomUUID()}`;
+  const privateExecutionImage = join(dirname(executionImagePath), `.${basename(executionImagePath)}.${attempt}.tmp`);
+  const privateCollaborationImage = join(dirname(collaborationImagePath), `.${basename(collaborationImagePath)}.${attempt}.tmp`);
+  const privatePaths = [privateExecutionImage, privateCollaborationImage];
+  const linked: string[] = [];
 
   let execution: BackupReceipt | undefined;
   let collaborationInspection: CollaborationImageInspection | undefined;
   try {
-    execution = await backupStore(context, { out: executionImagePath });
-    await writeCollaborationImage(location.dbPath, collaborationImagePath);
-    collaborationInspection = await inspectCollaborationImage(collaborationImagePath, location).catch((error: unknown) => {
+    execution = await backupStore(context, { out: privateExecutionImage });
+    await writeCollaborationImage(location.dbPath, privateCollaborationImage);
+    collaborationInspection = await inspectCollaborationImage(privateCollaborationImage, location).catch((error: unknown) => {
       throw error instanceof StoreError ? error : incompletePair(`The collaboration image could not be verified (${messageOf(error)}).`);
     });
 
@@ -1179,47 +1287,63 @@ export async function backupRepositoryStores(
           `${executionAfter.revision}); a pair is only published against one stable generation. Stop the writers and retry.`,
       );
     }
-    if (collaborationAfter.storeId !== collaborationBefore.storeId || collaborationAfter.epoch !== collaborationBefore.epoch) {
+    const sameCollaborationGeneration = (generation: CollaborationAuthority): boolean =>
+      generation.storeId === collaborationBefore.storeId &&
+      generation.epoch === collaborationBefore.epoch &&
+      generation.revision === collaborationBefore.revision &&
+      generation.catalogRevision === collaborationBefore.catalogRevision;
+    if (!sameCollaborationGeneration(collaborationAfter) || !sameCollaborationGeneration(collaborationInspection.authority)) {
+      // Both copies can be individually coherent while the lane moved under
+      // them: the pair would name a generation its bytes do not hold.
       throw incompletePair(
-        `The collaboration authority changed generation while the pair was copied (${collaborationBefore.storeId} epoch ` +
-          `${collaborationBefore.epoch} -> ${collaborationAfter.storeId} epoch ${collaborationAfter.epoch}). Stop the writers and retry.`,
+        `The collaboration authority moved while the pair was copied (store ${collaborationBefore.storeId} epoch ` +
+          `${collaborationBefore.epoch} revision ${collaborationBefore.revision} catalog revision ` +
+          `${collaborationBefore.catalogRevision} -> revision ${collaborationAfter.revision} catalog revision ` +
+          `${collaborationAfter.catalogRevision}, image revision ${collaborationInspection.authority.revision} catalog ` +
+          `revision ${collaborationInspection.authority.catalogRevision}); a pair is only published against one stable ` +
+          `generation. Stop the writers and retry.`,
       );
     }
-    if (collaborationInspection.authority.revision !== collaborationAfter.revision) {
-      // Both copies are individually coherent, but the collaboration image is
-      // not the generation the pair claims: retry against a quiescent lane.
-      throw incompletePair(
-        `The collaboration image holds revision ${collaborationInspection.authority.revision} while the live authority is at ` +
-          `${collaborationAfter.revision}; the pair does not describe one generation. Stop the writers and retry.`,
-      );
-    }
+    // The verified images must also clear the same boundary the live lane did.
+    assertLaneQuiescent(collaborationInspection.operations, `at ${privateCollaborationImage}`);
+
+    // Publish both images create-only: a link either creates this attempt's name
+    // or fails, so a competitor's image is never overwritten or adopted.
+    linkSync(privateExecutionImage, executionImagePath);
+    linked.push(executionImagePath);
+    linkSync(privateCollaborationImage, collaborationImagePath);
+    linked.push(collaborationImagePath);
   } catch (error) {
-    // No partial layout is ever published: a failed pair removes only the two
-    // images this attempt created.
-    rmSync(executionImagePath, { force: true });
-    rmSync(collaborationImagePath, { force: true });
-    rmSync(`${executionImagePath}-wal`, { force: true });
-    rmSync(`${executionImagePath}-shm`, { force: true });
-    throw error;
+    for (const path of [...privatePaths, ...linked]) rmSync(path, { force: true });
+    for (const path of privatePaths) {
+      rmSync(`${path}-wal`, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+    }
+    throw error instanceof StoreError
+      ? error
+      : incompletePair(`The pair could not be published (${messageOf(error)}).`);
+  } finally {
+    for (const path of privatePaths) rmSync(path, { force: true });
   }
 
   const collaborationImage: CollaborationBackupImage = {
     path: collaborationImagePath,
-    authority: collaborationInspection.authority,
+    authority: collaborationInspection!.authority,
     takenAt: new Date().toISOString(),
-    counts: collaborationInspection.counts,
+    counts: collaborationInspection!.counts,
   };
   const receipt: RepositoryBackupReceipt = {
     version: 1,
     manifestPath,
-    execution: execution!,
+    execution: { ...execution!, backupPath: executionImagePath },
     collaboration: collaborationImage,
   };
   try {
     publishTextCreateOnly(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch (error) {
-    rmSync(executionImagePath, { force: true });
-    rmSync(collaborationImagePath, { force: true });
+    // Remove ONLY the two names this attempt created; a competitor's own images
+    // are never touched.
+    for (const path of linked) rmSync(path, { force: true });
     throw error instanceof StoreError
       ? error
       : incompletePair(`The manifest could not be published at ${manifestPath} (${messageOf(error)}).`);
@@ -1492,28 +1616,32 @@ function requireRepositoryBackupReceipt(value: unknown): RepositoryBackupReceipt
 }
 
 /**
- * The causal boundary of one pair: the collaboration receipts only ever name an
- * execution generation at or before the paired execution image, and neither
- * side may be frozen mid-operation.
+ * The causal boundary of a restore. The lane is repository-wide and every
+ * checkout (including a replacement clone) has its own execution store, so a
+ * composite effect recorded for ANOTHER execution root is legitimate, already
+ * acknowledged history — never a mismatch. What the restore does refuse:
+ *
+ * - a lane frozen mid-activation (the cutover claim slot still held);
+ * - an effect of the PAIRED execution root that its own execution half never
+ *   acknowledged (an outstanding effect of the root this restore replaces);
+ * - an effect of the paired root from a LATER epoch than the paired image.
  */
 function assertCausalBoundary(
   receipt: RepositoryBackupReceipt,
   collaboration: CollaborationImageInspection,
   execution: BackupInspection,
 ): void {
-  const claim = collaboration.operations.find((row) => row.keySpace === "standalone" && row.operationId === COLLABORATION_CLAIM_KEY);
-  if (claim !== undefined) {
-    throw incompletePair(
-      "The collaboration image holds a pending cutover claim, so it was frozen mid-activation. Resume or abandon that " +
-        "activation before taking a pair.",
-    );
-  }
+  assertNoPendingClaim(collaboration.operations, `at ${receipt.collaboration.path}`);
   for (const row of collaboration.operations) {
     if (row.keySpace !== "composite") continue;
-    if (row.executionStoreId !== execution.storeId) {
+    // Another root's history: acknowledged or not, it belongs to a checkout this
+    // restore neither replaces nor can complete.
+    if (row.executionStoreId !== execution.storeId) continue;
+    if (!row.acknowledged) {
       throw incompletePair(
-        `The collaboration image records a composite effect for execution store ${String(row.executionStoreId)}, not for the ` +
-          `paired execution store ${execution.storeId}; the two images are not one repository's generation.`,
+        `The collaboration image records composite effect ${row.operationId} for the paired execution store ` +
+          `${execution.storeId} without its acknowledgement; that root's owning verb must replay it before this pair can be ` +
+          `restored over it.`,
       );
     }
     if (row.executionEpoch !== null && row.executionEpoch > execution.epoch) {
@@ -1523,7 +1651,6 @@ function assertCausalBoundary(
       );
     }
   }
-  void receipt;
 }
 
 /**
@@ -1545,10 +1672,7 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
     try {
       const fence = readCollaborationFence(handle.db);
       if (fence === null) {
-        const tables = tableNamesOn(handle.db);
-        const held = ["issues", "occurrences", "issue_transitions", "provenance", "catalog_entities", "catalog_links"].filter(
-          (table) => tables.has(table) && scalar(handle.db, `select count(*) as n from ${table}`) > 0,
-        );
+        const held = heldCollaborationTables(handle.db);
         if (held.length > 0) {
           throw new StoreError(
             "collaboration.cutover-required",

@@ -751,13 +751,16 @@ function readLaneRevision(db: StoreDb): number {
 }
 
 /**
- * The combined store's collaboration-owned tables. A store that still holds
- * rows in any of them owns its issue/catalog authority the pre-cutover way, and
- * a file-era import would mint a SECOND authority beside it. The fence drops
- * exactly these tables, so a fenced store has nothing to refuse by row count —
- * its own refusal comes first, and names the retained pre-fence image.
+ * The store's collaboration-owned tables. A store that still holds rows in any
+ * of them owns its issue/catalog authority the pre-cutover way, and a file-era
+ * import or fresh bootstrap would mint a SECOND authority beside it. The fence
+ * drops exactly these tables, so a fenced store has nothing to refuse by row
+ * count — its own refusal comes first, and names the retained pre-fence image.
+ *
+ * `issue_counter` is the allocator: a pristine store always carries its
+ * singleton row, so only a MOVED allocator counts as held authority.
  */
-const COMBINED_SOURCE_TABLES: readonly string[] = [
+const COLLABORATION_HELD_TABLES: readonly string[] = [
   "issues",
   "occurrences",
   "relations",
@@ -774,6 +777,21 @@ const COMBINED_SOURCE_TABLES: readonly string[] = [
   "catalog_links",
   "catalog_operations",
 ];
+
+/** Every collaboration-owned table this store still holds rows for, in listing order. */
+export function heldCollaborationTables(db: StoreDb): string[] {
+  const tables = tableNamesOn(db);
+  const held = COLLABORATION_HELD_TABLES.filter(
+    (table) => tables.has(table) && countOf(db, `select count(*) as n from ${table}`) > 0,
+  );
+  if (tables.has("issue_counter")) {
+    const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
+    if (allocator !== null && typeof allocator === "object" && "next_value" in allocator && typeof allocator.next_value === "number" && allocator.next_value > 1) {
+      held.push("issue_counter");
+    }
+  }
+  return held;
+}
 
 /**
  * Refuse when the checkout's execution store is still the collaboration
@@ -793,13 +811,11 @@ async function assertNotCombinedSource(context: StoreContext): Promise<void> {
           `the verified image at ${fence.backupPath}. Nothing was written.`,
       );
     }
-    const tables = tableNamesOn(handle.db);
-    for (const table of COMBINED_SOURCE_TABLES) {
-      if (!tables.has(table)) continue;
-      if (countOf(handle.db, `select count(*) as n from ${table}`) === 0) continue;
+    const held = heldCollaborationTables(handle.db);
+    if (held.length > 0) {
       throw new StoreError(
         "collaboration.cutover-required",
-        `This store still owns collaboration rows (${table} is not empty), so it is a combined source: a file-era ` +
+        `This store still owns collaboration rows (${held.join(", ")}), so it is a combined source: a file-era ` +
           `register import would create a second collaboration authority beside it. Nothing was written.`,
       );
     }

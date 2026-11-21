@@ -3363,6 +3363,18 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
 }
 
 /**
+ * The composite reservation ledger this build reserves into, present or not.
+ * Migrations run in version order, so a store below the ledger's own migration
+ * has nothing to consult; presence — never a recorded version — decides.
+ */
+function reservationLedgerPresent(db: StoreDb): boolean {
+  const row = db
+    .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_collaboration_intents'")
+    .get();
+  return row !== null && typeof row === "object" && "n" in row && row.n === 1;
+}
+
+/**
  * §3.1 the one receipt writer: the committed receipt of an accepted operation
  * (`planId: null` for a workflow-level operation), recorded inside the same
  * transaction that produced the effect, so a rolled-back operation leaves no
@@ -3397,7 +3409,12 @@ export function writeOperationReceipt(
   // ledgers. A different writer may not commit an id a pending composite reserved
   // (or already declined): the effect's receipt would otherwise be unreachable
   // and a same-id retry would read this unrelated receipt instead.
-  if (input.allowReservedIntent !== true) {
+  //
+  // The reservation ledger arrives with its own migration, and a schema-8 store's
+  // version-9 normalizer writes receipts BEFORE that migration runs: a ledger
+  // that does not exist yet reserves nothing, so the probe is gated on its
+  // presence instead of failing the supported upgrade.
+  if (input.allowReservedIntent !== true && reservationLedgerPresent(tx.db)) {
     const pending = tx.db
       .prepare(
         "select kind from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +

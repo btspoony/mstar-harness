@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import * as collaborationStore from "./collaboration-store.js";
 import {
   initializeCollaborationStore,
   openCollaborationStore,
@@ -96,6 +97,18 @@ function repoWorkspace(name: string): Fixture {
   mkdirSync(checkout, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
+  const harness = join(checkout, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, root, checkout };
+}
+
+/** A synthetic checkout whose repository identity is the caller's: two clones of one repository. */
+function repoWorkspaceWithKey(name: string, repoKey: string): Fixture {
+  const root = mkdtempSync(join(ROOT, name));
+  const checkout = join(root, "checkout");
+  mkdirSync(checkout, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoKey}\n`);
   const harness = join(checkout, ".mstar");
   mkdirSync(harness, { recursive: true });
   return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, root, checkout };
@@ -1785,6 +1798,193 @@ describe("repository backup pair", () => {
     expect(existsSync(secondOut)).toBe(true);
     expect(existsSync(secondReceipt.execution.backupPath)).toBe(true);
     expect(readFileSync(resolveCollaborationLocation(second.context).dbPath)).toEqual(secondLive);
+  });
+
+  test("a prepared composite in the selected root refuses the pair", async () => {
+    const fixture = await pairedWorkspace("pair-pending-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    // The state a reservation leaves between admission and finalization: the
+    // effect may already be committed on the lane side.
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db
+        .prepare(
+          "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+            "actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+            "values (?, 1, 'op-pending-pair', 'residual-add', 'hash', 'project-manager', 'token', 1, '{}', '{}', 'prepared', ?, ?)",
+        )
+        .run((handle.db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string }).store_id, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    } finally {
+      handle.close();
+    }
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(`${out}.execution.db`)).toBe(false);
+    expect(existsSync(`${out}.collaboration.db`)).toBe(false);
+  });
+
+  test("an unacknowledged composite effect refuses the pair", async () => {
+    const fixture = await pairedWorkspace("pair-unacknowledged-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    // A confirmed effect whose execution half never acknowledged it: the
+    // supported two-transaction state the pair must never freeze.
+    const location = resolveCollaborationLocation(fixture.context);
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+          "result_json, collaboration_revision, catalog_revision, committed_at) " +
+          "values ('composite', 'op-unacknowledged', 'store-x', 1, 'hash', ?, 0, 0, ?)",
+      ).run(JSON.stringify({ receipt: { operationId: "op-unacknowledged" }, acknowledgedAt: null }), "2026-11-21T00:00:00.000Z");
+    });
+
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    expect(existsSync(out)).toBe(false);
+    // The refusal names the outstanding effect, so the operator knows what to replay.
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/op-unacknowledged/);
+  });
+
+  test("a lane mutation during the copy refuses the pair and keeps the previous generation", async () => {
+    const fixture = await pairedWorkspace("pair-mutated-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const location = resolveCollaborationLocation(fixture.context);
+    const realOpen = collaborationStore.openCollaborationStore;
+    let calls = 0;
+    const spy = spyOn(collaborationStore, "openCollaborationStore").mockImplementation(async (context, mode, expected) => {
+      calls += 1;
+      // The second live read of the barrier (the after-copy pass) sees a lane
+      // that advanced under the copy.
+      if (calls === 2) {
+        await writeCollaborationStage(location, ({ db }) => {
+          db.prepare("update collaboration_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+        });
+      }
+      return realOpen(context, mode, expected);
+    });
+    try {
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({
+        code: "collaboration.backup-incomplete",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(existsSync(out)).toBe(false);
+    // Only this attempt's own scratch is gone; no canonical name was published.
+    expect(existsSync(`${out}.execution.db`)).toBe(false);
+    expect(existsSync(`${out}.collaboration.db`)).toBe(false);
+    expect(readdirSync(dirname(out)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("a competing attempt's image is never deleted by the loser", async () => {
+    const fixture = await pairedWorkspace("pair-competitor-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    mkdirSync(dirname(out), { recursive: true });
+    const realOpen = collaborationStore.openCollaborationStore;
+    let calls = 0;
+    const spy = spyOn(collaborationStore, "openCollaborationStore").mockImplementation(async (context, mode, expected) => {
+      calls += 1;
+      // A competitor publishes the execution image atomically while this attempt
+      // is still copying: the create-only link below must lose, and the loser
+      // must leave the competitor's bytes exactly as they are.
+      if (calls === 2) writeFileSync(`${out}.execution.db`, "a competing attempt's execution image\n");
+      return realOpen(context, mode, expected);
+    });
+    try {
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({
+        code: "collaboration.backup-incomplete",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readFileSync(`${out}.execution.db`, "utf8")).toBe("a competing attempt's execution image\n");
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(`${out}.collaboration.db`)).toBe(false);
+    expect(readdirSync(dirname(out)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("overlapping attempts never publish a pair with a missing image", async () => {
+    const fixture = await pairedWorkspace("pair-overlap-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const results = await Promise.allSettled([
+      backupRepositoryStores(fixture.context, { out }),
+      backupRepositoryStores(fixture.context, { out }),
+    ]);
+    const published = results.filter((result) => result.status === "fulfilled");
+    // At most one manifest may exist, and whichever attempt failed refused by
+    // name instead of publishing a partial layout.
+    expect(published.length).toBeLessThanOrEqual(1);
+    for (const failed of results.filter((result) => result.status === "rejected")) {
+      expect((failed as PromiseRejectedResult).reason).toMatchObject({ code: "collaboration.backup-incomplete" });
+    }
+    if (published.length === 1) {
+      const receipt = (published[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof backupRepositoryStores>>>).value;
+      expect(existsSync(receipt.execution.backupPath)).toBe(true);
+      expect(existsSync(receipt.collaboration.path)).toBe(true);
+      expect(existsSync(out)).toBe(true);
+    }
+    expect(readdirSync(dirname(out)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("restore accepts acknowledged history from another execution root", async () => {
+    // One repository, two checkouts: the lane is shared, each clone has its own
+    // execution store. A composite that completed and was acknowledged in the
+    // FIRST clone is legitimate history for the second clone's pair.
+    const repoKey = `fixture-shared-${repoSequence++}`;
+    const first = repoWorkspaceWithKey("clone-a-", repoKey);
+    (await initializeStore(first.context)).close();
+    await ensureCollaborationAuthority(first.context);
+    const firstStoreId = (await openStore(first.context, "read").then((handle) => {
+      try {
+        return (handle.db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string }).store_id;
+      } finally {
+        handle.close();
+      }
+    }));
+    const location = resolveCollaborationLocation(first.context);
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+          "result_json, collaboration_revision, catalog_revision, committed_at) " +
+          "values ('composite', 'op-first-clone', ?, 1, 'hash', ?, 0, 0, ?)",
+      ).run(firstStoreId, JSON.stringify({ receipt: { operationId: "op-first-clone" }, acknowledgedAt: "2026-11-21T00:00:01.000Z" }), "2026-11-21T00:00:01.000Z");
+    });
+
+    const second = repoWorkspaceWithKey("clone-b-", repoKey);
+    (await initializeStore(second.context)).close();
+    const out = join(second.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(second.context, { out });
+    expect(receipt.collaboration.authority.storeId).toBe((await ensureCollaborationAuthority(second.context)).storeId);
+
+    const target = resolveCollaborationLocation(second.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+    const restored = await restoreCollaborationBackup(second.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    expect(restored.state).toBe("active");
+    // The other root's acknowledged history travelled with the image.
+    const handle = await openCollaborationStore(second.context, "read");
+    try {
+      expect(handle.db.prepare("select execution_store_id from collaboration_operations where operation_id = 'op-first-clone'").get()).toEqual({
+        execution_store_id: firstStoreId,
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("fresh bootstrap refuses a store holding only non-issue collaboration rows", async () => {
+    const fixture = repoWorkspace("bootstrap-project-only-");
+    const store = await initializeStore(fixture.context);
+    store.db
+      .prepare("insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at) values ('proj-x', 'linear', 'ws', 'team', 'remote', 1, 'now')")
+      .run();
+    store.close();
+    await rmSync(resolveCollaborationLocation(fixture.context).dbPath, { force: true });
+
+    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({
+      code: "collaboration.cutover-required",
+    });
+    expect(existsSync(resolveCollaborationLocation(fixture.context).dbPath)).toBe(false);
   });
 
   test("restore refuses another repository's pair by its stale binding", async () => {
