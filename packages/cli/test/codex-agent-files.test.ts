@@ -293,8 +293,21 @@ describe("Codex regular agent installation", () => {
       expect(refused.failure).toContain(`git -C '${f.source}' restore -- '${relative}'`);
       expect(refused.failure).not.toContain("pull");
       expect(git("restore", "--", relative).exitCode).toBe(0);
-      expect(fs.readFileSync(tracked, "utf8")).toBe("command");
       expect(run(f.root, "project").failure).toBeUndefined();
+      expect(fs.realpathSync(path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md"))).toBe(tracked);
+    } finally { f.cleanup(); }
+  });
+  test("project: dry run previews the refusal before following a dangling installed link", () => {
+    const f = fixture();
+    try {
+      expect(run(f.root, "project").failure).toBeUndefined();
+      const missing = path.join(f.source, "commands", "codebase-comment-cleanup.md");
+      const link = path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md");
+      expect(fs.realpathSync(link)).toBe(missing);
+      fs.unlinkSync(missing);
+      const preview = run(f.root, "project", false, true);
+      expect(preview.failure).toBeUndefined();
+      expect(preview.notes.join(" ")).toContain(`Would refuse: Missing Codex project command sources: '${missing}'`);
     } finally { f.cleanup(); }
   });
 });

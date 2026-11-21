@@ -191,6 +191,8 @@ function assertIterationCommandSources(dryRun: boolean) {
 
 function ensureIterationSkillLinks(dryRun: boolean) {
   const notes: string[] = assertIterationCommandSources(dryRun);
+  // why: only a dry run gets here with notes; following a dangling installed link would throw instead of previewing the refusal.
+  if (notes.length) return notes;
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);

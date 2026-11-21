@@ -78,14 +78,23 @@ function bootErrorRecords(booted: BootResult): BootLogRecord[] {
  * repo, so a newly shipped command needs no edit here.
  */
 function repoCommands(): string[] | undefined {
-  try {
-    return readdirSync(fileURLToPath(new URL('../../../commands', import.meta.url)))
-      .filter((file) => file.endsWith('.md'))
-      .map((file) => file.replace(/\.md$/, ''))
-      .sort()
-  } catch {
-    return undefined
-  }
+  const dir = fileURLToPath(new URL('../../../commands', import.meta.url))
+  if (!existsSync(dir)) return undefined
+  return readdirSync(dir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => file.replace(/\.md$/, ''))
+    .sort()
+}
+
+const mirrorDir = packagedCommandsDir()
+
+/** why: the mirror is the product's own inventory, so a package-scoped
+ * checkout asserts parity and steering against it instead of passing vacuously. */
+function mirrorCommandNames(dir: string): string[] {
+  return readdirSync(dir)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => file.replace(/\.md$/, ''))
+    .sort()
 }
 
 /** A minimal fake receiving agent capturing steered messages. */
@@ -111,15 +120,10 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
 }
 
 describe('bundled mstar commands (omp parity)', () => {
-  it('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
-    const dir = packagedCommandsDir()
-    // The missing-mirror boot is covered by the fail-loud case below; this
-    // probe only guards the mirror-present steering contract.
-    if (dir === undefined) return
-    const expected = repoCommands()
-    // why: a package-scoped checkout has no sibling repo `commands/`, so skip
-    // only the parity assertion (and its per-command loop), never collection.
-    if (expected === undefined) return
+  it.skipIf(mirrorDir === undefined)('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
+    // why: a package-scoped checkout has no sibling repo `commands/`, so the
+    // mirror it ships is the expected inventory and the loop still runs.
+    const expected = repoCommands() ?? mirrorCommandNames(mirrorDir!)
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
     expect(booted.ctx.commands.list(agent).map((descriptor) => descriptor.name)).toEqual(expected)
