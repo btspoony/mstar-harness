@@ -64,6 +64,7 @@ import {
   type ExecutionSessionRef,
 } from "./execution-store.js";
 import { deriveResidualEntries, mutateExecutionPlan, progressExecutionPlan } from "./execution-coordination.js";
+import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
@@ -145,11 +146,12 @@ async function activeStore(name: string): Promise<StoreContext> {
 
 async function executionPlanFixture(
   name: string,
-  options: { collaboration?: "active" | "staged" } = {},
+  options: { collaboration?: "active" | "staged"; plans?: readonly string[] } = {},
 ): Promise<{
   context: StoreContext;
   workflowId: string;
   planId: string;
+  planIds: readonly string[];
   caller: ExecutionCaller;
   session: ExecutionSessionRef;
 }> {
@@ -161,7 +163,8 @@ async function executionPlanFixture(
   if ((options.collaboration ?? "active") === "active") activate(collaborationLocation(context).dbPath);
   const initialized = await readExecutionState(context);
   const workflowId = "wf-issue-batch";
-  const planId = "plan-issue-batch";
+  const planIds = options.plans ?? ["plan-issue-batch"];
+  const planId = planIds[0]!;
   const iterationId = "iter-issue-batch";
   const compassRef = `iterations/${iterationId}/delivery-compass.md`;
   const compassPath = join(harnessDir, compassRef);
@@ -173,7 +176,7 @@ async function executionPlanFixture(
     "status: active",
     "iteration_base_branch: main",
     "target_branch: main",
-    `plans: [${planId}]`,
+    `plans: [${planIds.join(", ")}]`,
     "---",
     "",
     `# ${iterationId}`,
@@ -198,7 +201,13 @@ async function executionPlanFixture(
       branch: { base: "main", source: "feature/issue-batch", target: "main", integration: "integration/issue-batch" },
       integration_worktree_path: integrationPath,
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
-      plans: [{ id: planId, title: "Issue batch", file: `plans/${planId}.md`, status: "Todo", metadata: { working_branch: "feature/issue-batch" } }],
+      plans: planIds.map((id) => ({
+        id,
+        title: `Plan ${id}`,
+        file: `plans/${id}.md`,
+        status: "Todo",
+        metadata: { working_branch: "feature/issue-batch" },
+      })),
     } as unknown as WorkflowSnapshot,
     expected: initialized.token,
     operationId: `create-${name}`,
@@ -210,7 +219,7 @@ async function executionPlanFixture(
     expected: workflow.workflowToken,
     operationId: `bind-${name}`,
   });
-  return { context, workflowId, planId, caller, session: session.data };
+  return { context, workflowId, planId, planIds, caller, session: session.data };
 }
 
 function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
@@ -979,6 +988,39 @@ describe("collaboration composite residual", () => {
     expect(replay.replayed).toBe(true);
     expect(await issueFacts(fixture.context)).toEqual(before);
     expect(await acknowledgement()).not.toBeNull();
+
+    // A repair that genuinely cannot run (the collaboration authority is not
+    // available) is disclosed on the committed result, every time it is replayed,
+    // instead of being reported as a silent success.
+    await setAcknowledgement(null);
+    const dbPath = collaborationLocation(fixture.context).dbPath;
+    const stage = new DatabaseSync(dbPath);
+    try {
+      stage.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      stage.close();
+    }
+    const warningOf = (receipt: { recovery?: { warnings?: readonly { message: string }[] } }): string =>
+      (receipt.recovery?.warnings ?? []).map((warning) => warning.message).join(" | ");
+    const operationsBefore = (await executionFacts(fixture.context)).operations;
+    const outstanding = await mutateExecutionPlan(context, request);
+    expect(outstanding.replayed).toBe(true);
+    expect(warningOf(outstanding)).toContain("collaboration acknowledgement pending");
+    const repeated = await mutateExecutionPlan(context, request);
+    expect(repeated.replayed).toBe(true);
+    expect(warningOf(repeated)).toContain("collaboration acknowledgement pending");
+    // The business effect did not move while the acknowledgement stayed outstanding.
+    expect((await executionFacts(fixture.context)).operations).toBe(operationsBefore);
+    const restore = new DatabaseSync(dbPath);
+    try {
+      restore.prepare("update collaboration_meta set authority_state = 'active' where id = 1").run();
+    } finally {
+      restore.close();
+    }
+    const repaired = await mutateExecutionPlan(context, request);
+    expect(repaired.replayed).toBe(true);
+    expect(warningOf(repaired)).not.toContain("collaboration acknowledgement pending");
+    expect(await acknowledgement()).not.toBeNull();
   });
 
   test("a deterministic refusal is declined durably and cannot later apply", async () => {
@@ -1119,6 +1161,192 @@ describe("collaboration composite residual", () => {
     expect(refused.code).toBe("collaboration.not-active");
     expect(await executionFacts(fixture.context)).toEqual(beforeExecution);
     expect(await readExecutionPlan(context, fixture.session, fixture.planId).then((read) => read.token)).toBe(plan.token);
+  });
+
+  test("a terminal lifecycle close is withheld while a composite reservation is pending", async () => {
+    const fixture = await executionPlanFixture("composite-lifecycle");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-lifecycle" },
+      kind: "residual-add",
+      requestHash: "hash-lifecycle",
+      target: await collaborationStamp(fixture.context),
+      scope: { workflowId: fixture.workflowId, planId: fixture.planId },
+      actor: ACTOR,
+      expectedExecution: plan.token,
+      frozenPayload: JSON.stringify({ plan: fixture.planId }),
+    };
+    await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: parseExecutionToken(plan.token).revision }),
+    );
+
+    const close = (operationId: string) => ({
+      operationId,
+      session: fixture.session,
+      operation: { kind: "lifecycle" as const, status: "failed" as const, reason: "operator stopped the lifecycle" },
+    });
+    const withheld = await refusalOf(() => mutateExecutionWorkflow(context, close("close-while-reserved")));
+    expect(withheld.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(withheld)).toMatchObject({ operation_id: "composite-lifecycle", phase: "prepared" });
+    // The lifecycle and the row are exactly as they were: the reservation still
+    // owns the facts it will finalize.
+    expect((await readExecutionPlan(context, fixture.session, fixture.planId)).token).toBe(plan.token);
+
+    // Settling the pending operation releases the lifecycle, which then closes.
+    const completed = await runCollaborationComposite<string>(context, intent, {
+      apply: () => JSON.stringify({ applied: true }),
+      finalize: () => "completed",
+    });
+    expect(completed).toBe("completed");
+    const closed = await mutateExecutionWorkflow(context, close("close-after-finalize"));
+    expect(closed.replayed).toBe(false);
+    const afterClose = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        operationId: "post-close-add",
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "post-close" })] },
+      }),
+    );
+    expect(afterClose.code).toBe("coordination.workflow-not-running");
+  });
+
+  test("a composite admitted while running still finalizes after the lifecycle ends", async () => {
+    const fixture = await executionPlanFixture("composite-after-lifecycle");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-after-lifecycle" },
+      kind: "residual-add",
+      requestHash: "hash-after-lifecycle",
+      target: await collaborationStamp(fixture.context),
+      scope: { workflowId: fixture.workflowId, planId: fixture.planId },
+      actor: ACTOR,
+      expectedExecution: plan.token,
+      frozenPayload: JSON.stringify({ plan: fixture.planId }),
+    };
+    await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: parseExecutionToken(plan.token).revision }),
+    );
+    let applications = 0;
+    const interrupted = await refusalOf(() =>
+      runCollaborationComposite<string>(context, intent, {
+        apply: () => {
+          applications += 1;
+          return JSON.stringify({ applied: true });
+        },
+        finalize: () => {
+          throw new Error("simulated process loss");
+        },
+      }),
+    );
+    expect(interrupted.code).toBe("collaboration.operation-partial");
+    expect(applications).toBe(1);
+
+    // A writer outside the lifecycle frame ends the workflow (the supported
+    // transitions refuse, so only a bypass can reach this state).
+    await inExecutionWrite(fixture.context, (db) => {
+      const row = db
+        .prepare("select state_json from execution_workflows where workflow_id = ?")
+        .get(fixture.workflowId) as { state_json: string };
+      const stored = JSON.parse(row.state_json) as Record<string, unknown>;
+      stored.status = "failed";
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(
+        JSON.stringify(stored),
+        fixture.workflowId,
+      );
+    });
+
+    // The running gate belongs to admission: an operation admitted while running
+    // still commits its execution delta, so the committed effect is never stranded.
+    const resumed = await runCollaborationComposite<string>(context, intent, {
+      apply: () => {
+        applications += 1;
+        return JSON.stringify({ applied: true });
+      },
+      finalize: () => "finalized",
+    });
+    expect(resumed).toBe("finalized");
+    expect(applications).toBe(1);
+    expect(await intentPhases(fixture.context, "composite-after-lifecycle")).toEqual(["confirmed"]);
+  });
+
+  test("an operation id is reserved across plans and both execution ledgers", async () => {
+    const fixture = await executionPlanFixture("composite-namespace", {
+      plans: ["plan-issue-batch", "plan-issue-second"],
+    });
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const [planAId, planBId] = fixture.planIds;
+    if (planAId === undefined || planBId === undefined) throw new Error("fixture: two plans expected");
+    const planA = await readExecutionPlan(context, fixture.session, planAId);
+    const planB = await readExecutionPlan(context, fixture.session, planBId);
+    const sharedId = "composite-shared-id";
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: sharedId },
+      kind: "residual-add",
+      requestHash: "hash-shared-id",
+      target: await collaborationStamp(fixture.context),
+      scope: { workflowId: fixture.workflowId, planId: planAId },
+      actor: ACTOR,
+      expectedExecution: planA.token,
+      frozenPayload: JSON.stringify({ plan: planAId }),
+    };
+    await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: parseExecutionToken(planA.token).revision }),
+    );
+
+    // A plain writer on ANOTHER plan reusing the id is refused when it tries to
+    // commit the receipt, inside its own transaction, so nothing survives.
+    const beforeOperations = (await executionFacts(fixture.context)).operations;
+    const stolen = await refusalOf(() =>
+      progressExecutionPlan(context, {
+        operationId: sharedId,
+        session: fixture.session,
+        expected: planB.token,
+        planId: planBId,
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "stolen id", evidence_paths: [] } },
+      }),
+    );
+    expect(stolen.code).toBe("execution.operation-conflict");
+    expect(detailsOf(stolen)).toMatchObject({ operation_id: sharedId });
+    expect((await readExecutionPlan(context, fixture.session, planBId)).token).toBe(planB.token);
+    expect((await executionFacts(fixture.context)).operations).toBe(beforeOperations);
+
+    // A second composite on plan B with the same id is refused by the frozen
+    // identity (one operation id, one reservation).
+    const secondComposite = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        operationId: sharedId,
+        session: fixture.session,
+        expected: planB.token,
+        planId: planBId,
+        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "namespace-b" })] },
+      }),
+    );
+    expect(secondComposite.code).toBe("execution.operation-conflict");
+    expect((await listIssues(fixture.context, {})).total).toBe(0);
+
+    // The admitted reservation is the only owner: it resumes, finalizes, and then
+    // plan B proceeds under its own id.
+    const finalized = await runCollaborationComposite<string>(context, intent, {
+      apply: () => JSON.stringify({ applied: true }),
+      finalize: () => "finalized",
+    });
+    expect(finalized).toBe("finalized");
+    const accepted = await mutateExecutionPlan(context, {
+      operationId: "composite-namespace-b",
+      session: fixture.session,
+      expected: planB.token,
+      planId: planBId,
+      operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "namespace-b-ok" })] },
+    });
+    expect(accepted.replayed).toBe(false);
+    expect((await listIssues(fixture.context, {})).total).toBe(1);
   });
 
   test("a wrong collaboration binding refuses before the effect runs", async () => {

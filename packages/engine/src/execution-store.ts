@@ -3299,6 +3299,7 @@ export function writePlanOperationReceipt(
     planId: string;
     receipt: ExecutionRead<unknown>;
     now: string;
+    allowReservedIntent?: true;
   },
 ): void {
   writeOperationReceipt(tx, input);
@@ -3343,8 +3344,40 @@ export function writeOperationReceipt(
     receipt: ExecutionRead<unknown>;
     now: string;
     slim?: true;
+    /**
+     * The admitted composite's own finalization: its reservation is the row this
+     * write completes, so it is the one writer allowed while that id is pending.
+     */
+    allowReservedIntent?: true;
   },
 ): void {
+  // §3.1 the operation-id namespace is ONE namespace across both execution
+  // ledgers. A different writer may not commit an id a pending composite reserved
+  // (or already declined): the effect's receipt would otherwise be unreachable
+  // and a same-id retry would read this unrelated receipt instead.
+  if (input.allowReservedIntent !== true) {
+    const pending = tx.db
+      .prepare(
+        "select kind from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +
+          "and operation_id = ? and phase != 'confirmed'",
+      )
+      .get(tx.storeId, tx.epoch, input.operationId) as { kind?: unknown } | undefined;
+    if (pending !== undefined) {
+      throw new ExecutionError(
+        "execution.operation-conflict",
+        `operation id ${JSON.stringify(input.operationId)} is reserved by pending composite operation ` +
+          `(${typeof pending.kind === "string" ? pending.kind : "composite"}); another writer may not commit that id. ` +
+          `Nothing was written.`,
+        {
+          operation_id: input.operationId,
+          reserved_kind: typeof pending.kind === "string" ? pending.kind : null,
+          recovery:
+            "Resume the pending composite with the same --operation id and payload (or let its deterministic refusal be " +
+            "recorded), then retry this operation; use a new operation id for the new effect.",
+        },
+      );
+    }
+  }
   tx.db
     .prepare(
       "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +

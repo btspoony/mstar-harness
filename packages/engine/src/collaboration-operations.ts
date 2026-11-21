@@ -102,7 +102,12 @@ type EffectOutcome =
   | { kind: "committed"; receipt: CollaborationEffectReceipt }
   | { kind: "declined"; cause: DeclineCause };
 
-export type CompositeReservation = Readonly<{ outcome: "reserved" | "resume"; reservedRevision: number }>;
+export type CompositeReservation = Readonly<{
+  outcome: "reserved" | "resume";
+  reservedRevision: number;
+  /** The ADMITTED request fingerprint: the effect key and the frozen identity. */
+  requestHash: string;
+}>;
 
 /**
  * Refusal codes that describe an unavailable or uncertain ENVIRONMENT rather
@@ -248,15 +253,17 @@ function assertIntentGeneration(tx: ExecutionTransaction, intent: CompositeInten
 }
 
 /**
- * A resumed intent must be the one this call froze. Transport freshness (the CAS
- * token the caller re-read) is deliberately excluded: an admitted reservation
- * whose plan row later moved is refreshed by re-admission, not treated as a
- * different business intent.
+ * A resumed intent must be the one this call froze. Both transport facts are
+ * deliberately excluded: the CAS token the caller re-read (an admitted
+ * reservation whose row later moved is refreshed by re-admission) and the
+ * caller fingerprint (the coordinator identity may have been recovered, and the
+ * spec requires recovery to continue the frozen intent rather than take over a
+ * collaboration binding). The semantic request, actor, scope and target are what
+ * make it the same operation.
  */
 function assertSameIntent(recorded: StoredIntent, intent: CompositeIntent): void {
   const same =
     recorded.kind === intent.kind &&
-    recorded.requestHash === intent.requestHash &&
     recorded.actor === intent.actor &&
     recorded.workflowId === intent.scope.workflowId &&
     recorded.planId === intent.scope.planId &&
@@ -402,6 +409,25 @@ export function reserveCompositeIntent(
   const row = readIntent(tx.db, intent.key);
   const now = nowRfc3339();
   if (row === null) {
+    // §3.1 the operation-id namespace is ONE namespace across the execution
+    // ledgers: an id another operation already committed here is never adopted
+    // by a composite (its receipt would otherwise collide after the effect ran).
+    const committed = tx.db
+      .prepare("select request_hash from execution_operations where epoch = ? and operation_id = ?")
+      .get(tx.epoch, intent.key.operationId) as { request_hash?: unknown } | undefined;
+    if (committed !== undefined) {
+      throw new ExecutionError(
+        "execution.operation-conflict",
+        `operation id ${JSON.stringify(intent.key.operationId)} already has a committed execution receipt in this store ` +
+          `epoch; a composite reserves an unused id before it applies any effect. Nothing was applied.`,
+        {
+          operation_id: intent.key.operationId,
+          recorded_fingerprint: typeof committed.request_hash === "string" ? committed.request_hash : null,
+          requested_fingerprint: intent.requestHash,
+          recovery: "Use a new operation id for this composite; the committed receipt keeps its own id.",
+        },
+      );
+    }
     if (intent.scope.planId !== null && intent.scope.workflowId !== null) {
       assertNoForeignCompositeReservation(tx, {
         workflowId: intent.scope.workflowId,
@@ -431,9 +457,10 @@ export function reserveCompositeIntent(
         now,
         now,
       );
-    return { outcome: "reserved", reservedRevision: reservation.revision };
+    return { outcome: "reserved", reservedRevision: reservation.revision, requestHash: intent.requestHash };
   }
-  if (row.requestHash !== intent.requestHash) throw intentConflict(intent, row.requestHash);
+  // The reservation's PK is the operation-id namespace: another plan's attempt to
+  // reuse this id finds THIS row and is refused by the frozen-identity check.
   assertSameIntent(row, intent);
   if (row.phase === "declined") throw recordedRefusal(intent.key.operationId, row.cause);
   if (row.phase === "confirmed") throw intentConflict(intent, row.requestHash);
@@ -445,7 +472,52 @@ export function reserveCompositeIntent(
       )
       .run(reservation.revision, now, intent.key.executionStoreId, intent.key.executionEpoch, intent.key.operationId);
   }
-  return { outcome: "resume", reservedRevision: reservation.revision };
+  return { outcome: "resume", reservedRevision: reservation.revision, requestHash: row.requestHash };
+}
+
+/** True when this exact operation already holds a live reservation (a resume, not a new admission). */
+export function hasPreparedCompositeIntent(tx: ExecutionTransaction, key: CompositeKey): boolean {
+  const row = tx.db
+    .prepare(
+      "select 1 as found from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +
+        "and operation_id = ? and phase = 'prepared'",
+    )
+    .get(key.executionStoreId, key.executionEpoch, key.operationId) as { found?: number } | undefined;
+  return row !== undefined;
+}
+
+/**
+ * The workflow-lifecycle half of the reservation: a terminal transition would
+ * invalidate the running witness every admitted composite depends on, so it
+ * refuses while ANY composite of this workflow is pending. The pending operation
+ * is named with its own resume/decline recovery, so the operator settles it
+ * first and then closes the lifecycle.
+ */
+export function assertNoPendingCompositeForWorkflow(tx: ExecutionTransaction, workflowId: string): void {
+  const pending = tx.db
+    .prepare(
+      "select operation_id, kind, plan_id from execution_collaboration_intents " +
+        "where execution_epoch = ? and phase = 'prepared' and workflow_id = ? order by created_at limit 1",
+    )
+    .get(tx.epoch, workflowId) as { operation_id?: unknown; kind?: unknown; plan_id?: unknown } | undefined;
+  if (pending === undefined) return;
+  const operationId = text(pending.operation_id, "execution_collaboration_intents.operation_id");
+  const kind = text(pending.kind, "execution_collaboration_intents.kind");
+  throw new ExecutionError(
+    "collaboration.operation-partial",
+    `workflow ${workflowId} still has pending composite operation ${JSON.stringify(operationId)} (${kind}); a terminal ` +
+      `lifecycle would invalidate the facts it will finalize, so the transition is withheld. Nothing was modified.`,
+    {
+      operation_id: operationId,
+      kind,
+      phase: "prepared",
+      workflow_id: workflowId,
+      ...(typeof pending.plan_id === "string" ? { plan_id: pending.plan_id } : {}),
+      recovery:
+        `Reissue the pending verb with the same --operation id and payload to resume and finalize it (or let its deterministic ` +
+        `refusal be recorded), then retry the lifecycle transition.`,
+    },
+  );
 }
 
 /**
@@ -664,19 +736,25 @@ async function acknowledgeEffect(context: StoreContext, intent: CompositeIntent,
  * Replay-time acknowledgement repair: reads the committed effect row by its local
  * key and records the acknowledgement if it is still missing. Called from the
  * replay path OUTSIDE any execution transaction, so no write transactions nest.
+ * Returns the outstanding cause when the acknowledgement could NOT be confirmed
+ * (including when the collaboration authority refuses the repair), so the caller
+ * can disclose it on the committed result instead of reporting a silent success.
  */
-export async function repairCompositeAcknowledgement(context: StoreContext, key: CompositeKey): Promise<void> {
+export async function repairCompositeAcknowledgement(context: StoreContext, key: CompositeKey): Promise<string | null> {
   try {
-    await withCollaborationWrite(context, (handle) => {
+    return await withCollaborationWrite(context, (handle) => {
       const row = handle.db
         .prepare(
           "select result_json from collaboration_operations where key_space = 'composite' " +
             "and execution_store_id = ? and execution_epoch = ? and operation_id = ?",
         )
         .get(key.executionStoreId, key.executionEpoch, key.operationId) as { result_json?: unknown } | undefined;
-      if (row === undefined || typeof row.result_json !== "string") return;
+      if (row === undefined || typeof row.result_json !== "string") return null;
       const parsed = parseJson(row.result_json, "collaboration_operations.result_json");
-      if (!isPlainObject(parsed) || !isPlainObject(parsed.receipt) || typeof parsed.acknowledgedAt === "string") return;
+      if (!isPlainObject(parsed) || !isPlainObject(parsed.receipt)) {
+        return "the committed collaboration effect row carries no receipt";
+      }
+      if (typeof parsed.acknowledgedAt === "string") return null;
       handle.db
         .prepare(
           "update collaboration_operations set result_json = ? where key_space = 'composite' " +
@@ -688,9 +766,10 @@ export async function repairCompositeAcknowledgement(context: StoreContext, key:
           key.executionEpoch,
           key.operationId,
         );
+      return null;
     });
-  } catch {
-    // Metadata only: a later replay repairs it, and the business outcome stands.
+  } catch (error) {
+    return messageOf(error);
   }
 }
 
@@ -701,11 +780,22 @@ function withAcknowledgementFact<T>(result: T, cause: unknown): T {
   if (recovery === null || typeof recovery !== "object" || !("warnings" in recovery)) return result;
   const warnings = recovery.warnings;
   if (!Array.isArray(warnings)) return result;
-  warnings.push(
-    `collaboration acknowledgement pending: ${messageOf(cause)}. Both business effects are committed; replaying this ` +
+  warnings.push({
+    code: "collaboration.acknowledgement-pending",
+    message:
+      `collaboration acknowledgement pending: ${messageOf(cause)}. Both business effects are committed; replaying this ` +
       `operation with the same id repairs the acknowledgement only.`,
-  );
+  });
   return result;
+}
+
+/**
+ * Disclose an outstanding acknowledgement on a committed business result. The
+ * caller passes the cause `repairCompositeAcknowledgement` returned; `null` means
+ * the acknowledgement is confirmed and the result is returned untouched.
+ */
+export function noteOutstandingAcknowledgement<T>(result: T, cause: string | null): T {
+  return cause === null ? result : withAcknowledgementFact(result, cause);
 }
 
 /** A recorded result replays with its own envelope, marked as a replay. */
@@ -786,7 +876,6 @@ async function finalizeComposite<T>(
         { operation_id: intent.key.operationId },
       );
     }
-    if (row.requestHash !== intent.requestHash) throw intentConflict(intent, row.requestHash);
     if (row.phase === "declined") throw recordedRefusal(intent.key.operationId, row.cause);
     if (row.phase === "confirmed") {
       if (row.receiptJson === null) {
@@ -794,6 +883,9 @@ async function finalizeComposite<T>(
       }
       return markReplayed(parseJson(row.receiptJson, "execution_collaboration_intents.receipt_json") as T);
     }
+    // The frozen identity (payload/actor/scope/target) is the admission; the
+    // caller fingerprint is deliberately not compared, so a recovered coordinator
+    // identity continues the intent instead of taking it over.
     assertSameIntent(row, intent);
     const result = finalize(tx, receipt);
     tx.db
