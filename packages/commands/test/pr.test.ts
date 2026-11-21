@@ -110,4 +110,30 @@ describe("pr merge-gate", () => {
     expect(clean).toMatchObject({ status: "ok" });
     expect(clean.status === "ok" ? clean.data : {}).toMatchObject({ mergeAllowed: true, head, unresolved: [] });
   });
+
+  test("the page cap refuses with its own code, and a raised cap completes the scan", async () => {
+    const { context } = fixture();
+    const head = "abcdef0123456";
+    let pages = 0;
+    context.effects.spawn = async (request) => {
+      if (request.argv[1] === "pr") {
+        return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: head }), stderr: "" };
+      }
+      pages += 1;
+      const more = pages < 2;
+      return {
+        exitCode: 0, signal: null, stderr: "",
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { headRefOid: head, reviewThreads: { pageInfo: { hasNextPage: more, endCursor: more ? `cursor-${pages}` : null }, nodes: [] } } } } }),
+      };
+    };
+    const gate = command("pr.merge-gate");
+    const capped = await gate.execute({ pr: "42", maxPages: "1" }, context);
+    expect(capped).toMatchObject({ status: "refused", code: "pr.merge-gate.page-cap" });
+    expect(capped.status === "ok" ? "" : JSON.stringify(capped)).toContain("--max-pages");
+    // why: the refusal names the one action that changes the outcome, so the
+    // raised cap must actually complete the same scan.
+    pages = 0;
+    const completed = await gate.execute({ pr: "42", maxPages: "2" }, context);
+    expect(completed).toMatchObject({ status: "ok" });
+  });
 });

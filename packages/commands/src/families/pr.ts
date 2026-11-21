@@ -52,10 +52,16 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     details: details ?? {},
     recovery: "Install the GitHub CLI and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
   });
-  if (code === undefined) return {
-    version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message,
-    recovery: "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
-  };
+  if (code === undefined) {
+    // why: consumers read the recovery from `details.recovery` (the channel
+    // refusalEnvelope fills), so the unexpected-failure path publishes there too.
+    const hint = "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.";
+    return {
+      version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1,
+      message: `${message}\nRecovery: ${hint}`,
+      details: { recovery: hint },
+    };
+  }
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     details: details ?? {},
@@ -125,12 +131,12 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     if (!pageResult.readable) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads response carried no readable thread page (missing connection or nodes array)",
-      recovery: "The response was truncated rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
     });
     if (pageResult.headRefOid === null) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads response carried no headRefOid",
-      recovery: "The response was incomplete rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
     });
     // why: threads are read across several requests, so a head that moves
     // mid-scan makes the enumeration — and any waiver bound to it — stale.
@@ -147,11 +153,11 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     if (pageResult.endCursor === null) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads reported more pages without an end cursor",
-      recovery: "The response was incomplete rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
     });
     after = pageResult.endCursor;
     if (page >= maxPages - 1) return refusalEnvelope({
-      command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
+      command: id, status: "refused", code: `${id}.page-cap`, exitCode: 1,
       message: `review thread scan exceeded ${maxPages} page(s) (${maxPages * 100} threads); increase the page cap`,
       recovery: "Raise the page cap for this scan. Run mstar pr merge-gate --pr <n> --max-pages <n>.",
     });
