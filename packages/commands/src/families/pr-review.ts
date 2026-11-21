@@ -514,7 +514,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         // why: threads are read across several requests, so a head that moves
         // mid-scan makes the enumeration — and any waiver bound to it — stale.
         if (pageResult.headRefOid !== head) {
-          return refusalEnvelope({ command: id, status: "refused", code: `${id}.head-moved`, exitCode: 1, message: `PR head moved from ${head} to ${pageResult.headRefOid} while reading review threads`, details: { expected: head, actual: pageResult.headRefOid }, recovery: "Re-run the gate against the new head; a confirmation bound to the earlier head cannot merge." });
+          return refusalEnvelope({ command: id, status: "refused", code: `${id}.head-moved`, exitCode: 1, message: `PR head moved from ${head} to ${pageResult.headRefOid} while reading review threads`, details: { expected: head, actual: pageResult.headRefOid }, recovery: "A confirmation bound to the earlier head cannot merge; rerun the gate against the new head. Run mstar pr-review thread-gate --pr <n>." });
         }
         threads.push(...pageResult.threads);
         if (!pageResult.hasNextPage) break;
