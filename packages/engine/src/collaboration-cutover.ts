@@ -1794,6 +1794,7 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
   const handle = await openStore(context, "write");
   try {
     handle.db.exec("begin immediate");
+    let commitAttempted = false;
     try {
       const existing = readCollaborationFence(handle.db);
       if (existing !== null) {
@@ -1841,8 +1842,7 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
           at,
         );
       for (const table of [...COLLABORATION_CUTOVER_TABLES].reverse()) handle.db.exec(`drop table ${table}`);
-      handle.db.exec("commit");
-      return {
+      const fence: CollaborationFence = {
         manifestId: manifest.manifestId,
         manifestDigest: digest,
         sourceStoreId: manifest.source.storeId,
@@ -1855,26 +1855,68 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
         backupPath,
         fencedAt: at,
       };
+      commitAttempted = true;
+      handle.db.exec("commit");
+      return fence;
     } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      let rollbackFailure: string | null = null;
       try {
         handle.db.exec("rollback");
-      } catch {
-        // nothing committed either way
+      } catch (rollbackError) {
+        rollbackFailure = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      }
+      // A commit attempt that threw, or a rollback that did not complete, leaves
+      // the persisted state unconfirmed. The fence must never be reported as
+      // "unchanged" without proof, so the operator is sent to inspect it.
+      if (commitAttempted || rollbackFailure !== null) {
+        throw new StoreError(
+          "collaboration.cutover-unconfirmed",
+          `The collaboration fence did not complete cleanly (${cause}` +
+            `${rollbackFailure === null ? "" : `; the rollback also failed: ${rollbackFailure}`}). Its persisted state is ` +
+            `UNCONFIRMED: do not treat the combined source as unchanged, and do not retry as if nothing happened. Inspect ` +
+            `the persisted fence record, the retained pre-fence image at ${backupPath} and the source's schema_version and ` +
+            `moved tables, then recover from the verified pre-fence image or resume the same activation.`,
+          { cause, rollback: rollbackFailure === null ? "rolled-back" : "rollback-failed", commitAttempted },
+        );
+      }
+      // The rollback returned: prove the source really is pre-fence before any
+      // "unchanged" claim, otherwise report the unconfirmed state.
+      if (!sourceIsPreFence(handle.db, manifest)) {
+        throw new StoreError(
+          "collaboration.cutover-unconfirmed",
+          `The collaboration fence failed (${cause}) and its rollback returned, but re-reading the combined source did not ` +
+            `show the expected pre-fence state. Do not treat the source as unchanged: inspect the persisted fence record, ` +
+            `the retained pre-fence image at ${backupPath} and the source's schema_version and moved tables.`,
+          { cause, rollback: "rolled-back", verified: false },
+        );
       }
       if (error instanceof StoreError) throw error;
-      // A SQLite-level failure inside the fence transaction (a damaged source,
-      // a rogue constraint) is not a named refusal of its own: report it as a
-      // rolled-back, unchanged source so the operator sees what actually
-      // happened instead of a raw driver error.
+      // A SQLite-level failure inside the fence transaction (a damaged source, a
+      // rogue constraint) is not a named refusal of its own: report the verified
+      // rollback and keep the original cause.
       throw new StoreError(
         "store.corrupt",
-        `The collaboration fence transaction failed and rolled back (${error instanceof Error ? error.message : String(error)}). ` +
-          `The combined source is unchanged and no target publication was made; fix the source's integrity and rerun ` +
-          `the same activation.`,
+        `The collaboration fence transaction failed and rolled back (${cause}). The combined source was re-read and is ` +
+          `still at its pre-cutover schema with no fence record, so nothing was fenced and no target publication was ` +
+          `made; fix the source's integrity and rerun the same activation.`,
+        { cause, rollback: "rolled-back", verified: true },
       );
     }
   } finally {
     handle.close();
+  }
+}
+
+/** True when the connection shows the pre-fence source: no fence, expected schema. */
+function sourceIsPreFence(db: StoreDb, manifest: CutoverManifest): boolean {
+  try {
+    return (
+      readCollaborationFence(db) === null &&
+      validateAppliedMigrations(readAppliedMigrations(db, false)) === manifest.source.schemaVersion
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -1460,6 +1460,41 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect((await cutoverState(location)).receipts.map((row) => row.operation_id)).toEqual(["issue-op-legacy"]);
   });
 
+  test("a fence commit failure is reported as unconfirmed, never as unchanged", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-commit-unconfirmed.git");
+    const source = seedSchema19Source(repo);
+    const location = locationAt(repo);
+    const manifest = await planCollaborationCutover(source.context);
+    await applyCollaborationCutover(source.context, manifest);
+
+    // A DEFERRED foreign-key child passes the `drop table issues` statement and
+    // fails at COMMIT, so the fence reaches its commit path before it fails.
+    const blocker = new DatabaseSync(join(source.context.harnessDir, "store.db"));
+    try {
+      blocker.exec(
+        "create table issue_notes(id integer primary key, issue_id text not null references issues(id) deferrable initially deferred);" +
+          "insert into issue_notes(issue_id) values ('I-000001')",
+      );
+    } finally {
+      blocker.close();
+    }
+
+    const failure = await refusalOf(() =>
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+    );
+    expect(failure.code).toBe("collaboration.cutover-unconfirmed");
+    expect(failure.message).toContain("UNCONFIRMED");
+    expect(failure.message).toContain("do not treat the combined source as unchanged");
+    expect(failure.message).toContain("Inspect the persisted fence record");
+    // The original driver cause survives the classification.
+    expect(failure.message).toContain("FOREIGN KEY constraint failed");
+    // It is NOT the confirmed-rollback message.
+    expect(failure.message).not.toContain("is still at its pre-cutover schema with no fence record");
+    expect(failure.message).not.toContain("nothing was fenced and no target publication was made");
+    // Nothing was published.
+    expect((await cutoverState(location)).authority.state).toBe("staged");
+  });
+
   test("a failed fence rolls the schema-19 source back and publishes nothing", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
     const source = seedSchema19Source(repo);

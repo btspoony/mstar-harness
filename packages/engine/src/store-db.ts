@@ -100,6 +100,10 @@ export type StoreErrorCode =
   | "collaboration.cutover-required"
   | "collaboration.cutover-conflict"
   | "collaboration.cutover-not-quiescent"
+  // The fence's own durable boundary failed: a failed commit or an incomplete
+  // rollback leaves the persisted state UNCONFIRMED, so the operator must
+  // inspect it instead of retrying as if nothing happened.
+  | "collaboration.cutover-unconfirmed"
   | "collaboration.backup-incomplete"
   // The cutover activation input: an activation needs a named operator whose
   // own attestation document is the one supplied.
