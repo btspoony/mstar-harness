@@ -47,6 +47,7 @@ export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
 import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
+import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
 import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
 import {
   normalizeSeverity,
@@ -401,25 +402,7 @@ export type ProjectBindingReceipt = {
 };
 
 function bindingWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  return openStore(context, "write").then((handle) => {
-    try {
-      handle.db.exec("begin immediate");
-      try {
-        const result = fn(handle.db);
-        handle.db.exec("commit");
-        return result;
-      } catch (error) {
-        try {
-          handle.db.exec("rollback");
-        } catch {
-          /* the original error is the one worth reporting */
-        }
-        throw error;
-      }
-    } finally {
-      handle.close();
-    }
-  });
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
 function bindingRow(db: StoreDb, projectId: string): ProjectBinding | null {
@@ -449,7 +432,7 @@ export async function readProjectBinding(context: StoreContext, projectId: strin
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
   }
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const binding = bindingRow(handle.db, projectId.trim());
     if (binding !== null) return { kind: "bound", binding };
@@ -471,9 +454,9 @@ export async function readProjectBinding(context: StoreContext, projectId: strin
  * - the identical pair → a no-op success (`changed: false`), never a refusal
  *
  * `workspace`/`team` are the `.mstarc` connection facts supplied by the
- * caller; this module never reads configuration. One `begin immediate` … `commit`
+ * caller; this module never reads configuration. One collaboration write
  * transaction per call (house transaction ownership), with the row mutation
- * and its `store_operations` receipt committing together.
+ * and its `collaboration_operations` receipt committing together.
  */
 export function bindProject(
   context: StoreContext,
@@ -505,7 +488,7 @@ export function bindProject(
     const hash = createHash("sha256")
       .update(JSON.stringify({ domain: "project-binding", projectId: id, provider, workspace, team, remoteProject }))
       .digest("hex");
-    const prior = db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(mutation.operationId.trim()) as
+    const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space = 'standalone' and operation_id = ?").get(mutation.operationId.trim()) as
       | { request_hash: string; result_json: string }
       | undefined;
     if (prior !== undefined) {
@@ -515,8 +498,9 @@ export function bindProject(
       return JSON.parse(prior.result_json) as ProjectBindingReceipt;
     }
 
-    if (readStoreAuthority(db).authorityState !== "active") {
-      throw new BindingError("store.not-active", "Project binding requires an active store.");
+    const state = db.prepare("select authority_state from collaboration_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+    if (state?.authority_state !== "active") {
+      throw new BindingError("store.not-active", "Project binding requires an active collaboration authority.");
     }
     if (db.prepare("select 1 from catalog_entities where kind = 'project' and id = ?").get(id) === undefined) {
       throw new BindingError(
@@ -524,7 +508,8 @@ export function bindProject(
         `Project ${id} is not registered in the catalog. Register it with \`mstar catalog register\` (or reconcile the catalog) before binding it to ${provider}.`,
       );
     }
-    const storeRevision = (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+    const current = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number };
+    const storeRevision = current.revision;
     if (mutation.expectedStoreRevision !== undefined && storeRevision !== mutation.expectedStoreRevision) {
       throw new BindingError("linear.revision-conflict", `Store revision changed since ${mutation.expectedStoreRevision} was observed (now ${storeRevision}).`);
     }
@@ -565,10 +550,11 @@ export function bindProject(
         `Project ${id} already mirrors ${existing.provider} project ${existing.remoteProject} (workspace ${existing.workspace}); re-binding it to ${remoteProject} is refused. Bind the intended remote project to its own store project instead.`,
       );
     }
-    if (changed) db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    const currentStoreRevision = (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+    if (changed) db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    const revisionRow = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number };
+    const currentStoreRevision = revisionRow.revision;
     const receipt: ProjectBindingReceipt = { projectId: id, provider, remoteProject, revision, storeRevision: currentStoreRevision, changed };
-    db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?,?,?,?)").run(
+    db.prepare("insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) values ('standalone', ?, ?, ?, ?)").run(
       mutation.operationId.trim(),
       hash,
       JSON.stringify(receipt),

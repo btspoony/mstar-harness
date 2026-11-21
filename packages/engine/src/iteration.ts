@@ -51,6 +51,7 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 // query, so neither side dereferences the other during module evaluation.
 import { catalogRootDir } from "./catalog.js";
 import { StoreError, openStore, readStoreAuthority, type StoreContext } from "./store-db.js";
+import { openCollaborationStore } from "./collaboration-store.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
@@ -975,24 +976,10 @@ export async function readCatalogCompleteness(
   let storeRevision = 0;
   let catalogRevision = 0;
   try {
-    const handle = await openStore(context, "read");
+    const handle = await openCollaborationStore(context, "read");
     try {
-      const meta = readStoreAuthority(handle.db);
-      if (typeof meta.authorityState !== "string" || typeof meta.revision !== "number" || typeof meta.catalogRevision !== "number") {
-        throw new StoreError("store.corrupt", "store_meta is missing or malformed; the catalog authority cannot be verified");
-      }
-      storeRevision = meta.revision;
-      catalogRevision = meta.catalogRevision;
-      if (meta.authorityState !== "active") {
-        return completenessRefusal(
-          "store.not-active",
-          `The catalog store is ${meta.authorityState}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
-            "the legacy index/register sources remain authoritative until activation completes.",
-          discovered.length,
-          storeRevision,
-          catalogRevision,
-        );
-      }
+      storeRevision = handle.authority.revision;
+      catalogRevision = handle.authority.catalogRevision;
       const rows = handle.db
         .prepare("select root_kind, relative_path from catalog_entities")
         .all() as Array<{ root_kind?: unknown; relative_path?: unknown }>;
@@ -1005,7 +992,7 @@ export async function readCatalogCompleteness(
       handle.close();
     }
   } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") {
+    if (error instanceof StoreError && (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active")) {
       return completenessRefusal(error.code, error.message, discovered.length, storeRevision, catalogRevision);
     }
     throw error;

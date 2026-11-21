@@ -1,7 +1,8 @@
 export type { RoadmapContent } from "./roadmap-content.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { StoreError, openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
+import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
 export type RoadmapExpected = number | "absent";
@@ -64,20 +65,10 @@ function receiptFromOperation(resultJson: string): RoadmapWriteReceipt {
   };
 }
 
-function requireRoadmapSchema(db: StoreDb): void {
-  const present = db.prepare("select count(*) as count from sqlite_master where type='table' and name='schema_version'").get() as
-    | { count?: unknown }
-    | undefined;
-  if (present?.count !== 1) throw new StoreError("store.corrupt", "The store database has no schema_version table.");
-  const row = db.prepare("select max(version) as version from schema_version").get() as { version?: unknown } | undefined;
-  if (typeof row?.version !== "number" || row.version < 6) {
-    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store upgrade --operator <name>" first.');
-  }
-}
-
 function requireActive(db: StoreDb): void {
-  if (readStoreAuthority(db).authorityState !== "active") {
-    throw new RoadmapError("roadmap.store-not-active", "Roadmap access requires an active store; staged stores are not readable or writable.");
+  const row = db.prepare("select authority_state from collaboration_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+  if (row?.authority_state !== "active") {
+    throw new RoadmapError("roadmap.store-not-active", "Roadmap access requires an active collaboration authority; staged stores are not readable or writable.");
   }
 }
 
@@ -90,7 +81,6 @@ function projectRow(db: StoreDb, projectId: string): { revision: number } {
 }
 
 function readOn(db: StoreDb, projectId: string): RoadmapRead {
-  requireRoadmapSchema(db);
   requireActive(db);
   const project = projectRow(db, projectId);
   const row = db.prepare("select project_id, content_markdown, content_hash, revision, updated_at from project_roadmaps where project_id=?").get(projectId) as
@@ -126,7 +116,7 @@ export function readRoadmapAuthorityOn(db: StoreDb, projectId: string): RoadmapR
 }
 
 export async function readRoadmapAuthority(context: StoreContext, projectId: string): Promise<RoadmapRead> {
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     handle.db.exec("begin");
     try {
@@ -143,11 +133,10 @@ export async function readRoadmapAuthority(context: StoreContext, projectId: str
 }
 
 export async function listRoadmapAuthority(context: StoreContext): Promise<RoadmapRead[]> {
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     handle.db.exec("begin");
     try {
-      requireRoadmapSchema(handle.db);
       requireActive(handle.db);
       const projects = handle.db.prepare("select id from catalog_entities where kind='project' order by id").all() as Array<{ id: string }>;
       const result = projects.map(({ id }) => readOn(handle.db, id));
@@ -219,20 +208,7 @@ export async function reviewRoadmapImport(context: StoreContext, projectId: stri
 }
 
 async function withWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  const handle = await openStore(context, "write");
-  try {
-    handle.db.exec("begin immediate");
-    try {
-      const result = fn(handle.db);
-      handle.db.exec("commit");
-      return result;
-    } catch (error) {
-      try { handle.db.exec("rollback"); } catch { /* transaction already failed */ }
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
 /**
@@ -258,7 +234,6 @@ function writeAuthority(
   requestHashOverride: string | undefined,
   expected: { projectRevision: number; roadmapRevision: RoadmapExpected },
 ): RoadmapWriteReceipt {
-  requireRoadmapSchema(db);
   requireActive(db);
   const hash = sha256(input.contentMarkdown);
   const requestHash = requestHashOverride ?? sha256(JSON.stringify({
@@ -269,7 +244,7 @@ function writeAuthority(
     contentHash: hash,
     provenance: provenance ?? null,
   }));
-  const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(operation.operationId) as
+  const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?").get(operation.operationId) as
     | { request_hash: string; result_json: string }
     | undefined;
   if (prior) {
@@ -296,10 +271,10 @@ function writeAuthority(
     db.prepare("insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at) values(?,?,?,?,?)")
       .run(input.projectId, input.contentMarkdown, hash, revision, updatedAt);
   }
-  db.prepare("update store_meta set revision=revision+1 where id=1").run();
-  const versions = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+  db.prepare("update collaboration_meta set revision=revision+1 where id=1").run();
+  const versions = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
   const receipt = { projectId: input.projectId, revision, contentHash: hash, storeRevision: versions.revision };
-  db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values(?,?,?,?)")
+  db.prepare("insert into collaboration_operations(key_space,operation_id,request_hash,result_json,committed_at) values('standalone',?,?,?,?)")
     .run(operation.operationId, requestHash, JSON.stringify({ ...receipt, outcome: "committed", provenance: provenance ?? null }), updatedAt);
   return receipt;
 }
@@ -344,7 +319,6 @@ export async function importRoadmapAuthority(
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
   return withWrite(context, (db) => {
-    requireRoadmapSchema(db);
     requireActive(db);
     const requestHash = sha256(JSON.stringify({
       domain: "roadmap-content-authority",
@@ -355,7 +329,7 @@ export async function importRoadmapAuthority(
       sourcePath: review.sourcePath,
       sourceHash: review.sourceHash,
     }));
-    const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(operation.operationId) as
+    const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?").get(operation.operationId) as
       | { request_hash: string; result_json: string }
       | undefined;
     if (prior) {

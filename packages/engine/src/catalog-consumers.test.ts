@@ -17,7 +17,7 @@
  * - root active routing stays JSON authority: the catalog never decides which
  *   workflow is active.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -35,13 +35,26 @@ import { createFsStore, setArtifactStore } from "./store.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { findRegisteredWorkflow, validateStatus } from "./status.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { execFileSync } from "node:child_process";
+import * as nodeOs from "node:os";
+import { DatabaseSync } from "node:sqlite";
+import { beforeAll, spyOn } from "bun:test";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-consumers-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
 const WORKFLOW_ID = "wf-consumers";
 const PLAN_ID = "plan-consumers";
 
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 afterEach(() => {
@@ -49,22 +62,38 @@ afterEach(() => {
 });
 
 /**
- * A fresh workspace with a real `.mstar` harness marker. The store context
+ * A fresh workspace with a real `.mstar` harness marker inside a synthetic
+ * checkout whose origin names the collaboration repository. The store context
  * selects that harness directly, including when it owns a plans/ child.
  */
 function workspace(name: string): { root: string; harness: string; context: StoreContext } {
-  const root = mkdtempSync(join(ROOT, name));
+  const root = realpathSync(mkdtempSync(join(ROOT, name)));
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   setArtifactStore(createFsStore(harness));
   return { root, harness, context: { harnessDir: harness } };
 }
 
-/** One initialized (active) store with the harness artifact store pinned. */
+/** The private staged record flipped to active: this plan ships no public activator. */
+function activate(context: StoreContext): void {
+  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+/** One initialized (active) store on both lanes with the harness artifact store pinned. */
 async function withStore(name: string): Promise<{ root: string; harness: string; context: StoreContext }> {
   const fixture = workspace(name);
   const handle = await initializeStore(fixture.context);
   handle.close();
+  await initializeCollaborationStore(resolveCollaborationLocation(fixture.context));
+  activate(fixture.context);
   return fixture;
 }
 
@@ -249,7 +278,7 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
     const report = await readCatalogCompleteness(context);
     expect(report.ok).toBe(false);
     expect(report.gaps).toEqual([]);
-    expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
+    expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
   });
 });
 
@@ -312,13 +341,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
 
 describe("catalog consumers \u2014 scaffold and execution routing boundaries", () => {
   test("catalog discovery: scaffold registers the project directory, idempotently, without roadmap content", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-catalog-"));
-    const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: harness };
-    mkdirSync(harness, { recursive: true });
-    setArtifactStore(createFsStore(harness));
-    const handle = await initializeStore(context);
-    handle.close();
+    const { root, harness, context } = await withStore("scaffold-catalog-");
 
     expect(await scaffoldHarness(root)).toBe(harness);
     const created = await getCatalog(context, { kind: "project", id: "_default" });
@@ -331,13 +354,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   });
 
   test("catalog discovery: existing scaffold-location identity and content are not relocated", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-existing-catalog-"));
-    const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: harness };
-    mkdirSync(harness, { recursive: true });
-    setArtifactStore(createFsStore(harness));
-    const handle = await initializeStore(context);
-    handle.close();
+    const { root, harness, context } = await withStore("scaffold-existing-catalog-");
     const roadmapPath = join(harness, "projects", "_default", "roadmap.md");
     mkdirSync(join(harness, "projects", "_default"), { recursive: true });
     writeFileSync(roadmapPath, "# Existing authority\n");
@@ -361,14 +378,13 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   });
 
   test("catalog discovery: scaffold leaves catalog registration to the store lifecycle when no store exists", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-no-store-"));
-    setArtifactStore(createFsStore(join(root, ".mstar")));
+    const { root } = workspace("scaffold-no-store-");
     const harness = await scaffoldHarness(root);
     expect(existsSync(join(harness, "projects", "_default"))).toBe(true);
     expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(false);
     const report = await readCatalogCompleteness({ harnessDir: harness }, ["projects"]);
     expect(report.ok).toBe(false);
-    expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
+    expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
   });
 
   test("catalog discovery: the registration gate is answered from the ACTIVE store, not a file view", async () => {

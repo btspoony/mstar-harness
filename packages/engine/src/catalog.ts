@@ -36,7 +36,8 @@ import {
   resolveTrackedResultDir,
 } from "./path.js";
 import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { openStore, readStoreAuthority, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import { type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -733,11 +734,13 @@ export type ComposedStoreRevision = {
  * — one reader for both transports.
  */
 export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
-  const row = readStoreAuthority(db);
-  if (typeof row.authorityState !== "string" || typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
+  const row = db
+    .prepare("select authority_state, revision, catalog_revision from collaboration_meta where id = 1")
+    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
+  if (typeof row?.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new CatalogError("store.not-active", "collaboration_meta is missing; the catalog requires the repository's collaboration authority. Run mstar store init (fresh scope) or the reviewed collaboration apply/activate sequence, then retry.");
   }
-  return { storeRevision: row.revision, catalogRevision: row.catalogRevision, authorityState: row.authorityState };
+  return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
 }
 
 function assertCatalogActive(db: StoreDb): void {
@@ -759,10 +762,10 @@ function assertCatalogActive(db: StoreDb): void {
  */
 function bumpCatalogRevisions(db: StoreDb, composed?: ComposedStoreRevision): CatalogStoreVersions {
   if (composed !== undefined) {
-    db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    db.prepare("update collaboration_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
     return { ...readCatalogStoreVersionsOn(db), storeRevision: composed.committedStoreRevision };
   }
-  db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
+  db.prepare("update collaboration_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
   return readCatalogStoreVersionsOn(db);
 }
 
@@ -816,24 +819,7 @@ function receiptOf(row: EntityRow, storeRevision: number): CatalogReceipt {
 }
 
 async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  const handle = await openStore(context, "write");
-  try {
-    handle.db.exec("begin immediate");
-    try {
-      const result = fn(handle.db);
-      handle.db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed
-      }
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,7 +1185,7 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
   }
   const { where, params } = bindCatalogFilter(filter);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
     const storeRevision = readCatalogStoreVersionsOn(db).storeRevision;
@@ -1228,7 +1214,7 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
 export async function getCatalog(context: StoreContext, key: CatalogKey): Promise<CatalogDetail> {
   const target = requireKey("key", key);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const row = readEntity(handle.db, target.kind, target.id);
     if (!row) throw new CatalogError("catalog.not-found", `${target.kind} ${target.id} is not registered`);
