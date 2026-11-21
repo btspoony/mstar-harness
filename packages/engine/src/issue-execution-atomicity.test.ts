@@ -1023,6 +1023,65 @@ describe("collaboration composite residual", () => {
     expect(await acknowledgement()).not.toBeNull();
   });
 
+  test("a missing or malformed collaboration receipt discloses an unverifiable acknowledgement", async () => {
+    const fixture = await executionPlanFixture("composite-ack-unverifiable");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const request = {
+      operationId: "composite-ack-unverifiable-1",
+      session: fixture.session,
+      expected: plan.token,
+      planId: fixture.planId,
+      operation: { kind: "residual-add" as const, entries: [baseInput({ occurrenceKey: "ack-unverifiable" })] },
+    };
+    const accepted = await mutateExecutionPlan(context, request);
+    const before = await issueFacts(fixture.context);
+    const warningOf = (receipt: { recovery?: { warnings?: readonly { message: string }[] } }): string =>
+      (receipt.recovery?.warnings ?? []).map((warning) => warning.message).join(" | ");
+
+    // The execution receipt proves the effect committed; a MISSING collaboration
+    // row means the acknowledgement state cannot be verified at all.
+    await withCollaborationWrite(fixture.context, (handle) => {
+      handle.db
+        .prepare(
+          "delete from collaboration_operations where key_space = 'composite' and execution_store_id = ? " +
+            "and execution_epoch = ? and operation_id = ?",
+        )
+        .run(accepted.storeId, accepted.epoch, "composite-ack-unverifiable-1");
+    });
+    const missing = await mutateExecutionPlan(context, request);
+    expect(missing.replayed).toBe(true);
+    expect(warningOf(missing)).toContain("collaboration acknowledgement pending");
+    expect(warningOf(missing)).toContain("cannot be verified");
+    const missingAgain = await mutateExecutionPlan(context, request);
+    expect(warningOf(missingAgain)).toContain("collaboration acknowledgement pending");
+
+    // A MALFORMED receipt is the same class of disclosure, never a silent success.
+    await withCollaborationWrite(fixture.context, (handle) => {
+      handle.db
+        .prepare(
+          "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+            "result_json, collaboration_revision, catalog_revision, committed_at) values ('composite', ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run("composite-ack-unverifiable-1", accepted.storeId, accepted.epoch, "malformed-hash", "{not-json", 0, 0, new Date().toISOString());
+    });
+    const malformed = await mutateExecutionPlan(context, request);
+    expect(malformed.replayed).toBe(true);
+    expect(warningOf(malformed)).toContain("collaboration acknowledgement pending");
+    expect(warningOf(malformed)).toContain("cannot be verified");
+    const malformedAgain = await mutateExecutionPlan(context, request);
+    expect(warningOf(malformedAgain)).toContain("collaboration acknowledgement pending");
+
+    // The committed business result never moved while the state was unverifiable.
+    expect(await issueFacts(fixture.context)).toMatchObject({
+      issues: before.issues,
+      occurrences: before.occurrences,
+      provenance: before.provenance,
+      revision: before.revision,
+    });
+    expect((await listIssues(fixture.context, {})).total).toBe(1);
+  });
+
   test("a deterministic refusal is declined durably and cannot later apply", async () => {
     const fixture = await executionPlanFixture("composite-declined");
     const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };

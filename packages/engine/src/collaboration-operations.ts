@@ -749,10 +749,23 @@ export async function repairCompositeAcknowledgement(context: StoreContext, key:
             "and execution_store_id = ? and execution_epoch = ? and operation_id = ?",
         )
         .get(key.executionStoreId, key.executionEpoch, key.operationId) as { result_json?: unknown } | undefined;
-      if (row === undefined || typeof row.result_json !== "string") return null;
-      const parsed = parseJson(row.result_json, "collaboration_operations.result_json");
+      // An execution receipt proves the effect committed, so an absent or
+      // unreadable collaboration row means the acknowledgement state cannot be
+      // VERIFIED. That is disclosed on the result, never reported as success.
+      if (row === undefined) {
+        return "the committed collaboration effect row is missing, so its acknowledgement cannot be verified";
+      }
+      if (typeof row.result_json !== "string") {
+        return "the collaboration effect row carries no readable result, so its acknowledgement cannot be verified";
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.result_json);
+      } catch (error) {
+        return `the collaboration effect row is not readable JSON (${messageOf(error)}), so its acknowledgement cannot be verified`;
+      }
       if (!isPlainObject(parsed) || !isPlainObject(parsed.receipt)) {
-        return "the committed collaboration effect row carries no receipt";
+        return "the collaboration effect row carries no readable receipt, so its acknowledgement cannot be verified";
       }
       if (typeof parsed.acknowledgedAt === "string") return null;
       handle.db
