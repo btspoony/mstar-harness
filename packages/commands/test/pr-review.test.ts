@@ -1092,31 +1092,52 @@ describe("pr-review command family", () => {
   });
 
   test("thread-gate refuses unresolved threads and accepts a matching two-confirmation record", async () => {
-    const { cwd, context } = fixture();
+    const { cwd, context, calls } = fixture();
     const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
-    const threads = (nodes: unknown[]) => ({ exitCode: 0, signal: null, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } }), stderr: "" });
+    let pageHead = "abcdef0123456";
+    const nodes: Record<string, unknown>[] = [
+      { id: "T1", isResolved: false, isOutdated: false, path: "src/a.ts", line: 42, comments: { nodes: [{ author: { login: "bot" }, body: "should-fix" }] } },
+      { id: "T2", isResolved: true, isOutdated: false, path: "src/b.ts", line: 7, comments: { nodes: [{ author: { login: "human" }, body: "question" }] } },
+    ];
+    const threads = () => ({ exitCode: 0, signal: null, stdout: JSON.stringify({ data: { repository: { pullRequest: { headRefOid: pageHead, reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } }), stderr: "" });
     context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return threads([
-        { id: "T1", isResolved: false, isOutdated: false, path: "src/a.ts", line: 42, comments: { nodes: [{ author: { login: "bot" }, body: "should-fix" }] } },
-        { id: "T2", isResolved: true, isOutdated: false, path: "src/b.ts", line: 7, comments: { nodes: [{ author: { login: "human" }, body: "question" }] } },
-      ]);
+      return threads();
     };
     const gate = command("pr-review.thread-gate");
     const refused = await gate.execute({ pr: "42" }, context);
     expect(refused).toMatchObject({ status: "refused", code: "prreview.thread-gate.unresolved", exitCode: 1 });
     expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ head: "abcdef0123456", unresolved: [{ id: "T1", author: "bot", path: "src/a.ts", line: 42 }] });
+    // why: the scan must read the host that served the PR, not whatever host
+    // `gh api` would default to.
+    expect(calls[1]!.argv).toEqual(expect.arrayContaining(["graphql", "--hostname", "github.com"]));
 
+    const digest = (refused.status === "ok" ? {} : refused.details)?.digest as string;
+    expect(digest).toMatch(/^[0-9a-f]{16}$/);
     const confirm = path.join(cwd, "confirm.json");
-    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 2, threads: ["T1"] }));
+    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 2, threads: ["T1"], digest }));
     const allowed = await gate.execute({ pr: "42", confirm }, context);
     expect(allowed).toMatchObject({ status: "ok" });
-    expect(allowed.status === "ok" ? allowed.data : {}).toMatchObject({ mergeAllowed: true, head: "abcdef0123456", unresolved: [{ id: "T1" }] });
+    expect(allowed.status === "ok" ? allowed.data : {}).toMatchObject({ mergeAllowed: true, head: "abcdef0123456", digest, unresolved: [{ id: "T1" }] });
 
-    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 1, threads: ["T1"] }));
+    // why: an edited opening comment keeps the id, so only the digest can show
+    // that what the user confirmed is no longer what the thread says.
+    nodes[0] = { ...nodes[0], comments: { nodes: [{ author: { login: "bot" }, body: "now a behaviour bug" }] } };
+    const edited = await gate.execute({ pr: "42", confirm }, context);
+    expect(edited).toMatchObject({ status: "refused", code: "prreview.thread-gate.confirmation-invalid" });
+    expect(edited.status === "ok" ? "" : JSON.stringify(edited.details)).toContain("digest does not match");
+
+    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 1, threads: ["T1"], digest }));
     const once = await gate.execute({ pr: "42", confirm }, context);
     expect(once).toMatchObject({ status: "refused", code: "prreview.thread-gate.confirmation-invalid" });
     expect(once.status === "ok" ? "" : JSON.stringify(once.details)).toContain("2 are required");
+
+    // why: a head that moves while the threads are read makes the enumeration
+    // stale, so the scan refuses instead of answering for the old head.
+    pageHead = "9999999999999";
+    const moved = await gate.execute({ pr: "42" }, context);
+    expect(moved).toMatchObject({ status: "refused", code: "pr-review.thread-gate.head-moved" });
   });
 
 });

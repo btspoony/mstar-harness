@@ -529,6 +529,7 @@ export {
   computePrTally,
   decideThreadGate,
   parseReviewThreads,
+  threadGateDigest,
   pickReviewBranchName,
   planReviewPost,
   preflightChangeset,

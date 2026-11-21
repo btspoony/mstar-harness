@@ -23,6 +23,7 @@
  * per lint:ascii-literals — bun misdecodes raw UTF-8 in the CLI bundle).
  */
 import { lstatSync, readdirSync, type Dirent, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { resolveReviewRunDir } from "./path.js";
@@ -2540,12 +2541,14 @@ export interface ReviewThreadFacts {
 }
 
 /** The record a double confirmation leaves behind: the head it was given for,
- * how many confirmations it carries, and the exact unresolved thread ids the
- * user confirmed. */
+ * how many confirmations it carries, the exact unresolved thread ids the user
+ * confirmed, and the `digest` of what the user was shown — an edited opening
+ * comment or a new thread changes the digest and voids the record. */
 export interface ThreadGateConfirmation {
   head: string;
   confirmations: number;
   threads: readonly string[];
+  digest?: string;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -2554,17 +2557,32 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
     : null;
 
 /**
+ * The fingerprint of the unresolved set the user confirmed: thread id plus the
+ * opening comment. An edit to either changes it, so a stale confirmation
+ * cannot be replayed against a rewritten thread.
+ */
+export function threadGateDigest(threads: readonly ReviewThreadFacts[]): string {
+  const payload = threads.map((thread) => [thread.id, thread.body ?? ""]).sort(([a], [b]) => String(a).localeCompare(String(b)));
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
+}
+
+/**
  * Read one GraphQL page of `repository.pullRequest.reviewThreads` into thread
  * facts. A node without a string `id` is skipped — a gate must never invent an
- * identity it cannot name back to the user.
+ * identity it cannot name back to the user. `readable` is false when the
+ * response carries no thread connection at all, so an empty answer from a
+ * malformed payload can never read as "nothing to review".
  */
 export function parseReviewThreads(payload: unknown): {
   threads: ReviewThreadFacts[];
   hasNextPage: boolean;
   endCursor: string | null;
+  readable: boolean;
+  headRefOid: string | null;
 } {
   const repository = asRecord(asRecord(asRecord(payload)?.data)?.repository);
-  const connection = asRecord(asRecord(repository?.pullRequest)?.reviewThreads);
+  const pullRequest = asRecord(repository?.pullRequest);
+  const connection = asRecord(pullRequest?.reviewThreads);
   const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
   const threads = nodes.flatMap((node): ReviewThreadFacts[] => {
     const row = asRecord(node);
@@ -2587,6 +2605,8 @@ export function parseReviewThreads(payload: unknown): {
     threads,
     hasNextPage: pageInfo?.hasNextPage === true,
     endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
+    readable: connection !== null,
+    headRefOid: typeof pullRequest?.headRefOid === "string" ? pullRequest.headRefOid : null,
   };
 }
 
@@ -2628,6 +2648,11 @@ export function decideThreadGate(input: {
   const open = new Set(unresolved.map((thread) => thread.id));
   for (const id of open) if (!named.has(id)) problems.push(`thread ${id} is unresolved but not named in the confirmation`);
   for (const id of named) if (!open.has(id)) problems.push(`thread ${id} is named in the confirmation but is resolved or absent`);
+  // why: an unchanged id can hide an edited opening comment, so the record must
+  // carry the fingerprint of what the user was actually shown.
+  if (unresolved.length > 0 && input.confirmation.digest !== threadGateDigest(unresolved)) {
+    problems.push(`confirmation digest does not match the unresolved threads on ${input.head}; re-enumerate and confirm again`);
+  }
   return problems.length === 0
     ? { ok: true, head: input.head, unresolved }
     : { ok: false, code: "prreview.thread-gate.confirmation-invalid", head: input.head, unresolved, problems };
