@@ -62,7 +62,7 @@ A change that edits a line verifies the adjacent comment in the same edit: delet
 
 Labels: `simplify: <ceiling>` and its spelling `shortcut:`, and `temporary` written `temporary:`, `temporary —` or `temporary -` — never the bare adjective, and a bare quoted token (`` `simplify:` ``, `"simplify:"`) names the label without being a marker. A `simplify:` or `shortcut:` marker is bounded by an `upgrade: <when>` clause or a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), stated on the label line or anywhere in the same comment block; `temporary:` is bounded only by that reference — an upgrade clause says when the shortcut goes, not who removes a workaround. The tracking entry is the task's plan or issue.
 
-The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.
+The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — the defect is captured per `mstar-project-governance` § Issue capture, then delete it with the code it excused, or add the bound.
 
 The gate reads the code files under `packages/` and `scripts/`, selected by extension (`mstar lint <file>`); a marker elsewhere is unenforced, so check it in review.
 

@@ -7,7 +7,7 @@ input: "[path|subsystem] [dry-run]"
 
 # Comment Cleanup
 
-Triage a comment corpus into four outcomes: a tautology or a stale comment is deleted, an Excuse is corrected in the change or its defect captured per `mstar-project-governance` § Issue capture before the comment is deleted, a decision record moves to its ADR and leaves at most one contract pointer, and everything else must take a declared shape or go. No Decision Record is deleted before its ADR exists, and no Excuse is deleted before its defect is captured per that section or the code is corrected in the change; the per-PR ratchet is the shipped `--diff-base` gate, not a new comment-ban rule.
+Triage a comment corpus into four outcomes: a tautology or a stale comment is deleted; an Excuse is a confirmed defect, so it is captured per `mstar-project-governance` § Issue capture whether or not the fix lands here, then the code is corrected in this change when the correction fits — otherwise the fix stays with the captured issue — and the excusing comment is deleted; a decision record moves to its ADR and leaves at most one contract pointer, and everything else must take a declared shape or go. No Decision Record is deleted before its ADR exists, and no Excuse is deleted before its defect is captured per that section; a failed capture keeps it. The per-PR ratchet is the shipped `--diff-base` gate, not a new comment-ban rule.
 
 **Procedure SSOT** → `mstar-coding-behavior` → `references/comments.md` (failure modes, MUST/MUST NOT shapes, gate) + `references/comment-cleanup.md` (classification, batching, close-out).
 

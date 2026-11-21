@@ -272,8 +272,10 @@ describe("Codex regular agent installation", () => {
       fs.unlinkSync(missing);
       const refused = run(f.root, "project");
       expect(refused.failure).toContain(`git -C '${f.source}' pull --ff-only`);
-      const parser = Bun.spawnSync(["/bin/sh", "-c", `set -- '${f.source}' pull --ff-only; printf '%s' "$1"`], { stdout: "pipe", stderr: "pipe" });
-      expect(parser.stdout.toString()).toBe(f.source);
+      const emitted = refused.failure.match(/`(git -C .*? pull --ff-only)`/)?.[1];
+      expect(emitted).toBeDefined();
+      const parsed = Bun.spawnSync(["/bin/sh", "-c", `set -- ${emitted}; printf '%s' "$3"`], { stdout: "pipe", stderr: "pipe" });
+      expect(parsed.stdout.toString()).toBe(f.source);
       fs.writeFileSync(missing, "command");
       expect(run(f.root, "project").failure).toBeUndefined();
       expect(fs.realpathSync(path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md"))).toBe(missing);
