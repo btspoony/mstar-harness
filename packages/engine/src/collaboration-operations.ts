@@ -733,14 +733,27 @@ async function acknowledgeEffect(context: StoreContext, intent: CompositeIntent,
 }
 
 /**
+ * The outstanding-acknowledgement fact: what could not be confirmed, and whether
+ * a replay can repair it. A readable receipt whose acknowledgement write failed
+ * is repairable by replay; an absent or malformed receipt is NOT — replay cannot
+ * reconstruct the effect, so the operator must reconcile it instead.
+ */
+export type OutstandingAcknowledgement = Readonly<{ message: string; repairableByReplay: boolean }>;
+
+/**
  * Replay-time acknowledgement repair: reads the committed effect row by its local
  * key and records the acknowledgement if it is still missing. Called from the
  * replay path OUTSIDE any execution transaction, so no write transactions nest.
- * Returns the outstanding cause when the acknowledgement could NOT be confirmed
- * (including when the collaboration authority refuses the repair), so the caller
- * can disclose it on the committed result instead of reporting a silent success.
+ *
+ * Returns `null` only when the acknowledgement is confirmed. Every other outcome
+ * returns the fact the caller must disclose: a missing or unreadable effect row
+ * is NOT repairable by replay (`repairableByReplay: false`), while a readable row
+ * whose acknowledgement could not be written (including an authority refusal) is.
  */
-export async function repairCompositeAcknowledgement(context: StoreContext, key: CompositeKey): Promise<string | null> {
+export async function repairCompositeAcknowledgement(
+  context: StoreContext,
+  key: CompositeKey,
+): Promise<OutstandingAcknowledgement | null> {
   try {
     return await withCollaborationWrite(context, (handle) => {
       const row = handle.db
@@ -753,19 +766,22 @@ export async function repairCompositeAcknowledgement(context: StoreContext, key:
       // unreadable collaboration row means the acknowledgement state cannot be
       // VERIFIED. That is disclosed on the result, never reported as success.
       if (row === undefined) {
-        return "the committed collaboration effect row is missing, so its acknowledgement cannot be verified";
+        return { message: "the committed collaboration effect row is missing", repairableByReplay: false };
       }
       if (typeof row.result_json !== "string") {
-        return "the collaboration effect row carries no readable result, so its acknowledgement cannot be verified";
+        return { message: "the collaboration effect row carries no readable result", repairableByReplay: false };
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(row.result_json);
       } catch (error) {
-        return `the collaboration effect row is not readable JSON (${messageOf(error)}), so its acknowledgement cannot be verified`;
+        return {
+          message: `the collaboration effect row is not readable JSON (${messageOf(error)})`,
+          repairableByReplay: false,
+        };
       }
       if (!isPlainObject(parsed) || !isPlainObject(parsed.receipt)) {
-        return "the collaboration effect row carries no readable receipt, so its acknowledgement cannot be verified";
+        return { message: "the collaboration effect row carries no readable receipt", repairableByReplay: false };
       }
       if (typeof parsed.acknowledgedAt === "string") return null;
       handle.db
@@ -782,12 +798,14 @@ export async function repairCompositeAcknowledgement(context: StoreContext, key:
       return null;
     });
   } catch (error) {
-    return messageOf(error);
+    // The receipt could not be READ either, so whether a replay can repair the
+    // acknowledgement is unknown; the named cause is the authority's own refusal.
+    return { message: messageOf(error), repairableByReplay: true };
   }
 }
 
-/** Carry a pending acknowledgement as a warning instead of a false partial business outcome. */
-function withAcknowledgementFact<T>(result: T, cause: unknown): T {
+/** Carry an outstanding acknowledgement as a warning instead of a false partial business outcome. */
+function withAcknowledgementFact<T>(result: T, fact: OutstandingAcknowledgement): T {
   if (result === null || typeof result !== "object" || !("recovery" in result)) return result;
   const recovery = result.recovery;
   if (recovery === null || typeof recovery !== "object" || !("warnings" in recovery)) return result;
@@ -795,9 +813,12 @@ function withAcknowledgementFact<T>(result: T, cause: unknown): T {
   if (!Array.isArray(warnings)) return result;
   warnings.push({
     code: "collaboration.acknowledgement-pending",
-    message:
-      `collaboration acknowledgement pending: ${messageOf(cause)}. Both business effects are committed; replaying this ` +
-      `operation with the same id repairs the acknowledgement only.`,
+    message: fact.repairableByReplay
+      ? `collaboration acknowledgement pending: ${fact.message}. Both business effects are committed; replaying this ` +
+        `operation with the same id repairs the acknowledgement only.`
+      : `collaboration acknowledgement unverifiable: ${fact.message}. The committed effect must be preserved; reconcile the ` +
+        `reservation and effect under the admitted authority, or settle the operation through its supported recovery/decline ` +
+        `path. Replaying this operation cannot reconstruct the effect or its acknowledgement.`,
   });
   return result;
 }
@@ -807,8 +828,8 @@ function withAcknowledgementFact<T>(result: T, cause: unknown): T {
  * caller passes the cause `repairCompositeAcknowledgement` returned; `null` means
  * the acknowledgement is confirmed and the result is returned untouched.
  */
-export function noteOutstandingAcknowledgement<T>(result: T, cause: string | null): T {
-  return cause === null ? result : withAcknowledgementFact(result, cause);
+export function noteOutstandingAcknowledgement<T>(result: T, fact: OutstandingAcknowledgement | null): T {
+  return fact === null ? result : withAcknowledgementFact(result, fact);
 }
 
 /** A recorded result replays with its own envelope, marked as a replay. */
@@ -987,7 +1008,10 @@ export async function runCollaborationComposite<T>(
   }
   const acknowledged = await acknowledgeEffect(context, intent, effect.receipt);
   if (!acknowledged) {
-    return withAcknowledgementFact(result, "the collaboration effect row could not be marked acknowledged");
+    return withAcknowledgementFact(result, {
+      message: "the collaboration effect row could not be marked acknowledged",
+      repairableByReplay: true,
+    });
   }
   return result;
 }

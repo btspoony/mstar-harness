@@ -1051,10 +1051,13 @@ describe("collaboration composite residual", () => {
     });
     const missing = await mutateExecutionPlan(context, request);
     expect(missing.replayed).toBe(true);
-    expect(warningOf(missing)).toContain("collaboration acknowledgement pending");
-    expect(warningOf(missing)).toContain("cannot be verified");
+    expect(warningOf(missing)).toContain("collaboration acknowledgement unverifiable");
+    // Replay cannot reconstruct a missing effect: no same-id repair promise.
+    expect(warningOf(missing)).not.toContain("repairs the acknowledgement only");
+    expect(warningOf(missing)).toContain("cannot reconstruct the effect");
     const missingAgain = await mutateExecutionPlan(context, request);
-    expect(warningOf(missingAgain)).toContain("collaboration acknowledgement pending");
+    expect(warningOf(missingAgain)).toContain("collaboration acknowledgement unverifiable");
+    expect(warningOf(missingAgain)).not.toContain("repairs the acknowledgement only");
 
     // A MALFORMED receipt is the same class of disclosure, never a silent success.
     await withCollaborationWrite(fixture.context, (handle) => {
@@ -1067,10 +1070,12 @@ describe("collaboration composite residual", () => {
     });
     const malformed = await mutateExecutionPlan(context, request);
     expect(malformed.replayed).toBe(true);
-    expect(warningOf(malformed)).toContain("collaboration acknowledgement pending");
-    expect(warningOf(malformed)).toContain("cannot be verified");
+    expect(warningOf(malformed)).toContain("collaboration acknowledgement unverifiable");
+    expect(warningOf(malformed)).not.toContain("repairs the acknowledgement only");
+    expect(warningOf(malformed)).toContain("cannot reconstruct the effect");
     const malformedAgain = await mutateExecutionPlan(context, request);
-    expect(warningOf(malformedAgain)).toContain("collaboration acknowledgement pending");
+    expect(warningOf(malformedAgain)).toContain("collaboration acknowledgement unverifiable");
+    expect(warningOf(malformedAgain)).not.toContain("repairs the acknowledgement only");
 
     // The committed business result never moved while the state was unverifiable.
     expect(await issueFacts(fixture.context)).toMatchObject({
