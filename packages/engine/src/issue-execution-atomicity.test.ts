@@ -1667,3 +1667,216 @@ describe("collaboration findings observation \u2014 completion evidence", () => 
     expect((metadata.completion_findings as Record<string, unknown>).mode).toBe("zero-residual");
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * Catalog pin source in prepare — verified lineage, missing identity and
+ * receipt-first replay
+ * ------------------------------------------------------------------------ */
+
+/** The completion fixture's sealed execution input and its recorded pin bytes. */
+async function sealedPinFacts(context: StoreContext): Promise<{ inputHash: string; pinJson: string | null }> {
+  const handle = await openStore(context, "read");
+  try {
+    const row = handle.db
+      .prepare("select input_hash, catalog_pin_json from execution_inputs where workflow_id = ? and plan_id = ?")
+      .get(COMPLETION_WORKFLOW, COMPLETION_PLAN) as { input_hash?: unknown; catalog_pin_json?: unknown } | undefined;
+    if (row === undefined || typeof row.input_hash !== "string") {
+      throw new Error("fixture: the completion plan has no sealed execution input");
+    }
+    return {
+      inputHash: row.input_hash,
+      pinJson: typeof row.catalog_pin_json === "string" ? row.catalog_pin_json : null,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+/** Write a pin into the sealed input exactly as a prior prepare would have. */
+async function seedSealedPin(context: StoreContext, pin: CatalogExecutionPin): Promise<void> {
+  await inExecutionWrite(context, (db) => {
+    db.prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = ? and plan_id = ?").run(
+      JSON.stringify(pin),
+      COMPLETION_WORKFLOW,
+      COMPLETION_PLAN,
+    );
+  });
+}
+
+/** Record the verified cutover publication that proves this migration target. */
+async function recordActiveCutover(context: StoreContext, sourceStoreId: string): Promise<void> {
+  const authority = await readCollaborationAuthority(context);
+  await withCollaborationWrite(context, (handle) => {
+    handle.db
+      .prepare(
+        "insert into cutover_publications(manifest_id, phase, source_store_id, source_epoch, source_schema_version, " +
+          "source_revision, source_catalog_revision, manifest_digest, target_store_id, target_epoch, verified_at, activated_at) " +
+          "values (?, 'active', ?, 1, 21, 0, 0, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        `manifest-${sourceStoreId}`,
+        sourceStoreId,
+        "0".repeat(64),
+        authority.storeId,
+        authority.epoch,
+        COMPLETION_TS,
+        COMPLETION_TS,
+      );
+  });
+}
+
+/** The prepare config the fixture itself used (plus a different findings mode). */
+function preparePins(fixture: { worktreePath: string }) {
+  return {
+    worktreePath: fixture.worktreePath,
+    workingBranch: `feature/${COMPLETION_PLAN}`,
+    findingsCleanup: "zero-residual" as const,
+  };
+}
+
+describe("catalog pin \u2014 prepare source lineage and replay", () => {
+  test("catalog pin: a historical pin cannot rebind onto an unrelated active catalog", async () => {
+    const fixture = await completionFixture("pin-lineage-unproven");
+    const execution = await readExecutionState(fixture.context);
+    const sealed = await sealedPinFacts(fixture.context);
+    const historical: CatalogExecutionPin = {
+      store_id: execution.storeId,
+      entity_revision: 1,
+      document_hash: sealed.inputHash,
+      relation_hash: "0".repeat(64),
+    };
+    await seedSealedPin(fixture.context, historical);
+
+    const refusal = await refusalOf(async () =>
+      prepareExecutionPlan(fixture.planContext, {
+        operationId: "prepare-lineage-unproven",
+        session: fixture.session,
+        expected: await fixture.token(),
+        planId: fixture.planId,
+        operation: { kind: "prepare", config: preparePins(fixture) },
+      }),
+    );
+    expect(refusal.code).toBe("catalog.execution-pin-conflict");
+    expect(detailsOf(refusal).verified_source_stores).toEqual([]);
+    expect((await sealedPinFacts(fixture.context)).pinJson).toBe(JSON.stringify(historical));
+  });
+
+  test("catalog pin: a verified migration publication proves the historical source", async () => {
+    const fixture = await completionFixture("pin-lineage-verified");
+    const execution = await readExecutionState(fixture.context);
+    const authority = await readCollaborationAuthority(fixture.context);
+    const sealed = await sealedPinFacts(fixture.context);
+    const historical: CatalogExecutionPin = {
+      store_id: execution.storeId,
+      entity_revision: 1,
+      document_hash: sealed.inputHash,
+      relation_hash: "0".repeat(64),
+    };
+    await seedSealedPin(fixture.context, historical);
+    await registerCatalogEntity(
+      fixture.context,
+      {
+        kind: "plan",
+        id: fixture.planId,
+        title: `Plan ${fixture.planId}`,
+        rootKind: "plans",
+        relativePath: `plans/${fixture.planId}.md`,
+      },
+      { operationId: "register-lineage-verified", actor: ACTOR },
+    );
+    await recordActiveCutover(fixture.context, execution.storeId);
+
+    const prepared = await prepareExecutionPlan(fixture.planContext, {
+      operationId: "prepare-lineage-verified",
+      session: fixture.session,
+      expected: await fixture.token(),
+      planId: fixture.planId,
+      operation: { kind: "prepare", config: preparePins(fixture) },
+    });
+    expect(prepared.replayed).toBe(false);
+    const stored = JSON.parse((await sealedPinFacts(fixture.context)).pinJson!) as CatalogExecutionPin;
+    expect(stored.store_id).toBe(authority.storeId);
+    expect(stored.entity_revision).toBe(1);
+  });
+
+  test("catalog pin: an active catalog missing the pinned plan refuses instead of clearing the pin", async () => {
+    const fixture = await completionFixture("pin-missing-entity");
+    const authority = await readCollaborationAuthority(fixture.context);
+    const sealed = await sealedPinFacts(fixture.context);
+    const pinned: CatalogExecutionPin = {
+      store_id: authority.storeId,
+      entity_revision: 1,
+      document_hash: sealed.inputHash,
+      relation_hash: "0".repeat(64),
+    };
+    await seedSealedPin(fixture.context, pinned);
+
+    const refusal = await refusalOf(async () =>
+      prepareExecutionPlan(fixture.planContext, {
+        operationId: "prepare-missing-entity",
+        session: fixture.session,
+        expected: await fixture.token(),
+        planId: fixture.planId,
+        operation: { kind: "prepare", config: preparePins(fixture) },
+      }),
+    );
+    expect(refusal.code).toBe("catalog.execution-pin-conflict");
+    expect(detailsOf(refusal).catalog_store_id).toBe(authority.storeId);
+    expect((await sealedPinFacts(fixture.context)).pinJson).toBe(JSON.stringify(pinned));
+
+    // Only an explicit registration lets the authorized prepare re-select it.
+    await registerCatalogEntity(
+      fixture.context,
+      {
+        kind: "plan",
+        id: fixture.planId,
+        title: `Plan ${fixture.planId}`,
+        rootKind: "plans",
+        relativePath: `plans/${fixture.planId}.md`,
+      },
+      { operationId: "register-missing-entity", actor: ACTOR },
+    );
+    const prepared = await prepareExecutionPlan(fixture.planContext, {
+      operationId: "prepare-missing-entity-registered",
+      session: fixture.session,
+      expected: await fixture.token(),
+      planId: fixture.planId,
+      operation: { kind: "prepare", config: preparePins(fixture) },
+    });
+    expect(prepared.replayed).toBe(false);
+    const stored = JSON.parse((await sealedPinFacts(fixture.context)).pinJson!) as CatalogExecutionPin;
+    expect(stored.store_id).toBe(authority.storeId);
+    expect(stored.entity_revision).toBe(1);
+  });
+
+  test("catalog pin: an exact prepare retry replays after the collaboration store becomes unreadable", async () => {
+    const fixture = await completionFixture("prepare-replay-unavailable");
+    const expected = await fixture.token();
+    const config = {
+      worktreePath: fixture.worktreePath,
+      workingBranch: `feature/${COMPLETION_PLAN}`,
+      findingsCleanup: "allow-residual" as const,
+    };
+    const first = await prepareExecutionPlan(fixture.planContext, {
+      operationId: "prepare-replay",
+      session: fixture.session,
+      expected,
+      planId: fixture.planId,
+      operation: { kind: "prepare", config },
+    });
+    expect(first.replayed).toBe(false);
+
+    // The lane is now unreadable: a NEW attempt would refuse, but the exact
+    // retry must be served from the execution receipt before any catalog read.
+    writeFileSync(collaborationLocation(fixture.context).dbPath, "not a sqlite database\n", "utf8");
+    const retry = await prepareExecutionPlan(fixture.planContext, {
+      operationId: "prepare-replay",
+      session: fixture.session,
+      expected,
+      planId: fixture.planId,
+      operation: { kind: "prepare", config },
+    });
+    expect(retry.replayed).toBe(true);
+    expect({ ...retry, replayed: false }).toEqual(first);
+  });
+});
