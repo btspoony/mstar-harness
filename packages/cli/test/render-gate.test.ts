@@ -1080,18 +1080,22 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       },
       { actor: "project-manager", operationId: "render-gate-flow-capture" },
     );
-    const handle = await openStore(context, "write");
-    // `readIssueFlow`'s closure read filters `issue_transitions.to_disposition`; without
-    // the column that statement fails, which is the store's own failure path — not a
-    // synthetic flag, and not a dropped table (dropping one trips foreign keys).
-    handle.db.exec("alter table issue_transitions drop column to_disposition");
-    handle.close();
-    // Two dated buckets, so the trend has a line: the issues were captured in the same
-    // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
-    const dated = await openStore(context, "write");
-    dated.db.exec("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)");
-    dated.close();
-    // Drain the WAL side files so the server's read-only open cannot refuse.
+    // `readIssueFlow` reads the collaboration lane after the store split, so the
+    // closure read that must fail — it filters `issue_transitions.to_disposition` —
+    // is broken on the LANE's schema, not the execution store's. Without the column
+    // that statement fails, which is the store's own failure path — not a synthetic
+    // flag, and not a dropped table (dropping one trips foreign keys). The back-date
+    // runs FIRST: lane admission validates the schema, so once the column is gone no
+    // further lane open succeeds — which is the fail-closed behaviour under test.
+    await withCollaborationWrite(context, (handle) => {
+      handle.db.prepare("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)").run();
+    });
+    await withCollaborationWrite(context, (handle) => {
+      handle.db.prepare("alter table issue_transitions drop column to_disposition").run();
+    });
+    // No lane drain here: lane admission validates the schema, so after the drop the
+    // lane is deliberately unreadable — the dashboard's own read is the refusal under
+    // test. Only the execution store's WAL needs draining for the server's open.
     (await openStore(context, "read")).close();
 
     const broken = await startDashboard({ harnessDir: context.harnessDir, port: 0 });
