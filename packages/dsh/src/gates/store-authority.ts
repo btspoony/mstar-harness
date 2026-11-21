@@ -111,7 +111,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
  * `unavailable` = the authority could not be read and the write fails closed. */
 type AuthorityRoute =
   | { kind: 'legacy' }
-  | { kind: 'retired'; storeRevision: number }
+  | { kind: 'retired'; storeRevision: number | null }
   | { kind: 'unavailable'; code: string; message: string }
 
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
@@ -181,11 +181,11 @@ function storeDirectWriteRefusal(targetPath: string): ValidationResult {
   )
 }
 
-function registerRetiredRefusal(storeRevision: number): ValidationResult {
+function registerRetiredRefusal(storeRevision: number | null): ValidationResult {
   return authorityViolation(
     REGISTER_RETIRED_CODE,
     'project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision ' +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       'issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused',
   )
 }
