@@ -1638,7 +1638,14 @@ describe("collaboration creation catalog authority", () => {
 
   test("a failed required execution open leaves the collaboration lane usable", async () => {
     const { context } = await workspace("mixed-open-failure-");
-    writeFileSync(storeDbPath(context), "not a database");
+    // A damaged execution metadata record: the execution lane refuses with its own
+    // code while the collaboration lane's state stays intact and inspectable.
+    const damaged = new DatabaseSync(storeDbPath(context));
+    try {
+      damaged.prepare("delete from execution_meta where id = 1").run();
+    } finally {
+      damaged.close();
+    }
     const probe = {
       view: "mixed-open-probe",
       needsProjection: false,

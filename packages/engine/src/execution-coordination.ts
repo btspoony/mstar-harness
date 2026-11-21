@@ -1201,10 +1201,11 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
  * The collaboration authority a residual composite addresses, read through the
  * same admission every collaboration write uses. A missing, staged, unreadable
  * or differently-bound lane refuses HERE, before any execution reservation
- * exists, so the refusal never leaves a pending intent behind.
+ * exists, so the refusal never leaves a pending intent behind. The WRITE mode
+ * returns the same read-only handle; it only adds the binding preflight.
  */
 async function collaborationTarget(context: ExecutionContext): Promise<CollaborationStamp> {
-  const handle = await openCollaborationStore(context, "read");
+  const handle = await openCollaborationStore(context, "write");
   try {
     return {
       repoKey: handle.authority.repoKey,

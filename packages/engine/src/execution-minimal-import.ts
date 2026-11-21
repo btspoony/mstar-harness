@@ -14,7 +14,7 @@ import {
   type CollaborationEffectReceipt,
   type CompositeIntent,
 } from "./collaboration-operations.js";
-import { readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { openCollaborationStore, type CollaborationStamp } from "./collaboration-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { SettlementAttestationNeeded, initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
@@ -1203,8 +1203,19 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
 
 /** The frozen collaboration target stamp of this repository's ACTIVE lane. */
 async function collaborationTargetOf(context: StoreContext): Promise<CollaborationStamp> {
-  const authority = await readCollaborationAuthority(context);
-  return { repoKey: authority.repoKey, mode: authority.mode, storeId: authority.storeId, epoch: authority.epoch };
+  // WRITE admission: the binding must hold before this verb reserves an intent,
+  // so an unbound checkout refuses here instead of after the reservation.
+  const handle = await openCollaborationStore(context, "write");
+  try {
+    return {
+      repoKey: handle.authority.repoKey,
+      mode: handle.authority.mode,
+      storeId: handle.authority.storeId,
+      epoch: handle.authority.epoch,
+    };
+  } finally {
+    handle.close();
+  }
 }
 
 export async function upgradeStoreMinimal(input: {

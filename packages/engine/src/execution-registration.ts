@@ -53,7 +53,7 @@ import {
   type CompositeIntent,
   type CompositeKey,
 } from "./collaboration-operations.js";
-import { readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { openCollaborationStore, readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
 import {
   assertRegisteredCompassDocument,
   assertRegisteredPlanDocuments,
@@ -587,8 +587,19 @@ function registrationEffectFacts(facts: string): { catalogRevision: number; enti
 
 /** The frozen collaboration target stamp of this repository's ACTIVE lane. */
 async function collaborationStamp(context: ExecutionContext): Promise<CollaborationStamp> {
-  const authority = await readCollaborationAuthority(context);
-  return { repoKey: authority.repoKey, mode: authority.mode, storeId: authority.storeId, epoch: authority.epoch };
+  // WRITE admission: the binding must hold before this verb reserves an intent,
+  // so an unbound checkout refuses here instead of after the reservation.
+  const handle = await openCollaborationStore(context, "write");
+  try {
+    return {
+      repoKey: handle.authority.repoKey,
+      mode: handle.authority.mode,
+      storeId: handle.authority.storeId,
+      epoch: handle.authority.epoch,
+    };
+  } finally {
+    handle.close();
+  }
 }
 
 /**

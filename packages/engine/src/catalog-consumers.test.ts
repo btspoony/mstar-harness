@@ -477,16 +477,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     const replacement = workspace("clone-replacement", "shared-plan-repo");
     expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
     expect(existsSync(join(replacement.harness, "plans", "plan-clone.md"))).toBe(false);
-    // A replacement clone reads unbound; its first write requires adoption.
-    const replacementAuthority = await readCollaborationAuthority(replacement.context);
-    writeCollaborationBinding(replacement.context, {
-      repoKey: replacementAuthority.repoKey,
-      mode: replacementAuthority.mode,
-      storeId: replacementAuthority.storeId,
-      epoch: replacementAuthority.epoch,
-      binding: "active",
-    });
-
+    // A replacement clone READS unbound: the reads are admitted and record nothing.
     const read = await getCatalog(replacement.context, { kind: "plan", id: "plan-clone" });
     expect(read.entity).toMatchObject({ rootKind: "plans", relativePath: "plan-clone.md", present: false });
     // The logical reference resolves against THIS checkout; the registered
@@ -498,6 +489,26 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     const report = await readCatalogCompleteness(replacement.context, ["plans"]);
     expect(report).toMatchObject({ ok: true, gaps: [] });
     expect(report.registered).toBe(1);
+
+    // Reading did not bind the clone; its first write still needs the binding.
+    expect(existsSync(join(replacement.harness, "collaboration-binding.json"))).toBe(false);
+    await expect(
+      registerCatalogEntity(
+        replacement.context,
+        { kind: "plan", id: "plan-clone", title: "Registered Plan", rootKind: "plans", relativePath: "plan-clone.md" },
+        op("clone-unbound-write"),
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // This lane records no publication lineage, so the supported adoption verb
+    // cannot bind it; the fixture records the same binding that activation writes.
+    const replacementAuthority = await readCollaborationAuthority(replacement.context);
+    writeCollaborationBinding(replacement.context, {
+      repoKey: replacementAuthority.repoKey,
+      mode: replacementAuthority.mode,
+      storeId: replacementAuthority.storeId,
+      epoch: replacementAuthority.epoch,
+      binding: "active",
+    });
 
     // Registration keeps the identity: identical replay is a no-op, a new path
     // for the same id is a duplicate refusal, and a different id at that
