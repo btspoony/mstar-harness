@@ -677,8 +677,18 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
   );
 }
 
-/** Mark the execution reservation declined AFTER its collaboration decline is durable. */
-async function markDeclined(context: StoreContext, intent: CompositeIntent, cause: DeclineCause): Promise<void> {
+/**
+ * Mark the execution reservation declined AFTER its collaboration decline is
+ * durable. Returns the settlement failure instead of swallowing it: the decline
+ * is committed, but a reservation that stayed `prepared` blocks the next plan or
+ * workflow mutation and every verified backup, so the caller must report a
+ * PARTIAL — never the terminal business refusal — until this transaction lands.
+ */
+async function markDeclined(
+  context: StoreContext,
+  intent: CompositeIntent,
+  cause: DeclineCause,
+): Promise<{ settled: true } | { settled: false; error: unknown }> {
   try {
     await withExecutionTransaction(context, (tx) => {
       assertIntentGeneration(tx, intent);
@@ -700,10 +710,37 @@ async function markDeclined(context: StoreContext, intent: CompositeIntent, caus
           intent.key.operationId,
         );
     });
-  } catch {
-    // The collaboration decline is durable and is replayed by the next attempt,
-    // which records this phase then; nothing is applied either way.
+    return { settled: true };
+  } catch (error) {
+    return { settled: false, error };
   }
+}
+
+/**
+ * The partial receipt of a durable decline whose execution settlement did not
+ * confirm: the business cause and the settlement failure are both preserved, and
+ * the same-identity replay is named. The reservation may still be live, so the
+ * terminal refusal would be a false success report.
+ */
+function unsettledDeclineRefusal(intent: CompositeIntent, cause: DeclineCause, settlement: unknown): ExecutionError {
+  return new ExecutionError(
+    "collaboration.operation-partial",
+    `The business refusal ${JSON.stringify(cause.code)} is recorded durably for operation ` +
+      `${JSON.stringify(intent.key.operationId)}, but its execution-side settlement did not confirm ` +
+      `(${messageOf(settlement)}): the reservation may still be prepared and is never reported as a terminal refusal. ` +
+      `Reissue the SAME verb with the SAME --operation id and payload; the recorded decline replays and only the ` +
+      `reservation settlement is committed.`,
+    {
+      operation_id: intent.key.operationId,
+      kind: intent.kind,
+      phase: "collaboration-confirmed",
+      business_cause: { code: cause.code, message: cause.message, details: cause.details },
+      settlement_error: messageOf(settlement),
+      recovery:
+        "Reissue the same verb with the same --operation id and payload (the recorded decline replays and only the " +
+        "reservation settlement is committed).",
+    },
+  );
 }
 
 /** Repair a missing acknowledgement on an already committed effect row. Metadata only. */

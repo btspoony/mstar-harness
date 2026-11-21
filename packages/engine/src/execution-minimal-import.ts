@@ -967,6 +967,24 @@ function admitExecutionImport(
 }
 
 /**
+ * Disclose and repair the composite acknowledgement of an import that already
+ * committed. The effect row is metadata: a replay repairs ONLY the acknowledgement
+ * and never re-applies a business effect, so a lost acknowledgement can never
+ * leave a pair permanently unsettled while every retry reports clean success.
+ */
+async function repairImportAcknowledgement<T extends MinimalImportResult>(
+  context: StoreContext,
+  key: CompositeKey,
+  result: T,
+): Promise<T> {
+  const fact = await repairCompositeAcknowledgement(context, key);
+  if (fact === null) return result;
+  // A stored receipt predates this field, so the carrier is created here: the
+  // disclosure must not depend on how the earlier run happened to serialize.
+  return noteOutstandingAcknowledgement({ ...result, warnings: [...(result.warnings ?? [])] }, fact);
+}
+
+/**
  * The execution half of one admitted import, in ONE execution transaction:
  * write the imported workflows, activate the execution authority for the
  * reviewed legacy bytes and record the operation receipt. The collaboration

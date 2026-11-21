@@ -391,6 +391,11 @@ function ledgerPathOf(fixture: Fixture, activation: ActivationReceipt): string {
   return join(fixture.harness, "archived", "store-migration", activation.applyManifestHash, "ledger.json");
 }
 
+/** The absolute path of one image of a published pair: its locator is a sibling basename. */
+function pairImage(receipt: RepositoryBackupReceipt, which: "execution" | "collaboration"): string {
+  return join(dirname(receipt.manifestPath), which === "execution" ? receipt.execution.backupPath : receipt.collaboration.path);
+}
+
 /**
  * Rewrite the recorded body of one lane phase row, for tamper fixtures. The
  * row's own operation id is the identity; its recorded JSON is what the verbs

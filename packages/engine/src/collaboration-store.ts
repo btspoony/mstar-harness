@@ -1191,7 +1191,17 @@ export async function openCollaborationStore(
       throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
     }
   }
-  return openAdmission(location, "active", expected, busyTimeoutMs());
+  const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
+  try {
+    // The control checkout's own binding is proved before any handle escapes: an
+    // unfenced legacy owner or a retargeted/ foreign checkout never reads this
+    // repository's lane.
+    await assertControlBinding(context, location, handle.authority);
+  } catch (error) {
+    handle.close();
+    throw error;
+  }
+  return handle;
 }
 
 /** The active authority record alone; no handle escapes and nothing is created. */
@@ -1306,7 +1316,9 @@ export async function withCollaborationWrite<T>(
   // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    admit(probe, location, expected, "active");
+    const admitted = admit(probe, location, expected, "active");
+    // The binding is proved on the same refusing read, before a writer exists.
+    await assertControlBinding(context, location, admitted);
   } finally {
     probe.close();
   }

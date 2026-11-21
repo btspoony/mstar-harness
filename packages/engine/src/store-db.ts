@@ -2320,6 +2320,81 @@ export type CollaborationFence = Readonly<{
 }>;
 
 /**
+ * The store's collaboration-owned tables. A store that still holds rows in any
+ * of them owns its issue/catalog authority the pre-cutover way, and a file-era
+ * import or fresh bootstrap would mint a SECOND authority beside it. The fence
+ * drops exactly these tables, so a fenced store has nothing to refuse by row
+ * count — its own refusal comes first, and names the retained pre-fence image.
+ *
+ * `issue_counter` is the allocator: a pristine store always carries its
+ * singleton row, so only a MOVED allocator counts as held authority.
+ *
+ * This lives here — the one module every store layer imports — so the bootstrap,
+ * the file-era import and the runtime binding check share ONE rule without an
+ * import cycle.
+ */
+const COLLABORATION_HELD_TABLES: readonly string[] = [
+  "issues",
+  "occurrences",
+  "relations",
+  "provenance",
+  "issue_transitions",
+  "issue_project_moves",
+  "issue_sync_state",
+  "sync_cursor",
+  "sync_runs",
+  "project_bindings",
+  "project_roadmaps",
+  "project_milestones",
+  "catalog_entities",
+  "catalog_links",
+  "catalog_operations",
+];
+
+/**
+ * The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
+ * except the catalog registration journal. A journal row is pending execution
+ * state a supported verb reconciles; by itself it never makes a checkout the
+ * issue/catalog authority, so a runtime lane read must not be refused for it.
+ */
+const COLLABORATION_AUTHORITY_TABLES: readonly string[] = COLLABORATION_HELD_TABLES.filter(
+  (table) => table !== "catalog_operations",
+);
+
+/** Every collaboration AUTHORITY table this store still holds rows for, in listing order. */
+export function heldCollaborationTables(db: StoreDb): string[] {
+  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES);
+}
+
+/** Every collaboration-owned table (authority AND journal) this store still holds rows for. */
+export function heldCollaborationSourceTables(db: StoreDb): string[] {
+  return heldTablesAmong(db, COLLABORATION_HELD_TABLES);
+}
+
+function heldTablesAmong(db: StoreDb, tablesWanted: readonly string[]): string[] {
+  const tables = tableNamesOn(db);
+  const held: string[] = [];
+  for (const table of tablesWanted) {
+    if (!tables.has(table)) continue;
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) held.push(table);
+  }
+  if (tables.has("issue_counter")) {
+    const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
+    if (
+      allocator !== null &&
+      typeof allocator === "object" &&
+      "next_value" in allocator &&
+      typeof allocator.next_value === "number" &&
+      allocator.next_value > 1
+    ) {
+      held.push("issue_counter");
+    }
+  }
+  return held;
+}
+
+/**
  * Read the fence ledger of an existing store: `null` when the file never held a
  * cutover (including a store migrated only to an earlier schema, which has no
  * ledger table at all), the one recorded fence otherwise. A ledger row that

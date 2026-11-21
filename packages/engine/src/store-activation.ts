@@ -906,6 +906,12 @@ export type CollaborationBackupImage = Readonly<{
  * The verified pair one `store backup` publishes. A single image is never
  * called a repository backup: both domains are copied, verified against their
  * own bytes, and only then named together by this receipt and its manifest.
+ *
+ * `execution.backupPath` and `collaboration.path` are SAFE SIBLING BASENAMES:
+ * the two images are published beside the manifest, and a restore resolves them
+ * against the manifest location the operator supplied. `manifestPath` records
+ * where the manifest was published (provenance), never the locator a restore
+ * depends on — a moved, intact pair therefore restores from its new directory.
  */
 export type RepositoryBackupReceipt = Readonly<{
   version: 1;
@@ -1306,23 +1312,35 @@ export async function backupRepositoryStores(
     throw incompletePair("A repository backup needs the absolute manifest path it publishes (--out <abs-manifest>).");
   }
   const manifestPath = resolve(options.out);
+  const executionImagePath = `${manifestPath}.execution.db`;
+  const collaborationImagePath = `${manifestPath}.collaboration.db`;
+  const location = resolveCollaborationLocation(context);
+
   if (existsSync(manifestPath)) {
     throw incompletePair(
       `A repository backup manifest already exists at ${manifestPath}; pass --out <path> naming a new destination instead of ` +
         `overwriting a recorded recovery point.`,
     );
   }
-  const executionImagePath = `${manifestPath}.execution.db`;
-  const collaborationImagePath = `${manifestPath}.collaboration.db`;
-  for (const imagePath of [executionImagePath, collaborationImagePath]) {
-    if (existsSync(imagePath)) {
+  // The manifest is the pair's ONLY discoverable commit. Two image names with no
+  // manifest are an interrupted attempt (or a competitor still copying), never a
+  // published backup: resume it by verifying those exact bytes, refuse a half
+  // pair by name, and never guess.
+  if (existsSync(executionImagePath) || existsSync(collaborationImagePath)) {
+    if (!existsSync(executionImagePath) || !existsSync(collaborationImagePath)) {
+      const missing = existsSync(executionImagePath) ? collaborationImagePath : executionImagePath;
       throw incompletePair(
-        `A file already exists at ${imagePath}; a pair is published create-only and never overwrites a recorded recovery ` +
-          `point. Pass --out <path> naming a new destination.`,
+        `An interrupted pair left an image at ${existsSync(executionImagePath) ? executionImagePath : collaborationImagePath} ` +
+          `without ${missing} and without a manifest. Nothing is published by that half attempt; remove the orphan image or ` +
+          `pass --out <path> naming a new destination.`,
       );
     }
+    return resumeInterruptedPair(context, location, {
+      manifestPath,
+      executionImagePath,
+      collaborationImagePath,
+    });
   }
-  const location = resolveCollaborationLocation(context);
 
   // The quiescent causal boundary BEFORE either copy: no prepared composite in
   // this execution root, and no unacknowledged or mid-activation state in the
@@ -1432,7 +1450,7 @@ export async function backupRepositoryStores(
   }
 
   const collaborationImage: CollaborationBackupImage = {
-    path: collaborationImagePath,
+    path: basename(collaborationImagePath),
     authority: collaborationInspection!.authority,
     takenAt: new Date().toISOString(),
     counts: collaborationInspection!.counts,
@@ -1440,20 +1458,133 @@ export async function backupRepositoryStores(
   const receipt: RepositoryBackupReceipt = {
     version: 1,
     manifestPath,
-    execution: { ...execution!, backupPath: executionImagePath },
+    execution: { ...execution!, backupPath: basename(executionImagePath) },
     collaboration: collaborationImage,
   };
+  publishPairManifest(manifestPath, receipt);
+  return receipt;
+}
+
+/**
+ * Verify an interrupted attempt's two image names and publish the manifest for
+ * them. The images are the only evidence, so they are proved exactly like a
+ * fresh pair: each re-inspected, both at one generation, the lane quiescent and
+ * the execution image free of prepared reservations. A competitor still copying
+ * therefore loses the create-only manifest link to whoever verifies first, and
+ * nothing is deleted.
+ */
+async function resumeInterruptedPair(
+  context: StoreContext,
+  location: CollaborationLocation,
+  paths: { manifestPath: string; executionImagePath: string; collaborationImagePath: string },
+): Promise<RepositoryBackupReceipt> {
+  const executionCopy = await inspectBackupCopy(paths.executionImagePath).catch((error: unknown) => {
+    throw incompletePair(
+      `The interrupted pair's execution image ${paths.executionImagePath} cannot be verified (${messageOf(error)}); nothing ` +
+        `was published.`,
+    );
+  });
+  const collaborationInspection = await inspectCollaborationImage(paths.collaborationImagePath, location);
+  assertLaneQuiescent(collaborationInspection.operations, `at ${paths.collaborationImagePath}`);
+  assertNoPreparedCompositeOnImage(paths.executionImagePath);
+  assertCausalBoundary(
+    {
+      version: 1,
+      manifestPath: paths.manifestPath,
+      execution: { ...executionCopy, receiptVersion: BACKUP_RECEIPT_VERSION, backupPath: basename(paths.executionImagePath), walPending: false, bytes: statSync(paths.executionImagePath).size, takenAt: new Date().toISOString() },
+      collaboration: { path: basename(paths.collaborationImagePath), authority: collaborationInspection.authority, takenAt: new Date().toISOString(), counts: collaborationInspection.counts },
+    },
+    collaborationInspection,
+    executionCopy,
+  );
+  const receipt: RepositoryBackupReceipt = {
+    version: 1,
+    manifestPath: paths.manifestPath,
+    execution: {
+      receiptVersion: BACKUP_RECEIPT_VERSION,
+      backupPath: basename(paths.executionImagePath),
+      ...executionCopy,
+      walPending: false,
+      bytes: statSync(paths.executionImagePath).size,
+      takenAt: new Date().toISOString(),
+    },
+    collaboration: {
+      path: basename(paths.collaborationImagePath),
+      authority: collaborationInspection.authority,
+      takenAt: new Date().toISOString(),
+      counts: collaborationInspection.counts,
+    },
+  };
+  publishPairManifest(paths.manifestPath, receipt);
+  return receipt;
+}
+
+/**
+ * Publish the pair's manifest — the ONE discoverable commit — create-only. Once
+ * the link lands the pair exists: a directory-sync failure is disclosed as
+ * uncertain durability and BOTH the manifest and its images are retained, never
+ * deleted behind the operator's back.
+ */
+function publishPairManifest(manifestPath: string, receipt: RepositoryBackupReceipt): void {
   try {
     publishTextCreateOnly(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch (error) {
-    // Remove ONLY the two names this attempt created; a competitor's own images
-    // are never touched.
-    for (const path of linked) rmSync(path, { force: true });
+    if (existsSync(manifestPath)) {
+      throw incompletePair(
+        `The pair was published at ${manifestPath} but its directory entry could not be synchronized ` +
+          `(${messageOf(error)}); the manifest and both images are retained with UNCERTAIN durability. Verify the pair from a ` +
+          `second process before relying on it for recovery.`,
+      );
+    }
     throw error instanceof StoreError
       ? error
       : incompletePair(`The manifest could not be published at ${manifestPath} (${messageOf(error)}).`);
   }
-  return receipt;
+}
+
+/**
+ * Allocate the recovery generation of one restore. The canonical target is
+ * ABSENT by precondition, so nothing inside it can remember an earlier recovery:
+ * a small lineage ledger beside it does, and its epoch only ever advances. Two
+ * restores of the same point therefore never issue the same authority stamp, and
+ * the receipt records the generation and the epoch it superseded.
+ */
+function allocateRecoveryGeneration(
+  storeDir: string,
+  storeId: string,
+  backupEpoch: number,
+): { epoch: number; generation: number; previousEpoch: number | null } {
+  const path = join(storeDir, "restore-lineage.json");
+  let generation = 1;
+  let previousEpoch: number | null = null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    if (typeof parsed.generation === "number" && Number.isSafeInteger(parsed.generation)) generation = parsed.generation + 1;
+    const prior = parsed.epochByStore;
+    if (prior !== null && typeof prior === "object" && !Array.isArray(prior)) {
+      const last = (prior as Record<string, unknown>)[storeId];
+      if (typeof last === "number" && Number.isSafeInteger(last)) previousEpoch = last;
+    }
+  } catch {
+    // Absent or unreadable lineage is a first recovery: it can only make the
+    // allocated epoch HIGHER than the image's, never reuse one.
+  }
+  const epoch = Math.max(backupEpoch, previousEpoch ?? 0) + 1;
+  const body = {
+    version: 1,
+    generation,
+    epochByStore: { ...(previousEpoch === null ? {} : { [storeId]: previousEpoch }), [storeId]: epoch },
+    allocatedAt: nowRfc3339(),
+  };
+  mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+  const tmp = join(storeDir, `.restore-lineage.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  return { epoch, generation, previousEpoch };
 }
 
 /** One `VACUUM INTO` copy of the collaboration lane (the one-image primitive). */
@@ -1508,34 +1639,46 @@ function publishTextCreateOnly(path: string, text: string): void {
 export async function restoreCollaborationBackup(
   context: StoreContext,
   receipt: RepositoryBackupReceipt,
-  options: { operator: string; attestation: ActivationAttestation },
+  options: { operator: string; attestation: ActivationAttestation; manifestPath?: string },
 ): Promise<CollaborationAuthority> {
   const supplied = requireRepositoryBackupReceipt(receipt);
   const location = resolveCollaborationLocation(context);
+  // The canonical target's own admission comes FIRST: a redirected storage
+  // ancestor or a symlinked target is refused before any staging directory, byte
+  // copy or link exists on that path.
+  assertCollaborationTargetAdmission(location);
+
+  // The pair is addressed by the manifest the OPERATOR supplied: its directory is
+  // where the two sibling images live, so an intact pair moved together restores
+  // from its new location without editing the manifest.
+  const manifestFile = resolve(options?.manifestPath ?? supplied.manifestPath);
+  const pairDir = dirname(manifestFile);
+  const executionImagePath = join(pairDir, supplied.execution.backupPath);
+  const collaborationImagePath = join(pairDir, supplied.collaboration.path);
 
   // The manifest is the published authority for the pair: the supplied receipt
   // must BE it, so a caller cannot recombine two verified images by hand.
   let manifestText: string;
   try {
-    manifestText = readFileSync(supplied.manifestPath, "utf8");
+    manifestText = readFileSync(manifestFile, "utf8");
   } catch (error) {
-    throw incompletePair(`The backup manifest ${supplied.manifestPath} cannot be read (${messageOf(error)}).`);
+    throw incompletePair(`The backup manifest ${manifestFile} cannot be read (${messageOf(error)}).`);
   }
   let manifest: unknown;
   try {
     manifest = JSON.parse(manifestText) as unknown;
   } catch {
-    throw incompletePair(`The backup manifest ${supplied.manifestPath} is not readable JSON.`);
+    throw incompletePair(`The backup manifest ${manifestFile} is not readable JSON.`);
   }
   if (canonicalJsonOf(manifest) !== canonicalJsonOf(supplied)) {
     throw incompletePair(
-      `The supplied receipt is not the manifest published at ${supplied.manifestPath}; supply the verified pair's own ` +
+      `The supplied receipt is not the manifest published at ${manifestFile}; supply the verified pair's own ` +
         `manifest rather than images assembled by hand.`,
     );
   }
 
-  const executionCopy = await inspectBackupCopy(supplied.execution.backupPath).catch((error: unknown) => {
-    throw incompletePair(`The execution image ${supplied.execution.backupPath} cannot be verified (${messageOf(error)}).`);
+  const executionCopy = await inspectBackupCopy(executionImagePath).catch((error: unknown) => {
+    throw incompletePair(`The execution image ${executionImagePath} cannot be verified (${messageOf(error)}).`);
   });
   if (
     executionCopy.storeId !== supplied.execution.storeId ||
@@ -1547,10 +1690,10 @@ export async function restoreCollaborationBackup(
     !sameCounts(executionCopy.counts, supplied.execution.counts)
   ) {
     throw incompletePair(
-      `The execution image at ${supplied.execution.backupPath} does not describe the generation the manifest records.`,
+      `The execution image at ${executionImagePath} does not describe the generation the manifest records.`,
     );
   }
-  const collaborationInspection = await inspectCollaborationImage(supplied.collaboration.path, location);
+  const collaborationInspection = await inspectCollaborationImage(collaborationImagePath, location);
   const recorded = supplied.collaboration.authority;
   if (
     collaborationInspection.authority.storeId !== recorded.storeId ||
@@ -1561,9 +1704,13 @@ export async function restoreCollaborationBackup(
     canonicalJsonOf(collaborationInspection.counts) !== canonicalJsonOf(supplied.collaboration.counts)
   ) {
     throw incompletePair(
-      `The collaboration image at ${supplied.collaboration.path} does not describe the generation the manifest records.`,
+      `The collaboration image at ${collaborationImagePath} does not describe the generation the manifest records.`,
     );
   }
+  // The pair must still prove the SAME settled boundary the producer required:
+  // no prepared reservation in the paired execution image, and no outstanding
+  // effect in the lane (acknowledged or declined history of any root is settled).
+  assertNoPreparedCompositeOnImage(executionImagePath);
   assertCausalBoundary(supplied, collaborationInspection, executionCopy);
 
   const attestation = validateActivationAttestation(options?.attestation);
@@ -1603,15 +1750,32 @@ export async function restoreCollaborationBackup(
   }
   let staged = false;
   try {
-    copyFileSync(supplied.collaboration.path, stagingPath);
+    copyFileSync(collaborationImagePath, stagingPath);
     chmodSync(stagingPath, 0o600);
     const stagedInspection = await inspectCollaborationImage(stagingPath, location);
     if (canonicalJsonOf(stagedInspection.counts) !== canonicalJsonOf(collaborationInspection.counts)) {
-      throw incompletePair(`The staged copy of ${supplied.collaboration.path} does not hold the verified rows.`);
+      throw incompletePair(`The staged copy of ${collaborationImagePath} does not hold the verified rows.`);
+    }
+    // The runtime's OWN admission over the private staged bytes (migration and
+    // checksum, closed inventory, metadata) — the same proof the live read will
+    // apply, so an image this build would refuse never reaches the canonical name.
+    const admitted = await admitCollaborationImage(location, stagingPath).catch((error: unknown) => {
+      throw error instanceof StoreError
+        ? error
+        : incompletePair(`The staged copy of ${collaborationImagePath} is not an admissible collaboration store (${messageOf(error)}).`);
+    });
+    if (admitted.storeId !== recorded.storeId || admitted.epoch !== recorded.epoch || admitted.state !== recorded.state) {
+      throw incompletePair(
+        `The staged copy of ${collaborationImagePath} is not the generation the manifest records (identity, epoch or state changed).`,
+      );
     }
     const imageSha = sha256Bytes(readFileSync(stagingPath));
     const restoredAt = nowRfc3339();
-    const nextEpoch = recorded.epoch + 1;
+    // A recovery generation is NEVER reused: the epoch comes from a lineage
+    // ledger that only ever advances, so a second restore of the same point
+    // cannot re-issue a stamp an earlier recovery already handed out.
+    const lineage = allocateRecoveryGeneration(dir, recorded.storeId, recorded.epoch);
+    nextEpoch = lineage.epoch;
     const db = await connect(stagingPath, "write", busyTimeoutMs(), { keepJournalMode: true });
     try {
       db.exec("begin immediate");
@@ -1635,13 +1799,14 @@ export async function restoreCollaborationBackup(
           `restore:${nextEpoch}:${imageSha}`,
           imageSha,
           JSON.stringify({
-            version: 1,
-            imagePath: supplied.collaboration.path,
+            version: 2,
+            imagePath: basename(collaborationImagePath),
             imageSha256: imageSha,
             restoredFrom: { storeId: recorded.storeId, epoch: recorded.epoch, revision: recorded.revision },
+            lineage: { generation: lineage.generation, previousEpoch: lineage.previousEpoch },
             authority: { storeId: recorded.storeId, epoch: nextEpoch, repoKey: location.repoKey, mode: location.mode },
             operator,
-            executionImage: { path: supplied.execution.backupPath, storeId: supplied.execution.storeId, epoch: supplied.execution.epoch },
+            executionImage: { path: basename(executionImagePath), storeId: supplied.execution.storeId, epoch: supplied.execution.epoch },
             restoredAt,
           }),
           restoredAt,
@@ -1689,7 +1854,12 @@ export async function restoreCollaborationBackup(
   return readCollaborationAuthority(context);
 }
 
-/** The receipt shape a restore accepts: the pair's own manifest fields, nothing inferred. */
+/**
+ * The receipt shape a restore accepts: the pair's own manifest fields, nothing
+ * inferred. The two image fields are SAFE SIBLING BASENAMES — a restore resolves
+ * them against the manifest location the operator supplied — so an absolute path,
+ * a separator, `.` or `..` is a hand-assembled manifest, refused by name.
+ */
 function requireRepositoryBackupReceipt(value: unknown): RepositoryBackupReceipt {
   const bad = (detail: string): never => {
     throw incompletePair(`The supplied repository backup receipt is not usable: ${detail}.`);
@@ -1699,21 +1869,29 @@ function requireRepositoryBackupReceipt(value: unknown): RepositoryBackupReceipt
   if (receipt.version !== 1) bad(`its version is ${JSON.stringify(receipt.version)}, not this build's 1`);
   const manifestPath = receipt.manifestPath;
   if (typeof manifestPath !== "string" || manifestPath.trim() === "") bad("it names no manifest path");
+  const requireSibling = (name: unknown, what: string): void => {
+    if (typeof name !== "string" || name.trim() === "") bad(`its ${what} names no image`);
+    const imageName = name as string;
+    if (imageName !== basename(imageName) || imageName === "." || imageName === "..") {
+      bad(`its ${what} is ${JSON.stringify(imageName)}, not a sibling file name (a pair is resolved beside its manifest)`);
+    }
+  };
   const execution = receipt.execution;
   if (
     execution === null ||
     typeof execution !== "object" ||
-    typeof (execution as Record<string, unknown>).backupPath !== "string" ||
     typeof (execution as Record<string, unknown>).storeId !== "string"
   ) {
     bad("it carries no execution image receipt");
   }
+  requireSibling((execution as Record<string, unknown>).backupPath, "execution image");
   const collaboration = receipt.collaboration;
   if (collaboration === null || typeof collaboration !== "object") bad("it carries no collaboration image");
   const image = collaboration as Record<string, unknown>;
-  if (typeof image.path !== "string" || image.authority === null || typeof image.authority !== "object") {
+  if (image.authority === null || typeof image.authority !== "object") {
     bad("its collaboration image names no verified authority");
   }
+  requireSibling(image.path, "collaboration image");
   if (image.counts === null || typeof image.counts !== "object" || Array.isArray(image.counts)) {
     bad("its collaboration image records no row counts");
   }
@@ -1778,6 +1956,19 @@ function assertCausalBoundary(
  */
 export async function ensureCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthority> {
   const location = resolveCollaborationLocation(context);
+  // A checkout already bound to a repository is never silently re-pointed by an
+  // origin or `.mstarc` change: the bootstrap refuses before it creates, reuses or
+  // publishes anything for the newly derived scope.
+  const binding = readCollaborationBinding(context);
+  if (binding !== null && (binding.repoKey !== location.repoKey || binding.mode !== location.mode)) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` +
+        `${location.repoKey} (${location.mode}); a retargeted checkout never adopts another repository's authority. ` +
+        `Re-resolve the scope deliberately (mstar path resolve) or start a new checkout for the other repository. ` +
+        `Nothing was created or changed.`,
+    );
+  }
   if (existsSync(storeDbPath(context))) {
     const handle = await openStore(context, "read");
     try {
