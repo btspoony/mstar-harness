@@ -855,9 +855,9 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "persist.get": "root", "persist.list": "root", "persist.write": "root",
   "plan.bind": "root", "plan.complete": "root", "plan.issue-add": "root",
   "plan.issue-close": "root", "plan.prepare": "root", "plan.progress": "root",
-  "plan.show": "root", "plugin.validate": "none", "pr-review.budget": "none",
+  "plan.show": "root", "plugin.validate": "none", "pr.merge-gate": "none", "pr-review.budget": "none",
   "pr-review.post": "none", "pr-review.report-path": "root", "pr-review.seat-prompt": "none",
-  "pr-review.size": "none", "pr-review.tally": "none", "pr-review.thread-gate": "none", "pr-review.validate-report": "none",
+  "pr-review.size": "none", "pr-review.tally": "none", "pr-review.validate-report": "none",
   "pr-review.worktree-cleanup": "none", "pr-review.worktree-setup": "root", "qc.validate-report": "none",
   "report": "none", "review.seats": "none", "roadmap.export": "root",
   "roadmap.import": "root", "roadmap.replace": "root", "roadmap.show": "root",
@@ -914,7 +914,7 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "plugin.validate": { args: {}, subject: "the plugin package" },
   "pr-review.budget": null,
   "pr-review.post": { args: { pr: "1", bodyFile: path.join(os.tmpdir(), "mstar-mcp-root-unread-review.md") }, subject: "the repository this review is posted to" },
-  "pr-review.thread-gate": { args: { pr: "1" }, subject: "the pull request whose review threads are read" },
+  "pr.merge-gate": { args: { pr: "1" }, subject: "the pull request whose review threads are read" },
   // The worktree and skill root are named ABSOLUTELY here so the relative
   // diffFile is the one input left offending: each of the three seat paths has
   // its own assertion (the omitted pair is covered by its own test).

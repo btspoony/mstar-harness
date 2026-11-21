@@ -2617,7 +2617,7 @@ export type ThreadGateDecision =
   | { ok: true; head: string; unresolved: ReviewThreadFacts[] }
   | {
       ok: false;
-      code: "prreview.thread-gate.unresolved" | "prreview.thread-gate.confirmation-invalid";
+      code: "pr.merge-gate.unresolved" | "pr.merge-gate.confirmation-invalid";
       head: string;
       unresolved: ReviewThreadFacts[];
       problems: string[];
@@ -2638,7 +2638,7 @@ export function decideThreadGate(input: {
   if (input.confirmation === undefined) {
     return unresolved.length === 0
       ? { ok: true, head: input.head, unresolved }
-      : { ok: false, code: "prreview.thread-gate.unresolved", head: input.head, unresolved, problems: [] };
+      : { ok: false, code: "pr.merge-gate.unresolved", head: input.head, unresolved, problems: [] };
   }
   const problems: string[] = [];
   if (input.confirmation.head !== input.head) {
@@ -2658,5 +2658,5 @@ export function decideThreadGate(input: {
   }
   return problems.length === 0
     ? { ok: true, head: input.head, unresolved }
-    : { ok: false, code: "prreview.thread-gate.confirmation-invalid", head: input.head, unresolved, problems };
+    : { ok: false, code: "pr.merge-gate.confirmation-invalid", head: input.head, unresolved, problems };
 }

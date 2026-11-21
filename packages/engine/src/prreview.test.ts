@@ -600,7 +600,7 @@ describe("thread gate (\u00a75.3a)", () => {
   test("an unresolved thread refuses the merge without a confirmation", () => {
     expect(decideThreadGate({ head, threads: [thread("T1"), thread("T2", true)] })).toEqual({
       ok: false,
-      code: "prreview.thread-gate.unresolved",
+      code: "pr.merge-gate.unresolved",
       head,
       unresolved: [thread("T1")],
       problems: [],

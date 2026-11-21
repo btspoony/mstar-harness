@@ -152,7 +152,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.3a Unresolved conversation gate（HARD — 先于 head 对账，独立于 `pr_merge_policy`）
 
-- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread，执行 `mstar pr-review thread-gate --pr <n>`（它读取每条 thread 的作者、`path:line` 与首条评论，分页耗尽即拒绝）；人类与 bot 都算，**不按 merge class 过滤**，`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。
+- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread，执行 `mstar pr merge-gate --pr <n>`（它读取每条 thread 的作者、`path:line` 与首条评论，分页耗尽即拒绝）；人类与 bot 都算，**不按 merge class 过滤**，`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。
 - **门**：未解决项 > 0 时**不得 merge**，唯一出口是「恢复路径」的逐条 waive + 两次确认，或全部 resolve——owner 批准、`ship it`、CI 绿、§5.3 谓词成立都不能替代本 gate；本 gate 不因 thread 被归在 §5.2 第 4 项而免检。
 - **清单**：PM 必须逐条列出 `author.login`、`path:line`、首条评论要点（bot 报告有 merge class 时一并给出），不得只报数量或以「有些评论」概括。
 - **两次确认**：存在未解决项时（clean 枚举按 §5.2 第 4 项直接通过，不需用户确认），展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、出现新的未解决 thread 或清单变化 → 前一次确认作废并重走；确认结果写入 `--confirm` 文件（`{head, confirmations: 2, threads: [<thread id>...], digest}`，`digest` 取自该命令对未解决清单的输出），**head 对账（§5.3）之后、执行 merge 之前必须重跑同一条命令复验**——新 head、未解决集合变化（含新出现的未解决 thread、某条未解决 thread 被重新打开）或未解决 thread 的首条评论被编辑都会使复验失败，即无授权。

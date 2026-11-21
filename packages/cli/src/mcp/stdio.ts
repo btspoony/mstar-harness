@@ -84,7 +84,7 @@ const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "pr-review.size",
   "pr-review.seat-prompt",
   "pr-review.post",
-  "pr-review.thread-gate",
+  "pr.merge-gate",
   "pr-review.worktree-cleanup",
   // Their only `harness` field is the operation TARGET they export or restore,
   // not a root they execute against: with no connection root they still have
