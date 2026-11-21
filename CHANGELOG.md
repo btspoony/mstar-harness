@@ -8,6 +8,25 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.8.2] - 2026-11-21
+
+### Changed
+
+- Give `proposed/` an admission rule and a trigger: a decision not implemented this round that must outlive the current plan or iteration is written to `proposed/` before implementation, while a decision implemented in the same change goes straight to `implemented/`.
+- `clarify` now judges ADR admission at its closing summary and marks qualifying decisions as `ADR-candidate`, without writing a file; plan lock lands a deferred candidate as a `proposed/` record, while an implemented one writes nothing until its `Done`-time `## Review Gate Summary` pointer.
+- `mstar-iteration` Phase 1 writes an unstarted selected direction back as a proposal, and the change that implements one promotes it to `implemented/` with its `ADR:` pointer following the new path.
+- Added a **proposed ADR** separating execution state from collaboration authority and defining local, mirror, and remote modes.
+
+### Fixed
+
+- Added a hard pre-merge review-thread gate (§5.3a): every unresolved thread on the current head — human or bot, any merge class — blocks the merge regardless of policy or an owner merge instruction. The PM must list each unresolved thread with its author and location, then obtain a second explicit confirmation before merging; a generic "merge it" is not a per-thread waiver.
+- Wired the gate into the merge authorization predicate, the Phase 5 checklist item, the merge executor, and the project-manager NEVER rules, so a checklist-only reading of "threads resolved" no longer leaves merging possible.
+- Added `mstar pr merge-gate --pr <n>`: it enumerates every review thread on the current head and refuses the merge while any stays unresolved; `--confirm` verifies a `{head, confirmations: 2, threads: [...], digest}` record against that same head, so a merge after a push, a new thread, or an edited opening comment loses its authority. The scan reads the host that served the PR and refuses when the head moves mid-scan; a missing or malformed `--confirm` file reports a usage refusal (exit 2), not an execution failure.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.2**.
+
 ## [4.8.1] - 2026-11-20
 
 ### Added
