@@ -81,6 +81,8 @@ import {
   resolvePlanRead,
   resolveTokenFreshness,
   semanticRequestHash,
+  serializeExecutionValue,
+  parseExecutionToken,
   withExecutionTransaction,
   writeExecutionInputPin,
   writePlanCoordinationRow,
@@ -108,12 +110,19 @@ import {
   closeIssueOn,
   issueWriteSeat,
   linkIssueScopedOn,
-  storeRevisionOn,
   IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting } from "./path.js";
+import { openCollaborationStore, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
+import {
+  advanceCollaborationRevision,
+  reserveCompositeIntent,
+  runCollaborationComposite,
+  type CollaborationEffectReceipt,
+  type CompositeIntent,
+} from "./collaboration-operations.js";
 import { parseAssignmentBranchForms } from "./dispatch.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
@@ -1102,16 +1111,186 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
 }
 
 /**
+ * The collaboration authority a residual composite addresses, read through the
+ * same admission every collaboration write uses. A missing, staged, unreadable
+ * or differently-bound lane refuses HERE, before any execution reservation
+ * exists, so the refusal never leaves a pending intent behind.
+ */
+async function collaborationTarget(context: ExecutionContext): Promise<CollaborationStamp> {
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    return {
+      repoKey: handle.authority.repoKey,
+      mode: handle.authority.mode,
+      storeId: handle.authority.storeId,
+      epoch: handle.authority.epoch,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+/** One residual composite the residual verbs drive: its frozen payload and its collaboration effect. */
+type ResidualComposite = {
+  kind: "residual-add" | "residual-close";
+  actor: string;
+  target: CollaborationStamp;
+  /** Freeze the admitted payload from the addressed row; runs inside the reservation transaction. */
+  freeze(witness: ExecutionPlanWitness): string;
+  /** Apply the whole collaboration effect; runs inside the effect transaction. */
+  apply(handle: CollaborationStoreHandle): string;
+};
+
+/**
+ * §3.1 the refusal of a composite whose collaboration effect is committed while
+ * its execution finalization can no longer apply the admitted reservation. The
+ * effect is NEVER undone or re-applied; the caller reissues the same verb with
+ * the same operation id against the current plan token, which replays the
+ * recorded effect and commits the missing execution delta.
+ */
+function residualPartialRefusal(input: {
+  intent: CompositeIntent;
+  kind: ResidualComposite["kind"];
+  witness: ExecutionPlanWitness;
+  reservedRevision: number | null;
+  cause: string;
+  receipt: CollaborationEffectReceipt;
+}): ExecutionError {
+  const verb = input.kind === "residual-add" ? "mstar plan issue-add" : "mstar plan issue-close";
+  return new ExecutionError(
+    "collaboration.operation-partial",
+    `The collaboration effect of operation ${JSON.stringify(input.intent.key.operationId)} is committed ` +
+      `(collaboration revision ${input.receipt.collaborationRevision}), but its execution finalization is withheld: ` +
+      `${input.cause}. Do not re-run a different operation id. Reissue ${verb} with the same --operation id and the same ` +
+      `payload against the plan token this read returns; the recorded effect replays and only the execution delta is committed.`,
+    {
+      operation_id: input.intent.key.operationId,
+      phase: "collaboration-confirmed",
+      confirmed_components: [`collaboration:${input.kind}`, `collaboration_revision:${input.receipt.collaborationRevision}`],
+      cause: input.cause,
+      workflow_id: input.witness.workflowId,
+      plan_id: input.witness.planId,
+      reserved_revision: input.reservedRevision,
+      current_revision: input.witness.revision,
+      recovery:
+        `Re-read this plan row with mstar plan show --workflow ${input.witness.workflowId} --plan ${input.witness.planId}, ` +
+        `then reissue ${verb} with the same --operation id and payload. The committed collaboration effect is never ` +
+        `re-applied, and no second issue is allocated.`,
+    },
+  );
+}
+
+/**
+ * §3.1 the admitted half of one residual composite: authenticate, fence the
+ * caller's token, freeze the payload and record the reservation in the SAME
+ * execution transaction. A committed receipt is served BEFORE the CAS (an
+ * identical retry never re-evaluates a token the first attempt already spent),
+ * while a recorded reservation only resumes for the exact frozen intent.
+ */
+async function runResidualComposite(
+  context: ExecutionContext,
+  resolved: ResolvedPlanOperation<ResidualAddOperation | ResidualCloseOperation>,
+  requestHash: string,
+  composite: ResidualComposite,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const prepared = await withExecutionTransaction(context, (tx) => {
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; a residual plan operation requires an active authority.`,
+    );
+    const witness = readExecutionPlanWitness(tx, resolved.read);
+    const replay = readPlanOperationReplay<ExecutionPlanView>(tx, {
+      operationId: resolved.call.operationId,
+      requestHash,
+      workflowId: witness.workflowId,
+      planId: witness.planId,
+    });
+    if (replay !== null) return { kind: "replay" as const, receipt: replay };
+    const freshness = resolveTokenFreshness(
+      resolved.call.expected,
+      {
+        kind: "plan",
+        storeId: tx.storeId,
+        epoch: tx.epoch,
+        key: [witness.workflowId, witness.planId],
+        revision: witness.revision,
+      },
+      { target: { workflowId: witness.workflowId, planId: witness.planId } },
+    );
+    assertRunningWorkflow(witness);
+    if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, composite.kind);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId: resolved.call.operationId },
+      kind: composite.kind,
+      requestHash,
+      target: composite.target,
+      scope: { workflowId: witness.workflowId, planId: witness.planId },
+      actor: composite.actor,
+      expectedExecution: resolved.call.expected ?? witness.token,
+      frozenPayload: composite.freeze(witness),
+    };
+    reserveCompositeIntent(tx, intent);
+    return { kind: "reserved" as const, intent };
+  });
+  if (prepared.kind === "replay") return prepared.receipt;
+  return runCollaborationComposite<ExecutionReceipt<ExecutionPlanView>>(context, prepared.intent, {
+    apply: composite.apply,
+    finalize: (tx, receipt) => finalizeResidualComposite(tx, resolved, prepared.intent, composite.kind, receipt),
+  });
+}
+
+/**
+ * §3.1 the finalization of one residual composite: require the admitted
+ * reservation (plan CAS, addressed scope and actor evidence are the SAME facts
+ * the prepare froze), advance the plan row once, and hand back the committed
+ * read. A moved reservation refuses `collaboration.operation-partial` instead of
+ * applying the execution delta on top of a state the caller never admitted.
+ */
+function finalizeResidualComposite(
+  tx: ExecutionTransaction,
+  resolved: ResolvedPlanOperation<ResidualAddOperation | ResidualCloseOperation>,
+  intent: CompositeIntent,
+  kind: ResidualComposite["kind"],
+  receipt: CollaborationEffectReceipt,
+): ExecutionReceipt<ExecutionPlanView> {
+  const witness = readExecutionPlanWitness(tx, resolved.read);
+  const reservedRevision = parseExecutionToken(intent.expectedExecution).revision;
+  const cause =
+    reservedRevision !== witness.revision
+      ? `the plan row moved from the reserved revision ${reservedRevision} to ${witness.revision}`
+      : intent.scope.workflowId !== witness.workflowId || intent.scope.planId !== witness.planId
+        ? "the admitted plan address is no longer the addressed row's"
+        : intent.actor !== issueWriteSeat(witness.session.role)
+          ? "the admitted actor no longer holds this row's issue-write seat"
+          : null;
+  if (cause !== null) throw residualPartialRefusal({ intent, kind, witness, reservedRevision, cause, receipt });
+  assertRunningWorkflow(witness);
+  const at = new Date().toISOString();
+  advancePlanOperationRevisions(tx, { workflowId: witness.workflowId, now: at });
+  advancePlanRowRevision(tx, witness);
+  const committed = readExecutionPlanWitness(tx, resolved.read);
+  return {
+    data: committed.view,
+    token: committed.token,
+    storeId: tx.storeId,
+    epoch: tx.epoch,
+    operationId: intent.key.operationId,
+    replayed: false,
+    recovery: appliedRecovery(witness, kind),
+  };
+}
+
+/**
  * §3 `residual-add` on the DB authority: the coordinator captures each residual
- * and links it to this plan, in the SAME transaction that commits the
- * workflow/store revisions and the operation receipt.
+ * and links it to this plan in ONE collaboration effect, correlated to this
+ * admitted execution operation by a durable intent and effect receipt.
  *
  * The issue work is composed, never re-entered: `captureIssueOn` /
- * `linkIssueScopedOn` take this transaction's own handle, so there is no nested
- * `BEGIN` and no second connection. Any refusal anywhere in the loop rolls back
- * every entry, the receipt and the revision advance together. The plan row's
- * state is untouched (a residual lives in the issue authority) while its
- * REVISION still advances once.
+ * `linkIssueScopedOn` take the effect transaction's own handle, so there is no
+ * nested `BEGIN`. Any refusal anywhere in the loop rolls back every entry and
+ * the effect receipt together, and the execution delta is committed only after
+ * that effect is durable. The plan row's state is untouched (a residual lives in
+ * the issue authority) while its REVISION still advances once, at finalization.
  */
 export async function residualAddExecutionPlan(
   context: ExecutionContext,
@@ -1126,75 +1305,94 @@ export async function residualAddExecutionPlan(
   }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
-    assertRunningWorkflow(witness);
-    assertIssueStoreActive(tx.db);
-    // §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
-    // (validated as a safe path component), falling back to `_default`, never the
-    // workflow header's: a residual captured on this row must keep its own
-    // project provenance even when the workflow declares another one.
-    const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
-    const derivedEntries = deriveResidualEntries(entries, projectId);
-    const { planId } = witness;
-    const sessionId = witness.session.sessionId;
-    // §3.1 the shared store revision this transaction commits at: the frame's
-    // single advance has already run, so every composed issue helper joins it
-    // instead of advancing the same counter once more.
-    const composed: ComposedTransactionRevision = { committedStoreRevision: storeRevisionOn(tx.db) };
-    for (const [entryIndex, input] of derivedEntries.entries()) {
-      const occurrenceKey = input.occurrenceKey;
-      let childOperation: "capture" | "plan-link" = "capture";
-      try {
-        const capture = captureIssueOn(
-          tx.db,
-          input,
-          { operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey), actor },
-          composed,
-        );
-        // Always link, never only on `created`: the plan link is the gate a later
-        // residual-close is checked against, and both verbs are idempotent, so a
-        // retry converges instead of leaving an unlinked issue the plan can never
-        // close.
-        childOperation = "plan-link";
-        linkIssueScopedOn(
-          tx.db,
-          capture.issueId,
-          { kind: "plan", target: planId },
-          { operationId: residualLinkOperationId(sessionId, planId, occurrenceKey), actor, expectedRevision: capture.revision },
-          composed,
-        );
-      } catch (error) {
-        if (!(error instanceof IssueError) || error.code !== "store.operation-conflict") throw error;
-        const contextual = new IssueError(
-          error.code,
-          `residual-add entry ${entryIndex} ${childOperation} child operation conflicts: ${error.message}`,
-        );
-        contextual.details = {
-          entryIndex,
-          entryPath: `entries[${entryIndex}].occurrenceKey`,
-          childOperation,
-          childOperationIdOrigin: "session + plan + entry occurrenceKey",
-          causeCode: error.code,
-          correction: "Give each observation within this session and plan a distinct occurrenceKey; the child operation id derives from session + plan + occurrenceKey, so changing only the outer operationId repeats the conflict.",
-        };
-        throw contextual;
+  const target = await collaborationTarget(context);
+  // Frozen at admission: the plan bucket and the derived entries are fixed by the
+  // reservation, so a later edit of the request cannot reinterpret a pending
+  // intent (the frozen payload is compared on resume).
+  let address: { sessionId: string; planId: string } = { sessionId: "", planId: "" };
+  let derived: CaptureInput[] = [];
+  return runResidualComposite(context, resolved, requestHash, {
+    kind: "residual-add",
+    actor,
+    target,
+    freeze(witness) {
+      // §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
+      // (validated as a safe path component), falling back to `_default`, never the
+      // workflow header's: a residual captured on this row must keep its own
+      // project provenance even when the workflow declares another one.
+      const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
+      derived = deriveResidualEntries(entries, projectId);
+      address = { sessionId: witness.session.sessionId, planId: witness.planId };
+      return serializeExecutionValue({ projectId, entries: derived });
+    },
+    apply(handle) {
+      assertIssueStoreActive(handle.db);
+      const { planId, sessionId } = address;
+      // §3.1 ONE collaboration revision advance for the whole effect transaction:
+      // every composed issue helper joins it instead of advancing the counter.
+      const composed: ComposedTransactionRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
+      const captured: Array<{ issueId: string; occurrenceId?: number; revision: number; created: boolean }> = [];
+      for (const [entryIndex, input] of derived.entries()) {
+        const occurrenceKey = input.occurrenceKey;
+        let childOperation: "capture" | "plan-link" = "capture";
+        try {
+          const capture = captureIssueOn(
+            handle.db,
+            input,
+            { operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey), actor },
+            composed,
+          );
+          captured.push({
+            issueId: capture.issueId,
+            ...(capture.occurrenceId === undefined ? {} : { occurrenceId: capture.occurrenceId }),
+            revision: capture.revision,
+            created: capture.created,
+          });
+          // Always link, never only on `created`: the plan link is the gate a later
+          // residual-close is checked against, and both verbs are idempotent, so a
+          // retry converges instead of leaving an unlinked issue the plan can never
+          // close.
+          childOperation = "plan-link";
+          linkIssueScopedOn(
+            handle.db,
+            capture.issueId,
+            { kind: "plan", target: planId },
+            { operationId: residualLinkOperationId(sessionId, planId, occurrenceKey), actor, expectedRevision: capture.revision },
+            composed,
+          );
+        } catch (error) {
+          if (!(error instanceof IssueError) || error.code !== "store.operation-conflict") throw error;
+          const contextual = new IssueError(
+            error.code,
+            `residual-add entry ${entryIndex} ${childOperation} child operation conflicts: ${error.message}`,
+          );
+          contextual.details = {
+            entryIndex,
+            entryPath: `entries[${entryIndex}].occurrenceKey`,
+            childOperation,
+            childOperationIdOrigin: "session + plan + entry occurrenceKey",
+            causeCode: error.code,
+            correction: "Give each observation within this session and plan a distinct occurrenceKey; the child operation id derives from session + plan + occurrenceKey, so changing only the outer operationId repeats the conflict.",
+          };
+          throw contextual;
+        }
       }
-    }
-    advancePlanRowRevision(tx, witness);
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+      return serializeExecutionValue({ planId, issues: captured });
+    },
   });
 }
 
 /**
  * §3 `residual-close` on the DB authority: the coordinator closes ONE finding
- * linked to this plan, under the issue revision the caller read, in the same
- * transaction as the receipt and the revision advance — the plan row's own CAS
- * revision included, exactly as a residual-add advances it.
+ * linked to this plan, under the issue revision the caller read, in one
+ * collaboration effect correlated to this admitted execution operation. The plan
+ * row's own CAS revision advances at finalization, exactly as a residual-add
+ * advances it.
  *
  * Two refusals protect the scope and the CAS: an issue that is not linked to
  * THIS plan refuses `issue.scope-refused`, and an `expectedIssueRevision` that
  * is not the issue's current revision refuses `issue.revision-conflict`. Both
+ * are decided inside the effect transaction, before any issue row changes, and
  * leave the issue, its history, the plan token and the operation ledger
  * untouched.
  */
@@ -1222,27 +1420,34 @@ export async function residualCloseExecutionPlan(
   assertClosureAuthority(operation.disposition, operation.evidence);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
-    assertRunningWorkflow(witness);
-    assertIssueStoreActive(tx.db);
-    assertIssueLinkedToPlanOn(tx.db, operation.issueId, witness.planId);
-    closeIssueOn(
-      tx.db,
-      operation.issueId,
-      operation.disposition,
-      operation.evidence,
-      {
-        operationId: residualCloseOperationId(witness.session.sessionId, witness.planId, operation.issueId),
+  const target = await collaborationTarget(context);
+  let planId = "";
+  let sessionId = "";
+  return runResidualComposite(context, resolved, requestHash, {
+    kind: "residual-close",
+    actor,
+    target,
+    freeze(witness) {
+      planId = witness.planId;
+      sessionId = witness.session.sessionId;
+      return serializeExecutionValue({
+        issueId: operation.issueId,
+        disposition: operation.disposition,
+        expectedIssueRevision: operation.expectedIssueRevision,
+        evidence: operation.evidence,
+      });
+    },
+    apply(handle) {
+      assertIssueStoreActive(handle.db);
+      assertIssueLinkedToPlanOn(handle.db, operation.issueId, planId);
+      // The single closure body owns this transaction's one revision advance.
+      const closed = closeIssueOn(handle.db, operation.issueId, operation.disposition, operation.evidence, {
+        operationId: residualCloseOperationId(sessionId, planId, operation.issueId),
         actor,
         expectedRevision: operation.expectedIssueRevision,
-      },
-      // §3.1 the frame's single advance of the shared store revision has already
-      // run: this closure joins it rather than advancing the counter again.
-      { committedStoreRevision: storeRevisionOn(tx.db) },
-    );
-    advancePlanRowRevision(tx, witness);
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+      });
+      return serializeExecutionValue({ issueId: operation.issueId, revision: closed.revision });
+    },
   });
 }
 

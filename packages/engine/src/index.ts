@@ -707,6 +707,15 @@ export {
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
+// The cross-domain composite contract: the admitted intent, its local effect key
+// and the collaboration receipt. The frame itself stays internal to the engine;
+// only the admitted owning verb may run one.
+export type {
+  CollaborationEffectReceipt,
+  CompositeIntent,
+  CompositeKey,
+  CompositeKind,
+} from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
