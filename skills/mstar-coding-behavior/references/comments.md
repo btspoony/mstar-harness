@@ -8,6 +8,10 @@ A comment is an input to the next change: whoever edits the line reads it before
 2. **License** — a label (`simplify:`, `temporary`, `TODO`) is read as permission to repeat the pattern, so a bounded shortcut becomes the house style.
 3. **Substitute** — the comment says what the code already says, or explains a known-bad pattern instead of the code being corrected. Two descriptions of one behavior diverge, and the code is the one that runs.
 
+## Triage
+
+A comment corpus is cleaned by classifying it, not by banning it: a **Tautology** (Substitute) and a **Stale** comment (Drift) are deleted, an **Excuse** (License) is deleted together with the code it excused, or else stays while its captured defect is tracked, per `mstar-project-governance` § Issue capture, and a **Decision Record** moves its rationale into `{ADR_DIR}` and leaves one contract pointer. Whatever survives must carry a shape from § MUST. A full pass, its batch and ratchet rules, and its measurement → **`references/comment-cleanup.md`**.
+
 ## MUST
 
 A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`) together with its bound — a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), or for `simplify:`/`shortcut:` an `upgrade:` clause — a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference and only when it opens the comment content (`// TODO:`, `* TODO(`, `# TODO:`) — a marker named mid-sentence is prose, and `see` without a target is prose, not a pointer. A bare label is not a shape: it licenses the pattern without bounding it, so the lint rejects it. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.

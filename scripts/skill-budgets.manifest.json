@@ -23,6 +23,7 @@
   { "file": "skills/mstar-branch-worktree/references/parallel-writable-pre-dispatch.md", "maxLines": 70 },
   { "file": "skills/mstar-branch-worktree/references/worktree-cleanup.md", "maxLines": 50 },
   { "file": "skills/mstar-coding-behavior/SKILL.md", "maxLines": 70 },
+  { "file": "skills/mstar-coding-behavior/references/comment-cleanup.md", "maxLines": 70 },
   { "file": "skills/mstar-coding-behavior/references/comments.md", "maxLines": 70 },
   { "file": "skills/mstar-coding-behavior/references/constraint-ladder.md", "maxLines": 40 },
   { "file": "skills/mstar-coding-behavior/references/evidence-selection.md", "maxLines": 38 },

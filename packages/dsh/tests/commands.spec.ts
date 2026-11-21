@@ -1,11 +1,12 @@
 /**
  * Bundled mstar commands (omp parity, iteration v2.1.0 gap fill): the plugin
  * registers the packaged `harness-commands/*.md` mirror (synced from the
- * repo root by `bundle-assets`; gitignored) on `ctx.commands` — the six
- * mstar slash commands (`iteration-start`, `iteration-drive`,
- * `iteration-loop`, `codebase-audit`, `amazing-pr-review`, `amazing-e2e-check`), matching the omp/opencode command
- * surface. Each registered command's handler steers the command body into
- * the receiving agent as a user message (the dsh-commands "explicitly
+ * repo root by `bundle-assets`; gitignored) on `ctx.commands` — every shipped
+ * mstar slash command (`iteration-start`, `iteration-drive`, `iteration-loop`,
+ * `codebase-audit`, `codebase-comment-cleanup`, `amazing-pr-review`,
+ * `amazing-test-audit`, `amazing-e2e-check`), matching the omp/opencode
+ * command surface. Each registered command's handler steers the command body
+ * into the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
  *
  * The commands service resolve from the npm registry* ; the registrations are deferred with
@@ -68,8 +69,8 @@ function bootErrorRecords(booted: BootResult): BootLogRecord[] {
   return (logger?.buffer ?? []).filter((record) => record.type === 'error')
 }
 
-/** The six mstar slash commands (repo-root `commands/` mirror). */
-const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review', 'amazing-e2e-check'] as const
+/** Every shipped mstar slash command (repo-root `commands/` mirror). */
+const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'codebase-comment-cleanup', 'amazing-pr-review', 'amazing-test-audit', 'amazing-e2e-check'] as const
 
 /** A minimal fake receiving agent capturing steered messages. */
 function fakeAgent(): { agent: Agent; steered: UserMessage[] } {

@@ -309,15 +309,14 @@ function parseCommandMarkdown(content: string): { name: string; description: str
 /**
  * Register the bundled mstar commands (`harness-commands/*.md`, synced from
  * the repo root by `bundle-assets`; gitignored) on `ctx.commands` — the
- * omp/opencode slash-command parity surface (`/iteration-start`,
- * `/iteration-drive`, `/iteration-loop`, `/codebase-audit`). Each command
- * handler steers the command body into the receiving agent as a user message
- * (the dsh-commands "explicitly schedule model-visible work through the
- * receiving Agent" path), returning a success result. When the frontmatter
- * declares an `input` hint, the registration advertises `input.hint`, which
- * flips the dsh web client's decision table from detached bare execution to
- * a leadingInput claim (composer insert + args wait — the /plan, /goal,
- * /advisor interaction); user-typed args are appended to the steered text.
+ * omp/opencode slash-command parity surface. Each command handler steers the
+ * command body into the receiving agent as a user message (the dsh-commands
+ * "explicitly schedule model-visible work through the receiving Agent" path),
+ * returning a success result. When the frontmatter declares an `input` hint,
+ * the registration advertises `input.hint`, which flips the dsh web client's
+ * decision table from detached bare execution to a leadingInput claim
+ * (composer insert + args wait — the /plan, /goal, /advisor interaction);
+ * user-typed args are appended to the steered text.
  * The registration is deferred with `ctx.inject(['commands'], …)` — the same
  * optional-unit pattern as the tools — so the plugin boots without the
  * commands service. Absent mirror (no `bundle-assets` run) → no registrations
@@ -753,8 +752,7 @@ export function apply(ctx: Context, config: Config): void {
   // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map
   // closure is created + bound alongside the catalog cache below (see the catalog section comment).
 
-  // Bundled mstar commands — the omp/opencode slash-command parity surface
-  // (iteration-start / iteration-drive / iteration-loop / codebase-audit),
+  // Bundled mstar commands — the omp/opencode slash-command parity surface,
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)
 
