@@ -291,6 +291,7 @@ describe("apply", () => {
           { localId: "I-000102", outcome: "refused", cause: "label risk does not exist in team ENG" },
           { localId: "I-000103", outcome: "ambiguous", cause: "tool call timed out after send" },
         ]),
+        run: pending.data.runId,
       },
       f.context,
     );
@@ -324,7 +325,7 @@ describe("apply", () => {
 
   test("an unknown local id and a missing field are per-item refusals, not a failed run", async () => {
     const f = await fixture("apply-per-item");
-    await run("pending", {}, f.context);
+    const pending = await run("pending", {}, f.context);
     const result = await run(
       "apply",
       {
@@ -332,6 +333,7 @@ describe("apply", () => {
           { localId: "I-999999", outcome: "confirmed", externalId: "LIN-9" },
           { localId: "I-000101", outcome: "confirmed" },
         ]),
+        run: pending.data.runId,
       },
       f.context,
     );
@@ -342,25 +344,46 @@ describe("apply", () => {
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
   });
 
-  test("apply with no prior pending acquires its own run and still records", async () => {
-    // why: The recovery branch: pending ran somewhere else and released (or crashed
-    // without claiming), so there is no held run. apply must not need one - it
-    // acquires a fresh lease so every ledger write still carries a run token.
-    const f = await fixture("apply-no-held-run");
+  test("results that name no run are refused as unattributed, with the reconciliation recovery", async () => {
+    // why: A result only means something as the answer to a plan this repository
+    // recorded. Without `--run` it belongs to no run, so recording it would adopt
+    // whatever the caller cached - the one thing a one-way mirror must not guess.
+    const f = await fixture("apply-unattributed");
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
-    // why: An unclaimed pending row would be refused (round 4's guard), so this
-    // exercises the clean path: a local id with no ledger row at all is a
-    // per-item refusal, and the run itself succeeds and ends.
     const result = await run(
       "apply",
       { results: bodyFile(f, "orphan.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-81" }]) },
       f.context,
     );
-    expect(result.status).toBe("ok");
-    expect(result.data.runId).toBeTruthy();
-    expect(result.data.counts).toEqual({ applied: 0, unconfirmed: 0, refused: 1 });
-    expect(result.data.items[0].cause).toContain("no push ledger row");
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sync.run-held");
+    expect(result.message).toContain("unattributed");
+    expect(result.message).toContain("--run <runId>");
+    // why: A legacy result has exactly two supported paths, and the refusal names both.
+    expect(result.message).toContain("issue-sync ingest");
+    expect(result.message).toContain("--adopt");
+    expect(await rowOf(f, "I-000101")).toBeNull();
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+  });
+
+  test("--take-run refuses to record results: a takeover only replaces a dead holder", async () => {
+    const f = await fixture("apply-take-run-results");
+    const pending = await run("pending", {}, f.context);
+    const takeover = await run(
+      "apply",
+      {
+        results: bodyFile(f, "takeover.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-82" }]),
+        takeRun: true,
+      },
+      f.context,
+    );
+    expect(takeover.status).toBe("refused");
+    expect(takeover.code).toBe("sync.run-held");
+    expect(takeover.message).toContain("takeover records no results");
+    // Nothing moved: the pending run still owns the direction and its item is untouched.
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
+    const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
+    expect(held?.runId).toBe(pending.data.runId);
   });
   test("--take-run ends a dead holder's run and the next pending works", async () => {
     const f = await fixture("apply-take-run");
@@ -388,7 +411,10 @@ describe("apply", () => {
 
     const stale = await run(
       "apply",
-      { results: bodyFile(f, "stale.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-9" }]) },
+      {
+        results: bodyFile(f, "stale.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-9" }]),
+        run: later.data.runId,
+      },
       f.context,
     );
     expect(stale.status).toBe("refused");
@@ -424,6 +450,7 @@ describe("apply", () => {
           { localId: "I-000101", outcome: "confirmed", externalId: "LIN-9", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
         ]),
         adopt: ["I-000101=LIN-9"],
+        run: later.data.runId,
       },
       f.context,
     );
@@ -446,7 +473,7 @@ describe("apply", () => {
     await run("pending", {}, f.context);
     await run("apply", { results: "-" }, f.withStdin("[]"));
     await Bun.sleep(2);
-    await run("pending", {}, f.context);
+    const laterUrl = await run("pending", {}, f.context);
     const result = await run(
       "apply",
       {
@@ -454,6 +481,7 @@ describe("apply", () => {
           { localId: "I-000101", outcome: "confirmed", externalId: "LIN-9", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
         ]),
         adopt: ["I-000101=https://linear.app/acme/issue/LIN-9/url-form"],
+        run: laterUrl.data.runId,
       },
       f.context,
     );
@@ -469,12 +497,13 @@ describe("apply", () => {
     await run("pending", {}, f.context);
     await run("apply", { results: "-" }, f.withStdin("[]"));
     await Bun.sleep(2);
-    await run("pending", {}, f.context);
+    const laterMismatch = await run("pending", {}, f.context);
     const mismatch = await run(
       "apply",
       {
         results: bodyFile(f, "mismatch.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-9" }]),
         adopt: ["I-000101=LIN-10"],
+        run: laterMismatch.data.runId,
       },
       f.context,
     );
@@ -485,7 +514,7 @@ describe("apply", () => {
 
   test("--release clears an unconfirmed create, and an associated item is not releasable", async () => {
     const f = await fixture("apply-release");
-    await run("pending", {}, f.context);
+    const pendingRelease = await run("pending", {}, f.context);
     await run(
       "apply",
       {
@@ -493,6 +522,7 @@ describe("apply", () => {
           { localId: "I-000103", outcome: "ambiguous", cause: "connection closed mid-call" },
           { localId: "I-000101", outcome: "confirmed", externalId: "LIN-11" },
         ]),
+        run: pendingRelease.data.runId,
       },
       f.context,
     );
@@ -574,6 +604,125 @@ describe("mirror stale run", () => {
     expect(held?.runId).toBe(pending.data.runId);
   });
 
+  test("a rebind between pending and apply refuses, and the superseded run is retired before re-planning", async () => {
+    const f = await fixture("run-rebind");
+    const pending = await run("pending", {}, f.context);
+    // The operator rebinds the project to another team between planning and recording.
+    await bindProject(
+      { harnessDir: f.harnessDir },
+      PROJECT,
+      { provider: "linear", workspace: "acme", team: "ENG-OPS", remoteProject: "Remote" },
+      { operationId: "rebind-1" },
+    );
+    const stale = await run(
+      "apply",
+      {
+        results: bodyFile(f, "rebound.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-71" }]),
+        run: pending.data.runId,
+      },
+      f.context,
+    );
+    expect(stale.status).toBe("refused");
+    expect(stale.code).toBe("collaboration.stale-binding");
+    expect(stale.message).toContain("different project binding");
+    // Nothing was recorded under the old destination.
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
+
+    // The documented recovery: retire the superseded run (a takeover records
+    // nothing), re-plan under the binding in force, then record these results.
+    const retired = await run("apply", { results: "-", takeRun: true }, f.withStdin("[]"));
+    expect(retired.status).toBe("ok");
+    const replanned = await run("pending", {}, f.context);
+    expect(replanned.status).toBe("ok");
+    // The create cycle the retired run opened is still its residue, so recording
+    // it needs the explicit identity the operator confirmed.
+    const unadopted = await run(
+      "apply",
+      {
+        results: bodyFile(f, "rebound-2.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-71" }]),
+        run: replanned.data.runId,
+      },
+      f.context,
+    );
+    expect(unadopted.status).toBe("refused");
+    expect(unadopted.code).toBe("sync.run-held");
+    expect(unadopted.message).toContain("earlier run");
+    const applied = await run(
+      "apply",
+      {
+        results: bodyFile(f, "rebound-3.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-71" }]),
+        adopt: ["I-000101=LIN-71"],
+        run: replanned.data.runId,
+      },
+      f.context,
+    );
+    expect(applied.status).toBe("ok");
+    expect(applied.data.counts.applied).toBe(1);
+  });
+
+  test("an update result from an earlier run is refused instead of proving the current payload", async () => {
+    const f = await fixture("run-old-update");
+    const first = await run("pending", {}, f.context);
+    const confirmed = await run(
+      "apply",
+      {
+        results: bodyFile(f, "first.json", [
+          { localId: "I-000101", outcome: "confirmed", externalId: "LIN-61", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
+        ]),
+        run: first.data.runId,
+      },
+      f.context,
+    );
+    expect(confirmed.data.counts.applied).toBe(1);
+    const provenHash = (await rowOf(f, "I-000101"))!.lastRequestHash;
+
+    // The local content moved on, so the next run plans an UPDATE of the same issue.
+    await withCollaborationWrite({ harnessDir: f.harnessDir }, ({ db }) => {
+      db.prepare("update issues set title = ?, updated_at = ? where id = ?").run(
+        "Issue I-000101 (edited)",
+        new Date().toISOString(),
+        "I-000101",
+      );
+    });
+    const second = await run("pending", {}, f.context);
+    expect(second.data.items).toEqual([
+      expect.objectContaining({ localId: "I-000101", operation: "update", externalId: "LIN-61" }),
+    ]);
+
+    // The cached result of the FIRST run cannot prove this run's write.
+    const stale = await run(
+      "apply",
+      {
+        results: bodyFile(f, "stale-update.json", [
+          { localId: "I-000101", outcome: "confirmed", externalId: "LIN-61", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
+        ]),
+        run: first.data.runId,
+      },
+      f.context,
+    );
+    expect(stale.status).toBe("refused");
+    expect(stale.code).toBe("sync.run-held");
+    // The payload proof still belongs to the confirmed write, not to this attempt.
+    expect((await rowOf(f, "I-000101"))!.lastRequestHash).toBe(provenHash);
+    expect((await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION })))?.runId).toBe(
+      second.data.runId,
+    );
+  });
+
+  test("one pending command advances the collaboration revision once for its whole batch", async () => {
+    const f = await fixture("run-batch-revision");
+    const revision = (): Promise<number> =>
+      f.read(
+        (db) =>
+          (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision,
+      );
+    expect(await revision()).toBe(0);
+    const planned = await run("pending", {}, f.context);
+    // Three items, one transaction: one advance, not one per item.
+    expect(planned.data.items).toHaveLength(3);
+    expect(await revision()).toBe(1);
+  });
+
   test("--run with no run holding the binding refuses instead of continuing a guess", async () => {
     const f = await fixture("run-absent");
     const result = await run("apply", { results: bodyFile(f, "empty.json", []), run: "nobody" }, f.context);
@@ -606,10 +755,13 @@ describe("ingest", () => {
     const f = await fixture("ingest-buckets");
     // why: A confirmed push first, so this item has a recorded payload hash that a
     // remote edit can drift from.
-    await run("pending", {}, f.context);
+    const planned = await run("pending", {}, f.context);
     await run(
       "apply",
-      { results: bodyFile(f, "confirmed.json", [{ localId: "I-000102", outcome: "confirmed", externalId: "LIN-32" }]) },
+      {
+        results: bodyFile(f, "confirmed.json", [{ localId: "I-000102", outcome: "confirmed", externalId: "LIN-32" }]),
+        run: planned.data.runId,
+      },
       f.context,
     );
     const before = await f.read((db) => db.prepare("select id, title, updated_at from issues order by id").all());
@@ -641,10 +793,13 @@ describe("ingest", () => {
 
   test("remote content equal to the confirmed payload is associated, and an edit drifts", async () => {
     const f = await fixture("ingest-converged");
-    await run("pending", {}, f.context);
+    const planned = await run("pending", {}, f.context);
     await run(
       "apply",
-      { results: bodyFile(f, "confirmed.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-41" }]) },
+      {
+        results: bodyFile(f, "confirmed.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-41" }]),
+        run: planned.data.runId,
+      },
       f.context,
     );
     const converged = record(f, "LIN-41", "I-000101");

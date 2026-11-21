@@ -6,16 +6,18 @@
  *
  * TRANSACTION OWNERSHIP: the transport owns the transaction. Every exported
  * mutation runs inside the collaboration write transaction it is called in
- * (`withCollaborationWrite`, which takes `BEGIN IMMEDIATE`, re-verifies the
- * binding and active state under the writer lock, and commits), and a verb never
- * begins, commits or releases one — the guarded write connection refuses
- * transaction control, so a verb called the old way fails loudly instead of
- * half-committing. The row mutation and its receipt therefore still commit
- * together or not at all: an interruption cannot leave an advanced row without
- * a receipt.
+ * (`withSyncWrite`, which takes `BEGIN IMMEDIATE`, re-verifies the binding and
+ * active state under the writer lock, and commits), and a verb never begins,
+ * commits or releases one — the guarded write connection refuses transaction
+ * control, so a verb called the old way fails loudly instead of half-committing.
+ * The row mutation and its receipt therefore still commit together or not at
+ * all: an interruption cannot leave an advanced row without a receipt. Because
+ * one command may run many verbs in one commit, the collaboration revision is
+ * advanced ONCE at that boundary by `withSyncWrite`, never by a verb.
  */
 import { createHash } from "node:crypto";
-import type { StoreDb } from "./store-db.js";
+import { withCollaborationWrite, type CollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 
 export type SyncDirection = "import" | "push";
 export type SyncItemState = "unbound" | "pending" | "applied" | "failed" | "skipped";
@@ -195,22 +197,53 @@ function replayOrRefuse<T>(db: StoreDb, operationId: string, hash: string): T | 
 }
 
 /**
- * The receipt of one accepted effect, with that effect's single collaboration
- * revision advance. A replay returns before this point, so a retried verb never
- * advances the counter.
+ * The receipt of one accepted effect. It does NOT advance the collaboration
+ * revision: one command may record several receipts in one commit, and the
+ * contract allows exactly one advance per committed mirror transaction — that
+ * advance belongs to `withSyncWrite`'s boundary, which observes whether the
+ * transaction changed anything at all (so a pure replay advances nothing).
  *
  * Upsert, not insert: a claim's key is stable per residue, so the retry that
  * opens the next cycle necessarily reuses it. Every other verb returns on its
  * replay before reaching here, so this only ever rewrites that one receipt.
  */
 function recordOperation(db: StoreDb, operationId: string, hash: string, receipt: unknown, at: string): void {
-  db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
   db.prepare(
     "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
       " values ('standalone', ?, ?, ?, ?)" +
       " on conflict do update set request_hash = excluded.request_hash, result_json = excluded.result_json," +
       " committed_at = excluded.committed_at",
   ).run(operationId, hash, JSON.stringify(receipt), at);
+}
+
+/** Rows this connection has modified, in and out of the current transaction. */
+function changedRows(db: StoreDb): number {
+  return (db.prepare("select total_changes() as n").get() as { n: number }).n;
+}
+
+/**
+ * One mirror transaction on the collaboration authority.
+ *
+ * The collaboration writer admits the store, takes `BEGIN IMMEDIATE`, re-verifies
+ * the repository binding and active state under the writer lock, and commits.
+ * The revision advance for the commit happens HERE and exactly once: when the
+ * effect modified no row — a replay, a no-op cursor write, a plan with nothing
+ * due — the counter does not move, so exact replay and no-op semantics survive
+ * the batch-wide transaction.
+ */
+export async function withSyncWrite<T>(
+  context: StoreContext,
+  apply: (db: StoreDb, authority: CollaborationAuthority) => T,
+  expected?: CollaborationStamp,
+): Promise<T> {
+  return withCollaborationWrite(context, ({ db, authority }) => {
+    const before = changedRows(db);
+    const result = apply(db, authority);
+    if (changedRows(db) > before) {
+      db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    }
+    return result;
+  }, expected);
 }
 
 type SyncRow = {
@@ -519,7 +552,8 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
       `another ${direction} run holds ${bindingId}: run ${held.runId} started at ${held.startedAt} as pid ` +
         `${held.holderPid} on host ${JSON.stringify(held.holderHost)}. Nothing was written by this run. Wait for that holder to ` +
         `finish, then re-run \`mstar issue-sync pending --project <project-id>\`; or, after confirming that holder is dead, take the ` +
-        `run over with \`mstar issue-sync apply --project <project-id> --results <file|-> --take-run\`.`,
+        `run over with \`mstar issue-sync apply --project <project-id> --results <file|-> --take-run\` and an EMPTY result list, then ` +
+        `record the results under the run id that takeover returns.`,
     );
   }
   return readRun(db, { bindingId, direction })!;

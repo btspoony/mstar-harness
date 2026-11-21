@@ -11,7 +11,7 @@ import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import { initializeCollaborationStore } from "./collaboration-store.js";
 import { busyTimeoutMs, connect, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   acquireRun,
@@ -29,8 +29,11 @@ import {
   releaseRun,
   replanItem,
   SyncError,
+  withSyncWrite,
   writeCursor,
 } from "./issue-sync.js";
+import { planItem as planPushItem, recordResults, selectPushCandidates } from "./issue-sync/push.js";
+import { defaultLinearMapping } from "./mstarc.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-sync-test-"));
 const HOME = join(ROOT, "home");
@@ -81,7 +84,7 @@ function activate(dbPath: string): void {
  * The ledger fixture: one active collaboration authority holding the project row
  * and the three local issues a binding can address. `db` is the case's own
  * writable connection for seeding and assertions; the TRANSPORT owns the ledger
- * transaction, so a case that needs one opens it with `withCollaborationWrite`.
+ * transaction, so a case that needs one opens it with `withSyncWrite`.
  */
 async function openedStore(name: string): Promise<{ context: StoreContext; db: StoreDb; close: () => void }> {
   const storeContext = context(name);
@@ -89,7 +92,7 @@ async function openedStore(name: string): Promise<{ context: StoreContext; db: S
   await initializeCollaborationStore(location);
   activate(location.dbPath);
   // A fixture connection, not a lane writer: it keeps the lane's rollback journal
-  // so the store stays admissible to `withCollaborationWrite`.
+  // so the store stays admissible to `withSyncWrite`.
   const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-t', 'T', 'projects', 'p-t/roadmap.md', 'now', 'now')",
@@ -281,10 +284,10 @@ describe("transaction ownership (the collaboration writer owns the transaction)"
   test("an effect cannot take the transaction control the writer owns", async () => {
     const { context: store, db, close } = await openedStore("tx-control");
     await expect(
-      withCollaborationWrite(store, ({ db: guarded }) => guarded.exec("begin immediate")),
+      withSyncWrite(store, (guarded) => guarded.exec("begin immediate")),
     ).rejects.toMatchObject({ code: "store.corrupt" });
     await expect(
-      withCollaborationWrite(store, ({ db: guarded }) => guarded.prepare("commit").run()),
+      withSyncWrite(store, (guarded) => guarded.prepare("commit").run()),
     ).rejects.toMatchObject({ code: "store.corrupt" });
     // Neither refusal wrote anything.
     expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
@@ -295,17 +298,17 @@ describe("transaction ownership (the collaboration writer owns the transaction)"
   test("a failing receipt rolls the ledger row back, so the retry is not a one-way door", async () => {
     const { context: store, db, close } = await openedStore("tx-rollback");
     await expect(
-      withCollaborationWrite(store, ({ db: guarded }) => planItem(failingReceipts(guarded), PLAN)),
+      withSyncWrite(store, (guarded) => planItem(failingReceipts(guarded), PLAN)),
     ).rejects.toThrow(/simulated crash/);
     // The row did not advance, and no receipt exists.
     expect(rowOf(db)).toBeUndefined();
     expect(receiptCount(db)).toBe(0);
     // The retry with the SAME operationId succeeds instead of being refused.
-    expect((await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN))).itemState).toBe("pending");
+    expect((await withSyncWrite(store, (guarded) => planItem(guarded, PLAN))).itemState).toBe("pending");
     expect(receiptCount(db)).toBe(1);
 
     await expect(
-      withCollaborationWrite(store, ({ db: guarded }) =>
+      withSyncWrite(store, (guarded) =>
         markApplied(failingReceipts(guarded), { ...KEY, operationId: "op-tx-applied" }),
       ),
     ).rejects.toThrow(/simulated crash/);
@@ -313,7 +316,7 @@ describe("transaction ownership (the collaboration writer owns the transaction)"
     expect(rowOf(db)?.revision).toBe(1);
     // The same operationId now lands, because no orphan receipt blocks it.
     expect(
-      (await withCollaborationWrite(store, ({ db: guarded }) => markApplied(guarded, { ...KEY, operationId: "op-tx-applied" })))
+      (await withSyncWrite(store, (guarded) => markApplied(guarded, { ...KEY, operationId: "op-tx-applied" })))
         .itemState,
     ).toBe("applied");
     expect(rowOf(db)?.item_state).toBe("applied");
@@ -322,21 +325,91 @@ describe("transaction ownership (the collaboration writer owns the transaction)"
 });
 
 describe("collaboration mirror binding", () => {
-  test("one ledger effect advances the collaboration revision once, and a replay does not", async () => {
+  test("one committed mirror transaction advances the revision once, however many verbs it runs, and a replay advances none", async () => {
     const { context: store, db, close } = await openedStore("binding-revision");
     const revisionOf = (): number =>
       (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
     expect(revisionOf()).toBe(0);
 
-    const planned = await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN));
+    // Three plans in ONE transaction: the batch is one committed effect, so the
+    // counter advances once — not once per verb.
+    const planned = await withSyncWrite(store, (guarded) => [
+      planItem(guarded, PLAN),
+      planItem(guarded, { ...PLAN, localId: "I-000302", externalId: "EXT-2", operationId: "op-binding-plan-2" }),
+      planItem(guarded, { ...PLAN, localId: "I-000303", externalId: "EXT-3", operationId: "op-binding-plan-3" }),
+    ]);
     expect(revisionOf()).toBe(1);
-    const replay = await withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, PLAN));
-    expect(replay).toEqual(planned);
+    expect(planned.map((item) => item.itemState)).toEqual(["pending", "pending", "pending"]);
+
+    // A batch that only replays those receipts changed nothing.
+    const replayed = await withSyncWrite(store, (guarded) => [
+      planItem(guarded, PLAN),
+      planItem(guarded, { ...PLAN, localId: "I-000302", externalId: "EXT-2", operationId: "op-binding-plan-2" }),
+    ]);
+    expect(replayed).toEqual([planned[0], planned[1]]);
     expect(revisionOf()).toBe(1);
-    await withCollaborationWrite(store, ({ db: guarded }) =>
+
+    await withSyncWrite(store, (guarded) =>
       markApplied(guarded, { ...KEY, operationId: "op-binding-apply" }),
     );
     expect(revisionOf()).toBe(2);
+    close();
+  });
+
+  test("a storage failure inside a result batch aborts it instead of committing an item's row", async () => {
+    const { context: store, db, close } = await openedStore("batch-abort");
+    const push = {
+      bindingId: "linear:p-t",
+      identity: { repo: "acme/widgets", author: "Ada Lovelace <ada@example.test>" },
+      mapping: defaultLinearMapping(),
+    };
+    let runId = "";
+    await withSyncWrite(store, (guarded) => {
+      runId = acquireRun(guarded, {
+        bindingId: push.bindingId,
+        direction: "push",
+        holderPid: 1,
+        holderHost: "fixture",
+        reason: "batch-abort fixture",
+      }).runId;
+      const context = { ...push, runId };
+      for (const candidate of selectPushCandidates(guarded, push.bindingId)) {
+        planPushItem(guarded, context, candidate);
+      }
+    });
+    const pending = (): Array<{ local_id: string; item_state: string }> =>
+      db
+        .prepare("select local_id, item_state from issue_sync_state where direction = 'push' order by local_id")
+        .all() as Array<{ local_id: string; item_state: string }>;
+    expect(pending()).toEqual([
+      { local_id: "I-000301", item_state: "pending" },
+      { local_id: "I-000302", item_state: "pending" },
+      { local_id: "I-000303", item_state: "pending" },
+    ]);
+    expect(receiptCount(db)).toBe(3);
+
+    // The second item's row updates and then its receipt insert fails. A per-item
+    // catch would report that as a refusal and commit the row without its receipt;
+    // the batch must abort and roll back instead.
+    const context = { ...push, runId };
+    await expect(
+      withSyncWrite(store, (guarded) =>
+        recordResults(failingReceipts(guarded), context, [
+          { localId: "I-000301", outcome: "confirmed", externalId: "LIN-1" },
+          { localId: "I-000302", outcome: "confirmed", externalId: "LIN-2" },
+        ]),
+      ),
+    ).rejects.toThrow(/simulated crash/);
+    expect(pending()).toEqual([
+      { local_id: "I-000301", item_state: "pending" },
+      { local_id: "I-000302", item_state: "pending" },
+      { local_id: "I-000303", item_state: "pending" },
+    ]);
+    // No receipt beyond the three claims, and no revision advance for the rolled-back batch.
+    expect(receiptCount(db)).toBe(3);
+    expect(
+      (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision,
+    ).toBe(1);
     close();
   });
 
@@ -347,7 +420,7 @@ describe("collaboration mirror binding", () => {
         " values ('standalone', 'shared-operation', 'issue-domain-hash', '{}', '2026-11-21T00:00:00.000Z')",
     ).run();
     await expect(
-      withCollaborationWrite(store, ({ db: guarded }) => planItem(guarded, { ...PLAN, operationId: "shared-operation" })),
+      withSyncWrite(store, (guarded) => planItem(guarded, { ...PLAN, operationId: "shared-operation" })),
     ).rejects.toMatchObject({ code: "sync.operation-conflict" });
     expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
     close();
@@ -356,9 +429,9 @@ describe("collaboration mirror binding", () => {
   test("a ledger effect refuses an authority stamp this repository cannot prove", async () => {
     const { context: store, db, close } = await openedStore("binding-stamp");
     await expect(
-      withCollaborationWrite(
+      withSyncWrite(
         store,
-        ({ db: guarded }) => planItem(guarded, PLAN),
+        (guarded) => planItem(guarded, PLAN),
         { repoKey: "github.com/acme/other", mode: "local", storeId: "foreign", epoch: 1 },
       ),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });

@@ -809,6 +809,7 @@ export {
   releaseRun,
   replanItem,
   resetCursor,
+  withSyncWrite,
   writeCursor,
 } from "./issue-sync.js";
 // why: One-way push (M1): candidates, the payload plan, the ledger protocol, the
