@@ -32,11 +32,16 @@ import { basename, dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { withProtectedWrite } from "./coordination-write.js";
 import { captureIssue, getIssue, listIssues, linkIssue, linkIssueScoped, type CaptureInput } from "./issue.js";
-import { findingsCleanupGate, observePlanFindings } from "./project.js";
+import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings } from "./project.js";
 import { createFsStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
 import { type StoreContext } from "./store-db.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationAuthority, withCollaborationWrite } from "./collaboration-store.js";
+import {
+  initializeCollaborationStore,
+  readCollaborationAuthority,
+  withCollaborationWrite,
+  writeCollaborationBinding,
+} from "./collaboration-store.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-cutover-")));
 const HOME = join(ROOT, "home");
@@ -87,16 +92,36 @@ function laneLocation(context: StoreContext) {
   return location;
 }
 
-/** Flip a staged lane record to active: this plan ships no public activator. */
+/**
+ * Flip a staged lane record to active: this plan ships no public activator. The
+ * fixture also records the checkout binding the real activation writes — an
+ * ACTIVE authority is never usable from an unbound checkout.
+ */
 function activate(context: StoreContext): void {
-  const db = new DatabaseSync(laneLocation(context).dbPath);
+  const location = laneLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") {
+      authority = { storeId: row.store_id, epoch: row.authority_epoch };
+    }
   } finally {
     db.close();
   }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    binding: "active",
+  });
 }
 
 /** The fixture's collaboration lane, created and activated. */
@@ -440,6 +465,77 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(second.revision).toBeGreaterThan(first.revision);
     expect(second.open).toEqual([{ id: issue.issueId, severity: "medium" }]);
     expect(second.authority).toEqual(first.authority);
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * § Collaboration gate evidence — one complete observation, re-checked
+ * ------------------------------------------------------------------------ */
+
+describe("collaboration gate evidence", () => {
+  test("collaboration gate evidence: the decision names one complete plan-scoped observation", async () => {
+    const context = ctx("gate-evidence");
+    await activeLane(context);
+    const medium = await captureIssue(context, finding("gate-evidence-medium"), {
+      operationId: "cap-gate-evidence-medium",
+      actor: "project-manager",
+    });
+    const critical = await captureIssue(context, finding("gate-evidence-critical", { severity: "critical" }), {
+      operationId: "cap-gate-evidence-critical",
+      actor: "project-manager",
+    });
+    await linkIssueScoped(context, medium.issueId, { kind: "plan", target: "plan-a" }, {
+      operationId: "link-gate-evidence-medium", actor: "project-manager", expectedRevision: medium.revision,
+    });
+    await linkIssueScoped(context, critical.issueId, { kind: "plan", target: "plan-a" }, {
+      operationId: "link-gate-evidence-critical", actor: "project-manager", expectedRevision: critical.revision,
+    });
+
+    const allow = await findingsCleanupGate(context, "plan-a", { mode: "allow-residual" });
+    expect(allow.collaboration.scope).toEqual({ kind: "plan", key: "plan-a" });
+    expect(allow.collaboration.completeness).toBe("complete");
+    expect(allow.collaboration.open.map((row) => row.id).sort()).toEqual([medium.issueId, critical.issueId].sort());
+    expect(allow.collaboration.authority.storeId).toBe((await readCollaborationAuthority(context)).storeId);
+    expect(allow.violations.map((violation) => violation.code)).toEqual(["findings.allow-residual-critical"]);
+
+    // No new threshold: zero-residual blocks every open row of THIS scope, and a
+    // peer plan that links nothing is still a complete clean decision.
+    const zero = await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" });
+    expect(zero.violations.map((violation) => violation.code).sort()).toEqual([
+      "findings.zero-residual-critical",
+      "findings.zero-residual-open-issue",
+    ]);
+    const peer = await findingsCleanupGate(context, "plan-peer", { mode: "zero-residual" });
+    expect(peer.ok).toBe(true);
+    expect(peer.collaboration.open).toEqual([]);
+
+    // The accepted observation is still applicable: no drift, no refusal.
+    await assertPlanFindingsCurrent(context, allow.collaboration);
+  });
+
+  test("collaboration gate evidence: unprovable scope is incomplete and a moved lane is stale", async () => {
+    const context = ctx("gate-evidence-drift");
+    await activeLane(context);
+    const observed = await observePlanFindings(context, "plan-a");
+
+    // Evidence whose scope cannot be re-observed is not a clean gate.
+    await expect(assertPlanFindingsCurrent(context, { ...observed, scope: { kind: "project", key: "plan-a" } }))
+      .rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
+
+    // A collaboration write in the preflight gap moves the lane revision.
+    const issue = await captureIssue(context, finding("gate-evidence-drift"), {
+      operationId: "cap-gate-evidence-drift",
+      actor: "project-manager",
+    });
+    await linkIssueScoped(context, issue.issueId, { kind: "plan", target: "plan-a" }, {
+      operationId: "link-gate-evidence-drift", actor: "project-manager", expectedRevision: issue.revision,
+    });
+    await expect(assertPlanFindingsCurrent(context, observed)).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+      details: { plan_id: "plan-a", observed: { revision: observed.revision } },
+    });
+    // The stale refusal judges the evidence without rewriting it.
+    expect(observed.open).toEqual([]);
   });
 });
 

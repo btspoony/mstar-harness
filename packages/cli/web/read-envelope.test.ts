@@ -206,3 +206,61 @@ describe("a list read is one snapshot", () => {
     expect(result.envelope.data.items).toHaveLength(COUNT);
   });
 });
+
+describe("pagination source stamp", () => {
+  /** A list server whose epoch, or projection health, moves once at the second request. */
+  function stamped(move: "epoch" | "freshness") {
+    let requests = 0;
+    const fetchImpl = (async (url: string) => {
+      requests += 1;
+      const moved = requests > 1;
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        // Identical numeric counters on both pages: only the source stamp moves.
+        storeRevision: 3,
+        catalogRevision: 2,
+        projection: {
+          observed: false,
+          generation: null,
+          freshness: move === "freshness" && moved ? "stale" : "current",
+        },
+        collaboration: {
+          scope: { kind: "query", key: `issues:*:open:*:*:${PAGE}:${offset}` },
+          completeness: "complete",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: {
+            repoKey: "github.com/acme/repo",
+            mode: "local",
+            storeId: "store-a",
+            epoch: move === "epoch" && moved ? 2 : 1,
+          },
+          revision: 3,
+          catalogRevision: 2,
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, requests: () => requests };
+  }
+
+  test("equal counters in a different authority epoch are not one list", async () => {
+    const { fetchImpl, requests } = stamped("epoch");
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    // The straddling pass was discarded and the list reread from offset 0.
+    expect(result.envelope.data.items).toHaveLength(COUNT);
+    expect(requests()).toBe(5);
+  });
+
+  test("a projection that turns stale between pages is reread, never presented as current", async () => {
+    const { fetchImpl, requests } = stamped("freshness");
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    // The assembled list states the health it was finally read under.
+    expect(result.envelope.projection.freshness).toBe("stale");
+    expect(requests()).toBe(5);
+  });
+});

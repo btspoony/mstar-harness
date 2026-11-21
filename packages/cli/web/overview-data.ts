@@ -19,9 +19,9 @@
  * trend was removed from the product (D30), the shared model ignores it, and this
  * module does not even name it in the model it builds.
  */
-import type { OverviewDTO, ReadEnvelope, ReadProjection } from "@mstar-harness/engine";
+import type { OverviewDTO, OverviewMember, ReadEnvelope, ReadProjection } from "@mstar-harness/engine";
 
-import { asEnvelope, refusalMessage } from "./read-envelope";
+import { asEnvelope, collaborationGap, refusalMessage } from "./read-envelope";
 import {
   overviewModel,
   type Copy,
@@ -65,12 +65,40 @@ export function overviewCopy(copy: Copy): OverviewCopy {
 /**
  * The model for one envelope.
  *
- * The projection block is the page's only validity disclosure (D28 narrowed by
- * D30): the shared `projectionState` reads it, so the host passes it through and
- * states no version, no `{HARNESS_DIR}` and no counters of its own.
+ * The projection block is the page's execution-health disclosure (D28 narrowed
+ * by D30) and the collaboration observation is the page's data-validity
+ * disclosure: an explicit partial/unavailable observation downgrades the members
+ * it answered instead of letting projection health stand in for collaboration
+ * health. The host states no version, no `{HARNESS_DIR}` and no counters of its
+ * own.
  */
 export function overviewFromEnvelope(envelope: ReadEnvelope<OverviewDTO>): OverviewModel {
-  return overviewModel(envelope.data, { projection: envelope.projection satisfies ReadProjection });
+  const gap = collaborationGap(envelope);
+  // A page may only present collaboration facts at all when the observation is
+  // complete. `null` is a legacy envelope that discloses no observation (kept
+  // compatible); an explicit partial/unavailable one downgrades every member it
+  // answered, while projection-backed execution data stays usable.
+  const data =
+    gap === null
+      ? envelope.data
+      : undisclosedCollaborationMembers(
+          envelope.data,
+          `The collaboration observation is ${gap.completeness} (${gap.code}); its members are not disclosed.`,
+        );
+  return overviewModel(data, { projection: envelope.projection satisfies ReadProjection });
+}
+
+/** Keep only what the observation did not vouch for: `read` members become unavailable. */
+function undisclosedCollaborationMembers(data: OverviewDTO, reason: string): OverviewDTO {
+  const undisclosed = <T>(member: OverviewMember<T>): OverviewMember<T> =>
+    member.state === "read" ? { state: "unavailable", reason } : member;
+  return {
+    ...data,
+    residuals: undisclosed(data.residuals),
+    milestones: undisclosed(data.milestones),
+    latestIteration: undisclosed(data.latestIteration),
+    issueFlow: undisclosed(data.issueFlow),
+  };
 }
 
 /** Turn a settled read into the page's outcome. An absent envelope is a failure. */
@@ -89,8 +117,9 @@ export function overviewOutcome(
         model: overviewFromEnvelope(result.envelope),
         // The footer states the STORE revision. `projection.generation` is a different
         // field in the same envelope and drifts from it, so the footer disagreed with
-        // every other screen's revision.
-        revision: result.envelope.storeRevision,
+        // every other screen's revision. A revision is a collaboration fact: an
+        // incomplete observation cannot vouch for it, so it is suppressed, not relabelled.
+        revision: collaborationGap(result.envelope) === null ? result.envelope.storeRevision : null,
       };
     case "error":
       return { kind: "failed", message: result.message };

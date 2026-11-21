@@ -46,9 +46,14 @@ import {
   type Severity,
 } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
-import { openCollaborationStore, type CollaborationStoreHandle } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  type CollaborationObservation,
+  type CollaborationScope,
+  type CollaborationStoreHandle,
+} from "./collaboration-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import type { CollaborationObservation, CollaborationScope } from "./project.js";
 import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
@@ -481,9 +486,6 @@ function parseJsonArray<T>(value: unknown): T[] {
 // Source evidence
 // ---------------------------------------------------------------------------
 
-/** The complete arm of a collaboration observation: the only arm a read builds. */
-type CompleteObservation = Extract<CollaborationObservation, { completeness: "complete" }>;
-
 /** A refusal's stable code, disclosed as the gap of an optional source. */
 function errorCode(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -507,33 +509,6 @@ function unobservedProjection(): ReadProjection {
     checkedAt: new Date().toISOString(),
     diagnostics: [],
   };
-}
-
-/**
- * The collaboration revision and the complete observation of one scoped read.
- * The counters are read INSIDE the request's own collaboration transaction, so
- * the rows a view answers with and the revision it reports are one snapshot.
- */
-function readCollaborationObservation(
-  handle: CollaborationStoreHandle,
-  scope: CollaborationScope,
-): CompleteObservation {
-  // The observation's instant is the moment THIS source's own transaction reads
-  // its first row: a slow open of the other authority never backdates it.
-  const asOf = new Date().toISOString();
-  const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
-    | { revision?: unknown; catalog_revision?: unknown }
-    | undefined;
-  const revision = integer(row?.revision);
-  const catalogRevision = integer(row?.catalog_revision);
-  if (revision === null || catalogRevision === null) {
-    throw new StoreError(
-      "collaboration.unreadable",
-      "The collaboration authority has no readable revision counters; this read cannot state the revision it answered at.",
-    );
-  }
-  const { repoKey, mode, storeId, epoch } = handle.authority;
-  return { scope, completeness: "complete", asOf, authority: { repoKey, mode, storeId, epoch }, revision, catalogRevision };
 }
 
 /**
@@ -900,6 +875,78 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
     collaboration: { scope: { kind: "query", key: `issue-flow:${scoped ?? "*"}` }, required: true },
     execution: "not-requested",
     run: (sources) => ({ data: readIssueFlow(collaborationSource(sources), scoped ?? undefined) }),
+  };
+}
+
+/** The panel's bounded preview size; a rollup never counts by paging. */
+const OPEN_ISSUE_PREVIEW_LIMIT = 10;
+
+/**
+ * One scoped open-issue snapshot: the total, the grouping by severity and by
+ * project, and the panel's bounded preview rows. Contract §Read/Completeness:
+ * a rollup's totals are SQL aggregates over ONE collaboration snapshot (never a
+ * retry over paging tables), and the preview is never the count source.
+ */
+export type OpenIssueRollup = {
+  totalOpen: number;
+  bySeverity: Record<string, number>;
+  byProject: Record<string, number>;
+  recent: IssuePage["items"];
+};
+
+function readOpenIssueRollup(db: StoreDb, projectId?: string): OpenIssueRollup {
+  const where = `where issues.disposition = 'open'${projectId === undefined ? "" : " and issues.project_id = ?"}`;
+  const params = projectId === undefined ? [] : [projectId];
+  // The whole severity vocabulary is reported (zeros included), so a consumer
+  // never distinguishes "absent" from "zero" by a missing key.
+  const bySeverity: Record<string, number> = {};
+  for (const severity of ISSUE_SEVERITIES) bySeverity[severity] = 0;
+  const severities = db
+    .prepare(`select issues.severity as severity, count(*) as count from issues ${where} group by issues.severity`)
+    .all(...params) as Array<{ severity: string; count: number }>;
+  for (const row of severities) bySeverity[row.severity] = row.count;
+  const byProject: Record<string, number> = {};
+  const projects = db
+    .prepare(`select issues.project_id as projectId, count(*) as count from issues ${where} group by issues.project_id order by issues.project_id asc`)
+    .all(...params) as Array<{ projectId: string; count: number }>;
+  for (const row of projects) byProject[row.projectId] = row.count;
+  const total = db.prepare(`select count(*) as count from issues ${where}`).get(...params) as { count: number };
+  return {
+    totalOpen: total.count,
+    bySeverity,
+    byProject,
+    recent: readIssuePage(db, {
+      disposition: "open",
+      limit: OPEN_ISSUE_PREVIEW_LIMIT,
+      ...(projectId === undefined ? {} : { projectId }),
+    }).items,
+  };
+}
+
+/**
+ * The open-issue rollup as one read request: repository-wide, or one project.
+ * Every statement runs inside the request's single collaboration read
+ * transaction, so the total, the grouping and the preview cannot be joined
+ * across generations.
+ */
+export function queryOpenIssueRollup(projectId?: string): StoreReadQuery<OpenIssueRollup> {
+  // A blank id is a request shape the contract does not define: it must not
+  // answer a zero rollup for a project that was never named.
+  if (projectId !== undefined && (typeof projectId !== "string" || projectId.trim() === "")) {
+    usage("projectId must be a non-empty id");
+  }
+  const scoped = projectId === undefined ? undefined : projectId.trim();
+  // The proof names the selection it actually covers: a repository-wide rollup
+  // and any project filter are different scopes with different keys, so one
+  // summary proof can never stand for both.
+  const scope: CollaborationScope =
+    scoped === undefined ? { kind: "repository", key: "open-issues:repository" } : { kind: "project", key: scoped };
+  return {
+    view: "open-issue-rollup",
+    needsProjection: false,
+    collaboration: { scope, required: true },
+    execution: "not-requested",
+    run: (sources) => ({ data: readOpenIssueRollup(collaborationSource(sources), scoped) }),
   };
 }
 

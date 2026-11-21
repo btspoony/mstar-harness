@@ -133,7 +133,7 @@ import {
   type CompositeKey,
 } from "./collaboration-operations.js";
 import { parseAssignmentBranchForms } from "./dispatch.js";
-import { findingsCleanupGate, observePlanFindings, type FindingsObservation } from "./project.js";
+import { assertPlanFindingsCurrent, findingsCleanupGate, type FindingsObservation } from "./project.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -1926,47 +1926,6 @@ function findingsOpenRefusal(planId: string, proof: CompletionFindingsProof): Co
   );
 }
 
-/**
- * §Read/Completeness the pre-commit applicability re-sample: the complete
- * observation that authorized completion must still name the same authority,
- * scope and revision. A known changed stamp/scope/revision refuses as stale so
- * the caller repeats the same completion against a current complete
- * observation. This runs before the execution transaction — the transaction
- * itself never reads collaboration.
- */
-async function assertFindingsObservationCurrent(
-  context: ExecutionContext,
-  observed: FindingsObservation,
-): Promise<void> {
-  const current = await observePlanFindings(context, observed.scope.key);
-  const sameAuthority =
-    current.authority.repoKey === observed.authority.repoKey &&
-    current.authority.mode === observed.authority.mode &&
-    current.authority.storeId === observed.authority.storeId &&
-    current.authority.epoch === observed.authority.epoch;
-  const sameScope =
-    current.scope.kind === observed.scope.kind && current.scope.key === observed.scope.key;
-  if (!sameAuthority || !sameScope || current.revision !== observed.revision) {
-    throw new CoordinationError(
-      "coordination.version-conflict",
-      "The collaboration findings observation changed before the completion transaction; repeat the same completion with the same semantic id so it is judged against a current complete observation.",
-      {
-        plan_id: observed.scope.key,
-        observed: {
-          asOf: observed.asOf,
-          authority: observed.authority,
-          revision: observed.revision,
-        },
-        current: {
-          asOf: current.asOf,
-          authority: current.authority,
-          revision: current.revision,
-        },
-      },
-    );
-  }
-}
-
 /** Test-only hook to observe the preflight→commit gap of a DB completion. */
 let completeWitnessGapForTest: (() => void) | undefined;
 export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
@@ -2044,10 +2003,11 @@ export async function completeExecutionPlan(
   // collaboration mutation in the real gap the write frame then re-reads and
   // re-validates.
   completeWitnessGapForTest?.();
-  // The findings observation that authorized this completion must still name the
-  // same authority/scope/revision; a known drift refuses as stale instead of
-  // committing a decision taken against an older snapshot.
-  await assertFindingsObservationCurrent(context, witnesses.findings.observation);
+  // §Read/Completeness the pre-commit applicability re-sample: the complete
+  // observation that authorized completion must still name the same authority,
+  // scope and revision, so a known drift refuses as stale before this frame
+  // owns SQLite. The transaction itself never reads collaboration.
+  await assertPlanFindingsCurrent(context, witnesses.findings.observation);
   return withExecutionPlanOperation<ExecutionPlanView>(
     context,
     resolved,

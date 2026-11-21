@@ -30,7 +30,7 @@ import {
   type ProjectFeature,
 } from "@mstar-harness/ui";
 
-import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
 
 /** Where the pair answers. */
 export const PROJECTS_PATH = "/api/projects";
@@ -96,6 +96,8 @@ export async function readProjects(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<ProjectListDTO>(body);
     if (envelope === null) return { status: "error", message: "The project list answered with something that is not a read envelope." };
+    const gap = requiredCollaborationRefusal(envelope);
+    if (gap !== null) return { status: "error", message: gap };
     return { status: "ready", envelope: { data: envelope.data, projection: envelope.projection } };
   } catch {
     return { status: "error", message: UNREACHABLE };
@@ -128,6 +130,10 @@ export async function readRoadmap(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<RoadmapDTO>(body);
     if (envelope === null) return { status: "error", message: "The roadmap read answered with something that is not a read envelope." };
+    // A gap is not an absent roadmap: the authority could not establish that the
+    // project has none, so the read fails rather than claiming a missing record.
+    const gap = requiredCollaborationRefusal(envelope);
+    if (gap !== null) return { status: "error", message: gap };
     const arm = roadmapFeatureArm({ data: envelope.data, projection: envelope.projection });
     // The envelope carries the catalog row even when the roadmap authority is absent,
     // so the head is built from what the store actually said rather than from the id:

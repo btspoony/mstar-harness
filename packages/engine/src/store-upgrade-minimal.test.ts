@@ -2977,7 +2977,9 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   );
   expect(project.id).toBe("_default");
   const current = await readRoadmapAuthority(context, "_default");
-  expect(current).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  const { collaboration: currentEvidence, ...currentRead } = current;
+  expect(currentRead).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  expect(currentEvidence.completeness).toBe("complete");
   const roadmap = [
     "---",
     "project_id: _default",

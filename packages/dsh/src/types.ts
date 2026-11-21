@@ -189,12 +189,14 @@ export interface HarnessResidualView {
 /**
  * Where the workspace-state digest's open-item facts came from, and whether
  * that read was whole. `kind: 'store'` means the issue rollup AND the knowledge
- * catalog digest were read from `{HARNESS_DIR}/store.db`; `'unavailable'` means
- * the store could not serve them (missing / staged / corrupt / below-floor
- * runtime) and `diagnostic` carries the refusal verbatim — never an empty
- * "no findings" rollup. `projection` is the read envelope's own projection
- * freshness (current | stale | unavailable), so a stale projection is disclosed
- * instead of being sold as current; `null` when no envelope was read.
+ * catalog digest were read from the collaboration authority; `'unavailable'`
+ * means that authority could not serve them (absent / staged / unreadable /
+ * below-floor runtime) and `diagnostic` carries the refusal verbatim — never an
+ * empty "no findings" rollup. `projection` is the read envelope's own
+ * projection freshness (current | stale | unavailable), so a stale projection
+ * is disclosed instead of being sold as current; `null` when no envelope was
+ * read. `completeness`/`asOf` are that envelope's collaboration observation
+ * for the rollup's own scope — projection health never stands in for them.
  *
  * ABSENT when a build ran without a store read (the synchronous
  * `buildCatalogPayload` callers — the `mstar:engine-status` context provider,
@@ -204,6 +206,10 @@ export interface StoreFactsView {
   readonly kind: 'store' | 'unavailable'
   readonly projection: 'current' | 'stale' | 'unavailable' | null
   readonly storeRevision: number | null
+  /** Completeness of the scoped collaboration observation that produced the rollup. */
+  readonly completeness: 'complete' | 'partial' | 'unavailable' | null
+  /** Observation time of that scoped snapshot (`null` when nothing was observed). */
+  readonly asOf: string | null
   readonly diagnostic: string | null
 }
 

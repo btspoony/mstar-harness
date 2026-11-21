@@ -1,11 +1,31 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import { initializeCollaborationStore, initializeStore, openStore, resolveCollaborationLocation } from "@mstar-harness/engine";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope } from "./support/cli-assertions";
+
+/**
+ * Both the in-process reads and the spawned CLI resolve the collaboration lane
+ * through the user home: pin it to a private root and restore it afterwards.
+ */
+const HOME_ROOT = mkdtempSync(join(tmpdir(), "status-cli-home-"));
+const PRIOR_HOME = process.env.HOME;
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  process.env.HOME = HOME_ROOT;
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  if (PRIOR_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = PRIOR_HOME;
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
 
 // ---------------------------------------------------------------------------
 // mstar status validate — v2 root + workflow snapshot (audit-004 cutover)
@@ -60,11 +80,22 @@ function captureInputOf(occurrenceKey: string, severity: string): Record<string,
 }
 
 /**
+ * A real checkout: issue authority is the repository's collaboration lane, so
+ * `store init` needs an origin or `[collaboration]` identity before it can
+ * create anything.
+ */
+function seedCheckout(dir: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
+}
+
+/**
  * An ACTIVE issue store under `dir` holding one unscoped OPEN issue; returns
  * the DB-assigned issue id. `store init` is create-only for a genuinely empty
  * workspace, so it runs before any register-shaped file exists.
  */
 function seedIssueStore(dir: string, severity = "high"): string {
+  seedCheckout(dir);
   const init = runCli(["store", "init", "--harness", dir]);
   expect(init.exitCode).toBe(0);
   const payloadPath = join(dir, "capture.json");
@@ -86,30 +117,35 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       seedIssueStore(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({
+      const data = cliEnvelope(result, "ok", "status.ok").data;
+      expect(data).toMatchObject({
         total_open: 1,
         by_severity: { critical: 0, high: 1, medium: 0, low: 0, nit: 0 },
         by_project: { _default: 1 },
+        // Additive evidence: the scope and instant that answered the totals.
+        collaboration: { completeness: "complete", scope: { kind: "repository", key: "open-issues:repository" } },
       });
     });
   });
 
   test("a missing store refuses instead of printing an empty rollup (exit 1)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
+      seedCheckout(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
+      // Missing collaboration data is never an empty success.
+      expect(cliEnvelope(result, "refused", "collaboration.not-initialized").data).toBeUndefined();
     });
   });
 
   test("a staged store is not the authority: the rollup refuses (exit 1)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "mstar-slice4-staged-"));
     try {
+      seedCheckout(dir);
       const handle = await initializeStore({ harnessDir: dir });
       handle.close();
-      const write = await openStore({ harnessDir: dir }, "write");
-      write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-      write.close();
+      // A staged lane exists but is not published: ordinary reads refuse it.
+      await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: dir }));
       // A read in THIS process first: a child's first read of a store the
       // runner just wrote intermittently fails to open (task-3 report §obs).
       const seal = await openStore({ harnessDir: dir }, "read");
@@ -117,7 +153,7 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
 
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(cliEnvelope(result, "refused", "store.not-active").data).toBeUndefined();
+      expect(cliEnvelope(result, "refused", "collaboration.not-active").data).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -130,14 +166,19 @@ describe("mstar status findings-cleanup — issue-linkage gate over the issue st
       seedIssueStore(dir, "critical");
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir, "--mode", "zero-residual"]);
       expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({ planId: "p1", violations: [] });
+      expect(cliEnvelope(result, "ok", "status.ok").data).toMatchObject({
+        planId: "p1",
+        violations: [],
+        collaboration: { completeness: "complete", scope: { kind: "plan", key: "p1" } },
+      });
     });
   });
   test("a missing store fails closed instead of passing as no findings (exit 1)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
+      seedCheckout(dir);
       const result = runCli(["status", "findings-cleanup", "p1", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      expect(cliEnvelope(result, "refused", "store.not-initialized").data).toBeUndefined();
+      expect(cliEnvelope(result, "refused", "collaboration.not-initialized").data).toBeUndefined();
     });
   });
   test("invalid --mode is a usage error before store access (exit 2)", () => {

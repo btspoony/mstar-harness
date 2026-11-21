@@ -62,6 +62,9 @@ describe("roadmap CLI", () => {
     const reviewFile = join(dir, "review.json");
     writeFileSync(source, MARKDOWN);
     const revisionBefore = await readRoadmapAuthority(context, "proj-roadmap");
+    // Each read stamps its own snapshot instant; the roads must be unchanged.
+    const { collaboration: evidenceBefore, ...readBefore } = revisionBefore;
+    expect(evidenceBefore.completeness).toBe("complete");
 
     const help = run(["roadmap", "--help"], dir);
     expect(help.status).toBe(0);
@@ -70,7 +73,10 @@ describe("roadmap CLI", () => {
     expect(preview.status).toBe(0);
     const reviewed = data(preview);
     expect(reviewed.expectedRoadmapRevision).toBe("absent");
-    expect(await readRoadmapAuthority(context, "proj-roadmap")).toEqual(revisionBefore);
+    const afterPreview = await readRoadmapAuthority(context, "proj-roadmap");
+    const { collaboration: evidenceAfter, ...readAfter } = afterPreview;
+    expect(evidenceAfter.completeness).toBe("complete");
+    expect(readAfter).toEqual(readBefore);
     writeFileSync(reviewFile, `${preview.stdout}\n`);
 
     const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-proof"], dir);

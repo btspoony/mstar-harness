@@ -1,7 +1,12 @@
 export type { RoadmapContent } from "./roadmap-content.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
@@ -115,14 +120,18 @@ export function readRoadmapAuthorityOn(db: StoreDb, projectId: string): RoadmapR
   return readOn(db, projectId);
 }
 
-export async function readRoadmapAuthority(context: StoreContext, projectId: string): Promise<RoadmapRead> {
+export async function readRoadmapAuthority(
+  context: StoreContext,
+  projectId: string,
+): Promise<RoadmapRead & { collaboration: CompleteCollaborationObservation }> {
   const handle = await openCollaborationStore(context, "read");
   try {
     handle.db.exec("begin");
     try {
+      const collaboration = readCollaborationObservation(handle, { kind: "project", key: projectId });
       const result = readOn(handle.db, projectId);
       handle.db.exec("commit");
-      return result;
+      return { ...result, collaboration };
     } catch (error) {
       handle.db.exec("rollback");
       throw error;

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getIssue, initializeCollaborationStore, initializeStore, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getCatalog, getIssue, initializeCollaborationStore, initializeStore, listCatalog, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
   dashboardFilters,
@@ -204,7 +204,13 @@ describe("dashboard views over a real store", () => {
 
     const envelope = await readDashboardView({ context, view: "issues" });
     const page = envelope.data as IssuePage;
-    expect(page).toEqual(await listIssues(context, {}));
+    // The direct domain read carries its own observation; the page itself keeps
+    // the existing DTO keys the dashboard answers with (asserted against the
+    // lane counters below).
+    const direct = await listIssues(context, {});
+    const { collaboration: pageEvidence, ...directPage } = direct;
+    expect(page).toEqual(directPage);
+    expect(pageEvidence).toMatchObject({ completeness: "complete", revision: direct.storeRevision });
     expect(page.items.map((item) => item.id)).toEqual(["I-000001", "I-000002"]);
     // The reported revision is the LANE's: issue/catalog authority lives there.
     expect(envelope.storeRevision).toBe(await laneRevision(context));
@@ -224,7 +230,14 @@ describe("dashboard views over a real store", () => {
     await seedIssue(context, "detail row", "low");
 
     const envelope = await readDashboardView({ context, view: "issue-detail", id: "I-000001" });
-    expect(envelope.data as IssueDetail).toEqual(await getIssue(context, "I-000001"));
+    const direct = await getIssue(context, "I-000001");
+    const { collaboration: detailEvidence, ...directDetail } = direct;
+    expect(envelope.data as IssueDetail).toEqual(directDetail);
+    expect(detailEvidence).toMatchObject({
+      completeness: "complete",
+      revision: envelope.storeRevision,
+      scope: { kind: "query", key: "issue:I-000001" },
+    });
 
     const failure = await readDashboardView({ context, view: "issue-detail", id: "I-999999" }).catch((error: unknown) => error);
     expect(dashboardFailure(failure)).toMatchObject({ code: "issue.not-found" });
@@ -359,6 +372,42 @@ describe("dashboard views over a real store", () => {
       message: expect.stringContaining("disposition must be one of"),
     });
     expect(Object.keys(dashboardFailure(caught)).sort()).toEqual(["code", "message"]);
+  });
+
+  test("collaboration command evidence: direct domain reads carry the lane observation", async () => {
+    const { context } = await workspace("command-evidence-");
+    await seedIssue(context, "evidence row", "low");
+    await registerCatalogEntity(context, {
+      kind: "project", id: "proj-a", title: "Project", rootKind: "projects", relativePath: "proj-a",
+    }, { operationId: "register-evidence", actor: "store-read-test" });
+    const revision = await laneRevision(context);
+
+    const page = await listIssues(context, {});
+    expect(page.collaboration).toMatchObject({ completeness: "complete", revision });
+    expect(page.collaboration.scope.kind).toBe("query");
+    expect(page.collaboration.scope.key.startsWith("issues:")).toBe(true);
+    expect(Number.isNaN(Date.parse(page.collaboration.asOf))).toBe(false);
+
+    const issueId = page.items[0]?.id;
+    if (issueId === undefined) throw new Error("the evidence fixture seeded no issue");
+    const detail = await getIssue(context, issueId);
+    expect(detail.collaboration).toMatchObject({
+      completeness: "complete",
+      revision,
+      scope: { kind: "query", key: `issue:${issueId}` },
+    });
+
+    const catalogPage = await listCatalog(context, {});
+    expect(catalogPage.collaboration).toMatchObject({ completeness: "complete", revision });
+    expect(catalogPage.collaboration.scope.kind).toBe("query");
+    expect(catalogPage.collaboration.scope.key.startsWith("catalog:")).toBe(true);
+
+    const catalogDetail = await getCatalog(context, { kind: "project", id: "proj-a" });
+    expect(catalogDetail.collaboration).toMatchObject({
+      completeness: "complete",
+      revision,
+      scope: { kind: "query", key: "catalog:project:proj-a" },
+    });
   });
 
   test("each source observation is stamped at its own snapshot, not at request time", async () => {

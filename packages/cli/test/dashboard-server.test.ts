@@ -11,19 +11,30 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, reviewRoadmapImport, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-server-"));
+/** The user-level collaboration root this suite owns: the real `$HOME` is never read or written. */
+const TEST_HOME = join(ROOT, "home");
+mkdirSync(TEST_HOME, { recursive: true });
+let homeSpy: { mockRestore(): void } | undefined;
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'";
 
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => TEST_HOME);
+});
+
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -33,30 +44,47 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   // cwd, so the fixture is a genuine checkout rather than a bare directory.
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+  // The origin and `.mstarc` select the collaboration lane; a fresh checkout with
+  // neither cannot resolve a repository authority.
+  spawnSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], { cwd: dir });
+  writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(dir, ".mstar") };
   const handle = await initializeStore(context);
   handle.close();
-  // Normalize the WAL side files (same reason as `withWrite`): a read-only open
-  // right after the initializing writer closed can refuse while the -wal/-shm
-  // pair is still on disk, and every server read opens the store read-only.
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  activateCollaboration(context);
+  // Normalize the WAL side files: a read-only open right after the initializing
+  // writer closed can refuse while the -wal/-shm pair is still on disk, and every
+  // server read opens the store read-only.
   const probe = await openStore(context, "read");
   probe.close();
   return { dir, context };
 }
 
-async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Promise<void> {
-  const handle = await openStore(context, "write");
+/**
+ * Publish the staged collaboration lane AND this checkout's binding -- the two
+ * records the real activation writes. An ACTIVE authority is never usable from
+ * an unbound checkout, so a fixture that flips only the lane is refused.
+ */
+function activateCollaboration(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const lane = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
-    fn(handle.db);
+    lane
+      .prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1")
+      .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
-    handle.close();
+    lane.close();
   }
-  // Normalize the WAL side files: a read-only open right after a writer close
-  // can refuse while the -wal/-shm pair is still on disk, so drain it with one
-  // read open before any server serves this store.
-  const probe = await openStore(context, "read");
-  probe.close();
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 async function seedIssue(context: StoreContext, title: string, severity: CaptureInput["severity"], resolved = false): Promise<void> {
@@ -282,9 +310,16 @@ describe("API over a real store", () => {
     expect(envelope.data.items.map((row) => row.id)).toEqual(before.items.map((row) => row.id));
     expect(envelope.storeRevision).toBe(before.storeRevision);
 
-    // Read-only: the authoritative rows and revisions are unchanged after the GET.
+    // Read-only: the authoritative rows and revisions are unchanged after the
+    // GET. `asOf` is each read's own observation instant, so it is the one
+    // field a before/after comparison must normalize away.
     const after = await listIssues(context, {});
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    const evidence = (page: Awaited<ReturnType<typeof listIssues>>): string => {
+      const copy = JSON.parse(JSON.stringify(page)) as { collaboration?: { asOf?: unknown } };
+      if (copy.collaboration !== undefined) delete copy.collaboration.asOf;
+      return JSON.stringify(copy);
+    };
+    expect(evidence(after)).toBe(evidence(before));
   });
 
   test("GET /api/issues/:id answers the detail DTO; unknown id is a structured 404", async () => {
@@ -386,19 +421,121 @@ describe("API over a real store", () => {
     }
   });
 
+  test("a refusal never echoes an authorization credential from the request path", async () => {
+    // The detail id reaches a lower-level issue refusal, which the HTTP error body
+    // publishes. A conventional authorization value must be redacted with its scheme.
+    for (const [scheme, secret] of [
+      ["Bearer", "sk-live-bearer"],
+      ["Basic", "dXNlcjpwYXNz"],
+      ["Token", "tok-live-123"],
+      ["bearer", "sk-live-mixed-case"],
+      ["bAsIc", "dXNlcjpwYXNzMixlZA=="],
+      ["toKeN", "tok-live-mixed"],
+    ] as const) {
+      const id = `x%20Authorization:%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+    // An UNLABELLED, mixed-case scheme carries a credential too.
+    for (const [scheme, secret] of [
+      ["bearer", "sk-live-bare"],
+      ["toKeN", "tok-live-bare"],
+    ] as const) {
+      const id = `x%20refused%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+  });
+
+  test("a Digest authorization value is redacted with all its parameters over HTTP", async () => {
+    const header = 'x Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"';
+    const res = await raw(new URL(`/api/issues/${encodeURIComponent(header)}`, server.url).href);
+    expect(res.status).toBe(404);
+    const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("issue.not-found");
+    for (const leaked of ["Mufasa", "test", "abc", "deadbeef"]) expect(body.error.message).not.toContain(leaked);
+    expect(body.error.message).toContain("{REDACTED}");
+  });
+
   test("stale projection is disclosed in the envelope, never hidden", async () => {
-    await withWrite(context, (db) => {
-      db.prepare(
-        "update projection_meta set freshness = 'stale', last_error_json = ? where id = 1",
-      ).run(
-        JSON.stringify({ sources: [{ sourceKey: "workflows", reason: "source-unreadable", message: "snapshot.json is unreadable" }] }),
+    const { dir, context } = await workspace("stale-projection-");
+    await declareWorkflow(context, "wf-stale-projection");
+    const staleServer = await start(dir);
+    try {
+      // Publish a generation first, then block the optional catalog input: the
+      // last good generation is retained and must be disclosed as stale, with
+      // its rows, on the execution-backed read.
+      const published = await raw(new URL("/api/workflows", staleServer.url).href);
+      expect(published.status).toBe(200);
+      unlinkSync(resolveCollaborationLocation(context).dbPath);
+      const res = await raw(new URL("/api/workflows", staleServer.url).href);
+      expect(res.status).toBe(200);
+      const envelope = JSON.parse(res.body) as {
+        projection: { freshness: string; diagnostics: Array<{ sourceKey: string }> };
+        data: { items: Array<{ id: string }> };
+      };
+      expect(envelope.projection.freshness).toBe("stale");
+      expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("catalog");
+      expect(envelope.data.items.map((item) => item.id)).toContain("wf-stale-projection");
+    } finally {
+      await staleServer.close();
+    }
+  });
+});
+
+describe("dashboard collaboration disclosure", () => {
+  test("a missing collaboration authority is a 503, never a 404 or an empty list", async () => {
+    const { dir, context } = await workspace("collaboration-missing-");
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/issues", server.url).href);
+      expect(res.status).toBe(503);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("collaboration.not-initialized");
+      // The refusal keeps its recovery and publishes neither HOME nor the store file.
+      expect(body.error.message).toContain("mstar store init");
+      expect(body.error.message).not.toContain(dir);
+      expect(body.error.message).not.toContain(TEST_HOME);
+      expect(body.error.message).not.toMatch(/\.db\b/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("an execution-only list serves its rows and discloses the optional gap", async () => {
+    const { dir, context } = await workspace("collaboration-optional-");
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/workflows", server.url).href);
+      expect(res.status).toBe(200);
+      const envelope = JSON.parse(res.body) as {
+        data: { items: unknown[]; total: number };
+        storeRevision: number | null;
+        collaboration: { completeness: string; code: string } | null;
+        execution: unknown;
+      };
+      // Execution data is preserved; the unavailable catalog association is
+      // disclosed and no collaboration counter is claimed.
+      expect(Array.isArray(envelope.data.items)).toBe(true);
+      expect(envelope.data.total).toBe(envelope.data.items.length);
+      expect(envelope.collaboration).toEqual(
+        expect.objectContaining({ completeness: "unavailable", code: "collaboration.not-initialized" }),
       );
-    });
-    const res = await raw(new URL("/api/issues", server.url).href);
-    expect(res.status).toBe(200);
-    const envelope = JSON.parse(res.body) as { projection: { freshness: string; diagnostics: Array<{ sourceKey: string; reason: string }> } };
-    expect(envelope.projection.freshness).toBe("stale");
-    expect(envelope.projection.diagnostics[0]?.sourceKey).toBe("workflows");
+      expect(envelope.storeRevision).toBeNull();
+      expect(envelope.execution).not.toBeNull();
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -473,32 +610,40 @@ describe("workflow detail and the projection generation", () => {
 
 describe("boundary and lifecycle", () => {
 
-  test("a staged store refuses reads with store.not-active (never an empty page)", async () => {
+  test("a staged collaboration authority refuses reads with collaboration.not-active (never an empty page)", async () => {
     const { dir, context } = await workspace("staged-");
-    await withWrite(context, (db) => {
-      db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-    });
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      lane.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      lane.close();
+    }
     const server = await start(dir);
     try {
       const res = await raw(new URL("/api/issues", server.url).href);
       expect(res.status).toBe(503);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
-      expect(body.error.code).toBe("store.not-active");
-      // No local filesystem path leaks in the refusal.
+      expect(body.error.code).toBe("collaboration.not-active");
+      // No local filesystem path or store file leaks in the refusal.
       expect(body.error.message).not.toContain(dir);
+      expect(body.error.message).not.toContain(TEST_HOME);
+      expect(body.error.message).not.toMatch(/\.db\b/);
     } finally {
       await server.close();
     }
   });
 
-  test("a missing store refuses reads with store.not-initialized", async () => {
-    const dir = mkdtempSync(join(ROOT, "missing-"));
-    mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const server = remember(await startDashboard({ harnessDir: join(dir, ".mstar") }));
+  test("a missing execution store refuses workflow reads with store.not-initialized", async () => {
+    const { dir } = await workspace("missing-");
+    for (const name of ["store.db", "store.db-wal", "store.db-shm"]) {
+      rmSync(join(dir, ".mstar", name), { force: true });
+    }
+    const server = await start(dir);
     try {
-      const res = await raw(new URL("/api/issues", server.url).href);
+      const res = await raw(new URL("/api/workflows", server.url).href);
       expect(res.status).toBe(503);
-      expect((JSON.parse(res.body) as { error: { code: string } }).error.code).toBe("store.not-initialized");
+      const body = JSON.parse(res.body) as { error: { code: string } };
+      expect(body.error.code).toBe("store.not-initialized");
     } finally {
       await server.close();
     }
@@ -595,6 +740,9 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
 
       const child = spawn("bun", [packaged, "dashboard", "--port", "0"], {
         cwd: dir,
+        // The child resolves the collaboration lane from HOME; this suite owns a
+        // temporary one, so it must not read the developer's real store.
+        env: { ...process.env, HOME: TEST_HOME },
         stdio: ["ignore", "pipe", "pipe"],
       });
       const url = await new Promise<string>((resolve, reject) => {
@@ -718,7 +866,7 @@ describe("hostile invocation-cwd dotenv", () => {
       `MSTAR_HARNESS_DIR=${join(decoy, ".mstar")}`,
       "",
     ].join("\n"));
-    const env = { ...process.env };
+    const env = { ...process.env, HOME: TEST_HOME };
     for (const key of ["MSTAR_STORE_TEST_RUNNER", "MSTAR_PROJECTION_DB_CHURN", "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR", "MSTAR_HARNESS_DIR"]) delete env[key];
 
     const cliDir = join(import.meta.dir, "..");

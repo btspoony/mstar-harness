@@ -1676,7 +1676,7 @@ describe("collaboration findings observation \u2014 completion evidence", () => 
     expect((await readExecutionPlan(fixture.planContext, fixture.session, fixture.planId)).data.plan.status).toBe("InProgress");
   });
 
-  test("collaboration findings observation: a findings change in the proof gap refuses as stale", async () => {
+  test("collaboration gate evidence: a findings change in the proof gap refuses as stale", async () => {
     const fixture = await completionFixture("completion-findings-stale");
     let seamRan = false;
     // The seam runs after the observation and before the execution transaction:
@@ -1693,7 +1693,15 @@ describe("collaboration findings observation \u2014 completion evidence", () => 
     try {
       const refusal = await refusalOf(() => fixture.complete("complete-findings-stale"));
       expect(seamRan).toBe(true);
-      expect(refusal.code).toBe("coordination.version-conflict");
+      expect(refusal.code).toBe("collaboration.observation-stale");
+      // The refusal names both snapshots, so the caller repeats the same
+      // completion against a current complete observation.
+      const details = detailsOf(refusal);
+      expect(details.plan_id).toBe(fixture.planId);
+      const observed = details.observed as { asOf: string; revision: number };
+      const current = details.current as { asOf: string; revision: number };
+      expect(observed.asOf).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(current.revision).toBe(observed.revision + 1);
     } finally {
       setCompleteWitnessGapForTest(undefined);
     }
@@ -1717,6 +1725,30 @@ describe("collaboration findings observation \u2014 completion evidence", () => 
     expect((recorded.authority as Record<string, unknown>).storeId).toBe(
       (await readCollaborationAuthority(fixture.context)).storeId,
     );
+  });
+
+  test("collaboration gate evidence: a later finding never rewrites the recorded completion evidence", async () => {
+    const fixture = await completionFixture("completion-findings-recorded-stable");
+    const receipt = await fixture.complete("complete-findings-recorded-stable");
+    expect(receipt.data.plan.status).toBe("Done");
+    const recorded = (receipt.data.plan.metadata as Record<string, unknown>).completion_findings;
+    expect((recorded as Record<string, unknown>).open).toEqual([]);
+
+    // A finding captured and linked after Done is a new fact about the issue
+    // store; the accepted completion predicate is evidence, not a live query.
+    const issue = await captureIssue(fixture.context, baseInput({ severity: "critical", occurrenceKey: "completion-after-done" }), {
+      operationId: "cap-completion-after-done",
+      actor: ACTOR,
+    });
+    await linkIssueScoped(fixture.context, issue.issueId, { kind: "plan", target: fixture.planId }, {
+      operationId: "link-completion-after-done",
+      actor: ACTOR,
+      expectedRevision: issue.revision,
+    });
+
+    const later = await readExecutionPlan(fixture.planContext, fixture.session, fixture.planId);
+    expect(later.data.plan.status).toBe("Done");
+    expect((later.data.plan.metadata as Record<string, unknown>).completion_findings).toEqual(recorded);
   });
 
   test("collaboration findings observation: zero-residual blocks an open medium and passes once it is legitimately zero", async () => {

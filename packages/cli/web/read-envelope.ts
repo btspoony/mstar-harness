@@ -43,6 +43,31 @@ export function refusalMessage(body: unknown, status: number): string {
 export const UNREACHABLE =
   "The dashboard could not reach its local server. Check that the dashboard is running, then reload.";
 
+/**
+ * The named gap of an EXPLICITLY incomplete collaboration observation, or `null`
+ * when the observation is complete or the envelope discloses none (a legacy
+ * transport). `null` is "not disclosed", never "healthy".
+ */
+export function collaborationGap(
+  envelope: ReadEnvelope<unknown>,
+): { completeness: "partial" | "unavailable"; code: string } | null {
+  const collaboration: ReadEnvelope<unknown>["collaboration"] | undefined = envelope.collaboration;
+  if (collaboration === null || collaboration === undefined || collaboration.completeness === "complete") return null;
+  return { completeness: collaboration.completeness, code: collaboration.code };
+}
+
+/**
+ * A read whose rows require collaboration must fail closed on an explicit gap:
+ * the transport established a complete observation or these rows are not
+ * authoritative, so they are never presented as a successful list.
+ */
+export function requiredCollaborationRefusal(envelope: ReadEnvelope<unknown>): string | null {
+  const gap = collaborationGap(envelope);
+  return gap === null
+    ? null
+    : `The collaboration authority answered ${gap.completeness} (${gap.code}), so this read is not authoritative. Reload to read it again.`;
+}
+
 /** A list view's payload: rows in a page window, plus the store's unpaged count. */
 type ListPayload = { items: unknown[]; total: number };
 
@@ -100,9 +125,10 @@ function logicalScope(scope: CollaborationScope, offset: number): CollaborationS
  * Every source fact that must agree for two pages to be one list: the
  * collaboration observation (authority identity/epoch, completeness, LOGICAL
  * scope, revision, catalog revision and gap code) and the execution observation
- * (identity/epoch/revision), beside the projection generation. Numeric counters
- * alone cannot tell a restored or replaced authority apart, and page bounds are
- * deliberately excluded: they differ by construction across a list's pages.
+ * (identity/epoch/revision), beside the projection generation and its health.
+ * Numeric counters alone cannot tell a restored or replaced authority apart, and
+ * page bounds are deliberately excluded: they differ by construction across a
+ * list's pages.
  */
 function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
   const { collaboration, execution, projection, storeRevision, catalogRevision } = envelope;
@@ -131,7 +157,10 @@ function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
         : execution.asOf === null
           ? { asOf: null, code: execution.code }
           : { storeId: execution.storeId, epoch: execution.epoch, revision: execution.revision },
-    projection: { observed: projection.observed, generation: projection.generation },
+    // Health is part of the disclosure, not decoration: a page read while the
+    // projection was still current must not be joined with one read after it
+    // went stale, or the assembled list would state the first page's freshness.
+    projection: { observed: projection.observed, generation: projection.generation, freshness: projection.freshness },
   });
 }
 

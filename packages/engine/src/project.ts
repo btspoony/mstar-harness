@@ -46,11 +46,14 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
-import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   openCollaborationStore,
+  readCollaborationObservation,
   withCollaborationWrite,
+  type CollaborationObservation,
   type CollaborationStamp,
+  type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import {
   normalizeSeverity,
@@ -226,40 +229,11 @@ export function validateProjectRegister(doc: unknown): GateResult {
 }
 
 /**
- * The scope a collaboration observation covers (contract §Read/Completeness).
- * The plan key is the exact stable plan catalog id; the repository identity is
- * the observation's `authority.repoKey`, never re-derived from a path.
+ * The collaboration read contract types are owned by `collaboration-store.ts`
+ * (beside the handle that builds them) and re-exported here for the existing
+ * domain imports.
  */
-export type CollaborationScope = Readonly<{
-  kind: "repository" | "project" | "plan" | "milestone" | "query";
-  key: string;
-}>;
-
-/**
- * One scoped read of the collaboration authority. `complete` is the only
- * observation a gate may decide on; `partial`/`unavailable` are declared so a
- * consumer can disclose a gap instead of reading it as an empty result.
- * `asOf` is when the local snapshot was established, never a file mtime.
- */
-export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
-  (
-    | {
-        completeness: "complete";
-        asOf: string;
-        authority: CollaborationStamp;
-        revision: number;
-        catalogRevision: number;
-      }
-    | {
-        completeness: "partial";
-        asOf: string;
-        authority: CollaborationStamp;
-        revision: number;
-        catalogRevision: number;
-        code: string;
-      }
-    | { completeness: "unavailable"; asOf: null; authority: null; code: string }
-  );
+export type { CollaborationObservation, CollaborationScope } from "./collaboration-store.js";
 
 /** A complete plan-scoped findings observation: the open local issues it read. */
 export type FindingsObservation = Extract<CollaborationObservation, { completeness: "complete" }> &
@@ -287,18 +261,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
     // the rows it was evaluated against come from the same instant.
     db.exec("begin");
     try {
-      const asOf = new Date().toISOString();
-      const meta = db
-        .prepare("select revision, catalog_revision from collaboration_meta where id = 1")
-        .get() as { revision?: unknown; catalog_revision?: unknown } | undefined;
-      const revision = meta?.revision;
-      const catalogRevision = meta?.catalog_revision;
-      if (typeof revision !== "number" || typeof catalogRevision !== "number") {
-        throw new StoreError(
-          "collaboration.unreadable",
-          "The collaboration authority has no readable revision counters; the findings observation cannot be established.",
-        );
-      }
+      const observation = readCollaborationObservation(handle, { kind: "plan", key: planId });
       const rows = db
         .prepare(
           "select issues.id as id, issues.severity as severity from issues " +
@@ -307,17 +270,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
         )
         .all(planId) as Array<{ id: string; severity: string }>;
       return {
-        scope: { kind: "plan", key: planId },
-        completeness: "complete",
-        asOf,
-        authority: {
-          repoKey: handle.authority.repoKey,
-          mode: handle.authority.mode,
-          storeId: handle.authority.storeId,
-          epoch: handle.authority.epoch,
-        },
-        revision,
-        catalogRevision,
+        ...observation,
         open: rows.map((row) => ({ id: row.id, severity: normalizeSeverity(row.severity) as Severity })),
       };
     } finally {
@@ -387,6 +340,73 @@ export async function findingsCleanupGate(
   const observation = await observePlanFindings(context, planId);
   const decision = findingsGateDecision(observation, opts?.mode ?? "allow-residual");
   return { ...decision, collaboration: observation };
+}
+
+/**
+ * The two named findings-evidence refusals (contract §Operator commands and
+ * refusals): the required scope was not fully proved, or the preflight
+ * observation no longer applies.
+ */
+export type FindingsEvidenceCode = "collaboration.observation-incomplete" | "collaboration.observation-stale";
+
+/**
+ * A findings decision could not be re-proved against current scope. `details`
+ * names the scope and both snapshots, so the caller repeats the same gate
+ * against current scope instead of retrying the stale one.
+ */
+export class FindingsEvidenceError extends Error {
+  readonly code: FindingsEvidenceCode;
+  readonly details: Record<string, unknown>;
+
+  constructor(code: FindingsEvidenceCode, message: string, details: Record<string, unknown> = {}) {
+    super(`[${code}] ${message}`);
+    this.name = "FindingsEvidenceError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * The pre-commit applicability re-sample of one findings decision: the complete
+ * observation a gate decided on must still name the same plan scope, authority
+ * stamp and revision. The recorded evidence is untrusted input here (a stored
+ * completion record is re-read, not re-observed), so a scope this repo cannot
+ * re-observe refuses as `observation-incomplete`; a moved lane refuses as
+ * `observation-stale` and names both snapshots. The evidence itself is never
+ * rewritten — the caller repeats the same gate against current scope.
+ */
+export async function assertPlanFindingsCurrent(
+  context: StoreContext,
+  observed: FindingsObservation,
+): Promise<void> {
+  const { scope } = observed;
+  if (scope.kind !== "plan" || scope.key.trim() === "") {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-incomplete",
+      `The findings evidence names ${scope.kind} scope ${JSON.stringify(scope.key)}, which this gate cannot re-observe as a plan. Repeat the gate with the plan id it was decided for.`,
+      { scope },
+    );
+  }
+  const current = await observePlanFindings(context, scope.key);
+  const { repoKey, mode, storeId, epoch } = observed.authority;
+  const authority = current.authority;
+  if (
+    authority.repoKey !== repoKey ||
+    authority.mode !== mode ||
+    authority.storeId !== storeId ||
+    authority.epoch !== epoch ||
+    current.revision !== observed.revision
+  ) {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-stale",
+      "The collaboration findings observation changed after the preflight gate; repeat the same gate against current scope so it is judged against a current complete observation.",
+      {
+        plan_id: scope.key,
+        observed: { asOf: observed.asOf, authority: observed.authority, revision: observed.revision },
+        current: { asOf: current.asOf, authority: current.authority, revision: current.revision },
+      },
+    );
+  }
 }
 
 /**
@@ -519,19 +539,34 @@ function bindingRow(db: StoreDb, projectId: string): ProjectBinding | null {
  * `linear.binding-absent` (plan Task 5 read path). Read-only: no projection
  * refresh, no mutation, so a dashboard or import entry can ask it freely.
  */
-export async function readProjectBinding(context: StoreContext, projectId: string): Promise<ProjectBindingRead> {
+export async function readProjectBinding(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectBindingRead & { collaboration: CompleteCollaborationObservation }> {
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
   }
   const handle = await openCollaborationStore(context, "read");
   try {
-    const binding = bindingRow(handle.db, projectId.trim());
-    if (binding !== null) return { kind: "bound", binding };
+    const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, { kind: "project", key: projectId.trim() });
+    const binding = bindingRow(db, projectId.trim());
+    db.exec("commit");
+    if (binding !== null) return { kind: "bound", binding, collaboration };
     return {
       kind: "absent",
       code: "linear.binding-absent",
       message: `Project ${projectId.trim()} mirrors no external project yet. Bind one with \`mstar project bind --project ${projectId.trim()} --provider linear --remote-project <name-or-id> --operation <id>\`.`,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }

@@ -21,8 +21,10 @@
  * and a write to a project register of a store-backed workspace are refused
  * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
  * `store.direct-write-refused`, `project.register.retired`,
- * `store.authority-unavailable`; a register keeps its document validator only
- * while no store / a staged store leaves it the live authority. Plan S4 adds
+ * `store.authority-unavailable`; a register is authorized only by the ACTIVE
+ * collaboration authority — a missing, staged or unreadable lane refuses
+ * (`store.authority-unavailable`) instead of leaving the register writable.
+ * Plan S4 adds
  * the EXECUTION authority's retired persistence route: a root `status.json` /
  * `workflows/<id>/snapshot.json` write is refused
  * `execution.direct-write-refused` while that authority is ACTIVE (fail-closed
@@ -70,7 +72,7 @@ import {
   landedPathOf,
   parseAssignmentFields,
   parseSimpleFrontmatter,
-  queryDashboard,
+  probeCollaborationAuthority,
   readJson,
   resolveExecutionReadRoute,
   resolveHarnessDir,
@@ -79,7 +81,6 @@ import {
   validateProjectRegister,
   validateStatus,
   validateWorkflowSnapshot,
-  withStoreRead,
 } from "@mstar-harness/engine";
 import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc } from "@mstar-harness/engine";
 import fs from "node:fs";
@@ -243,31 +244,28 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/** What the issue store says about a register target. */
+/** What the collaboration authority says about a register target: `retired` =
+ * ACTIVE lane (the register is migration history), `unavailable` = the lane is
+ * missing, staged or unreadable and the write fails closed. A missing or staged
+ * lane is never a pre-activation permission. */
 type AuthorityRoute =
-  | { kind: "legacy" }
   | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
-/** The authority answers from the ACTIVE store: the runtime floor is asserted on
- * the ACTUAL runtime (`detectStoreRuntime` — the Bun global first, never Bun's
- * emulated `process.versions.node`), and a store revision read is the retirement
- * verdict. A missing/staged store is the pre-activation state, not a refusal. */
+/** The authority answers from the ACTIVE collaboration lane: the runtime floor is
+ * asserted on the ACTUAL runtime (`detectStoreRuntime` — the Bun global first,
+ * never Bun's emulated `process.versions.node`), then the lane's own probe
+ * decides. No execution-store read takes part in this verdict. */
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   try {
     assertStoreRuntimeSupported(detectStoreRuntime());
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
-  try {
-    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
-    return { kind: "retired", storeRevision: envelope.storeRevision };
-  } catch (error) {
-    const refusal = refusalOf(error);
-    return PRE_ACTIVATION_CODES.includes(refusal.code)
-      ? { kind: "legacy" }
-      : { kind: "unavailable", ...refusal };
-  }
+  const probe = await probeCollaborationAuthority({ harnessDir });
+  return probe.kind === "active"
+    ? { kind: "retired", storeRevision: probe.authority.revision }
+    : { kind: "unavailable", code: probe.code, message: probe.message };
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -279,6 +277,16 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(path.resolve(landed));
   return aliased?.kind === "register" ? aliased.harnessDir : null;
+}
+
+/** The harness root of the register a write LANDS on (stricter-wins veto): the
+ * landed destination is the authority the bytes belong to, even when the
+ * caller's own path already classified as a register elsewhere. */
+function landedRegisterDirOf(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(path.resolve(landed));
+  if (aliased?.kind === "register") return aliased.harnessDir;
+  return caseFoldedRegisterRoot(landed);
 }
 
 /** One authority refusal as a refusal-capable GateResult: `hardBlocked` is
@@ -401,11 +409,10 @@ async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWri
  * refused outright, a root `status.json` / `workflows/<id>/snapshot.json`
  * write is refused while the control harness's EXECUTION authority is ACTIVE
  * (`execution.direct-write-refused` — the retired persistence route), and a
- * project register is routed through the DB-aware authority check — refused as
- * `project.register.retired` while the issue store is the active findings
- * authority, refused as `store.authority-unavailable` when that authority
- * cannot be read at all, and shape-validated only while no store / a staged
- * store leaves the register the live authority (issue contract §7). These
+ * project register is routed through the collaboration authority probe —
+ * refused as `project.register.retired` while that lane is ACTIVE, and
+ * refused as `store.authority-unavailable` when it is missing, staged or
+ * unreadable (there is no pre-activation register permission). These
  * refusal classes are decided on the path a target really LANDS on
  * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or to
  * a project register is refused and routed exactly like the file itself, while
@@ -519,17 +526,14 @@ export async function validateStatusWrite(
             : (aliasedRegisterDir(resolved, landed) ??
               caseFoldedRegisterRoot(resolved) ??
               (landed !== resolved ? caseFoldedRegisterRoot(landed) : null)));
-    const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
-    if (!target) return null;
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(landedRegisterDirOf(resolved, landed) ?? registerDir);
+      return route.kind === "retired" ? registerRetiredRefusal(route.storeRevision, log) : authorityUnavailableRefusal(route, log);
+    }
+    if (classified === null) return null;
+    const target = classified;
 
     let result: GateResult | null;
-    if (registerDir !== null) {
-      const route = await readAuthorityRoute(registerDir);
-      if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
-      if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
-// `legacy` (no store / staged store): pre-activation, the register is
-// still the findings authority, so its own validator decides below.
-    }
 
     if (opts.doc !== undefined) {
       result = validateDocByKind(opts.doc, target.kind);

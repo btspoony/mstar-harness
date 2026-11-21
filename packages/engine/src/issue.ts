@@ -11,8 +11,15 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { openCollaborationStore, withCollaborationWrite, type CollaborationStoreHandle } from "./collaboration-store.js";
-import { MIGRATIONS, type StoreContext, type StoreDb } from "./store-db.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CollaborationStoreHandle,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
+import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 
 
 /**
@@ -1113,6 +1120,22 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
+/** The canonical scope key of one issue page: the filters with the applied bounds. */
+function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
+  return {
+    kind: "query",
+    key: `issues:${JSON.stringify({
+      projectId: filter.projectId ?? null,
+      disposition: filter.disposition ?? "open",
+      kind: filter.kind ?? null,
+      severity: filter.severity ?? null,
+      query: filter.query ?? null,
+      limit,
+      offset,
+    })}`,
+  };
+}
+
 function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -1148,7 +1171,10 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-export async function listIssues(context: StoreContext, filter: IssueFilter): Promise<IssuePage> {
+export async function listIssues(
+  context: StoreContext,
+  filter: IssueFilter,
+): Promise<IssuePage & { collaboration: CompleteCollaborationObservation }> {
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
@@ -1158,11 +1184,15 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
     // The collaboration lane owns issue read authority: a staged or foreign
     // store never reaches this point, and no legacy schema gate applies — the
     // lane is created complete.
     assertIssueStoreActive(db);
-    const storeRevision = readMeta(db).revision;
+    const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
+    // The page revision is the observation's own counter: no second query of
+    // the same row can disagree with the proof it publishes.
+    const storeRevision = collaboration.revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const spanRow = db
       .prepare(`select count(distinct project_id) as n from issues ${where}`)
@@ -1191,6 +1221,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       milestoneId?: string | null;
       lastActivity: string | null;
     }>;
+    db.exec("commit");
     return {
       items: rows.map((row) => ({
         id: row.id,
@@ -1207,19 +1238,32 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       total: totalRow.n,
       projectCount: spanRow.n,
       storeRevision,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
 }
 
-export async function getIssue(context: StoreContext, id: string): Promise<IssueDetail> {
+export async function getIssue(
+  context: StoreContext,
+  id: string,
+): Promise<IssueDetail & { collaboration: CompleteCollaborationObservation }> {
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
     // Same authority and same gate as listIssues: the collaboration lane keeps
     // its complete shape, so no legacy per-table schema probe applies.
     assertIssueStoreActive(db);
+    const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
       .prepare(
         `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?`,
@@ -1404,7 +1448,15 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       relations,
       provenance,
       projectMoves,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }

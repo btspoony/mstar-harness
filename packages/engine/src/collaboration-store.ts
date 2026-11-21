@@ -511,6 +511,55 @@ export type CollaborationAuthority = CollaborationStamp &
   }>;
 
 /**
+ * The collaboration lane's own verdict for a host authority gate: the ACTIVE
+ * record, or the named reason no record can authorize a register write.
+ * `staged`, `absent` and `unavailable` are all refusals — none of them is a
+ * permission and none of them is inferred from the execution lane.
+ */
+export type CollaborationAuthorityProbe =
+  | Readonly<{ kind: "active"; authority: CollaborationAuthority }>
+  | Readonly<{ kind: "staged" | "absent" | "unavailable"; code: string; message: string }>;
+
+/**
+ * The scope a collaboration observation covers (contract §Read/Completeness).
+ * The plan key is the exact stable plan catalog id; the repository identity is
+ * the observation's `authority.repoKey`, never re-derived from a path.
+ */
+export type CollaborationScope = Readonly<{
+  kind: "repository" | "project" | "plan" | "milestone" | "query";
+  key: string;
+}>;
+
+/**
+ * One scoped read of the collaboration authority. `complete` is the only
+ * observation a gate may decide on; `partial`/`unavailable` are declared so a
+ * consumer can disclose a gap instead of reading it as an empty result.
+ * `asOf` is when the local snapshot was established, never a file mtime.
+ */
+export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
+  (
+    | {
+        completeness: "complete";
+        asOf: string;
+        authority: CollaborationStamp;
+        revision: number;
+        catalogRevision: number;
+      }
+    | {
+        completeness: "partial";
+        asOf: string;
+        authority: CollaborationStamp;
+        revision: number;
+        catalogRevision: number;
+        code: string;
+      }
+    | { completeness: "unavailable"; asOf: null; authority: null; code: string }
+  );
+
+/** The complete arm of a collaboration observation: the only arm an in-domain read builds. */
+export type CompleteCollaborationObservation = Extract<CollaborationObservation, { completeness: "complete" }>;
+
+/**
  * One admitted store handle. For every public entry (`openCollaborationStore`
  * in either mode) `db` is a read-only inspection connection: it cannot mutate,
  * so a retained handle never authorizes a write after the selection, state or
@@ -1746,6 +1795,64 @@ export async function readCollaborationAuthority(context: StoreContext): Promise
   const handle = await openCollaborationStore(context, "read");
   handle.close();
   return handle.authority;
+}
+
+/** One refusal's stable code (anything without one is the lane's generic cause). */
+function probeRefusal(error: unknown): { code: string; message: string } {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return {
+    code: typeof code === "string" && code !== "" ? code : "collaboration.unreadable",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+/**
+ * The collaboration lane's authority probe for host gates: it reads ONLY this
+ * lane, so the execution store can be absent, staged or corrupt without
+ * changing the verdict. Classification comes from ONE admission call's typed
+ * refusal — `collaboration.not-initialized` is `absent`,
+ * `collaboration.not-active` is `staged`, and every other cause (identity,
+ * mode, runtime, a rejected storage path, corrupt bytes, a stale binding) is
+ * `unavailable` with its original recovery — so a symlinked or non-private
+ * storage component is never reported as a missing database.
+ */
+export async function probeCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthorityProbe> {
+  try {
+    return { kind: "active", authority: await readCollaborationAuthority(context) };
+  } catch (error) {
+    const refusal = probeRefusal(error);
+    if (refusal.code === "collaboration.not-initialized") return { kind: "absent", ...refusal };
+    if (refusal.code === "collaboration.not-active") return { kind: "staged", ...refusal };
+    return { kind: "unavailable", ...refusal };
+  }
+}
+
+/**
+ * The complete observation of one domain read: the scope, the authority and the
+ * revision counters read INSIDE the caller's own open handle, so the evidence a
+ * consumer receives and the rows it read are one snapshot. This is the single
+ * source-layer proof builder for direct domain reads and read envelopes.
+ */
+export function readCollaborationObservation(
+  handle: CollaborationStoreHandle,
+  scope: CollaborationScope,
+): CompleteCollaborationObservation {
+  // The observation's instant is the moment THIS source's own transaction reads
+  // its first row: a slow open of the other authority never backdates it.
+  const asOf = new Date().toISOString();
+  const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
+    | { revision?: unknown; catalog_revision?: unknown }
+    | undefined;
+  const revision = row?.revision;
+  const catalogRevision = row?.catalog_revision;
+  if (typeof revision !== "number" || !Number.isInteger(revision) || typeof catalogRevision !== "number" || !Number.isInteger(catalogRevision)) {
+    throw new StoreError(
+      "collaboration.unreadable",
+      "The collaboration authority has no readable revision counters; this read cannot state the snapshot it answered at.",
+    );
+  }
+  const { repoKey, mode, storeId, epoch } = handle.authority;
+  return { scope, completeness: "complete", asOf, authority: { repoKey, mode, storeId, epoch }, revision, catalogRevision };
 }
 
 /**
