@@ -10,7 +10,8 @@
  * reads the real home or the control harness store.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { hostname } from "node:os";
 import { tmpdir } from "node:os";
@@ -35,6 +36,7 @@ import {
   type ActivationAttestation,
 } from "./store-activation.js";
 import { readHarnessVersion } from "./core.js";
+import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import {
   MIGRATIONS,
   initializeStore,
@@ -153,6 +155,11 @@ function cutoverOptions(
   return { operator: "ops-engineer", attestation };
 }
 
+/** A valid project roadmap body (frontmatter + sections), as the producer requires. */
+const ROADMAP_CONTENT =
+  "---\nproject_id: p-one\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n" +
+  "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
+
 /**
  * One populated combined source: a project, a plan, a document and their link,
  * a milestone, a roadmap, two issues (one open with history, one resolved), a
@@ -162,6 +169,7 @@ function cutoverOptions(
 async function seedSource(repo: string): Promise<{ context: StoreContext; storeId: string }> {
   const context = contextAt(repo);
   const handle = await initializeStore(context);
+  let storeId: string;
   try {
     const db = handle.db;
     db.exec(`
@@ -177,8 +185,6 @@ insert into catalog_links(from_kind, from_id, relation, to_kind, to_id)
 values ('plan', 'plan-one', 'documents', 'document', 'doc-one');
 insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at)
 values ('m-one', 'p-one', 'Milestone One', 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
-insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
-values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)
 values ('I-000001', 'p-one', 'First finding', 'bug', 'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-one', 'm-one');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
@@ -208,13 +214,28 @@ insert into store_operations(operation_id, request_hash, result_json, committed_
 values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":20}}', '2026-11-21T00:00:02.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
 values ('upgrade-op', 'upgrade-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-imported"],"skipped":[],"dispositions":[],"sourceDigest":"source-digest","inputDigest":"input-digest"}', '2026-11-21T00:00:03.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('upgrade-op-old', 'upgrade-old-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-historical"],"skipped":[],"dispositions":[],"sourceDigest":"historical-digest"}', '2026-11-21T00:00:07.000Z');
 update issue_counter set next_value = 3 where id = 1;
-update store_meta set revision = 7, catalog_revision = 3 where id = 1;
 `);
-    return { context, storeId: handle.storeId };
+    storeId = handle.storeId;
   } finally {
     handle.close();
   }
+  // A real roadmap write records the producer's own persisted receipt shape
+  // (outcome + nullable provenance), which the classifier must recognize.
+  await replaceRoadmapAuthority(
+    context,
+    { projectId: "p-one", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: ROADMAP_CONTENT },
+    { operationId: "roadmap-op", actor: "cutover-test" },
+  );
+  const counters = await openStore(context, "write");
+  try {
+    counters.db.exec("update store_meta set revision = 7, catalog_revision = 3 where id = 1");
+  } finally {
+    counters.close();
+  }
+  return { context, storeId };
 }
 
 type StagedRows = Readonly<{
@@ -903,51 +924,86 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     }
   }, 30000);
 
-  test("legacy issue receipts move with the domain and replay exactly", async () => {
+  test("legacy receipts move with the domain and replay exactly", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-receipts.git");
     const source = await seedSource(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    // Payload classification, not id shape: an issue operation that happens to
-    // be called `restore-attempt:...` is preserved, while the execution lane's
-    // own records (recovery replacement, execution import) are not moved.
-    expect(manifest.counts.store_operations).toBe(2);
+    // Payload classification, not id shape: a normal roadmap write, an issue
+    // operation that happens to be called `restore-attempt:...`, and the
+    // collaboration receipts all move; the execution lane's own records
+    // (recovery and current/historical imports) stay with the execution store.
+    expect(manifest.counts.store_operations).toBe(3);
+
+    const sourceReceipt = async (operationId: string): Promise<Record<string, unknown> | undefined> => {
+      const handle = await openStore(source.context, "read");
+      try {
+        return handle.db
+          .prepare("select request_hash, result_json, committed_at from store_operations where operation_id = ?")
+          .get(operationId) as Record<string, unknown> | undefined;
+      } finally {
+        handle.close();
+      }
+    };
+    const roadmapSource = await sourceReceipt("roadmap-op");
+    expect(roadmapSource).toBeDefined();
+    expect(JSON.parse(String(roadmapSource?.result_json))).toMatchObject({
+      projectId: "p-one",
+      outcome: "committed",
+      provenance: null,
+    });
 
     await applyCollaborationCutover(source.context, manifest);
-    const legacyIssue = {
-      key_space: "standalone",
-      operation_id: "issue-op-legacy",
-      request_hash: "legacy-request-hash",
-      result_json: '{"issueId":"I-000001","revision":1,"storeRevision":7,"created":true}',
-      committed_at: "2026-11-21T00:00:00.000Z",
-    };
-    const collision = {
-      key_space: "standalone",
-      operation_id: "restore-attempt:customer-request",
-      request_hash: "customer-hash",
-      result_json: '{"issueId":"I-000002","revision":2,"storeRevision":7,"created":false}',
-      committed_at: "2026-11-21T00:00:01.000Z",
-    };
-    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
+    const expectedIds = ["issue-op-legacy", "restore-attempt:customer-request", "roadmap-op"];
+    const state = await cutoverState(location);
+    expect(state.receipts.map((row) => row.operation_id).sort()).toEqual(expectedIds);
 
-    // The preserved rows answer the replay lookup and expose a conflicting reuse:
-    // the same operation id with another request hash can never replay.
-    const replay = await readCollaborationStage(location, ({ db }) =>
-      db
-        .prepare(
-          "select request_hash, result_json from collaboration_operations " +
-            "where key_space = 'standalone' and operation_id = ?",
-        )
-        .get("restore-attempt:customer-request"),
-    );
-    expect(replay).toEqual({ request_hash: "customer-hash", result_json: collision.result_json });
-    expect((replay as { request_hash: string }).request_hash).not.toBe("another-request-hash");
+    // The roadmap receipt's exact bytes survive, including the producer's
+    // outcome/provenance, and its request hash is the producer's own replay key.
+    const roadmap = state.receipts.find((row) => row.operation_id === "roadmap-op")!;
+    expect(roadmap.request_hash).toBe(roadmapSource?.request_hash);
+    expect(roadmap.result_json).toBe(roadmapSource?.result_json);
+    expect(roadmap.committed_at).toBe(roadmapSource?.committed_at);
+    const replayKey = createHash("sha256")
+      .update(
+        JSON.stringify({
+          domain: "roadmap-content-authority",
+          projectId: "p-one",
+          declaredProjectRevision: 1,
+          declaredRoadmapRevision: "absent",
+          contentHash: createHash("sha256").update(ROADMAP_CONTENT).digest("hex"),
+          provenance: null,
+        }),
+      )
+      .digest("hex");
+    expect(roadmap.request_hash).toBe(replayKey);
+    // A different request for the same id computes another hash, which is the
+    // conflict the preserved row must still be able to report.
+    const differentKey = createHash("sha256")
+      .update(
+        JSON.stringify({
+          domain: "roadmap-content-authority",
+          projectId: "p-one",
+          declaredProjectRevision: 1,
+          declaredRoadmapRevision: "absent",
+          contentHash: createHash("sha256").update(`${ROADMAP_CONTENT}x`).digest("hex"),
+          provenance: null,
+        }),
+      )
+      .digest("hex");
+    expect(differentKey === roadmap.request_hash).toBe(false);
+
+    // Execution-lane records are not promoted, including the supported
+    // historical import receipt that predates `inputDigest`.
+    for (const operationId of ["restore-attempt:abc", "upgrade-op", "upgrade-op-old"]) {
+      expect(state.receipts.some((row) => row.operation_id === operationId)).toBe(false);
+    }
 
     // An exact re-stage keeps the population, and activation preserves it.
     expect((await applyCollaborationCutover(source.context, manifest)).replayed).toBe(true);
-    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
+    expect((await cutoverState(location)).receipts.map((row) => row.operation_id).sort()).toEqual(expectedIds);
     await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
-    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
+    expect((await cutoverState(location)).receipts.map((row) => row.operation_id).sort()).toEqual(expectedIds);
   });
 
   test("two concurrent activations leave exactly one fence and one active authority", async () => {
@@ -1059,6 +1115,111 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  test("a stale recovery is serialized by its recovery slot", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock-recovery-slot.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+    const recoveryPath = `${lockPath}.recover`;
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: 999999, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "dead" })}\n`,
+    );
+
+    // A live recovery slot blocks every other recoverer: the recovery step is a
+    // real critical section, so two processes can never both act on the stale
+    // lock (and therefore can never both acquire).
+    writeFileSync(
+      recoveryPath,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "recovering" })}\n`,
+    );
+    try {
+      const busy = await refusalOf(() => planCollaborationCutover(source.context));
+      expect(busy.code).toBe("collaboration.cutover-conflict");
+      expect(busy.message).toContain("recovering the stale collaboration cutover lock");
+      // The stale file was not touched by the refused recoverer.
+      expect(readFileSync(lockPath, "utf8")).toContain('"token":"dead"');
+    } finally {
+      rmSync(recoveryPath, { force: true });
+    }
+
+    // With the slot free the same stale lock is recovered and released.
+    expect((await planCollaborationCutover(source.context)).counts.issues).toBe(2);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(recoveryPath)).toBe(false);
+  });
+
+  test("competing stale-lock recoveries never admit two owners", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock-race.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+    const script = join(ROOT, `child-hold-${sequence++}.ts`);
+    writeFileSync(
+      script,
+      [
+        `import { withCollaborationCutoverLock } from ${JSON.stringify(join(import.meta.dir, "collaboration-cutover.ts"))};`,
+        "const [harnessDir, checkoutRoot, holdMs] = process.argv.slice(2);",
+        "const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));",
+        "try {",
+        "  await withCollaborationCutoverLock({ harnessDir, checkoutRoot }, async () => {",
+        '    console.log("enter " + Date.now());',
+        "    await sleep(Number(holdMs));",
+        '    console.log("exit " + Date.now());',
+        "  });",
+        "} catch (error) {",
+        '  console.log("code:" + String((error as { code?: string }).code));',
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    // One real dead owner's lock; every child must recover it atomically.
+    const dead = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    const deadPid = dead.pid!;
+    await new Promise<void>((settle) => dead.on("exit", () => settle()));
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: deadPid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "dead" })}\n`,
+    );
+
+    const env = { ...process.env, HOME: resolvedHome };
+    const children = [0, 1, 2].map(() =>
+      spawn(process.execPath, [script, source.context.harnessDir, source.context.checkoutRoot!, "700"], {
+        env,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+    const outputs = await Promise.all(
+      children.map(async (child) => {
+        let output = "";
+        child.stdout.on("data", (chunk) => {
+          output += String(chunk);
+        });
+        await new Promise<void>((settle) => child.on("exit", () => settle()));
+        return output;
+      }),
+    );
+
+    const intervals = outputs.flatMap((output): Array<readonly [number, number]> => {
+      const enter = /enter (\d+)/.exec(output);
+      const exit = /exit (\d+)/.exec(output);
+      return enter !== null && exit !== null ? [[Number(enter[1]), Number(exit[1])] as const] : [];
+    });
+    expect(intervals.length).toBeGreaterThanOrEqual(1);
+    for (let first = 0; first < intervals.length; first++) {
+      for (let second = first + 1; second < intervals.length; second++) {
+        const a = intervals[first]!;
+        const b = intervals[second]!;
+        // Two owners would mean overlapping critical sections.
+        expect(a[1] < b[0] || b[1] < a[0]).toBe(true);
+      }
+    }
+    for (const output of outputs) {
+      if (!output.includes("enter ")) expect(output).toContain("code:collaboration.cutover-conflict");
+    }
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(`${lockPath}.recover`)).toBe(false);
+  }, 30000);
+
   test("a foreign-host or unreadable lock refuses with its recovery", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-lock-foreign.git");
     const source = await seedSource(repo);
@@ -1156,7 +1317,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       cleaned.close();
     }
     const replanned = await planCollaborationCutover(source.context);
-    expect(replanned.counts.store_operations).toBe(2);
+    expect(replanned.counts.store_operations).toBe(3);
     expect(replanned.manifestId).toBe(manifest.manifestId);
   });
 });

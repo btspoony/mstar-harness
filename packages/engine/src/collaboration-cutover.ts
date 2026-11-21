@@ -108,6 +108,8 @@ const CLAIM_KEY = "collaboration-cutover-claim";
 
 /** The one local OS cutover lock, under the control harness root. */
 const CUTOVER_LOCK_BASENAME = "collaboration-cutover.lock";
+/** The recovery slot's suffix: serializes stale-lock recovery. */
+const CUTOVER_LOCK_RECOVERY_SUFFIX = ".recover";
 /** Bounded retries after recovering a stale lock another attempt just replaced. */
 const STALE_LOCK_ATTEMPTS = 3;
 
@@ -220,6 +222,11 @@ function cutoverLockPath(context: StoreContext): string {
   return join(context.harnessDir, CUTOVER_LOCK_BASENAME);
 }
 
+/** The recovery slot that serializes stale-lock recovery. */
+function cutoverRecoveryPath(path: string): string {
+  return `${path}${CUTOVER_LOCK_RECOVERY_SUFFIX}`;
+}
+
 /** The recorded owner, or `null` when the file is unreadable or malformed. */
 function readCutoverLock(path: string): CutoverLockOwner | null {
   let raw: string;
@@ -251,6 +258,15 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+function lockCreateRefusal(path: string, error: unknown): StoreError {
+  return new StoreError(
+    "collaboration.cutover-conflict",
+    `The collaboration cutover lock at ${path} could not be created ` +
+      `(${error instanceof Error ? error.message : String(error)}). Fix the control harness directory and retry. ` +
+      `Nothing was inspected, claimed, fenced or published.`,
+  );
+}
+
 function cutoverLockRefusal(path: string, owner: CutoverLockOwner | null): StoreError {
   const header = "Nothing was inspected, claimed, fenced or published.";
   if (owner === null) {
@@ -275,20 +291,116 @@ function cutoverLockRefusal(path: string, owner: CutoverLockOwner | null): Store
   );
 }
 
+function cutoverRecoveryRefusal(recoveryPath: string, holder: CutoverLockOwner | null): StoreError {
+  const who =
+    holder === null
+      ? "an unreadable recovery slot"
+      : `pid ${String(holder.pid)} on ${holder.host}, started at ${holder.startedAt}`;
+  return new StoreError(
+    "collaboration.cutover-conflict",
+    `Another process is recovering the stale collaboration cutover lock (recovery slot ${recoveryPath}, ${who}). ` +
+      `Wait for it and retry; if that process is gone, confirm no cutover is running and remove the recovery slot ` +
+      `file, then retry. Nothing was inspected, claimed, fenced or published.`,
+  );
+}
+
+/** Release one lock file only when it still carries this attempt's token. */
+function releaseCutoverLockFile(path: string, token: string): void {
+  try {
+    const held = readCutoverLock(path);
+    if (held !== null && held.token === token) unlinkSync(path);
+  } catch {
+    // best effort: a lock left by a live process is a same-host stale lock once it exits
+  }
+}
+
+/**
+ * Remove one PROVEN-stale lock, serialized by the recovery slot.
+ *
+ * Atomicity: the recovery slot is an exclusive create, so only one recoverer
+ * can act at a time. While it is held the main lock file cannot change -
+ * a new owner can only appear after the file is gone, and only a recovery (which
+ * needs this same slot) removes it - so the re-read after taking the slot is the
+ * compare that makes the unlink safe. A recoverer therefore never removes a live
+ * owner's lock, and two recoverers can never both acquire.
+ *
+ * Returns `true` when the caller should retry acquisition, `false` when another
+ * recovery is already in progress (the caller refuses with its named recovery).
+ */
+function recoverStaleCutoverLock(
+  path: string,
+  recoveryPath: string,
+  staleOwner: CutoverLockOwner,
+  attemptToken: string,
+): boolean {
+  const recoveryOwner: CutoverLockOwner = {
+    pid: process.pid,
+    host: hostname(),
+    startedAt: new Date().toISOString(),
+    token: recoverySlotToken(attemptToken),
+  };
+  try {
+    writeFileSync(recoveryPath, `${JSON.stringify(recoveryOwner)}\n`, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") return false;
+    throw lockCreateRefusal(recoveryPath, error);
+  }
+  try {
+    const current = readCutoverLock(path);
+    if (current === null) return true;
+    // Under the recovery slot the file cannot have been replaced: a different
+    // token means the stale owner is gone and a LIVE owner took the lock, so
+    // nothing is removed here and the retry refuses on that owner.
+    if (current.token !== staleOwner.token) return true;
+    unlinkSync(path);
+    return true;
+  } finally {
+    releaseCutoverLockFile(recoveryPath, recoveryOwner.token);
+  }
+}
+
+/** The recovery slot's token: unique per recovery attempt, not per lock owner. */
+function recoverySlotToken(attemptToken: string): string {
+  return `${attemptToken}:recover:${randomUUID()}`;
+}
+
+/**
+ * Acquire the local cutover lock: exclusive create plus an atomic stale-lock
+ * recovery. See `recoverStaleCutoverLock` for the recovery protocol.
+ */
+function acquireCutoverLock(path: string, recoveryPath: string, owner: CutoverLockOwner): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      writeFileSync(path, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600 });
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EEXIST") throw lockCreateRefusal(path, error);
+    }
+    const held = readCutoverLock(path);
+    if (held === null) throw cutoverLockRefusal(path, null);
+    const stale = held.host === owner.host && !processIsAlive(held.pid);
+    if (!stale || attempt >= STALE_LOCK_ATTEMPTS) throw cutoverLockRefusal(path, held);
+    if (!recoverStaleCutoverLock(path, recoveryPath, held, owner.token)) {
+      throw cutoverRecoveryRefusal(recoveryPath, readCutoverLock(recoveryPath));
+    }
+  }
+}
+
 /**
  * The one local OS cutover lock. Scope: `plan`, `apply`, `activate` (and the
  * durable fence entry) serialize their whole inspect/claim/fence/publish
- * critical section across processes of this host, and across hosts that share
- * the control harness. Ordinary collaboration writers do not take it: the
- * operator's complete-stop assertion covers them.
+ * critical section across processes of this host and across hosts that share
+ * the control harness. It is exported as the shared critical-section primitive
+ * for the operator verbs that wrap multi-step work. Ordinary collaboration
+ * writers do not take it: the operator's complete-stop assertion covers them.
  *
- * Acquisition is an exclusive create carrying `{pid, host, startedAt, token}`.
- * A same-host lock whose PID is gone is a supported stale-lock recovery (the
- * host probe is authoritative); a live or foreign-host lock refuses with a
- * named recovery. Release removes the file only when it still carries this
+ * Acquisition is an exclusive create carrying `{pid, host, startedAt, token}`;
+ * stale recovery goes through its own exclusive recovery slot (see
+ * `recoverStaleCutoverLock`). A live or foreign-host lock refuses with a named
+ * recovery, and release removes a file only when it still carries this
  * attempt's token, in `finally`, so a throwing step never leaves the lock held.
  */
-async function withCutoverLock<T>(context: StoreContext, work: () => Promise<T>): Promise<T> {
+export async function withCollaborationCutoverLock<T>(context: StoreContext, work: () => Promise<T>): Promise<T> {
   const path = cutoverLockPath(context);
   const owner: CutoverLockOwner = {
     pid: process.pid,
@@ -296,39 +408,11 @@ async function withCutoverLock<T>(context: StoreContext, work: () => Promise<T>)
     startedAt: new Date().toISOString(),
     token: randomUUID(),
   };
-  for (let attempt = 1; ; attempt++) {
-    try {
-      writeFileSync(path, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600 });
-      break;
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== "EEXIST") {
-        throw new StoreError(
-          "collaboration.cutover-conflict",
-          `The collaboration cutover lock at ${path} could not be created (${error instanceof Error ? error.message : String(error)}). ` +
-            `Fix the control harness directory and retry. Nothing was inspected, claimed, fenced or published.`,
-        );
-      }
-      const held = readCutoverLock(path);
-      if (held === null) throw cutoverLockRefusal(path, null);
-      const stale = held.host === owner.host && !processIsAlive(held.pid);
-      if (!stale || attempt >= STALE_LOCK_ATTEMPTS) throw cutoverLockRefusal(path, held);
-      try {
-        unlinkSync(path);
-      } catch (unlinkError) {
-        if ((unlinkError as { code?: string }).code !== "ENOENT") throw cutoverLockRefusal(path, held);
-      }
-    }
-  }
+  acquireCutoverLock(path, cutoverRecoveryPath(path), owner);
   try {
     return await work();
   } finally {
-    try {
-      const held = readCutoverLock(path);
-      if (held !== null && held.token === owner.token) unlinkSync(path);
-    } catch {
-      // best effort: a lock left by a live process is a same-host stale lock once it exits
-    }
+    releaseCutoverLockFile(path, owner.token);
   }
 }
 
@@ -474,14 +558,32 @@ function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** roadmap-store.ts `RoadmapWriteReceipt`. */
+/**
+ * roadmap-store.ts persisted roadmap receipt. The writer records the returned
+ * receipt PLUS the recorded outcome and the nullable reviewed provenance:
+ * `{projectId, revision, contentHash, storeRevision, outcome: "committed",
+ * provenance: {sourcePath, sourceHash} | null}`. A receipt written before those
+ * two fields were recorded keeps the four-field shape, which is accepted too -
+ * both are exact key sets, never a loose subset.
+ */
 function isRoadmapReceipt(record: Record<string, unknown>): boolean {
+  const provenance = record.provenance;
+  const provenanceOk =
+    record.provenance === undefined
+      ? true
+      : provenance === null ||
+        (isReceiptObject(provenance) &&
+          isText(provenance.sourcePath) &&
+          isText(provenance.sourceHash) &&
+          onlyKnownKeys(provenance, ["sourcePath", "sourceHash"]));
   return (
     isText(record.projectId) &&
     isCount(record.revision) &&
     isText(record.contentHash) &&
     isCount(record.storeRevision) &&
-    onlyKnownKeys(record, ["projectId", "revision", "contentHash", "storeRevision"])
+    (record.outcome === undefined || record.outcome === "committed") &&
+    provenanceOk &&
+    onlyKnownKeys(record, ["projectId", "revision", "contentHash", "storeRevision", "outcome", "provenance"])
   );
 }
 
@@ -544,18 +646,27 @@ function isRecoveryRecord(record: Record<string, unknown>): boolean {
   );
 }
 
-/** execution-minimal-import.ts `MinimalImportResult`. */
+/**
+ * execution-minimal-import.ts `MinimalImportResult`. The importer's own replay
+ * logic documents a supported HISTORICAL shape written before `inputDigest`
+ * existed: such a receipt still proves the source bytes but not the conversion
+ * input, so it must be recognized as an execution record rather than blocking
+ * the cutover. `skipped`/`dispositions` are likewise accepted when absent, and
+ * validated when present.
+ */
 function isExecutionImportResult(record: Record<string, unknown>): boolean {
+  const optionalStrings = (value: unknown): boolean =>
+    value === undefined || (Array.isArray(value) && value.every((entry) => typeof entry === "string"));
   return (
     (record.verdict === "upgraded" || record.verdict === "nothing-to-import") &&
     isCount(record.imported) &&
     Array.isArray(record.importedIds) &&
     record.importedIds.every((id) => typeof id === "string") &&
-    Array.isArray(record.skipped) &&
-    Array.isArray(record.dispositions) &&
-    record.dispositions.every((entry) => typeof entry === "string") &&
+    (record.skipped === undefined || Array.isArray(record.skipped)) &&
+    optionalStrings(record.dispositions) &&
     isText(record.sourceDigest) &&
-    isText(record.inputDigest)
+    (record.inputDigest === undefined || isText(record.inputDigest)) &&
+    onlyKnownKeys(record, ["verdict", "imported", "importedIds", "skipped", "dispositions", "sourceDigest", "inputDigest"])
   );
 }
 
@@ -1228,7 +1339,7 @@ function ensureFenceSchema(db: StoreDb): number {
 }
 
 export async function planCollaborationCutover(context: StoreContext): Promise<CutoverManifest> {
-  return withCutoverLock(context, () => planUnderCutoverLock(context));
+  return withCollaborationCutoverLock(context, () => planUnderCutoverLock(context));
 }
 
 async function planUnderCutoverLock(context: StoreContext): Promise<CutoverManifest> {
@@ -1281,7 +1392,7 @@ export async function applyCollaborationCutover(
   context: StoreContext,
   manifest: CutoverManifest,
 ): Promise<CutoverReceipt> {
-  return withCutoverLock(context, () => applyUnderCutoverLock(context, manifest));
+  return withCollaborationCutoverLock(context, () => applyUnderCutoverLock(context, manifest));
 }
 
 async function applyUnderCutoverLock(
@@ -1842,7 +1953,7 @@ export async function fenceCollaborationCutoverSource(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
-  return withCutoverLock(context, () => fenceUnderCutoverLock(context, manifest, options));
+  return withCollaborationCutoverLock(context, () => fenceUnderCutoverLock(context, manifest, options));
 }
 
 async function fenceUnderCutoverLock(
@@ -1880,7 +1991,7 @@ export async function activateCollaborationCutover(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
-  return withCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+  return withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
 }
 
 async function activateUnderCutoverLock(
