@@ -12,12 +12,20 @@
  * Run with
  * `bun test packages/engine/src/store-activation.test.ts --test-name-pattern 'activation|retirement|backup'`.
  */
-import { afterAll, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import {
+  initializeCollaborationStore,
+  openCollaborationStore,
+  readCollaborationStage,
+  writeCollaborationStage,
+} from "./collaboration-store.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { captureIssue } from "./issue.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
@@ -27,9 +35,12 @@ import {
   activationReceiptFor,
   appliedReceiptFor,
   assertAuthorityCurrent,
+  backupRepositoryStores,
   backupStore,
   currentAuthorityHandle,
+  ensureCollaborationAuthority,
   inspectBackupCopy,
+  restoreCollaborationBackup,
   retireStoreSources,
   StoreActivationError,
   type ActivationAttestation,
@@ -1527,3 +1538,233 @@ describe("store backup", () => {
 // files, and a recovery point neither freezes nor requires them. Their
 // non-blocking, untouched-by-backup behavior is proven in the marker case of
 // the "store backup" describe above.
+
+// ---------------------------------------------------------------------------
+// Collaboration lifecycle and the repository backup pair (operator verbs)
+// ---------------------------------------------------------------------------
+
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const COLLAB_HOME = join(ROOT, "collab-home");
+mkdirSync(COLLAB_HOME, { recursive: true });
+let collabHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  collabHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => COLLAB_HOME);
+});
+afterAll(() => {
+  collabHomeSpy?.mockRestore();
+});
+
+let repoSequence = 0;
+
+/**
+ * A synthetic checkout: a real Git main worktree, an explicit origin-less
+ * repository identity and the selected collaboration mode. Its harness is
+ * `<checkout>/.mstar`, so the lane resolves like a real operator's.
+ */
+function repoWorkspace(name: string): Fixture & { checkout: string } {
+  const root = mkdtempSync(join(ROOT, name));
+  const checkout = join(root, "checkout");
+  mkdirSync(checkout, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
+  const harness = join(checkout, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, root, checkout };
+}
+
+/** One capture through the real collaboration writer. */
+async function captureOne(fixture: Fixture, operationId: string): Promise<void> {
+  await captureIssue(
+    fixture.context,
+    {
+      projectId: "_default",
+      title: "Lane lifecycle finding",
+      kind: "bug",
+      severity: "high",
+      impact: "the lane's rows must survive a repeated bootstrap and a restore",
+      acceptance: "the row is readable through the restored authority",
+      sourceIdentity: "qc/lifecycle.md",
+      rootCauseKey: "lifecycle-root-cause",
+      acceptanceKey: "restored",
+      occurrenceKey: `run-${operationId}`,
+      sourceKind: "qc",
+      location: "packages/engine/src/store-activation.ts:1",
+      observedBehavior: "the collaboration authority owns the row",
+      evidence: ["proof"],
+      discoveredAt: "2026-09-19T00:00:00.000Z",
+    },
+    { operationId, actor: "project-manager" },
+  );
+}
+
+describe("collaboration lifecycle", () => {
+  test("a fresh bootstrap creates and activates the lane, and a repeat reuses it without clearing", async () => {
+    const fixture = repoWorkspace("collab-bootstrap-");
+    const first = await ensureCollaborationAuthority(fixture.context);
+    expect(first).toMatchObject({ state: "active", mode: "local" });
+    expect(existsSync(resolveCollaborationLocation(fixture.context).dbPath)).toBe(true);
+
+    await captureOne(fixture, "op-lane-bootstrap");
+    const second = await ensureCollaborationAuthority(fixture.context);
+    expect([second.storeId, second.epoch, second.state]).toEqual([first.storeId, first.epoch, "active"]);
+
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("a staged lane that recorded staging evidence is never published by a bootstrap", async () => {
+    const fixture = repoWorkspace("collab-staged-");
+    const location = resolveCollaborationLocation(fixture.context);
+    const staged = await initializeCollaborationStore(location);
+    expect(staged.state).toBe("staged");
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare(
+        "insert into cutover_publications(manifest_id, phase, source_store_id, source_epoch, source_schema_version, " +
+          "source_revision, source_catalog_revision, manifest_digest, target_store_id, target_epoch, verified_at) " +
+          "values ('manifest-one', 'verified', 'source-store', 1, 19, 3, 1, 'digest', 'target-store', 1, ?)",
+      ).run("2026-11-21T00:00:00.000Z");
+    });
+
+    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.not-active" });
+    // The pending activation's evidence is untouched: a bootstrap never publishes it.
+    const after = await readCollaborationStage(location, ({ db, authority }) => ({
+      state: authority.state,
+      publications: db.prepare("select count(*) as n from cutover_publications").get(),
+    }));
+    expect(after).toEqual({ state: "staged", publications: { n: 1 } });
+  });
+
+  test("a combined source that still owns collaboration rows directs to the reviewed cutover", async () => {
+    const fixture = repoWorkspace("collab-combined-");
+    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1" })] } });
+    const manifest = await planStoreMigration(fixture.context);
+    await applyStoreMigration(fixture.context, manifest);
+
+    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    // Nothing was created for a scope whose authority arrives through the cutover.
+    expect(existsSync(resolveCollaborationLocation(fixture.context).dbPath)).toBe(false);
+    expect(backupArtifacts(fixture.context)).toEqual([]);
+  });
+});
+
+describe("repository backup pair", () => {
+  /** One active execution + collaboration pair holding one lane issue. */
+  async function pairedWorkspace(name: string): Promise<Fixture & { checkout: string }> {
+    const fixture = repoWorkspace(name);
+    (await initializeStore(fixture.context)).close();
+    await ensureCollaborationAuthority(fixture.context);
+    await captureOne(fixture, `op-${name}`);
+    return fixture;
+  }
+
+  test("publishes both verified images and one manifest only after verification", async () => {
+    const fixture = await pairedWorkspace("pair-publish-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+
+    expect(receipt.version).toBe(1);
+    expect(receipt.manifestPath).toBe(out);
+    expect(existsSync(out)).toBe(true);
+    expect(existsSync(receipt.execution.backupPath)).toBe(true);
+    expect(existsSync(receipt.collaboration.path)).toBe(true);
+    expect(receipt.collaboration.authority).toMatchObject({ state: "active", mode: "local" });
+    // The issue lives in the collaboration half only; the execution image carries no collaboration payload.
+    expect(receipt.collaboration.counts.issues).toBe(1);
+    expect(receipt.execution.counts.issues).toBe(0);
+    // The manifest IS the receipt: one published description of the pair.
+    expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(JSON.parse(JSON.stringify(receipt)));
+  });
+
+  test("an occupied image destination fails honestly and publishes no manifest", async () => {
+    const fixture = await pairedWorkspace("pair-occupied-");
+    const out = join(fixture.harness, "archived", "recovery", "occupied.json");
+    mkdirSync(dirname(out), { recursive: true });
+    const occupied = `${out}.execution.db`;
+    writeFileSync(occupied, "not a database\n");
+
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(`${out}.collaboration.db`)).toBe(false);
+    // The operator's own file is never removed as this attempt's scratch.
+    expect(readFileSync(occupied, "utf8")).toBe("not a database\n");
+  });
+
+  test("restore is create-only into an absent target and changes the epoch", async () => {
+    const fixture = await pairedWorkspace("pair-restore-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const location = resolveCollaborationLocation(fixture.context);
+    const before = await ensureCollaborationAuthority(fixture.context);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+
+    // Unrelated inert scratch beside the absent target is never published.
+    const scratch = join(dirname(location.dbPath), ".staging-stale-attempt");
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(join(scratch, "collaboration.db"), "not a database\n");
+
+    const restored = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    expect(restored).toMatchObject({ state: "active", storeId: before.storeId, epoch: before.epoch + 1 });
+
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
+      expect(handle.db.prepare("select count(*) as n from collaboration_operations where operation_id like 'restore:%'").get()).toEqual({ n: 1 });
+    } finally {
+      handle.close();
+    }
+    // The stale private scratch is left exactly as it was: it is not authority.
+    expect(readFileSync(join(scratch, "collaboration.db"), "utf8")).toBe("not a database\n");
+  });
+
+  test("restore refuses a live target and a corrupt image without touching either", async () => {
+    const fixture = await pairedWorkspace("pair-refusals-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const location = resolveCollaborationLocation(fixture.context);
+    const liveBytes = readFileSync(location.dbPath);
+
+    await expect(
+      restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toMatchObject({ code: "collaboration.cutover-conflict" });
+    expect(readFileSync(location.dbPath)).toEqual(liveBytes);
+
+    // A corrupt second image is refused as an incomplete pair, with the
+    // manifest and the execution image left in place.
+    const second = await pairedWorkspace("pair-corrupt-");
+    const secondOut = join(second.harness, "archived", "recovery", "pair.json");
+    const secondReceipt = await backupRepositoryStores(second.context, { out: secondOut });
+    const secondLive = readFileSync(resolveCollaborationLocation(second.context).dbPath);
+    writeFileSync(secondReceipt.collaboration.path, "not a database\n");
+    await expect(
+      restoreCollaborationBackup(second.context, secondReceipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    expect(existsSync(secondOut)).toBe(true);
+    expect(existsSync(secondReceipt.execution.backupPath)).toBe(true);
+    expect(readFileSync(resolveCollaborationLocation(second.context).dbPath)).toEqual(secondLive);
+  });
+
+  test("restore refuses another repository's pair by its stale binding", async () => {
+    const other = await pairedWorkspace("pair-other-");
+    const otherOut = join(other.harness, "archived", "recovery", "pair.json");
+    const otherReceipt = await backupRepositoryStores(other.context, { out: otherOut });
+
+    const mine = repoWorkspace("pair-mine-");
+    (await initializeStore(mine.context)).close();
+    await ensureCollaborationAuthority(mine.context);
+    const myLocation = resolveCollaborationLocation(mine.context);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${myLocation.dbPath}${suffix}`, { force: true });
+
+    await expect(
+      restoreCollaborationBackup(mine.context, otherReceipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(existsSync(myLocation.dbPath)).toBe(false);
+  });
+});
+

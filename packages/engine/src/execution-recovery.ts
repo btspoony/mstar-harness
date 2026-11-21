@@ -135,6 +135,7 @@ import {
   openStore,
   readStoreAuthority,
   storeDbPath,
+  tableNamesOn,
   type StoreContext,
   type StoreDb,
   type StoreHandle,
@@ -843,6 +844,13 @@ function replacementOrder(availability: TableAvailability): readonly AuthorityTa
 }
 
 type TableAvailability = {
+  /**
+   * The tables THIS connection actually carries. A recorded schema version is
+   * not an inventory: the collaboration cutover's fence drops the moved
+   * collaboration tables while keeping the schema version, so presence is read
+   * from the connection, never derived from the version alone.
+   */
+  tables: ReadonlySet<string>;
   catalog: boolean;
   execution: boolean;
   executionCoverage: boolean;
@@ -869,8 +877,9 @@ type TableAvailability = {
  * records, so an older schema stays queryable and an unrecorded table is never
  * read as empty authority.
  */
-function availabilityOf(schemaVersion: number): TableAvailability {
+function availabilityOf(schemaVersion: number, tables: ReadonlySet<string>): TableAvailability {
   return {
+    tables,
     catalog: schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: schemaVersion >= EXECUTION_MIGRATION_VERSION,
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
@@ -889,6 +898,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
 }
 
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
+  if (!availability.tables.has(table.table)) return false;
   if (table.requires === "catalog") return availability.catalog;
   if (table.requires === "execution") return availability.execution;
   if (table.requires === "executionIntents") return availability.executionIntents;
@@ -975,10 +985,12 @@ function readAuthorityRows(db: StoreDb, availability: TableAvailability): Author
 /** The committed operation receipt ids of one store, per domain. */
 function readCommittedOperationIds(db: StoreDb, availability: TableAvailability): string[] {
   const ids: string[] = [];
-  for (const row of db.prepare("select operation_id from store_operations order by operation_id").all() as Array<Record<string, unknown>>) {
-    ids.push(`issue:${text(row, "operation_id")}`);
+  if (availability.tables.has("store_operations")) {
+    for (const row of db.prepare("select operation_id from store_operations order by operation_id").all() as Array<Record<string, unknown>>) {
+      ids.push(`issue:${text(row, "operation_id")}`);
+    }
   }
-  if (availability.catalog) {
+  if (availability.catalog && availability.tables.has("catalog_operations")) {
     for (const row of db
       .prepare("select operation_id from catalog_operations where phase = 'committed' order by operation_id")
       .all() as Array<Record<string, unknown>>) {
@@ -1325,7 +1337,7 @@ function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecu
   ) {
     throw corrupt(`${what} found store_meta missing or malformed; the live authority generation cannot be verified`);
   }
-  const availability = availabilityOf(schemaVersion);
+  const availability = availabilityOf(schemaVersion, tableNamesOn(db));
   return {
     storeId: meta.storeId,
     epoch: meta.epoch,
@@ -1350,7 +1362,7 @@ function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecu
  */
 async function readCopyRows(
   backupPath: string,
-  availability: TableAvailability,
+  schemaVersion: number,
 ): Promise<{ rows: AuthorityRow[]; operationIds: string[]; coverageDigest: string | null }> {
   assertStoreRuntimeSupported();
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
@@ -1361,6 +1373,9 @@ async function readCopyRows(
     db.exec("pragma query_only=ON");
     db.exec("begin");
     try {
+      // Presence comes from the copy's own catalog: a fenced image legitimately
+      // lacks the moved collaboration tables.
+      const availability = availabilityOf(schemaVersion, tableNamesOn(db));
       return {
         rows: readAuthorityRows(db, availability),
         operationIds: readCommittedOperationIds(db, availability),
@@ -1412,7 +1427,6 @@ async function readStagedImage(path: string, pointLabel: string): Promise<Staged
       `the recovery point at ${pointLabel} cannot be verified (${(error as Error).message}); it is not a recovery point for this store.`,
     );
   }
-  const availability = availabilityOf(description.schemaVersion);
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
@@ -1421,6 +1435,7 @@ async function readStagedImage(path: string, pointLabel: string): Promise<Staged
     db.exec("pragma query_only=ON");
     db.exec("begin");
     try {
+      const availability = availabilityOf(description.schemaVersion, tableNamesOn(db));
       return {
         path,
         storeId: description.storeId,
@@ -1669,7 +1684,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
     );
   }
 
-  const copy = await readCopyRows(point, availabilityOf(live.schemaVersion));
+  const copy = await readCopyRows(point, live.schemaVersion);
   const { differences, lostOperationIds, resurrectedOperationIds } = diffSides(live, copy, description);
 
   const withoutDigest: Omit<ExecutionRecoveryPreview, "lossDigest"> = {
@@ -2067,7 +2082,7 @@ async function restoreInOneTransaction(
 
       const newEpoch = Math.max(before.epoch, image.epoch) + 1;
 
-      replaceAuthorityRows(handle.db, image, availabilityOf(before.schemaVersion));
+      replaceAuthorityRows(handle.db, image, availabilityOf(before.schemaVersion, tableNamesOn(handle.db)));
       const changed = handle.db.prepare("update store_meta set authority_epoch = ? where id = 1").run(newEpoch) as {
         changes?: unknown;
       };

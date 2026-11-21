@@ -2943,6 +2943,20 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write", timeout: nu
 }
 
 /**
+ * The table names ONE connection can actually see.
+ *
+ * A recorded schema version is not a table inventory: the collaboration
+ * cutover's fence drops the moved collaboration tables while keeping the
+ * schema version, so a reader that derives "which tables exist" from the
+ * version alone asks for tables a fenced store no longer has. Every reader that
+ * enumerates tables judges presence from the connection itself.
+ */
+export function tableNamesOn(db: StoreDb): ReadonlySet<string> {
+  const rows = db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>;
+  return new Set(rows.map((row) => String(row.name)));
+}
+
+/**
  * Remove only the staging files one initialization attempt created for itself.
  * The canonical store path is never in this list: a failed or interrupted
  * create cannot unlink the store another process may already have published or

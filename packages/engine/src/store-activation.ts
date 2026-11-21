@@ -34,16 +34,19 @@
  *   and no marker or warning is treated as a fence against an old binary —
  *   the fence is the attestation, the register set and the epoch.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -53,6 +56,15 @@ import {
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
+import { resolveCollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
+import {
+  COLLABORATION_COLUMNS,
+  initializeCollaborationStore,
+  openCollaborationStore,
+  readCollaborationAuthority,
+  writeCollaborationStage,
+  type CollaborationAuthority,
+} from "./collaboration-store.js";
 import {
   detectIndexFamily,
   indexRowIdentity,
@@ -66,10 +78,16 @@ import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIGRATIONS,
   assertStoreRuntimeSupported,
+  busyTimeoutMs,
   compareVersions,
+  connect,
+  nowRfc3339,
   openStore,
+  readCollaborationFence,
   readStoreAuthority,
   storeDbPath,
+  syncDirectoryEntry,
+  tableNamesOn,
   StoreError,
   type ExecutionAuthorityState,
   type ExecutionMeta,
@@ -402,17 +420,19 @@ function schemaVersionOf(db: StoreDb): number {
 }
 
 function countsOf(db: StoreDb): BackupReceipt["counts"] {
-  const tables = new Set(
-    (db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name: string }>).map((row) => row.name),
-  );
+  const tables = tableNamesOn(db);
+  const countOf = (table: string): number => (tables.has(table) ? scalar(db, `select count(*) as n from ${table}`) : 0);
+  // A fenced store no longer holds the moved collaboration tables, so a copied
+  // image of it is complete without them: absence is zero rows of that domain
+  // here, never a corrupt store.
   const counts: BackupReceipt["counts"] = {
-    issues: scalar(db, "select count(*) as n from issues"),
-    occurrences: scalar(db, "select count(*) as n from occurrences"),
-    transitions: scalar(db, "select count(*) as n from issue_transitions"),
-    migrationReceipts: scalar(db, "select count(*) as n from migration_receipts"),
+    issues: countOf("issues"),
+    occurrences: countOf("occurrences"),
+    transitions: countOf("issue_transitions"),
+    migrationReceipts: countOf("migration_receipts"),
   };
-  if (tables.has("catalog_entities")) counts.catalogEntities = scalar(db, "select count(*) as n from catalog_entities");
-  if (tables.has("catalog_links")) counts.catalogLinks = scalar(db, "select count(*) as n from catalog_links");
+  if (tables.has("catalog_entities")) counts.catalogEntities = countOf("catalog_entities");
+  if (tables.has("catalog_links")) counts.catalogLinks = countOf("catalog_links");
   return counts;
 }
 
@@ -842,6 +862,720 @@ async function takeVerifiedBackup(
 export async function backupStore(context: StoreContext, options: { out?: string } = {}): Promise<BackupReceipt> {
   return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
 }
+
+// ---------------------------------------------------------------------------
+// Repository backup pair and scoped collaboration restore (§Backup/Restore)
+// ---------------------------------------------------------------------------
+
+/**
+ * One verified image of the collaboration lane. Every fact comes from the copy
+ * itself, exactly like the execution half: identity, state, epoch, both
+ * revisions and the row counts the image was verified to hold.
+ */
+export type CollaborationBackupImage = Readonly<{
+  path: string;
+  authority: CollaborationAuthority;
+  takenAt: string;
+  counts: Readonly<Record<string, number>>;
+}>;
+
+/**
+ * The verified pair one `store backup` publishes. A single image is never
+ * called a repository backup: both domains are copied, verified against their
+ * own bytes, and only then named together by this receipt and its manifest.
+ */
+export type RepositoryBackupReceipt = Readonly<{
+  version: 1;
+  manifestPath: string;
+  execution: BackupReceipt;
+  collaboration: CollaborationBackupImage;
+}>;
+
+/** The row counts one collaboration image records, in table-name order. */
+type CollaborationCounts = Readonly<Record<string, number>>;
+
+type CollaborationImageInspection = Readonly<{
+  authority: CollaborationAuthority;
+  counts: CollaborationCounts;
+  /** Every recorded operation row: kind, execution store/epoch and receipt revision. */
+  operations: readonly Readonly<{
+    keySpace: string;
+    operationId: string;
+    executionStoreId: string | null;
+    executionEpoch: number | null;
+  }>[];
+}>;
+
+/** The cutover's single claim slot: a pending activation, never a restore state. */
+const COLLABORATION_CLAIM_KEY = "collaboration-cutover-claim";
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The one refusal of an unverifiable pair: one image, generation or boundary. */
+function incompletePair(detail: string): StoreError {
+  return new StoreError("collaboration.backup-incomplete", `${detail} Nothing was written.`);
+}
+
+/** Canonical JSON (sorted keys) — the identity comparison a manifest round-trip needs. */
+function canonicalJsonOf(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonOf).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonOf(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Re-open ONE collaboration image and verify it as this build's complete
+ * collaboration store: consistent SQLite, the closed table/column inventory,
+ * a contiguous schema ledger, the singleton metadata and its row counts. Every
+ * fact is read from the copy, so a truncated, hand-assembled or foreign image
+ * cannot borrow the receipt's identity.
+ */
+async function inspectCollaborationImage(path: string, expected: Readonly<{ repoKey: string; mode: CollaborationMode }>): Promise<CollaborationImageInspection> {
+  assertStoreRuntimeSupported();
+  if (!existsSync(path)) throw incompletePair(`The collaboration image ${path} is missing.`);
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+    DatabaseSync: new (p: string, options?: { readOnly?: boolean }) => StoreDb;
+  };
+  let db: StoreDb;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+  } catch (error) {
+    throw incompletePair(`The collaboration image ${path} cannot be opened (${messageOf(error)}).`);
+  }
+  try {
+    db.exec("pragma query_only=ON");
+    const integrity = (db.prepare("pragma integrity_check").all() as Array<Record<string, unknown>>)
+      .map((row) => String(Object.values(row)[0] ?? ""));
+    if (integrity.length !== 1 || integrity[0] !== "ok") {
+      throw incompletePair(
+        `The collaboration image ${path} fails SQLite integrity_check (${integrity.slice(0, 3).join("; ") || "no result"}).`,
+      );
+    }
+    const violations = db.prepare("pragma foreign_key_check").all() as Array<Record<string, unknown>>;
+    if (violations.length > 0) {
+      throw incompletePair(`The collaboration image ${path} holds ${violations.length} row(s) violating its foreign keys.`);
+    }
+    const tables = tableNamesOn(db);
+    for (const [table, columns] of Object.entries(COLLABORATION_COLUMNS)) {
+      if (!tables.has(table)) {
+        throw incompletePair(`The collaboration image ${path} is missing the collaboration table ${table}.`);
+      }
+      const present = new Set(
+        (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((row) => String(row.name)),
+      );
+      const missing = columns.filter((column) => !present.has(column));
+      if (missing.length > 0) {
+        throw incompletePair(
+          `The collaboration image ${path} table ${table} is missing the column(s) ${missing.join(", ")}.`,
+        );
+      }
+    }
+    const maxVersion = scalar(db, "select max(version) as n from schema_version");
+    const applied = scalar(db, "select count(*) as n from schema_version");
+    if (maxVersion < 1 || applied !== maxVersion) {
+      throw incompletePair(`The collaboration image ${path} records a non-contiguous schema ledger.`);
+    }
+    const meta = db
+      .prepare(
+        "select repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision " +
+          "from collaboration_meta where id = 1",
+      )
+      .get() as Record<string, unknown> | undefined;
+    if (
+      meta === undefined ||
+      typeof meta.repository_key !== "string" ||
+      (meta.mode !== "local" && meta.mode !== "mirror") ||
+      typeof meta.store_id !== "string" ||
+      (meta.authority_state !== "staged" && meta.authority_state !== "active") ||
+      typeof meta.authority_epoch !== "number" ||
+      typeof meta.revision !== "number" ||
+      typeof meta.catalog_revision !== "number"
+    ) {
+      throw incompletePair(`The collaboration image ${path} records no readable collaboration_meta singleton.`);
+    }
+    if (meta.repository_key !== expected.repoKey || meta.mode !== expected.mode) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The collaboration image ${path} belongs to repository ${meta.repository_key} (${String(meta.mode)}), not to this ` +
+          `checkout's ${expected.repoKey} (${expected.mode}). A verified image of another repository never restores here; ` +
+          `run the recovery from a checkout of that repository. Nothing was written.`,
+      );
+    }
+    const counts: Record<string, number> = {};
+    for (const table of Object.keys(COLLABORATION_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
+    const operations = (
+      db
+        .prepare("select key_space, operation_id, execution_store_id, execution_epoch from collaboration_operations order by operation_id")
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      keySpace: String(row.key_space),
+      operationId: String(row.operation_id),
+      executionStoreId: typeof row.execution_store_id === "string" ? row.execution_store_id : null,
+      executionEpoch: typeof row.execution_epoch === "number" ? row.execution_epoch : null,
+    }));
+    return {
+      authority: {
+        repoKey: meta.repository_key,
+        mode: meta.mode,
+        storeId: meta.store_id,
+        epoch: meta.authority_epoch,
+        state: meta.authority_state,
+        schemaVersion: maxVersion,
+        revision: meta.revision,
+        catalogRevision: meta.catalog_revision,
+      },
+      counts,
+      operations,
+    };
+  } catch (error) {
+    // A driver-level failure (not a database, a locked or truncated image) is
+    // the same unverifiable-image refusal as a wrong identity: the pair is not
+    // evidence.
+    if (error instanceof StoreError) throw error;
+    throw incompletePair(`The collaboration image ${path} is not a readable collaboration store (${messageOf(error)}).`);
+  } finally {
+    db.close();
+  }
+}
+
+/** The live collaboration authority this checkout must use, leaving it untouched. */
+async function liveCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthority> {
+  const handle = await openCollaborationStore(context, "read");
+  handle.close();
+  return handle.authority;
+}
+
+/**
+ * The execution half of the pair's own outstanding work: an accepted composite
+ * whose execution finalization has not committed. A pair must never be offered
+ * while one exists, because the two images would freeze opposite halves of it.
+ */
+function assertNoOutstandingComposite(handle: { db: StoreDb }): void {
+  const tables = tableNamesOn(handle.db);
+  if (!tables.has("execution_collaboration_intents")) return;
+  const pending = handle.db
+    .prepare("select operation_id from execution_collaboration_intents where phase = 'prepared' order by operation_id")
+    .all() as Array<{ operation_id?: unknown }>;
+  if (pending.length > 0) {
+    throw incompletePair(
+      `This execution root holds ${pending.length} accepted composite operation(s) that are still pending ` +
+        `(${pending.map((row) => String(row.operation_id)).join(", ")}). Settle each with its own domain verb first, then ` +
+        `take the pair against a quiescent root.`,
+    );
+  }
+}
+
+/**
+ * `backupRepositoryStores` — the verified PAIR.
+ *
+ * Both domains are copied with their own SQLite snapshot (`VACUUM INTO`), each
+ * copy is re-opened and verified against its own bytes, and both authorities
+ * must hold the SAME generation before and after the two copies. Only then is
+ * the manifest published, create-only, naming the two verified images. A
+ * changed authority, an unverifiable image or a pending composite is reported
+ * as `collaboration.backup-incomplete` with nothing named as a backup.
+ */
+export async function backupRepositoryStores(
+  context: StoreContext,
+  options: { out: string },
+): Promise<RepositoryBackupReceipt> {
+  if (typeof options?.out !== "string" || options.out.trim() === "") {
+    throw incompletePair("A repository backup needs the absolute manifest path it publishes (--out <abs-manifest>).");
+  }
+  const manifestPath = resolve(options.out);
+  if (existsSync(manifestPath)) {
+    throw incompletePair(
+      `A repository backup manifest already exists at ${manifestPath}; pass --out <path> naming a new destination instead of ` +
+        `overwriting a recorded recovery point.`,
+    );
+  }
+  const executionImagePath = `${manifestPath}.execution.db`;
+  const collaborationImagePath = `${manifestPath}.collaboration.db`;
+  for (const imagePath of [executionImagePath, collaborationImagePath]) {
+    if (existsSync(imagePath)) {
+      throw incompletePair(
+        `A file already exists at ${imagePath}; a pair is published create-only and never overwrites a recorded recovery ` +
+          `point. Pass --out <path> naming a new destination.`,
+      );
+    }
+  }
+  const location = resolveCollaborationLocation(context);
+
+  // Both authorities' generation BEFORE either copy: a pair is only coherent
+  // when both domains held one generation across the whole window.
+  const executionBefore = await openStore(context, "read").then((handle) => {
+    try {
+      const meta = readMetaRow(handle.db);
+      assertNoOutstandingComposite(handle);
+      return meta;
+    } finally {
+      handle.close();
+    }
+  });
+  const collaborationBefore = await liveCollaborationAuthority(context);
+  if (collaborationBefore.state !== "active") {
+    throw incompletePair(
+      `The collaboration authority at ${location.dbPath} is ${collaborationBefore.state}; a repository pair is taken of the ` +
+        `ACTIVE authority only. Publish it with its own activation first.`,
+    );
+  }
+
+  let execution: BackupReceipt | undefined;
+  let collaborationInspection: CollaborationImageInspection | undefined;
+  try {
+    execution = await backupStore(context, { out: executionImagePath });
+    await writeCollaborationImage(location.dbPath, collaborationImagePath);
+    collaborationInspection = await inspectCollaborationImage(collaborationImagePath, location).catch((error: unknown) => {
+      throw error instanceof StoreError ? error : incompletePair(`The collaboration image could not be verified (${messageOf(error)}).`);
+    });
+
+    const executionAfter = await openStore(context, "read").then((handle) => {
+      try {
+        return readMetaRow(handle.db);
+      } finally {
+        handle.close();
+      }
+    });
+    const collaborationAfter = await liveCollaborationAuthority(context).catch((error: unknown) => {
+      throw incompletePair(`The collaboration authority changed during the copy and cannot be re-read (${messageOf(error)}).`);
+    });
+    if (
+      executionBefore.storeId !== executionAfter.storeId ||
+      executionBefore.epoch !== executionAfter.epoch ||
+      executionBefore.revision !== executionAfter.revision ||
+      executionBefore.catalogRevision !== executionAfter.catalogRevision
+    ) {
+      throw incompletePair(
+        `The execution authority advanced while the pair was copied (revision ${executionBefore.revision} -> ` +
+          `${executionAfter.revision}); a pair is only published against one stable generation. Stop the writers and retry.`,
+      );
+    }
+    if (collaborationAfter.storeId !== collaborationBefore.storeId || collaborationAfter.epoch !== collaborationBefore.epoch) {
+      throw incompletePair(
+        `The collaboration authority changed generation while the pair was copied (${collaborationBefore.storeId} epoch ` +
+          `${collaborationBefore.epoch} -> ${collaborationAfter.storeId} epoch ${collaborationAfter.epoch}). Stop the writers and retry.`,
+      );
+    }
+    if (collaborationInspection.authority.revision !== collaborationAfter.revision) {
+      // Both copies are individually coherent, but the collaboration image is
+      // not the generation the pair claims: retry against a quiescent lane.
+      throw incompletePair(
+        `The collaboration image holds revision ${collaborationInspection.authority.revision} while the live authority is at ` +
+          `${collaborationAfter.revision}; the pair does not describe one generation. Stop the writers and retry.`,
+      );
+    }
+  } catch (error) {
+    // No partial layout is ever published: a failed pair removes only the two
+    // images this attempt created.
+    rmSync(executionImagePath, { force: true });
+    rmSync(collaborationImagePath, { force: true });
+    rmSync(`${executionImagePath}-wal`, { force: true });
+    rmSync(`${executionImagePath}-shm`, { force: true });
+    throw error;
+  }
+
+  const collaborationImage: CollaborationBackupImage = {
+    path: collaborationImagePath,
+    authority: collaborationInspection.authority,
+    takenAt: new Date().toISOString(),
+    counts: collaborationInspection.counts,
+  };
+  const receipt: RepositoryBackupReceipt = {
+    version: 1,
+    manifestPath,
+    execution: execution!,
+    collaboration: collaborationImage,
+  };
+  try {
+    publishTextCreateOnly(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  } catch (error) {
+    rmSync(executionImagePath, { force: true });
+    rmSync(collaborationImagePath, { force: true });
+    throw error instanceof StoreError
+      ? error
+      : incompletePair(`The manifest could not be published at ${manifestPath} (${messageOf(error)}).`);
+  }
+  return receipt;
+}
+
+/** One `VACUUM INTO` copy of the collaboration lane (the one-image primitive). */
+async function writeCollaborationImage(dbPath: string, out: string): Promise<void> {
+  mkdirSync(dirname(out), { recursive: true });
+  const source = await connect(dbPath, "write", busyTimeoutMs(), { keepJournalMode: true, noCreate: true }).catch((error: unknown) => {
+    throw incompletePair(`The collaboration authority at ${dbPath} cannot be read for a copy (${messageOf(error)}).`);
+  });
+  try {
+    source.prepare("vacuum into ?").run(out);
+  } catch (error) {
+    throw incompletePair(`The collaboration image could not be written to ${out} (${messageOf(error)}).`);
+  } finally {
+    source.close();
+  }
+}
+
+/**
+ * Publish one text file create-only: the bytes are written under a private name
+ * first, so a crash leaves inert scratch and the canonical manifest is either
+ * complete or absent.
+ */
+function publishTextCreateOnly(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, text, "utf8");
+    linkSync(tmp, path);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw incompletePair(`A repository backup manifest already exists at ${path}.`);
+    }
+    throw error;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  syncDirectoryEntry(dirname(path));
+}
+
+/**
+ * `restoreCollaborationBackup` — the scoped collaboration restore.
+ *
+ * It validates BOTH images of the supplied pair (and the manifest they were
+ * published under), the repository/mode they belong to, and the causal
+ * boundary between the two generations; then it stages a private copy, bumps
+ * the restored authority's epoch, records the restore receipt in the same
+ * transaction and publishes the canonical path create-only. An absent target is
+ * the only admitted destination: a live, corrupt or foreign collaboration
+ * authority is never overwritten, quarantined or deleted. Execution sessions,
+ * leases and rows are neither copied nor changed.
+ */
+export async function restoreCollaborationBackup(
+  context: StoreContext,
+  receipt: RepositoryBackupReceipt,
+  options: { operator: string; attestation: ActivationAttestation },
+): Promise<CollaborationAuthority> {
+  const supplied = requireRepositoryBackupReceipt(receipt);
+  const location = resolveCollaborationLocation(context);
+
+  // The manifest is the published authority for the pair: the supplied receipt
+  // must BE it, so a caller cannot recombine two verified images by hand.
+  let manifestText: string;
+  try {
+    manifestText = readFileSync(supplied.manifestPath, "utf8");
+  } catch (error) {
+    throw incompletePair(`The backup manifest ${supplied.manifestPath} cannot be read (${messageOf(error)}).`);
+  }
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(manifestText) as unknown;
+  } catch {
+    throw incompletePair(`The backup manifest ${supplied.manifestPath} is not readable JSON.`);
+  }
+  if (canonicalJsonOf(manifest) !== canonicalJsonOf(supplied)) {
+    throw incompletePair(
+      `The supplied receipt is not the manifest published at ${supplied.manifestPath}; supply the verified pair's own ` +
+        `manifest rather than images assembled by hand.`,
+    );
+  }
+
+  const executionCopy = await inspectBackupCopy(supplied.execution.backupPath).catch((error: unknown) => {
+    throw incompletePair(`The execution image ${supplied.execution.backupPath} cannot be verified (${messageOf(error)}).`);
+  });
+  if (
+    executionCopy.storeId !== supplied.execution.storeId ||
+    executionCopy.epoch !== supplied.execution.epoch ||
+    executionCopy.revision !== supplied.execution.revision ||
+    executionCopy.catalogRevision !== supplied.execution.catalogRevision ||
+    executionCopy.schemaVersion !== supplied.execution.schemaVersion ||
+    executionCopy.authorityState !== supplied.execution.authorityState ||
+    !sameCounts(executionCopy.counts, supplied.execution.counts)
+  ) {
+    throw incompletePair(
+      `The execution image at ${supplied.execution.backupPath} does not describe the generation the manifest records.`,
+    );
+  }
+  const collaborationInspection = await inspectCollaborationImage(supplied.collaboration.path, location);
+  const recorded = supplied.collaboration.authority;
+  if (
+    collaborationInspection.authority.storeId !== recorded.storeId ||
+    collaborationInspection.authority.epoch !== recorded.epoch ||
+    collaborationInspection.authority.revision !== recorded.revision ||
+    collaborationInspection.authority.catalogRevision !== recorded.catalogRevision ||
+    collaborationInspection.authority.state !== recorded.state ||
+    canonicalJsonOf(collaborationInspection.counts) !== canonicalJsonOf(supplied.collaboration.counts)
+  ) {
+    throw incompletePair(
+      `The collaboration image at ${supplied.collaboration.path} does not describe the generation the manifest records.`,
+    );
+  }
+  assertCausalBoundary(supplied, collaborationInspection, executionCopy);
+
+  const attestation = validateActivationAttestation(options?.attestation);
+  const operator = options?.operator;
+  if (typeof operator !== "string" || operator.trim() === "") {
+    throw new StoreError(
+      "store.attestation-invalid",
+      "A collaboration restore requires the named operator (--operator <name>); it is recorded as the approving actor.",
+    );
+  }
+  if (attestation.operator.actor !== operator) {
+    throw new StoreError(
+      "store.attestation-invalid",
+      `The attestation names operator ${attestation.operator.actor}, not ${operator}. Attest this restore under the operator ` +
+        `who actually approved it; nothing was restored.`,
+    );
+  }
+
+  const dbPath = location.dbPath;
+  if (existsSync(dbPath)) {
+    throw new StoreError(
+      "collaboration.cutover-conflict",
+      `A collaboration authority already exists at ${dbPath}. A restore is create-only: it never overwrites, quarantines or ` +
+        `deletes a live, staged or corrupt authority. Inspect the existing authority with "mstar path resolve", move it aside ` +
+        `only through an explicit operator action after reconciliation, then restore into the absent target. Nothing was written.`,
+    );
+  }
+
+  const dir = dirname(dbPath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stagingDir = join(dir, `.restore-${process.pid}-${randomUUID()}`);
+  const stagingPath = join(stagingDir, basename(dbPath));
+  try {
+    mkdirSync(stagingDir, { mode: 0o700 });
+  } catch (error) {
+    throw incompletePair(`A private staging directory could not be created beside ${dbPath} (${messageOf(error)}).`);
+  }
+  let staged = false;
+  try {
+    copyFileSync(supplied.collaboration.path, stagingPath);
+    chmodSync(stagingPath, 0o600);
+    const stagedInspection = await inspectCollaborationImage(stagingPath, location);
+    if (canonicalJsonOf(stagedInspection.counts) !== canonicalJsonOf(collaborationInspection.counts)) {
+      throw incompletePair(`The staged copy of ${supplied.collaboration.path} does not hold the verified rows.`);
+    }
+    const imageSha = sha256Bytes(readFileSync(stagingPath));
+    const restoredAt = nowRfc3339();
+    const nextEpoch = recorded.epoch + 1;
+    const db = await connect(stagingPath, "write", busyTimeoutMs(), { keepJournalMode: true });
+    try {
+      db.exec("begin immediate");
+      try {
+        const flipped = db
+          .prepare(
+            "update collaboration_meta set authority_state = 'active', authority_epoch = ?, activated_at = ? " +
+              "where id = 1 and store_id = ? and repository_key = ? and mode = ? and authority_epoch = ?",
+          )
+          .run(nextEpoch, restoredAt, recorded.storeId, location.repoKey, location.mode, recorded.epoch) as { changes?: number };
+        if (Number(flipped?.changes) !== 1) {
+          throw incompletePair(
+            `The verified collaboration image changed between its inspection and the restore transaction (identity, ` +
+              `repository, mode or epoch no longer match).`,
+          );
+        }
+        db.prepare(
+          "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+            "values ('standalone', ?, ?, ?, ?)",
+        ).run(
+          `restore:${nextEpoch}:${imageSha}`,
+          imageSha,
+          JSON.stringify({
+            version: 1,
+            imagePath: supplied.collaboration.path,
+            imageSha256: imageSha,
+            restoredFrom: { storeId: recorded.storeId, epoch: recorded.epoch, revision: recorded.revision },
+            authority: { storeId: recorded.storeId, epoch: nextEpoch, repoKey: location.repoKey, mode: location.mode },
+            operator,
+            executionImage: { path: supplied.execution.backupPath, storeId: supplied.execution.storeId, epoch: supplied.execution.epoch },
+            restoredAt,
+          }),
+          restoredAt,
+        );
+        db.exec("commit");
+      } catch (error) {
+        try {
+          db.exec("rollback");
+        } catch {
+          // nothing committed either way
+        }
+        throw error;
+      }
+      // One self-contained file: the published name is not a journal alias.
+      const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
+      if (folded?.journal_mode !== "delete") {
+        throw incompletePair(`The restored image could not be folded into one database file (${String(folded?.journal_mode ?? "unknown")}).`);
+      }
+    } finally {
+      db.close();
+    }
+    try {
+      linkSync(stagingPath, dbPath);
+    } catch (error) {
+      if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+        throw new StoreError(
+          "collaboration.cutover-conflict",
+          `A collaboration authority appeared at ${dbPath} while this restore was staging; it is never overwritten. ` +
+            `Inspect the existing authority and retry only against an absent target.`,
+        );
+      }
+      throw incompletePair(`The restored image could not be published at ${dbPath} (${messageOf(error)}).`);
+    }
+    staged = true;
+    syncDirectoryEntry(dir);
+  } finally {
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${stagingPath}${suffix}`, { force: true });
+    try {
+      rmdirSync(stagingDir);
+    } catch {
+      // an empty private staging directory is inert scratch
+    }
+  }
+  if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
+  return readCollaborationAuthority(context);
+}
+
+/** The receipt shape a restore accepts: the pair's own manifest fields, nothing inferred. */
+function requireRepositoryBackupReceipt(value: unknown): RepositoryBackupReceipt {
+  const bad = (detail: string): never => {
+    throw incompletePair(`The supplied repository backup receipt is not usable: ${detail}.`);
+  };
+  if (value === null || typeof value !== "object" || Array.isArray(value)) bad("it is not an object");
+  const receipt = value as Record<string, unknown>;
+  if (receipt.version !== 1) bad(`its version is ${JSON.stringify(receipt.version)}, not this build's 1`);
+  const manifestPath = receipt.manifestPath;
+  if (typeof manifestPath !== "string" || manifestPath.trim() === "") bad("it names no manifest path");
+  const execution = receipt.execution;
+  if (
+    execution === null ||
+    typeof execution !== "object" ||
+    typeof (execution as Record<string, unknown>).backupPath !== "string" ||
+    typeof (execution as Record<string, unknown>).storeId !== "string"
+  ) {
+    bad("it carries no execution image receipt");
+  }
+  const collaboration = receipt.collaboration;
+  if (collaboration === null || typeof collaboration !== "object") bad("it carries no collaboration image");
+  const image = collaboration as Record<string, unknown>;
+  if (typeof image.path !== "string" || image.authority === null || typeof image.authority !== "object") {
+    bad("its collaboration image names no verified authority");
+  }
+  if (image.counts === null || typeof image.counts !== "object" || Array.isArray(image.counts)) {
+    bad("its collaboration image records no row counts");
+  }
+  return value as RepositoryBackupReceipt;
+}
+
+/**
+ * The causal boundary of one pair: the collaboration receipts only ever name an
+ * execution generation at or before the paired execution image, and neither
+ * side may be frozen mid-operation.
+ */
+function assertCausalBoundary(
+  receipt: RepositoryBackupReceipt,
+  collaboration: CollaborationImageInspection,
+  execution: BackupInspection,
+): void {
+  const claim = collaboration.operations.find((row) => row.keySpace === "standalone" && row.operationId === COLLABORATION_CLAIM_KEY);
+  if (claim !== undefined) {
+    throw incompletePair(
+      "The collaboration image holds a pending cutover claim, so it was frozen mid-activation. Resume or abandon that " +
+        "activation before taking a pair.",
+    );
+  }
+  for (const row of collaboration.operations) {
+    if (row.keySpace !== "composite") continue;
+    if (row.executionStoreId !== execution.storeId) {
+      throw incompletePair(
+        `The collaboration image records a composite effect for execution store ${String(row.executionStoreId)}, not for the ` +
+          `paired execution store ${execution.storeId}; the two images are not one repository's generation.`,
+      );
+    }
+    if (row.executionEpoch !== null && row.executionEpoch > execution.epoch) {
+      throw incompletePair(
+        `The collaboration image records a composite effect from execution epoch ${row.executionEpoch}, which is AHEAD of the ` +
+          `paired execution image's epoch ${execution.epoch}; the pair is out of causal order.`,
+      );
+    }
+  }
+  void receipt;
+}
+
+/**
+ * `ensureCollaborationAuthority` — the fresh/file-era bootstrap.
+ *
+ * A checkout whose combined store provably holds no collaboration rows (or no
+ * store at all) gets its repository's collaboration authority from here:
+ * `initializeCollaborationStore` creates it create-only or reuses the matching
+ * record WITHOUT clearing it, and a freshly created empty staged lane is
+ * published as this scope's first active generation. A lane that recorded any
+ * staging evidence belongs to a cutover or register import and is never
+ * published by a bootstrap. A combined source that still owns collaboration rows
+ * is not a fresh scope: it directs to the reviewed cutover.
+ */
+export async function ensureCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthority> {
+  const location = resolveCollaborationLocation(context);
+  if (existsSync(storeDbPath(context))) {
+    const handle = await openStore(context, "read");
+    try {
+      const fence = readCollaborationFence(handle.db);
+      if (fence === null) {
+        const tables = tableNamesOn(handle.db);
+        const held = ["issues", "occurrences", "issue_transitions", "provenance", "catalog_entities", "catalog_links"].filter(
+          (table) => tables.has(table) && scalar(handle.db, `select count(*) as n from ${table}`) > 0,
+        );
+        if (held.length > 0) {
+          throw new StoreError(
+            "collaboration.cutover-required",
+            `The combined store at ${storeDbPath(context)} still owns collaboration rows (${held.join(", ")}); it is not a ` +
+              `fresh scope. Move that authority with the reviewed cutover: mstar store collaboration plan, apply, then ` +
+              `activate. Nothing was created or changed.`,
+          );
+        }
+      }
+    } finally {
+      handle.close();
+    }
+  }
+  const authority = await initializeCollaborationStore(location);
+  if (authority.state === "active") return authority;
+  return writeCollaborationStage(location, ({ db, authority: current }) => {
+    if (current.state === "active") return current;
+    const evidence =
+      scalar(db, "select count(*) as n from cutover_publications") +
+      scalar(db, "select count(*) as n from collaboration_operations") +
+      current.revision +
+      current.catalogRevision;
+    if (evidence !== 0) {
+      throw new StoreError(
+        "collaboration.not-active",
+        `The collaboration authority at ${location.dbPath} is staged and holds recorded staging evidence, so it belongs to a ` +
+          `reviewed activation (a cutover or a file-era register import). Publish it with that activation \u2014 ` +
+          `mstar store collaboration activate --manifest <path> --operator <name> \u2014 instead of treating it as a fresh scope. ` +
+          `Nothing was written.`,
+      );
+    }
+    const at = nowRfc3339();
+    const flipped = db
+      .prepare(
+        "update collaboration_meta set authority_state = 'active', activated_at = ? " +
+          "where id = 1 and authority_state = 'staged' and store_id = ? and authority_epoch = ? and revision = 0 and catalog_revision = 0",
+      )
+      .run(at, current.storeId, current.epoch) as { changes?: number };
+    if (Number(flipped?.changes) !== 1) {
+      throw new StoreError(
+        "collaboration.not-active",
+        `The staged collaboration authority at ${location.dbPath} changed while it was being published; inspect it with ` +
+          `mstar path resolve before retrying. Nothing was written.`,
+      );
+    }
+    return { ...current, state: "active" as const };
+  });
+}
+
 
 /** The reviewed authority a recovery point has to belong to (primary spec §6 item 2). */
 export type ReviewedBackupAuthority = {
