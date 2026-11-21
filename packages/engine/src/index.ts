@@ -514,6 +514,9 @@ export type {
   ReviewChangesetMode,
   ReviewInlineComment,
   ReviewPostPlan,
+  ReviewThreadFacts,
+  ThreadGateConfirmation,
+  ThreadGateDecision,
   ValidateFindingDocOptions,
 } from "./prreview.js";
 export {
@@ -524,6 +527,8 @@ export {
   PR_VERDICTS,
   REVIEW_EMOJI,
   computePrTally,
+  decideThreadGate,
+  parseReviewThreads,
   pickReviewBranchName,
   planReviewPost,
   preflightChangeset,

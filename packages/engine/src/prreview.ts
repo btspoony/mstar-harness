@@ -2523,3 +2523,112 @@ export function resolvePrReviewTier(input: ResolvePrReviewTierInput): PrReviewTi
   if (input.tinyMechanical === true) return "quick";
   return "default";
 }
+
+// ---------------------------------------------------------------------------
+// thread gate — §5.3a unresolved conversation gate
+// ---------------------------------------------------------------------------
+
+/** One review thread as GitHub's `reviewThreads` connection reports it. */
+export interface ReviewThreadFacts {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path?: string;
+  line?: number;
+  author?: string;
+  body?: string;
+}
+
+/** The record a double confirmation leaves behind: the head it was given for,
+ * how many confirmations it carries, and the exact unresolved thread ids the
+ * user confirmed. */
+export interface ThreadGateConfirmation {
+  head: string;
+  confirmations: number;
+  threads: readonly string[];
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : null;
+
+/**
+ * Read one GraphQL page of `repository.pullRequest.reviewThreads` into thread
+ * facts. A node without a string `id` is skipped — a gate must never invent an
+ * identity it cannot name back to the user.
+ */
+export function parseReviewThreads(payload: unknown): {
+  threads: ReviewThreadFacts[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+} {
+  const repository = asRecord(asRecord(asRecord(payload)?.data)?.repository);
+  const connection = asRecord(asRecord(repository?.pullRequest)?.reviewThreads);
+  const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+  const threads = nodes.flatMap((node): ReviewThreadFacts[] => {
+    const row = asRecord(node);
+    if (row === null || typeof row.id !== "string") return [];
+    const comments = asRecord(row.comments);
+    const first = Array.isArray(comments?.nodes) ? asRecord(comments.nodes[0]) : null;
+    const author = asRecord(first?.author);
+    return [{
+      id: row.id,
+      isResolved: row.isResolved === true,
+      isOutdated: row.isOutdated === true,
+      ...(typeof row.path === "string" ? { path: row.path } : {}),
+      ...(typeof row.line === "number" ? { line: row.line } : {}),
+      ...(typeof author?.login === "string" ? { author: author.login } : {}),
+      ...(typeof first?.body === "string" ? { body: first.body } : {}),
+    }];
+  });
+  const pageInfo = asRecord(connection?.pageInfo);
+  return {
+    threads,
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
+  };
+}
+
+export type ThreadGateDecision =
+  | { ok: true; head: string; unresolved: ReviewThreadFacts[] }
+  | {
+      ok: false;
+      code: "prreview.thread-gate.unresolved" | "prreview.thread-gate.confirmation-invalid";
+      head: string;
+      unresolved: ReviewThreadFacts[];
+      problems: string[];
+    };
+
+/**
+ * §5.3a: with no confirmation, ANY unresolved thread refuses the merge. With a
+ * confirmation it must bind the current head, record two confirmations, and
+ * name exactly the unresolved thread ids — a blanket "merge it" leaves no
+ * record and therefore no authority.
+ */
+export function decideThreadGate(input: {
+  head: string;
+  threads: readonly ReviewThreadFacts[];
+  confirmation?: ThreadGateConfirmation;
+}): ThreadGateDecision {
+  const unresolved = input.threads.filter((thread) => !thread.isResolved);
+  if (input.confirmation === undefined) {
+    return unresolved.length === 0
+      ? { ok: true, head: input.head, unresolved }
+      : { ok: false, code: "prreview.thread-gate.unresolved", head: input.head, unresolved, problems: [] };
+  }
+  const problems: string[] = [];
+  if (input.confirmation.head !== input.head) {
+    problems.push(`confirmation head ${input.confirmation.head} is not the current head ${input.head}`);
+  }
+  if (input.confirmation.confirmations < 2) {
+    problems.push(`confirmation records ${input.confirmation.confirmations} confirmation(s); 2 are required`);
+  }
+  const named = new Set(input.confirmation.threads);
+  const open = new Set(unresolved.map((thread) => thread.id));
+  for (const id of open) if (!named.has(id)) problems.push(`thread ${id} is unresolved but not named in the confirmation`);
+  for (const id of named) if (!open.has(id)) problems.push(`thread ${id} is named in the confirmation but is resolved or absent`);
+  return problems.length === 0
+    ? { ok: true, head: input.head, unresolved }
+    : { ok: false, code: "prreview.thread-gate.confirmation-invalid", head: input.head, unresolved, problems };
+}

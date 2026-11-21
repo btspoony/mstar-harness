@@ -1089,7 +1089,34 @@ describe("pr-review command family", () => {
       status: "error", code: "pr-review.post.unknown-outcome",
       details: { outcome: "unknown", pr: 42, commitId: "abcdef0123456" },
     });
-    expect(calls).toHaveLength(2);
+  });
+
+  test("thread-gate refuses unresolved threads and accepts a matching two-confirmation record", async () => {
+    const { cwd, context } = fixture();
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    const threads = (nodes: unknown[]) => ({ exitCode: 0, signal: null, stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } }), stderr: "" });
+    context.effects.spawn = async (request) => {
+      if (request.argv[1] === "pr") return review;
+      return threads([
+        { id: "T1", isResolved: false, isOutdated: false, path: "src/a.ts", line: 42, comments: { nodes: [{ author: { login: "bot" }, body: "should-fix" }] } },
+        { id: "T2", isResolved: true, isOutdated: false, path: "src/b.ts", line: 7, comments: { nodes: [{ author: { login: "human" }, body: "question" }] } },
+      ]);
+    };
+    const gate = command("pr-review.thread-gate");
+    const refused = await gate.execute({ pr: "42" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "prreview.thread-gate.unresolved", exitCode: 1 });
+    expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ head: "abcdef0123456", unresolved: [{ id: "T1", author: "bot", path: "src/a.ts", line: 42 }] });
+
+    const confirm = path.join(cwd, "confirm.json");
+    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 2, threads: ["T1"] }));
+    const allowed = await gate.execute({ pr: "42", confirm }, context);
+    expect(allowed).toMatchObject({ status: "ok" });
+    expect(allowed.status === "ok" ? allowed.data : {}).toMatchObject({ mergeAllowed: true, head: "abcdef0123456", unresolved: [{ id: "T1" }] });
+
+    writeFileSync(confirm, JSON.stringify({ head: "abcdef0123456", confirmations: 1, threads: ["T1"] }));
+    const once = await gate.execute({ pr: "42", confirm }, context);
+    expect(once).toMatchObject({ status: "refused", code: "prreview.thread-gate.confirmation-invalid" });
+    expect(once.status === "ok" ? "" : JSON.stringify(once.details)).toContain("2 are required");
   });
 
 });

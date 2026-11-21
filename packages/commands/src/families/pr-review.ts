@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, openSync, fstatSync, lstatSync, closeSync, linkSync } from "node:fs";
 import path from "node:path";
 import {
-  computePrTally, planReviewPost, prReviewReportPath, prReviewSeatPrompt, prReviewSizing,
+  computePrTally, decideThreadGate, parseReviewThreads, planReviewPost, prReviewReportPath, prReviewSeatPrompt, prReviewSizing,
   resolvePrReviewSettlement, resolvePrReviewTier, resolveReviewDir, PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS, validatePrReviewReport,
-  MERGE_CLASSES, type MergeClass, type PrReportTarget, type ReviewPostPlan,
+  MERGE_CLASSES, type MergeClass, type PrReportTarget, type ReviewPostPlan, type ReviewThreadFacts, type ThreadGateConfirmation,
 } from "@mstar-harness/engine";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -15,14 +15,14 @@ import { launchDirectoryRefusal, launchDirectoryDiagnostics } from "./launch-wor
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
-const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
+const verbs = ["tally", "report-path", "validate-report", "post", "thread-gate", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
 type Verb = (typeof verbs)[number];
 type Input = {
   findings?: string; unmetAcUnsafe?: string; unmetAcSafe?: string;
   unmetAcTests?: string; unmetAcDocs?: string;
   stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string; partialScope?: string[];
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
-  pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
+  pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean; confirm?: string;
   base?: string; head?: string; largestFileTotal?: string;
   domain?: string; seat?: string; worktree?: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean; remainingMinutes?: string;
 };
@@ -31,7 +31,7 @@ const inputSchema = z.object({
   unmetAcTests: z.string().optional(), unmetAcDocs: z.string().optional(),
   stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(), partialScope: z.array(z.string()).optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
-  pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
+  pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(), confirm: z.string().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
@@ -40,6 +40,7 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
   post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
+  "thread-gate": { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "confirm", flags: "--confirm <file.json>", required: false, help: "Optional; the two-confirmation record {head, confirmations: 2, threads: [<thread id>...]} that authorizes merging while threads stay unresolved." }], effects: ["read", "validate", "process", "service"], description: "Enumerate every review thread on the PR's current head and decide the §5.3a merge gate: any unresolved thread refuses the merge unless a confirmation record binds the current head, records two confirmations and names exactly those thread ids." },
   "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false, help: "Only true is an explicit saved-report assertion; otherwise the recorded sidecar must already say true." }], effects: ["read", "write", "process"], description: "Remove the recorded PR-review worktree and branch only when --report-saved=true or the recorded sidecar says reportSaved=true, and only when the supplied branch matches its recorded branch." },
   size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false, help: "If omitted, derive the largest touched-file line count from Git at head." }], effects: ["read", "process"], description: "Classify base...head changes from Git; derive largest touched-file total from the referenced head when --largest-file-total is omitted." },
   "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true, help: "Must be 1 or 2; collect-folded=true further restricts this value to 2." }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: false, help: "Defaults to the invocation current working directory." }, { key: "security", flags: "--security", required: false, defaultValue: false, help: "Defaults to false; collect-folded=true forbids a security seat." }, { key: "skillRoot", flags: "--skill-root <dir>", required: false, defaultValue: "skills/mstar-audit" }, { key: "recon", flags: "--recon <facts...>", required: false, defaultValue: [] }, { key: "tier", flags: "--tier <quick|default|deep>", required: false, defaultValue: "default" }, { key: "diffFile", flags: "--diff-file <path>", required: false, help: "Required when --collect-folded is true." }, { key: "collectFolded", flags: "--collect-folded", required: false, defaultValue: false, help: "Defaults to false; true requires --stage 2 and --diff-file, and cannot be used for a security seat." }, { key: "remainingMinutes", flags: "--remaining-minutes <n>", required: false, help: "Minutes left of the tier's shared soft wall-clock cap at dispatch; negative = already over. Omitted = the prompt states the cap without a remaining figure." }], effects: ["read"], description: "Generate a read-only PR-review seat prompt; worktree defaults to invocation cwd, skillRoot to skills/mstar-audit, recon to [], security and collectFolded to false, tier to default, and no remaining-budget figure." },
@@ -470,6 +471,67 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       let reviewUrl = response.stdout.trim();
       try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* preserve successful response text */ }
       return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
+    }
+    if (verb === "thread-gate") {
+      // `gh` resolves the repository from its working directory, so an
+      // undeclared workspace would read the HOST checkout's pull request.
+      const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the pull request whose review threads are read" });
+      if (unnamedRepository !== undefined) return unnamedRepository;
+      const prText = need(input.pr, "--pr");
+      if (!/^\d+$/.test(prText) || Number(prText) < 1) throw new UsageError("--pr requires a positive integer");
+      const pr = Number(prText);
+      const unavailable = (cause: string) => refusalEnvelope({
+        command: id, status: "refused", code: `${id}.unavailable`, exitCode: 1, message: cause,
+        recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review thread-gate --pr <number>.",
+      });
+      const view = await spawn(context, ["gh", "pr", "view", String(pr), "--json", "url,headRefOid"]);
+      if (view.exitCode !== 0 || view.signal !== null) return unavailable(view.stderr || "GitHub authentication/target lookup failed");
+      const parsedView: unknown = JSON.parse(view.stdout);
+      const viewRecord: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
+      const url = typeof viewRecord.url === "string" ? viewRecord.url : "";
+      const head = typeof viewRecord.headRefOid === "string" ? viewRecord.headRefOid : "";
+      const target = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(url);
+      if (target === null || !/^[0-9a-f]{7,40}$/.test(head)) return unavailable("pr view returned no resolvable repository url/head");
+      if (Number(target[3]) !== pr) {
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${target[3]} does not match requested PR ${prText}`, recovery: "Select the pull request matching the requested number. Run mstar pr-review thread-gate --pr <number>." });
+      }
+      const query = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated path line comments(first:1){nodes{author{login} body}}}}}}}";
+      const threads: ReviewThreadFacts[] = [];
+      let after: string | null = null;
+      // why: a gate that silently stops paging would miss exactly the threads
+      // it exists to block on, so an exhausted page cap is a refusal.
+      for (let page = 0; ; page += 1) {
+        const argv = ["gh", "api", "graphql", "-f", `query=${query}`, "-f", `owner=${target[1]}`, "-f", `name=${target[2]}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
+        const response = await spawn(context, argv);
+        if (response.exitCode !== 0 || response.signal !== null) return unavailable(response.stderr || "gh api graphql failed");
+        const pageResult = parseReviewThreads(JSON.parse(response.stdout));
+        threads.push(...pageResult.threads);
+        if (!pageResult.hasNextPage) break;
+        if (pageResult.endCursor === null) return unavailable("reviewThreads reported more pages without an end cursor");
+        after = pageResult.endCursor;
+        if (page >= 19) return unavailable("review thread paging exceeded 20 pages");
+      }
+      let confirmation: ThreadGateConfirmation | undefined;
+      if (input.confirm !== undefined) {
+        const file = abs(context.cwd, input.confirm);
+        if (!existsSync(file)) throw new Error(`confirmation file not found: ${file}`);
+        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+        const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
+        if (row === null || typeof row.head !== "string" || typeof row.confirmations !== "number" || !Array.isArray(row.threads) || row.threads.some((value) => typeof value !== "string")) {
+          throw new UsageError("--confirm must be a JSON object {head: string, confirmations: number, threads: string[]}");
+        }
+        confirmation = { head: row.head, confirmations: row.confirmations, threads: row.threads as string[] };
+      }
+      const decision = decideThreadGate({ head, threads, ...(confirmation === undefined ? {} : { confirmation }) });
+      if (decision.ok) return ok(id, { mergeAllowed: true, head, total: threads.length, unresolved: decision.unresolved });
+      return refusalEnvelope({
+        command: id, status: "refused", code: decision.code, exitCode: 1,
+        message: decision.code === "prreview.thread-gate.unresolved"
+          ? `${decision.unresolved.length} unresolved review thread(s) on ${head} - merge is not authorized`
+          : `the confirmation record does not authorize a merge on ${head}`,
+        details: { head, total: threads.length, unresolved: decision.unresolved, problems: decision.problems },
+        recovery: "Resolve every listed thread, or obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...]}, and rerun mstar pr-review thread-gate --pr <number> --confirm <file>.",
+      });
     }
     if (verb === "worktree-cleanup") {
       // This action DELETES the worktree and branch the setup sidecar records,
