@@ -3538,18 +3538,41 @@ function receiptEnvelope(raw: unknown): RemoteReceiptEnvelope {
     "version", "selectorCommit", "generation", "projectId", "operationId", "attemptId", "requestHash", "observedAt",
     "outcome",
   ]);
-  if (body.version !== 1) invalid("receipt.version", "must be 1");
-  const selectorCommit = text(body.selectorCommit, "receipt.selectorCommit");
-  if (!GIT_OBJECT_ID.test(selectorCommit)) invalid("receipt.selectorCommit", "must be a Git object id");
+  // invariant: One submission answers EVERY invalid envelope field at once, so a caller
+  // fixes the whole document per attempt instead of discovering one refusal per field.
+  const errors: string[] = [];
+  const field = <T>(run: () => T, fallback: T): T => {
+    try {
+      return run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(message.endsWith(". Nothing was written.") ? message.slice(0, -". Nothing was written.".length) : message);
+      return fallback;
+    }
+  };
+  if (body.version !== 1) errors.push("receipt.version: must be 1");
+  let selectorCommit = "";
+  if (typeof body.selectorCommit !== "string") errors.push("receipt.selectorCommit: must be a non-empty string");
+  else if (!GIT_OBJECT_ID.test(body.selectorCommit)) errors.push("receipt.selectorCommit: must be a Git object id");
+  else selectorCommit = body.selectorCommit;
+  const generation = field(() => positiveInteger(body.generation, "receipt.generation"), 0);
+  const projectId = field(() => text(body.projectId, "receipt.projectId"), "");
+  const operationId = field(() => linearId(body.operationId, "receipt.operationId"), "");
+  const attemptId = field(() => linearId(body.attemptId, "receipt.attemptId"), "");
+  const requestHash = field(() => digest(body.requestHash, "receipt.requestHash"), "");
+  const observedAt = field(() => instant(body.observedAt, "receipt.observedAt"), "");
+  if (errors.length > 0) {
+    throw new StoreError("remote.input-invalid", `${errors.join("; ")}. Nothing was written.`);
+  }
   return {
     version: 1,
     selectorCommit,
-    generation: positiveInteger(body.generation, "receipt.generation"),
-    projectId: text(body.projectId, "receipt.projectId"),
-    operationId: linearId(body.operationId, "receipt.operationId"),
-    attemptId: linearId(body.attemptId, "receipt.attemptId"),
-    requestHash: digest(body.requestHash, "receipt.requestHash"),
-    observedAt: instant(body.observedAt, "receipt.observedAt"),
+    generation,
+    projectId,
+    operationId,
+    attemptId,
+    requestHash,
+    observedAt,
     outcome: body.outcome,
   };
 }
@@ -4827,6 +4850,19 @@ type ObservedIssue = Readonly<{
 }>;
 
 /**
+ * note: The observed issues one remote capture dedupes against, read under the same
+ * complete-and-current scope proof a write freezes under. A capture needs the
+ * authority's established occurrences BEFORE it chooses create versus append, so it
+ * reads this instead of guessing from nothing.
+ */
+export async function readRemoteObservedIssues(
+  context: StoreContext,
+  projectId: string,
+): Promise<readonly RemoteIssue[]> {
+  return (await readWriteScope(context, projectId)).snapshot.issues;
+}
+
+/**
  * note: Resolve the project one addressed issue lives in. A remote write addresses one project; a
  * caller that names none is answered by scanning the SELECTED projects only, and an issue the
  * caches do not observe is never guessed into an unbound project.
@@ -4918,6 +4954,12 @@ export type RemoteIssueWrite = Readonly<{
     current: Record<string, unknown> | null,
     observed: RemoteObservedSubject,
   ): unknown | null;
+  /**
+   * note: A caller-observed base proved inside the freeze transaction, exactly as a project
+   * write's guard is: a caller whose `--expect-store` moved under it refuses instead of
+   * silently superseding the newer base.
+   */
+  guard?: (observed: { observationRevision: number }) => void;
   /** note: A composite's execution reservation, so the provider effect settles it. */
   executionKey?: RemoteIntentExecutionKey | null;
 }>;
@@ -5085,7 +5127,7 @@ export async function prepareRemoteIssueWrite(
       expectedHeads: [],
       executionKey,
       origin,
-    });
+    }, write.guard);
   }
   const addressed = text(write?.issueId, "issueId");
   const { scope, native, projectId } = await resolveObservedIssue(context, addressed, write.projectId);
@@ -5137,7 +5179,7 @@ export async function prepareRemoteIssueWrite(
     expectedHeads: parents,
     executionKey,
     origin,
-  });
+  }, write.guard);
 }
 
 /**

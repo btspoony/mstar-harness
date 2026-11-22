@@ -5901,19 +5901,23 @@ describe("remote composite flows", () => {
         kind: "residual-close" as const,
         issueId: MSTAR_ISSUE,
         disposition: "resolved" as const,
-        evidence: { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        // note: The linked snapshot carries TWO plan links (the fixture's own plus this
+        // plan), so the closure declares the whole acceptance verified.
+        evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
         expectedIssueRevision: 1,
       },
       expected: workflow.planToken,
       session: workflow.session,
     };
 
-    // invariant: Only a finding linked to THIS plan is closable remotely, and the refusal keeps
-    // the admitted reservation so the same operation id resumes once the link exists.
+    // invariant: Only a finding linked to THIS plan is closable remotely. The deterministic
+    // refusal freezes no provider intent and DECLINES the reservation (I-001221), so the
+    // same id never resumes it: a linked close runs under a new operation id below.
     const unlinked = await refusalOf(() => residualCloseExecutionPlan(execution, request));
-    expect(unlinked.code).toBe("collaboration.operation-partial");
+    expect(unlinked.code).toBe("issue.scope-refused");
     expect(unlinked.message).toContain("not linked to plan");
     expect(outboxRows(cache.dbPath)).toEqual([]);
+    expect(await intentPhases(cache.context, "residual-remote-close")).toEqual(["declined"]);
 
     await ingestRemoteObservation(
       cache.context,
@@ -5924,15 +5928,19 @@ describe("remote composite flows", () => {
         snapshot: linkedSnapshot(workflow.planId),
       }),
     );
-    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    const linkedRequest = {
+      ...request,
+      operationId: "residual-remote-close-linked",
+    };
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, linkedRequest));
     expect(queued.code).toBe("collaboration.operation-partial");
-    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close"));
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close-linked"));
     expect(outboxStateOf(cache.dbPath, outboxId)).toBe("enqueued");
     expect(recordedEvent(cache.dbPath, outboxId).parents).toEqual([OBSERVED_ISSUE_HEAD]);
     await confirmIntent(cache, outboxId, MSTAR_ISSUE);
-    const completed = await residualCloseExecutionPlan(execution, request);
-    expect(completed.operationId).toBe("residual-remote-close");
-    expect(await intentPhases(cache.context, "residual-remote-close")).toEqual(["confirmed"]);
+    const completed = await residualCloseExecutionPlan(execution, linkedRequest);
+    expect(completed.operationId).toBe("residual-remote-close-linked");
+    expect(await intentPhases(cache.context, "residual-remote-close-linked")).toEqual(["confirmed"]);
 
   });
 
@@ -5949,7 +5957,8 @@ describe("remote composite flows", () => {
         snapshot: linkedSnapshot(workflow.planId),
       }),
     );
-    // invariant: The admitted revision is re-checked against the OBSERVED subject before freezing.
+    // invariant: The admitted revision is re-checked against the OBSERVED subject before freezing,
+    // and the deterministic refusal declines its reservation instead of blocking a corrected retry.
     const stale = await refusalOf(() =>
       residualCloseExecutionPlan(
         { harnessDir: cache.context.harnessDir, caller: workflow.caller },
@@ -5968,9 +5977,10 @@ describe("remote composite flows", () => {
         },
       ),
     );
-    expect(stale.code).toBe("collaboration.operation-partial");
+    expect(stale.code).toBe("issue.revision-conflict");
     expect(stale.message).toContain("revision");
     expect(outboxRows(cache.dbPath)).toEqual([]);
+    expect(await intentPhases(cache.context, "residual-remote-close-stale")).toEqual(["declined"]);
   });
 
   test("a remote registration publishes its catalog delta into the project journal", async () => {

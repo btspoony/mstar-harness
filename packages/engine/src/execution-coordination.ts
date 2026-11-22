@@ -109,12 +109,14 @@ import {
   assertClosureAuthority,
   assertIssueLinkedToPlanOn,
   assertIssueStoreActive,
+  assertObservedMultiPlanAcceptance,
   assertTerminalDisposition,
   captureIssueOn,
   closeIssueOn,
   closedRemoteSubject,
   issueWriteSeat,
   linkIssueScopedOn,
+  observedPlanTargets,
   residualGenesisSubject,
   IssueError,
   type CaptureInput,
@@ -1670,6 +1672,19 @@ export async function residualCloseExecutionPlan(
                 `Issue ${operation.issueId} is observed at revision ${String(fields.revision)}, not the admitted ` +
                   `${operation.expectedIssueRevision}; nothing was enqueued.`,
               );
+            }
+            // note: The same open-state and multi-plan gates the local closure body runs:
+            // a terminal issue never closes again (so no transition ever records a
+            // `fromDisposition: "open"` that never happened), and a multi-plan obligation
+            // answers its whole acceptance against the observed subject's own links.
+            if (fields.disposition !== "open") {
+              throw new IssueError(
+                "issue.invalid-disposition",
+                `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${operation.disposition}`,
+              );
+            }
+            if (operation.disposition === "resolved") {
+              assertObservedMultiPlanAcceptance(observedPlanTargets(subject), operation.evidence);
             }
             return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
           },

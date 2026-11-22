@@ -1362,15 +1362,129 @@ export async function captureIssue(
   requireCaptureSeat(mutation.actor);
   assertCaptureRequest(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
+    return captureIssueRemote(context, input, mutation);
+  }
+  return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
+}
+
+/**
+ * note: The remote branch of one capture: dedupe against the observed authority FIRST,
+ * exactly as the local body answers its own tables. The same occurrence key returns the
+ * established receipt, the same identity appends one occurrence through issue-replace,
+ * and only a genuinely new identity freezes a create — so a recurring finding never
+ * duplicates the provider record. A frozen intent under this operation id still answers
+ * first (the replay identity is the writer's own), like the local operation ledger.
+ */
+async function captureIssueRemote(
+  context: StoreContext,
+  input: CaptureInput,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  const cols = occurrenceColumns(input);
+  // note: Dynamic like every collaboration-remote import in this module: that boundary
+  // statically imports this module's vocabularies, so a static import here would close
+  // the cycle before they initialize.
+  const { readRemoteIntent, readRemoteObservedIssues } = await import("./collaboration-remote.js");
+  const origin = { verb: "captureIssue", request: { input, actor: mutation.actor } } as const;
+  const appendToIssue = (issueRef: string): Promise<IssueReceipt> => {
+    const at = nowRfc3339();
     return queueRemoteIssueWrite(context, {
+      projectId: input.projectId,
+      operationId: mutation.operationId,
+      kind: "issue-replace",
+      issueId: issueRef,
+      next: (current, observed) => {
+        const subject = current!;
+        // note: The same identity check the replacement path always runs: the authority
+        // is re-read at freeze time, so a moved occurrence never merges silently.
+        const authority = (observedIssue(observed, issueRef)?.mstar?.occurrences ?? []) as readonly Record<string, unknown>[];
+        if (
+          authority.length > 0 &&
+          (authority[0]!.sourceIdentity !== cols.sourceIdentity ||
+            authority[0]!.rootCauseKey !== cols.rootCauseKey ||
+            authority[0]!.acceptanceKey !== cols.acceptanceKey)
+        ) {
+          throw new IssueError(
+            "issue.ambiguous-identity",
+            "The occurrence's source/root-cause/acceptance identity does not match this issue; refusing a guessed merge",
+          );
+        }
+        return {
+          ...subject,
+          fields: patchedFields(subject, {}, at),
+          occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
+        };
+      },
+      origin,
+    });
+  };
+  const createIssue = (): Promise<IssueReceipt> =>
+    queueRemoteIssueWrite(context, {
       projectId: input.projectId,
       operationId: mutation.operationId,
       kind: "issue-create",
       next: () => genesisIssueSubject(input, nowRfc3339()),
-      origin: { verb: "captureIssue", request: { input, actor: mutation.actor } },
+      origin,
     });
+  try {
+    const frozen = await readRemoteIntent(context, mutation.operationId);
+    if (frozen.disclosure === "full" && frozen.event !== null) {
+      const change = frozen.event.change;
+      // note: A capture never freezes a project-replace; re-asking through the create
+      // path lets the replay check answer that collision with its recorded refusal.
+      return change.kind === "issue-create" || change.kind === "project-replace"
+        ? createIssue()
+        : appendToIssue(change.issueRef);
+    }
+  } catch (error) {
+    if (!(error instanceof StoreError && error.code === "remote.intent-not-found")) throw error;
   }
-  return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
+  const issues = await readRemoteObservedIssues(context, input.projectId);
+  for (const issue of issues) {
+    const mstar = issue.mstar;
+    if (mstar === null) continue;
+    const sameKey = mstar.occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
+    if (sameKey === undefined) continue;
+    // note: The genesis occurrence defines the issue's identity, exactly as the local
+    // identity_key column does: a key that belongs to another identity is never merged.
+    const genesis = mstar.occurrences[0];
+    if (
+      genesis === undefined ||
+      genesis.sourceIdentity !== cols.sourceIdentity ||
+      genesis.rootCauseKey !== cols.rootCauseKey ||
+      genesis.acceptanceKey !== cols.acceptanceKey
+    ) {
+      throw new IssueError(
+        "issue.ambiguous-identity",
+        "occurrence_key already belongs to a different identity; refusing a guessed merge",
+      );
+    }
+    if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
+      throw new IssueError(
+        "issue.occurrence-conflict",
+        "occurrence_key was reused with a different observation; the original occurrence is retained.",
+      );
+    }
+    return {
+      issueId: issue.identity.issueId,
+      ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
+      revision: Number(mstar.fields.revision ?? 0),
+      storeRevision: 0,
+      created: false,
+    } satisfies IssueReceipt;
+  }
+  for (const issue of issues) {
+    const mstar = issue.mstar;
+    if (mstar === null) continue;
+    const sameIdentity = mstar.occurrences.some(
+      (row) =>
+        row.sourceIdentity === cols.sourceIdentity &&
+        row.rootCauseKey === cols.rootCauseKey &&
+        row.acceptanceKey === cols.acceptanceKey,
+    );
+    if (sameIdentity) return appendToIssue(mstar.issueRef);
+  }
+  return createIssue();
 }
 
 export async function appendOccurrence(
@@ -2096,7 +2210,16 @@ function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
 }
 
 function assertMultiPlanAcceptance(db: StoreDb, issueId: string, evidence: ClosureEvidence): void {
-  const plans = linkedPlanTargets(db, issueId);
+  assertObservedMultiPlanAcceptance(linkedPlanTargets(db, issueId), evidence);
+}
+
+/**
+ * note: The multi-plan acceptance gate over a subject's OWN plan links, so a remote
+ * closure answers it against the observed project exactly as the local body answers
+ * the provenance table. A finding linked to two or more plans stays open until the
+ * references cover every link (or the closure declares the whole scope).
+ */
+export function assertObservedMultiPlanAcceptance(plans: readonly string[], evidence: ClosureEvidence): void {
   if (plans.length < 2) return;
   const refs: Record<string, true> = {};
   for (const ref of evidence.references ?? []) refs[ref] = true;
@@ -2107,6 +2230,18 @@ function assertMultiPlanAcceptance(db: StoreDb, issueId: string, evidence: Closu
       "A multi-plan obligation stays open until its whole acceptance is verified; one linked plan is not enough.",
     );
   }
+}
+
+/**
+ * note: The observed subject's plan links, as the local `provenance` table records them
+ * (`kind='plan'`, origin `scoped`, deduplicated and ordered like `linkedPlanTargets`).
+ */
+export function observedPlanTargets(subject: Record<string, unknown>): string[] {
+  const provenance = (subject.provenance ?? []) as readonly Record<string, unknown>[];
+  const targets = provenance
+    .filter((row) => row.kind === "plan" && row.origin === "scoped")
+    .map((row) => String(row.target));
+  return [...new Set(targets)].sort();
 }
 
 export function triageIssueOn(
@@ -2390,6 +2525,9 @@ export async function closeIssue(
           if (observedIssue(observed, canonical) === undefined) {
             throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
           }
+        }
+        if (disposition === "resolved") {
+          assertObservedMultiPlanAcceptance(observedPlanTargets(subject), evidence);
         }
         return closedRemoteSubject(subject, disposition, evidence, mutation.actor, at);
       },
@@ -2700,6 +2838,16 @@ export async function assignIssueMilestone(
           }
         }
         return { ...subject, fields: patchedFields(subject, { milestoneId: input.milestoneId }, at) };
+      },
+      // note: The observed base is the store revision in remote mode too, exactly as the local
+      // `withWrite` branch compares it: a stale `--expect-store` refuses before anything freezes.
+      guard: ({ observationRevision }) => {
+        if (observationRevision === mutation.expectedStoreRevision) return;
+        throw new IssueError(
+          "milestone.revision-conflict",
+          `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the observed store revision ` +
+            `${observationRevision}; nothing was enqueued.`,
+        );
       },
       origin: {
         verb: "assignIssueMilestone",
