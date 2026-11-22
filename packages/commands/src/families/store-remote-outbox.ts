@@ -72,9 +72,6 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof SddScriptError) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message });
   }
-  // Literal branches only: the repository's refusal-quality lint proves each text
-  // statically, so every code these verbs can emit names its own supported route
-  // instead of a composed variable.
   return refusalEnvelope({
     command: id,
     status: "refused",
@@ -82,25 +79,67 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     exitCode: 1,
     message,
     ...(details === undefined ? {} : { details }),
-    recovery: code === "remote.intent-not-found"
-      // note: An unknown id is never guessed or replaced by retrying the business verb.
-      ? "List this project's durable intents with mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>, then address the operation id it names; an operation id is never regenerated to make a write succeed."
-      : code === "remote.operation-conflict"
-        ? "This operation id already holds a different request, kind or generation. Inspect the recorded content with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; for a conflicted fork, prepare the reviewed replacement with mstar store collaboration remote outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>."
-        : code === "remote.dispatch-refused"
-          ? "The named intent is not dispatchable in its recorded state. Read it with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; reconcile an uncertain send under its original binding before any further attempt, and never reuse a dispatched operation id."
-          : code === "remote.outbox-unavailable"
-            ? "This checkout's collaboration lane holds no durable outbox, so nothing was enqueued and nothing was sent. Advance the lane with mstar store upgrade --operator <name> --harness <abs>, then rerun the same verb with the same operation id."
-            : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked"
-              ? "Correct the JSON document or the host's verified scope this refusal names, then resubmit the same receipt with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->; a refused document records nothing."
-              : code === "collaboration.stale-binding"
-                ? "Re-prove the checked selection and this checkout's binding with mstar store collaboration remote status --harness <abs>, then complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->; a draining generation is recovered, never resent."
-                : code === "collaboration.not-initialized" || code === "collaboration.upgrade-required" || code === "collaboration.mode-unavailable"
-                  ? "Initialize or advance this checkout's collaboration lane with mstar store upgrade --operator <name> --harness <abs>, then bind it with mstar store collaboration remote bind --harness <abs> --input <file|->."
-                  : code === "remote.selector-unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale"
-                    ? "Bring back Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs> and resubmit the host's fresh observation with mstar store collaboration remote observe --harness <abs> --input <file|->."
-                    : "Read the cause and the intent's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, and correct the named fact before resubmitting.",
+    recovery: recoveryFor(code, id.slice("store.collaboration.remote.".length) as OutboxVerb),
   });
+}
+
+/**
+ * The exact supported route for one refusal, by cause and by the verb that refused it. A
+ * document refusal is resubmitted to the verb that reads THAT document: a resolution is not
+ * a receipt, and reconciliation is not a receipt either. Texts stay literal because the
+ * repository's refusal-quality lint proves each named command statically.
+ */
+function recoveryFor(code: string, verb: OutboxVerb): string {
+  if (code === "remote.intent-not-found") {
+    // note: An unknown id is never guessed or replaced by retrying the business verb.
+    return "List this project's durable intents with mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>, then address the operation id it names; an operation id is never regenerated to make a write succeed.";
+  }
+  if (code === "remote.operation-conflict") {
+    return "This operation id already holds a different request, kind or generation. Inspect the recorded content with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; for a conflicted fork, prepare the reviewed replacement with mstar store collaboration remote outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>.";
+  }
+  if (code === "remote.dispatch-refused") {
+    if (verb === "outbox-dispatch") {
+      return "The named intent is not dispatchable in its recorded state. Read it with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; an enqueued reviewed resolution still needs the host fork observation through mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->, an uncertain send is reconciled under its original binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->, and a moved base needs a fresh observation before a new intent. Never reuse a dispatched operation id.";
+    }
+    if (verb === "outbox-receipt") {
+      return "The receipt names an attempt id or a state this intent does not hold. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then resubmit the receipt for that exact attempt with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->. Evidence of another send never settles this attempt.";
+    }
+    if (verb === "outbox-reconcile") {
+      return "Reconciliation is read-only evidence for a dispatched attempt under its original binding. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then resubmit under that binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->; a pre-send not-sent proof is only the original host's own receipt, recorded with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->.";
+    }
+    return "Read the intent's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid> and correct the named precondition; an operation id is never regenerated to make a write succeed.";
+  }
+  if (code === "remote.input-invalid") {
+    if (verb === "outbox-receipt") {
+      return "Correct the receipt document fields this refusal names, then resubmit it with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->; a refused document records nothing.";
+    }
+    if (verb === "outbox-reconcile") {
+      return "Correct the reconciliation document fields this refusal names (read-only evidence for an attempt under its original binding), then resubmit it with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->; a refused document records nothing.";
+    }
+    if (verb === "outbox-resolve") {
+      return "Correct the reviewed resolution document fields this refusal names (version, operationId, operator, reason and event), then resubmit it with mstar store collaboration remote outbox-resolve --harness <abs> --operation <uuid> --input <file|->; a refused document enqueues nothing.";
+    }
+    if (verb === "outbox-dispatch") {
+      return "Correct the host fork observation this refusal names (a complete traversal that began after the conflict evidence), then resubmit it with mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->; a refused document sends nothing.";
+    }
+    return "Correct the fact this refusal names, then inspect the intent with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid> and rerun the same verb; a refused request records nothing.";
+  }
+  if (code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked") {
+    return "Correct the verified scope, permission or selection this refusal names: re-prove this checkout's scope with mstar store collaboration remote status --harness <abs>, then rerun the same verb with the same operation id; a refused request records nothing.";
+  }
+  if (code === "remote.outbox-unavailable") {
+    return "This checkout's collaboration lane holds no durable outbox, so nothing was enqueued and nothing was sent. Advance the lane with mstar store upgrade --operator <name> --harness <abs>, then rerun the same verb with the same operation id.";
+  }
+  if (code === "collaboration.stale-binding") {
+    return "Re-prove the checked selection and this checkout's binding with mstar store collaboration remote status --harness <abs>, then complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->; a draining generation is recovered, never resent.";
+  }
+  if (code === "collaboration.not-initialized" || code === "collaboration.upgrade-required" || code === "collaboration.mode-unavailable") {
+    return "Initialize or advance this checkout's collaboration lane with mstar store upgrade --operator <name> --harness <abs>, then bind it with mstar store collaboration remote bind --harness <abs> --input <file|->.";
+  }
+  if (code === "remote.selector-unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale") {
+    return "Bring back Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs> and resubmit the host's fresh observation with mstar store collaboration remote observe --harness <abs> --input <file|->.";
+  }
+  return "Read the cause and the intent's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, and correct the named fact before resubmitting.";
 }
 
 function required(value: string | undefined, flag: string): string {
@@ -114,7 +153,8 @@ function absoluteFile(value: string, flag: string): string {
 }
 
 /**
- * Read one JSON document for a verb: an absolute file path, or `-` for stdin. An unreadable
+ * Read one JSON document for a verb: a file path (resolved against the caller's working
+ * directory, exactly like the observation lane's reader), or `-` for stdin. An unreadable
  * path or a body that is not JSON is a usage refusal naming the flag, before any store work.
  */
 async function readJsonDocument(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
@@ -122,11 +162,10 @@ async function readJsonDocument(invocation: InvocationContext, value: string | u
   let raw: string;
   if (value === "-") raw = await invocation.effects.readInput();
   else {
-    const absolute = absoluteFile(value, flag);
     try {
-      raw = readFileSync(absolute, "utf8");
+      raw = readFileSync(value, "utf8");
     } catch (error) {
-      throw new SddScriptError(`${flag} ${absolute} cannot be read: ${error instanceof Error ? error.message : String(error)}`, 2);
+      throw new SddScriptError(`${flag} ${value} cannot be read: ${error instanceof Error ? error.message : String(error)}`, 2);
     }
   }
   if (raw.trim() === "") throw new SddScriptError(`${flag} received no content; pass a JSON document`, 2);
@@ -194,10 +233,10 @@ function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unkn
     project: "the local project id whose current-binding intents this listing reports",
     operation: "the caller-owned operation UUID this verb addresses (never a display id)",
     input: verb === "outbox-dispatch"
-      ? "optional path to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent"
+      ? "optional path (absolute, or relative to the working directory) to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent"
       : verb === "outbox-resolve"
-        ? "path to the reviewed resolution JSON `{version,operationId,operator,reason,event}`, or - for stdin"
-        : "path to the strict receipt JSON document, or - for stdin",
+        ? "path (absolute, or relative to the working directory) to the reviewed resolution JSON `{version,operationId,operator,reason,event}`, or - for stdin"
+        : "path (absolute, or relative to the working directory) to the strict receipt JSON document, or - for stdin",
     reason: "why this intent is abandoned; the reason is retained with the attempt history",
   };
   const descriptions: Record<OutboxVerb, string> = {

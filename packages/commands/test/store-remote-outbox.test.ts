@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   bindRemoteAuthority,
@@ -379,6 +379,48 @@ describe("remote outbox commands", () => {
     expect(after.state).toBe("unconfirmed");
   });
 
+  test("--input reads a relative file path as well as stdin", async () => {
+    const { fixture, permit } = await adoptAndDispatch("relative-input");
+    const absolute = fixture.path("relative-receipt", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" }));
+    // invariant: The documented file input is a PATH, not an absolute path: it resolves against
+    // the caller's working directory exactly like the observation lane's reader.
+    const recorded = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: relative(process.cwd(), absolute),
+    }, fixture.repo);
+    expect(recorded).toMatchObject({ status: "ok", exitCode: 0 });
+    expect(dataOf(recorded)).toMatchObject({ state: "unconfirmed" });
+  });
+
+  test("a refused document names the verb that reads that document, not another DTO's verb", async () => {
+    const { fixture } = await adoptAndDispatch("recovery-routing");
+    // note: Valid JSON that is not the document the verb reads reaches the engine's own
+    // narrow validation; the recovery must resubmit it to THIS verb.
+    const reconcile = await invoke("store.collaboration.remote.outbox-reconcile", {
+      harness: fixture.harness,
+      input: fixture.path("bad-reconcile", { version: 1 }),
+    }, fixture.repo);
+    expect(reconcile).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(reconcile.details?.recovery).toContain("outbox-reconcile");
+    expect(reconcile.details?.recovery).not.toContain("outbox-receipt");
+
+    const resolve = await invoke("store.collaboration.remote.outbox-resolve", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      input: fixture.path("bad-resolution", { version: 1 }),
+    }, fixture.repo);
+    expect(resolve).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(resolve.details?.recovery).toContain("outbox-resolve");
+    expect(resolve.details?.recovery).not.toContain("outbox-receipt");
+
+    const receipt = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-receipt", { version: 1 }),
+    }, fixture.repo);
+    expect(receipt).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(receipt.details?.recovery).toContain("outbox-receipt");
+  });
+
   test("a receipt records evidence while the outbox state, not the command, says whether the effect landed", async () => {
     const { fixture, permit } = await adoptAndDispatch("receipt");
     const unconfirmed = await invoke("store.collaboration.remote.outbox-receipt", {
@@ -506,6 +548,10 @@ describe("remote outbox commands", () => {
       operation: OPERATIONS.resolution,
     }, fixture.repo);
     expect(bare).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
+    // invariant: An enqueued resolution missing its fork evidence is recovered by supplying that
+    // evidence to the dispatch verb, not by reconciling a send that never happened.
+    expect(bare.details?.recovery).toContain("outbox-dispatch");
+    expect(bare.details?.recovery).toContain("--input");
 
     const permitted = dataOf(await invoke("store.collaboration.remote.outbox-dispatch", {
       harness: fixture.harness,
