@@ -1,8 +1,3 @@
-/**
- * note: ingest.test.ts — the association rule over a listing the caller fetched with
- * its own tools: repo + local + git author decide, and the ledger is the only
- * thing that is written.
- */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -70,10 +65,6 @@ function pushRow(db: StoreDb, localId: string) {
   return readItem(db, { bindingId: BINDING, direction: "push", localId });
 }
 
-/**
- * note: Push one local issue through the real planner and recorder, then hand back the
- * remote record a Linear tool would report for it: the payload mstar sent.
- */
 function pushAndRecord(db: StoreDb, localId: string, externalId: string): ProviderItem {
   const push = pushContext();
   const candidate = selectPushCandidates(db, BINDING).find((entry) => entry.localId === localId)!;

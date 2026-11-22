@@ -35,6 +35,18 @@ function violationsOf(result: CommandEnvelope): { code: string; message: string 
   if (!("details" in result) || !Array.isArray(result.details?.violations)) throw new Error(`Expected semantic violations: type=${typeof result.details?.violations} ctor=${result.details?.violations?.constructor?.name} keys=${JSON.stringify(Object.keys(result.details?.violations ?? {}))}`);
   return result.details.violations as { code: string; message: string }[];
 }
+/** see skills/mstar-coding-behavior/references/comments.md § Ratchet — the
+ * lint gate reads git through the effect seam, so a diff-base case runs the
+ * real command. */
+const realSpawn: CommandEffects["spawn"] = async ({ argv, cwd }) => {
+  try {
+    const stdout = execFileSync(argv[0]!, argv.slice(1), { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { exitCode: 0, signal: null, stdout, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number | null; stdout?: string; stderr?: string };
+    return { exitCode: failure.status ?? 1, signal: null, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
+};
 
 describe("validation command family", () => {
   test("registers the ten inventory identities with their effect classes", () => {
@@ -325,6 +337,53 @@ describe("validation command family", () => {
     writeFileSync(path.join(dir, "scan.ts"), "// why: the fixture carries no code\n");
     expect((await definition("lint").execute({ target: dir, type: "code" }, context(cwd))).status).toBe("ok");
     expect((await definition("lint").execute({ target: dir, type: "provenance" }, context(cwd))).status).toBe("ok");
+  });
+
+  test("a changed line with a forged path pointer is refused", async () => {
+    const cwd = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
+    const file = path.join(cwd, "scan.ts");
+    writeFileSync(file, "const a = 1;\n");
+    execFileSync("git", ["add", "scan.ts"], { cwd });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "base"], { cwd });
+    writeFileSync(file, "const a = 1;\n// see docs/absent-pointer.md\n");
+    const advisory = await definition("lint").execute({ target: file }, context(cwd));
+    expect(advisory).toMatchObject({ status: "ok", exitCode: 0 });
+    const result = await definition("lint").execute({ target: file, diffBase: "HEAD" }, context(cwd, realSpawn));
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "lint.comment.pointer-unresolved",
+      details: { results: [{ violations: [expect.objectContaining({ code: "lint.comment.pointer-unresolved", message: expect.stringContaining("does not resolve") })] }] },
+    });
+    mkdirSync(path.join(cwd, "docs", "adr", "implemented", "testing"), { recursive: true });
+    writeFileSync(path.join(cwd, "docs", "adr", "implemented", "testing", "2026-01-01-release.md"), "Status: implemented\n\nVersion 9 fixed a bug.\n");
+    writeFileSync(file, "const a = 1;\n// ADR-9 owns the write order\n");
+    const adr = await definition("lint").execute({ target: file, diffBase: "HEAD" }, context(cwd, realSpawn));
+    expect(adr.code).toBe("lint.comment.pointer-unresolved");
+  });
+
+  test("a pointer that resolves at HEAD passes, path or ADR", async () => {
+    const cwd = tempRoot();
+    mkdirSync(path.join(cwd, "skills", "mstar-coding-behavior", "references"), { recursive: true });
+    writeFileSync(path.join(cwd, "skills", "mstar-coding-behavior", "references", "comments.md"), "# Comments\n");
+    mkdirSync(path.join(cwd, "docs", "adr", "implemented", "testing"), { recursive: true });
+    writeFileSync(path.join(cwd, "docs", "adr", "implemented", "testing", "0007-lock.md"), "Status: implemented\n");
+    writeFileSync(path.join(cwd, "docs", "adr", "implemented", "testing", "2026-01-01-release.md"), "Status: implemented\n\nADR-0008 records the release order.\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
+    const file = path.join(cwd, "scan.ts");
+    writeFileSync(file, "const a = 1;\n");
+    execFileSync("git", ["add", "scan.ts"], { cwd });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "base"], { cwd });
+    writeFileSync(file, [
+      "const a = 1;",
+      "// see skills/mstar-coding-behavior/references/comments.md",
+      "// ADR-0007 owns the write order",
+      "// ADR-8 records the release order",
+      "// see https://example.com/wire-format",
+      "",
+    ].join("\n"));
+    const result = await definition("lint").execute({ target: file, diffBase: "HEAD" }, context(cwd, realSpawn));
+    expect(result.status).toBe("ok");
   });
 
   test("unknown optional validator type is classified as usage", async () => {

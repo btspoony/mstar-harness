@@ -1,11 +1,3 @@
-/**
- * note: push.test.ts — the push ledger protocol without a transport: planning a
- * payload, recording the caller's results, and reconciling ambiguous creates.
- *
- * Everything here runs against a REAL store (the ledger is SQL). No fake
- * provider: mstar makes no call, so the test plays the agent's side and hands
- * the engine what a Linear tool would return.
- */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,11 +98,6 @@ function record(externalId: string, description: string): ProviderItem {
   };
 }
 
-/**
- * note: Take the run lease, as the command does before any planning. The holder pid is
- * part of the run token, so two acquisitions in the same millisecond still name
- * different runs.
- */
 function lease(db: StoreDb, options: { holderPid?: number; takeRun?: boolean } = {}) {
   return acquireRun(db, {
     bindingId: BINDING,

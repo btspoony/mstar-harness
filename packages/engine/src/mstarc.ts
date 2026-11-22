@@ -181,10 +181,6 @@ export type LinearBinding = {
   mode: "mirror";
   workspace: string;
   team: string;
-  /**
-   * note: `owner/name` of this repository, for a checkout with no `origin` remote:
-   * the fallback the correlation marker's `repo` field reads. Empty when unset.
-   */
   repo: string;
   /** Resolved correspondence: defaults overlaid by `[linear.mapping]`. */
   mapping: LinearFacetMapping;
