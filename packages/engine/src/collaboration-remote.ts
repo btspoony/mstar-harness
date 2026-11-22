@@ -2741,8 +2741,9 @@ export async function prepareRemoteIntent(
         throw new StoreError(
           "remote.operation-conflict",
           `Operation ${event.operationId} is already recorded under a different request or binding. An operation id is ` +
-            `reused only with the identical binding, request and execution key; inspect it with outbox-show and submit ` +
-            `a new id for a corrected write. Nothing was enqueued.`,
+            `reused only with the identical binding, request and execution key; inspect it with ` +
+            `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and submit a new id ` +
+            `for a corrected write. Nothing was enqueued.`,
           { operationId: event.operationId, state: existing.state },
         );
       }
@@ -3639,8 +3640,9 @@ async function recordReceiptEvidence(
       throw new StoreError(
         "remote.dispatch-refused",
         `A reconciliation of operation ${envelope.operationId} reports not-sent, but only the original host's own ` +
-          `pre-send refusal can prove an attempt was never sent. Record that refusal with outbox-receipt, or reconcile ` +
-          `the effect the provider actually holds. Nothing was changed.`,
+          `pre-send refusal can prove an attempt was never sent. Record that refusal with ` +
+          `\`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, or reconcile the ` +
+          `effect the provider actually holds. Nothing was changed.`,
         { operationId: envelope.operationId },
       );
     }
@@ -4295,8 +4297,10 @@ export async function dispatchRemoteIntent(
     if (row.state !== "enqueued") {
       throw new StoreError(
         "remote.dispatch-refused",
-        `Operation ${target} is ${row.state}; only an enqueued intent is dispatched. Inspect it with outbox-show and ` +
-          `reconcile an uncertain attempt with outbox-reconcile. Nothing was sent.`,
+        `Operation ${target} is ${row.state}; only an enqueued intent is dispatched. Inspect it with ` +
+          `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and reconcile an ` +
+          `uncertain attempt with \`mstar store collaboration remote outbox-reconcile --harness <abs> --input ` +
+          `<file|->\`. Nothing was sent.`,
         { operationId: target, state: row.state },
       );
     }
@@ -4384,7 +4388,8 @@ export async function dispatchRemoteIntent(
       throw new StoreError(
         "remote.dispatch-refused",
         `Operation ${target} changed state while its permit was issued; no permit was returned. Inspect it with ` +
-          `outbox-show before retrying. Nothing was sent.`,
+          `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` before retrying. ` +
+          `Nothing was sent.`,
         { operationId: target },
       );
     }
@@ -4558,8 +4563,9 @@ export async function prepareRemoteResolution(
         throw new StoreError(
           "remote.operation-conflict",
           `Operation ${conflicted} is already taken over by resolution ${original.resolvedBy}, which is ` +
-            `${linked.state}; one live reviewed resolution per fork is admitted. Inspect it with outbox-show, and ` +
-            `abandon it before submitting another. Nothing was enqueued.`,
+            `${linked.state}; one live reviewed resolution per fork is admitted. Inspect it with ` +
+            `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, and abandon it ` +
+            `before submitting another. Nothing was enqueued.`,
           { operationId: conflicted, resolvedBy: original.resolvedBy, resolvedByState: linked.state },
         );
       }
@@ -4636,7 +4642,8 @@ export async function abandonRemoteIntent(
       const retained = disclosure === "full" ? ` (${String(row.abandonReason)})` : "";
       throw new StoreError(
         "remote.dispatch-refused",
-        `Operation ${operationId} is already abandoned${retained}; an abandonment replays through outbox-show and is never ` +
+        `Operation ${operationId} is already abandoned${retained}; an abandonment replays through ` +
+          `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and is never ` +
           `rewritten.` +
           (disclosure === "full" ? "" : " Its retained reason stays withheld while this scope's read permission does not hold."),
         { operationId, state: row.state },
@@ -4968,7 +4975,9 @@ async function replayedIntent(
     throw new StoreError(
       "remote.operation-conflict",
       `Operation ${operationId} ${detail}; an operation id is reused only for the identical binding, target, request and ` +
-        `execution key. Inspect it with outbox-show and submit a new id for the corrected write. Nothing was enqueued.`,
+        `execution key. Inspect it with ` +
+        `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and submit a new id for ` +
+        `the corrected write. Nothing was enqueued.`,
       { operationId, state: read.state, ...details },
     );
   };
@@ -5244,14 +5253,18 @@ export function pendingRemoteEffect(intent: RemoteIntent): StoreError {
   return new StoreError(
     "remote.effect-pending",
     `The write is durably enqueued as operation ${intent.operationId} in state ${intent.state}. It is not a business ` +
-      `success yet: dispatch it with \`outbox-dispatch\`, then record the provider result with \`outbox-receipt\`. ` +
-      `Inspect it with \`outbox-show\`.`,
+      `success yet: dispatch it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ` +
+      `<uuid>\`, then record the provider result with \`mstar store collaboration remote outbox-receipt --harness ` +
+      `<abs> --input <file|->\`. Inspect it with \`mstar store collaboration remote outbox-show --harness <abs> ` +
+      `--operation <uuid>\`.`,
     {
       operationId: intent.operationId,
       state: intent.state,
       confirmedComponents: [],
       recovery:
-        "`outbox-show` for the state, `outbox-dispatch` for the one send permit, `outbox-receipt` for the result, then " +
+        "`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>` for the state, " +
+        "`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>` for the one send permit, " +
+        "`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->` for the result, then " +
         "reissue this same verb with the same operation id to receive the recorded business result.",
     },
   );
