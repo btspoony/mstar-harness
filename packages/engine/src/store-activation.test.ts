@@ -2960,7 +2960,107 @@ describe("repository backup pair", () => {
     writeFileSync(pairImage(first, "execution"), readFileSync(pairImage(later, "execution")));
     await expect(backupRepositoryStores(mixed.context, { out: mixedOut })).rejects.toThrow(/not the one this attempt copied/);
   });
+
+  test("a verified version-1 collaboration image restores by advancing the staged copy", async () => {
+    const fixture = await pairedWorkspace("pair-v1-image-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const location = resolveCollaborationLocation(fixture.context);
+    const generation = receipt.collaboration.authority;
+
+    // note: An earlier release verified this pair against the v1 inventory; its manifest is what
+    // the operator holds, so the images and the manifest are replaced together.
+    const imagePath = pairImage(receipt, "collaboration");
+    rmSync(imagePath, { force: true });
+    writeV1Image(imagePath, location.repoKey, generation);
+    const counts = v1Counts(imagePath);
+    const earlier = {
+      ...receipt,
+      collaboration: { ...receipt.collaboration, counts },
+    };
+    writeFileSync(receipt.manifestPath, `${JSON.stringify(earlier, null, 2)}\n`);
+
+    // note: The source image is a recovery point, never a staging area.
+    const sourceBytes = readFileSync(imagePath);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+    const restored = await restoreCollaborationBackup(fixture.context, earlier, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    // invariant: The published authority is THIS build's current schema, and the v1 history it
+    // carried survived the ladder with one minted reference per issue.
+    expect(restored).toMatchObject({ state: "active", schemaVersion: 3 });
+    expect(readFileSync(imagePath)).toEqual(sourceBytes);
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.db.prepare("select id, issue_ref from issues order by id").all()).toEqual([
+        { id: "I-000001", issue_ref: expect.stringMatching(/^mstar:issue:/) },
+      ]);
+      expect(handle.db.prepare("select count(*) as n from schema_version").get()).toEqual({ n: 3 });
+    } finally {
+      handle.close();
+    }
+  });
 });
+
+/**
+ * note: A real version-1 collaboration image: the immutable v1 body, its ledger row and one
+ * recorded issue, carrying the generation the earlier release verified.
+ */
+function writeV1Image(
+  path: string,
+  repoKey: string,
+  authority: RepositoryBackupReceipt["collaboration"]["authority"],
+): void {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    const v1 = collaborationStore.COLLABORATION_MIGRATIONS[0]!;
+    db.exec(v1.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v1.version,
+      v1.name,
+      migrationChecksum(v1),
+      "2026-11-20T00:00:00.000Z",
+    );
+    db.prepare(
+      "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, " +
+        "catalog_revision, created_at, activated_at) values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      repoKey,
+      authority.mode,
+      authority.storeId,
+      authority.state,
+      authority.epoch,
+      authority.revision,
+      authority.catalogRevision,
+      "2026-11-20T00:00:00.000Z",
+      "2026-11-20T00:00:00.000Z",
+    );
+    db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+        "identity_key) values ('I-000001', '_default', 'Version one finding', 'bug', 'high', 'resolved', 'impact', " +
+        "'acceptance', ?, ?, 'v1-identity')",
+    ).run("2026-11-20T00:00:00.000Z", "2026-11-20T00:00:00.000Z");
+  } finally {
+    db.close();
+  }
+}
+
+/** note: The row counts a v1 image was verified to hold: its own declared inventory. */
+function v1Counts(path: string): Record<string, number> {
+  const inventory = collaborationStore.collaborationInventoryOf(1);
+  const db = new DatabaseSync(path);
+  try {
+    const counts: Record<string, number> = {};
+    for (const table of Object.keys(inventory)) {
+      counts[table] = (db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n;
+    }
+    return counts;
+  } finally {
+    db.close();
+  }
+}
 
 /** why: A combined source checkout identified by a Git ORIGIN (so a retarget is testable). */
 function originCheckout(name: string, origin: string): Fixture {
