@@ -388,8 +388,10 @@ export async function commitExecutionRegistration(
     // at finalization; admitting it here is what keeps a duplicate from
     // publishing an effect and then reporting an unresumable partial. The
     // wording is kept identical to that guard deliberately.
-    // simplify: a second copy of the create-only guard until execution-store's
-    // `assertWorkflowIdentityIsNew` is exported for composing verbs.
+    // simplify: a second copy of the create-only guard, not yet composable
+    // because execution-store keeps `assertWorkflowIdentityIsNew` private.
+    // upgrade: export `assertWorkflowIdentityIsNew` from execution-store and
+    // compose the guard, or when a third copy would be required.
     const existing = tx.db
       .prepare("select revision from execution_workflows where workflow_id = ?")
       .get(plan.workflowId) as { revision?: unknown } | undefined;

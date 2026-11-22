@@ -798,8 +798,9 @@ function readSourceSnapshot(db: StoreDb): SourceSnapshot {
     );
   }
   // shortcut: one source snapshot is held in memory while it is copied, which
-  // suits a reviewed local database; stream it if collaboration rows reach
-  // hundreds of megabytes.
+  // suits a reviewed local database.
+  // upgrade: stream the rows when a reviewed source can approach hundreds of
+  // megabytes or the snapshot no longer fits the process budget.
   const rows = readCutoverRows(db);
   const ledger = readSourceLedger(db);
   const source: CutoverSource = {
