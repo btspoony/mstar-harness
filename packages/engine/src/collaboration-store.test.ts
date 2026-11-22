@@ -56,6 +56,8 @@ import {
 import {
   bindRemoteAuthority,
   ingestRemoteObservation,
+  prepareRemoteIntent,
+  readPendingIntents,
   readRemoteStatus,
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
@@ -114,6 +116,8 @@ const COLLABORATION_TABLES = [
   "remote_bindings",
   "remote_issue_identities",
   "remote_observations",
+  "remote_outbox",
+  "remote_outbox_receipts",
   "schema_version",
   "sync_cursor",
   "sync_runs",
@@ -318,7 +322,7 @@ describe("collaboration store", () => {
       repoKey: "github.com/acme/staged",
       mode: "local",
       state: "staged",
-      schemaVersion: 2,
+      schemaVersion: 3,
       epoch: 1,
       revision: 0,
       catalogRevision: 0,
@@ -340,6 +344,7 @@ describe("collaboration store", () => {
     expect(versions).toEqual([
       { version: 1, name: "collaboration-core" },
       { version: 2, name: "collaboration-remote-cache" },
+      { version: 3, name: "collaboration-remote-outbox" },
     ]);
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
@@ -448,7 +453,7 @@ describe("collaboration store", () => {
     const writer = new DatabaseSync(location.dbPath);
     try {
       writer
-        .prepare("insert into schema_version(version, name, checksum, applied_at) values (3, 'future', 'x', ?)")
+        .prepare("insert into schema_version(version, name, checksum, applied_at) values (4, 'future', 'x', ?)")
         .run("2026-11-21T00:00:00.000Z");
       // invariant: A newer layout no longer matches this build's inventory; the verdict is
       // still the upgrade requirement, never "damaged store".
@@ -458,7 +463,7 @@ describe("collaboration store", () => {
     }
     const expected = {
       code: "store.schema-unsupported",
-      details: { storeSchemaVersion: 3, supportedSchemaMax: 2, firstUnsupportedMigration: 3 },
+      details: { storeSchemaVersion: 4, supportedSchemaMax: 3, firstUnsupportedMigration: 4 },
     };
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject(expected);
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject(expected);
@@ -1361,6 +1366,26 @@ function writeV1Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** note: A real v2 lane with no issue rows: the v1 body, the v2 delta and its ledger row. */
+function writeV2Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV1Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    const v2 = COLLABORATION_MIGRATIONS[1]!;
+    db.exec(v2.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v2.version,
+      v2.name,
+      migrationChecksum(v2),
+      "2026-11-21T00:00:00.000Z",
+    );
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: Two issues with one occurrence: the history the upgrade must preserve. */
 function seedV1History(db: DatabaseSync): void {
   const insert = db.prepare(
@@ -1410,6 +1435,20 @@ function ledgerVersions(dbPath: string): number[] {
   }
 }
 
+/** note: The recorded ledger exactly as the lane holds it, for no-mutation assertions. */
+function ledgerRows(dbPath: string): Array<{ version: number; name: string; checksum: string }> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db.prepare("select version, name, checksum from schema_version order by version").all() as Array<{
+      version: number;
+      name: string;
+      checksum: string;
+    }>;
+  } finally {
+    db.close();
+  }
+}
+
 function hasColumn(dbPath: string, table: string, column: string): boolean {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1421,7 +1460,7 @@ function hasColumn(dbPath: string, table: string, column: string): boolean {
   }
 }
 
-describe("collaboration v2 remote cache schema", () => {
+describe("collaboration remote schema ladder", () => {
   test("an explicit upgrade preserves v1 history and backfills one stable reference per issue", async () => {
     const repo = makeRepo("https://github.com/v2-upgrade/upgrade.git");
     const context = contextAt(repo);
@@ -1445,12 +1484,12 @@ describe("collaboration v2 remote cache schema", () => {
     expect(receipt).toMatchObject({
       version: 1,
       fromVersion: 1,
-      toVersion: 2,
+      toVersion: 3,
       storeId: "v1-store",
       epoch: 1,
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
 
     const refs = issueRefs(location.dbPath);
     expect(refs.map((row) => row.id)).toEqual(["I-000001", "I-000002"]);
@@ -1469,10 +1508,10 @@ describe("collaboration v2 remote cache schema", () => {
 
     // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
     const replay = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(replay).toMatchObject({ fromVersion: 2, toVersion: 2, issuesBackfilled: 0 });
+    expect(replay).toMatchObject({ fromVersion: 3, toVersion: 3, issuesBackfilled: 0 });
     expect(issueRefs(location.dbPath)).toEqual(refs);
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(2);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
   });
 
   test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
@@ -1535,7 +1574,37 @@ describe("collaboration v2 remote cache schema", () => {
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+  });
+
+  test("a current lane whose recorded migration name or checksum is unknown refuses admission and replay", async () => {
+    const altered = [
+      { version: 1, column: "checksum", value: "e".repeat(64) },
+      { version: 2, column: "checksum", value: "e".repeat(64) },
+      { version: 3, column: "checksum", value: "e".repeat(64) },
+      { version: 3, column: "name", value: "foreign-outbox" },
+    ] as const;
+    for (const [index, change] of altered.entries()) {
+      const repo = makeRepo(`https://github.com/v2-upgrade/checksum-${String(index)}.git`);
+      const context = contextAt(repo);
+      const location = locationAt(repo);
+      writeV1Lane(location, seedV1History);
+      activate(location.dbPath);
+      await upgradeCollaborationStore(context, "ops-engineer");
+      const db = new DatabaseSync(location.dbPath);
+      try {
+        db.prepare(`update schema_version set ${change.column} = ? where version = ?`).run(change.value, change.version);
+      } finally {
+        db.close();
+      }
+      const before = ledgerRows(location.dbPath);
+
+      // invariant: Neither admission nor the already-current upgrade replay trusts a
+      // ledger row whose bytes are not this build's compiled migration.
+      await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+      await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({ code: "store.corrupt" });
+      expect(ledgerRows(location.dbPath)).toEqual(before);
+    }
   });
 
   test("a stale or unbound checkout never migrates a v1 lane it does not own", async () => {
@@ -1576,11 +1645,11 @@ describe("collaboration v2 remote cache schema", () => {
     activate(stale.dbPath);
     expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
       fromVersion: 1,
-      toVersion: 2,
+      toVersion: 3,
       storeId: "v1-store",
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2]);
+    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3]);
   });
 
   test("an unbound checkout adopts an intact v1 lane, then upgrades it", async () => {
@@ -1631,9 +1700,39 @@ describe("collaboration v2 remote cache schema", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
 
     const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 2, storeId: "v1-store", issuesBackfilled: 2 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 3, storeId: "v1-store", issuesBackfilled: 2 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
     expect(issueCount(location.dbPath)).toBe(2);
+  });
+
+  test("a v2 lane gains the exact outbox tables and a partial v3 refuses without mutation", async () => {
+    const repo = makeRepo("https://github.com/v3-upgrade/v2-to-v3.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV2Lane(location);
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(tableNames(location.dbPath)).not.toContain("remote_outbox");
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 3, storeId: "v1-store", issuesBackfilled: 0 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(tableNames(location.dbPath)).toEqual(COLLABORATION_TABLES);
+    // invariant: The upgraded lane admits as current only when the outbox keys, state
+    // vocabulary and composite binding key match the declared v3 layout.
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+
+    // note: Half of the v3 delta (one outbox table without its ledger row) is a partial apply.
+    const partialRepo = makeRepo("https://github.com/v3-upgrade/partial-v3.git");
+    const partial = locationAt(partialRepo);
+    writeV2Lane(partial, (partialDb) => partialDb.exec("create table remote_outbox(operation_id text primary key)"));
+    activate(partial.dbPath);
+    await expect(upgradeCollaborationStore(contextAt(partialRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerVersions(partial.dbPath)).toEqual([1, 2]);
+    expect(tableNames(partial.dbPath)).not.toContain("remote_outbox_receipts");
   });
 });
 
@@ -2080,7 +2179,7 @@ describe("remote observation cache", () => {
 
     // invariant: `store init` requires the populated remote binding and never creates a local
     // authority in its place.
-    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 2 });
+    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 3 });
 
     // invariant: A restored local image never reauthorizes the provider. The receipt and
     // attestation are placeholders: the route refuses before either is read.
@@ -3961,5 +4060,336 @@ describe("reviewed authority transition", () => {
       generation: 5,
       selectorCommit: third,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: v3 outbox intents: durable prepare, identical replay and named refusals
+// ---------------------------------------------------------------------------
+
+/** note: The frozen binding of the fixture's selected project at one selector commit. */
+function intentBindingFor(commit: string): Record<string, unknown> {
+  return {
+    generation: 3,
+    projectKey: SELECTED_PROJECT.localProjectId,
+    selectorCommit: commit,
+    provider: "linear",
+    workspaceId: SELECTED_PROJECT.workspaceId,
+    teamId: SELECTED_PROJECT.teamId,
+    projectId: SELECTED_PROJECT.projectId,
+    journalIssueId: SELECTED_PROJECT.journalIssueId,
+    writerId: SELECTED_PROJECT.writerId,
+  };
+}
+
+/** note: The complete normalized project document a project event freezes (no head, no binding). */
+function completeProjectSubject(): Record<string, unknown> {
+  const project = completeSnapshot().project;
+  return {
+    projectId: project.projectId,
+    milestones: project.milestones,
+    roadmap: project.roadmap,
+    catalogEntities: project.catalogEntities,
+    catalogLinks: project.catalogLinks,
+  };
+}
+
+/** note: The complete normalized issue subject a replacement freezes (no head, no issueRef). */
+function completeIssueSubject(): Record<string, unknown> {
+  const issue = completeSnapshot().issues[0]!.mstar!;
+  return {
+    fields: issue.fields,
+    occurrences: issue.occurrences,
+    transitions: issue.transitions,
+    relations: issue.relations,
+    provenance: issue.provenance,
+    projectMoves: issue.projectMoves,
+  };
+}
+
+/** note: One journal project-replace intent: the smallest complete frozen request. */
+function intentRequest(
+  fixture: { repoKey: string },
+  commit: string,
+  operationId: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    binding: intentBindingFor(commit),
+    event: {
+      version: 1,
+      repoKey: fixture.repoKey,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      parents: [],
+      change: { kind: "project-replace", project: completeProjectSubject() },
+    },
+    target: SELECTED_PROJECT.journalIssueId,
+    expectedHeads: [],
+    ...overrides,
+  };
+}
+
+/** note: The stored intents, for replay no-mutation and durability assertions. */
+function outboxRows(dbPath: string): Array<{
+  operation_id: string;
+  request_hash: string;
+  request_json: string;
+  state: string;
+  attempt_id: string | null;
+  execution_key_json: string | null;
+}> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (
+      db
+        .prepare(
+          "select operation_id, request_hash, request_json, state, attempt_id, execution_key_json " +
+            "from remote_outbox order by operation_id",
+        )
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      operation_id: String(row.operation_id),
+      request_hash: String(row.request_hash),
+      request_json: String(row.request_json),
+      state: String(row.state),
+      attempt_id: typeof row.attempt_id === "string" ? row.attempt_id : null,
+      execution_key_json: typeof row.execution_key_json === "string" ? row.execution_key_json : null,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+describe("remote outbox intents", () => {
+  test("prepare commits one frozen intent, replays identically and refuses a different request or binding", async () => {
+    const fixture = remoteFixture("outbox-prepare");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const operationId = "00000000-0000-4000-8000-0000000000a1";
+    const request = intentRequest(fixture, commit, operationId, { expectedHeads: ["a".repeat(64)] });
+
+    const first = await prepareRemoteIntent(context, request);
+    expect(first).toMatchObject({
+      version: 1,
+      operationId,
+      projectId: SELECTED_PROJECT.localProjectId,
+      generation: 3,
+      state: "enqueued",
+      target: SELECTED_PROJECT.journalIssueId,
+      executionKey: null,
+      replayed: false,
+    });
+    expect(first.requestHash).toMatch(/^[0-9a-f]{64}$/);
+
+    // invariant: The intent is committed before it is reported, with the exact frozen
+    // request and no send permit (no attempt id).
+    const [stored] = outboxRows(location.dbPath);
+    expect(stored).toMatchObject({ operation_id: operationId, state: "enqueued", attempt_id: null });
+    expect(stored!.request_hash).toBe(first.requestHash);
+    expect(JSON.parse(stored!.request_json)).toEqual(request);
+
+    // invariant: A semantically identical prepare returns the stored state and never re-inserts.
+    const replay = await prepareRemoteIntent(context, request);
+    expect(replay).toMatchObject({ state: "enqueued", replayed: true, requestHash: first.requestHash });
+    expect(outboxRows(location.dbPath)).toHaveLength(1);
+
+    const pending = await readPendingIntents(context, SELECTED_PROJECT.localProjectId);
+    expect(pending).toMatchObject({ version: 1, projectId: SELECTED_PROJECT.localProjectId, generation: 3 });
+    expect(pending.intents).toEqual([
+      {
+        operationId,
+        projectId: SELECTED_PROJECT.localProjectId,
+        state: "enqueued",
+        requestHash: first.requestHash,
+        target: SELECTED_PROJECT.journalIssueId,
+        kind: "project-replace",
+        createdAt: first.createdAt,
+      },
+    ]);
+
+    // invariant: The same id under a different frozen request refuses and leaves the intent intact.
+    await expect(
+      prepareRemoteIntent(
+        context,
+        intentRequest(fixture, commit, operationId, { expectedHeads: ["b".repeat(64)] }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: A request that does not address the checked binding refuses before any insert.
+    await expect(
+      prepareRemoteIntent(
+        context,
+        intentRequest(fixture, commit, "00000000-0000-4000-8000-0000000000a2", {
+          binding: { ...intentBindingFor(commit), writerId: null },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    expect(outboxRows(location.dbPath)).toEqual([stored!]);
+  });
+
+  test("an absent, older or incomplete outbox never accepts an intent", async () => {
+    // note: No remote lane exists at all: the prepare refuses and creates nothing.
+    const absent = remoteFixture("outbox-absent");
+    const absentCommit = absent.publish(absent.payload());
+    const absentLocation = locationAt(absent.repo);
+    await expect(
+      prepareRemoteIntent(
+        contextAt(absent.repo),
+        intentRequest(absent, absentCommit, "00000000-0000-4000-8000-0000000000b1"),
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(existsSync(absentLocation.dbPath)).toBe(false);
+
+    // note: A bound v3 lane whose outbox tables were removed is a damaged current lane.
+    const dropped = remoteFixture("outbox-dropped");
+    const commit = dropped.publish(dropped.payload());
+    const context = contextAt(dropped.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const dbPath = locationAt(dropped.repo).dbPath;
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec("pragma foreign_keys = off");
+      db.exec("drop table remote_outbox_receipts; drop table remote_outbox");
+    } finally {
+      db.close();
+    }
+    const before = tableNames(dbPath);
+    await expect(
+      prepareRemoteIntent(context, intentRequest(dropped, commit, "00000000-0000-4000-8000-0000000000b2")),
+    ).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    // invariant: The refusal created no table, lane or intent.
+    expect(tableNames(dbPath)).toEqual(before);
+  });
+
+  test("a frozen subject is the complete normalized document and refuses unknown or sensitive fields", async () => {
+    const fixture = remoteFixture("outbox-subject");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const project = completeProjectSubject();
+    const change = (operationId: string, value: Record<string, unknown>, target: string): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents: value.kind === "issue-replace" ? ["a".repeat(64)] : [],
+          change: value,
+        },
+        target,
+      });
+    const issueChange = (mstar: unknown): Record<string, unknown> => ({
+      kind: "issue-replace",
+      issueRef: FORGED_ISSUE_REF,
+      mstar,
+    });
+
+    const refusals = [
+      // note: A partial project document is not the complete normalized subject.
+      change("00000000-0000-4000-8000-0000000000c1", { kind: "project-replace", project: { projectId: SELECTED_PROJECT.localProjectId } }, SELECTED_PROJECT.journalIssueId),
+      // note: Credential-shaped and unrelated keys never reach the stored request.
+      change("00000000-0000-4000-8000-0000000000c2", { kind: "project-replace", project: { ...project, token: "sk-live-1234" } }, SELECTED_PROJECT.journalIssueId),
+      change("00000000-0000-4000-8000-0000000000c3", { kind: "project-replace", project: { ...project, headers: { authorization: "Bearer x" } } }, SELECTED_PROJECT.journalIssueId),
+      change("00000000-0000-4000-8000-0000000000c4", { kind: "project-replace", project: { ...project, binding: {} } }, SELECTED_PROJECT.journalIssueId),
+      // note: An empty or partial issue subject (and its derived head) is never frozen.
+      change("00000000-0000-4000-8000-0000000000c5", issueChange({}), MSTAR_ISSUE),
+      change("00000000-0000-4000-8000-0000000000c6", issueChange({ ...completeIssueSubject(), head: ["a".repeat(64)] }), MSTAR_ISSUE),
+      change(
+        "00000000-0000-4000-8000-0000000000c7",
+        issueChange({ ...completeIssueSubject(), fields: { ...(completeIssueSubject().fields as Record<string, unknown>), token: "x" } }),
+        MSTAR_ISSUE,
+      ),
+    ];
+    for (const request of refusals) {
+      await expect(prepareRemoteIntent(context, request)).rejects.toMatchObject({ code: "remote.input-invalid" });
+    }
+    // invariant: Every refusal happened before persistence.
+    expect(outboxRows(location.dbPath)).toEqual([]);
+  });
+
+  test("a shape-valid subject with a guessed semantic key is refused before any outbox row", async () => {
+    const fixture = remoteFixture("outbox-semantic-key");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const replacement = (operationId: string, occurrences: readonly Record<string, unknown>[]): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents: ["a".repeat(64)],
+          change: {
+            kind: "issue-replace",
+            issueRef: FORGED_ISSUE_REF,
+            mstar: { ...completeIssueSubject(), occurrences },
+          },
+        },
+        target: MSTAR_ISSUE,
+      });
+    const occurrence = (completeIssueSubject().occurrences as Record<string, unknown>[])[0]!;
+
+    // invariant: The shape is complete; only the issue domain's dedup rule (issue.ts
+    // occurrenceColumns via requireSemanticKey) refuses a guessed root-cause/acceptance key.
+    const guessed = [
+      { rootCauseKey: "?" },
+      { rootCauseKey: "Unknown" },
+      { acceptanceKey: " ? " },
+      { acceptanceKey: "unknown" },
+    ];
+    for (const [index, patch] of guessed.entries()) {
+      const operationId = `00000000-0000-4000-8000-0000000000e${String(index + 1)}`;
+      await expect(
+        prepareRemoteIntent(context, replacement(operationId, [{ ...occurrence, ...patch }])),
+      ).rejects.toMatchObject({ code: "remote.input-invalid", message: expect.stringContaining("ambiguous") });
+      expect(outboxRows(location.dbPath)).toEqual([]);
+    }
+
+    // invariant: The same complete subject with domain keys still enqueues normally.
+    const accepted = await prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000ef", [occurrence]));
+    expect(accepted).toMatchObject({ state: "enqueued", target: MSTAR_ISSUE });
+  });
+
+  test("a replacement must cite its replaced heads before anything is enqueued", async () => {
+    const fixture = remoteFixture("outbox-parents");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const replacement = (operationId: string, parents: string[]): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents,
+          change: { kind: "issue-replace", issueRef: FORGED_ISSUE_REF, mstar: completeIssueSubject() },
+        },
+        target: MSTAR_ISSUE,
+      });
+
+    // invariant: `[]` is genesis or adoption only; a replacement without a replaced head refuses.
+    await expect(
+      prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000d1", [])),
+    ).rejects.toMatchObject({ code: "remote.input-invalid", message: expect.stringContaining("replaced head") });
+    expect(outboxRows(location.dbPath)).toEqual([]);
+
+    // invariant: With its replaced head the same shape is a normal enqueued replacement.
+    const accepted = await prepareRemoteIntent(
+      context,
+      replacement("00000000-0000-4000-8000-0000000000d2", ["a".repeat(64)]),
+    );
+    expect(accepted).toMatchObject({ state: "enqueued", target: MSTAR_ISSUE });
+    const pending = await readPendingIntents(context, SELECTED_PROJECT.localProjectId);
+    expect(pending.intents).toMatchObject([
+      { operationId: "00000000-0000-4000-8000-0000000000d2", kind: "issue-replace", target: MSTAR_ISSUE },
+    ]);
   });
 });

@@ -540,7 +540,8 @@ function requireNonblank(label: string, value: string): string {
   return trimmed;
 }
 
-function requireSemanticKey(label: string, value: string): string {
+/** The domain's dedup rule; the remote freeze boundary reuses it so a new intent refuses the same guessed keys. */
+export function requireSemanticKey(label: string, value: string): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (!trimmed || /^unknown$/i.test(trimmed) || trimmed === "?") {
     throw new IssueError(

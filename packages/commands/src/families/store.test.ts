@@ -526,14 +526,14 @@ test("store.upgrade advances an admitted v1 collaboration lane and replays witho
     if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
     expect(first.data).toMatchObject({
       verdict: "upgraded",
-      collaboration: { version: 1, fromVersion: 1, toVersion: 2, issuesBackfilled: 1 },
+      collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 },
     });
 
     // note: A committed upgrade replays by revalidating instead of re-backfilling.
     const replay = await upgrade("fixture-operator");
     expect(replay.status).toBe("ok");
     if (replay.status !== "ok") throw new Error(`expected the replay to succeed: ${replay.message}`);
-    expect(replay.data).toMatchObject({ collaboration: { fromVersion: 2, toVersion: 2, issuesBackfilled: 0 } });
+    expect(replay.data).toMatchObject({ collaboration: { fromVersion: 3, toVersion: 3, issuesBackfilled: 0 } });
 
     // invariant: The retained issue is readable through the public read interface.
     const listed = await listIssues({ harnessDir: harness, checkoutRoot: root }, { disposition: "open" });
@@ -601,8 +601,8 @@ test("store.upgrade refuses a v1 lane this checkout is not bound to and leaves i
     const owned = await upgrade();
     expect(owned.status).toBe("ok");
     if (owned.status !== "ok") throw new Error(`expected the owned upgrade to succeed: ${owned.message}`);
-    expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 2, issuesBackfilled: 1 } });
-    expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2], issueRef: true, issues: 1 });
+    expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 } });
+    expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2, 3], issueRef: true, issues: 1 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

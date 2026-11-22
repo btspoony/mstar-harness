@@ -15,6 +15,7 @@
  * recorded as an invalidation (the cache stops serving) and returned as its
  * named refusal - never as an empty or zero result.
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -33,7 +34,7 @@ import {
   type CollaborationBinding,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
-import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, type CaptureInput } from "./issue.js";
+import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
   assertSelectionUnchanged,
   CollaborationIdentityError,
@@ -368,6 +369,16 @@ function text(value: unknown, path: string): string {
   return value;
 }
 
+/** note: The issue domain's dedup rule, reused here: a frozen subject never persists a guessed key. */
+function semanticKey(value: unknown, path: string): string {
+  if (typeof value !== "string") invalid(path, "must be a non-empty string");
+  try {
+    return requireSemanticKey(path, value);
+  } catch (error) {
+    invalid(path, error instanceof IssueError ? error.message : "is unknown or ambiguous");
+  }
+}
+
 function optionalText(value: unknown, path: string): string | null {
   if (value === null) return null;
   return text(value, path);
@@ -663,6 +674,19 @@ function occurrence(value: unknown, path: string): Record<string, unknown> {
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
     // note: The domain's imported provenance is a business field of the history, not a private detail.
     imported: boolean(body.imported, `${path}.imported`),
+  };
+}
+
+/**
+ * invariant: Freezing a new intent applies the issue domain's dedup rule; an
+ * observed chain is provider evidence and is never re-judged by this boundary.
+ */
+function frozenOccurrence(value: unknown, path: string): Record<string, unknown> {
+  const row = occurrence(value, path);
+  return {
+    ...row,
+    rootCauseKey: semanticKey(row.rootCauseKey, `${path}.rootCauseKey`),
+    acceptanceKey: semanticKey(row.acceptanceKey, `${path}.acceptanceKey`),
   };
 }
 
@@ -2196,4 +2220,479 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
       "The durable adoption intent arrives with the remote outbox plan.",
     { projectId, issueId, operationId, kind: adoption.kind, selectedWriterId: selected.writerId },
   );
+}
+
+// ---------------------------------------------------------------------------
+// note: prepareRemoteIntent / readPendingIntents (Q2 outbox)
+// ---------------------------------------------------------------------------
+
+/** note: The provider binding an intent was frozen under, exactly as the cache materialized it. */
+export type RemoteIntentBinding = Readonly<{
+  generation: number;
+  projectKey: string;
+  selectorCommit: string;
+  provider: "linear";
+  workspaceId: string;
+  teamId: string;
+  projectId: string;
+  journalIssueId: string;
+  writerId: string | null;
+}>;
+
+export type RemoteEventChange =
+  | Readonly<{
+      kind: "issue-create" | "issue-adopt" | "issue-replace";
+      issueRef: string;
+      mstar: Record<string, unknown>;
+    }>
+  | Readonly<{ kind: "project-replace"; project: Record<string, unknown> }>;
+
+/** note: The frozen provider event the Host Agent appends; its parents are content digests. */
+export type RemoteEvent = Readonly<{
+  version: 1;
+  repoKey: string;
+  projectId: string;
+  operationId: string;
+  parents: readonly string[];
+  change: RemoteEventChange;
+}>;
+
+/** note: The execution reservation a composite intent also owns; null for an ordinary intent. */
+export type RemoteIntentExecutionKey = Readonly<{
+  executionStoreId: string;
+  executionEpoch: number;
+  operationId: string;
+}>;
+
+export type RemoteIntentRequest = Readonly<{
+  binding: RemoteIntentBinding;
+  event: RemoteEvent;
+  target: string | null;
+  expectedHeads: readonly string[];
+  executionKey?: RemoteIntentExecutionKey | null;
+}>;
+
+export type RemoteIntentState = "enqueued" | "unconfirmed" | "confirmed" | "conflict" | "abandoned";
+
+/** note: One intent as its prepare reported it; `replayed` is true only for an identical re-prepare. */
+export type RemoteIntent = Readonly<{
+  version: 1;
+  operationId: string;
+  projectId: string;
+  generation: number;
+  state: RemoteIntentState;
+  requestHash: string;
+  target: string | null;
+  executionKey: RemoteIntentExecutionKey | null;
+  replayed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}>;
+
+/** note: A pending summary: enough to order and select an intent, never a send permit. */
+export type RemotePendingIntent = Readonly<{
+  operationId: string;
+  projectId: string;
+  state: "enqueued";
+  requestHash: string;
+  target: string | null;
+  kind: RemoteEventChange["kind"];
+  createdAt: string;
+}>;
+
+export type RemotePendingIntents = Readonly<{
+  version: 1;
+  projectId: string;
+  generation: number;
+  intents: readonly RemotePendingIntent[];
+}>;
+
+const REMOTE_CHANGE_KINDS = ["issue-create", "issue-adopt", "issue-replace", "project-replace"] as const;
+
+/** note: Stable JSON: object keys sorted, so equal semantics always hash equally. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  const body = value as Record<string, unknown>;
+  return `{${Object.keys(body)
+    .filter((key) => body[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(body[key])}`)
+    .join(",")}}`;
+}
+
+/**
+ * invariant: The event's issue subject is the complete normalized MStar document
+ * with the same field allowlists the snapshot applies, minus the derived `head`
+ * and the outer duplicate `issueRef`. An empty or partial subject never freezes.
+ */
+function frozenIssueSubject(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
+  if ("issueRef" in body) invalid(`${path}.issueRef`, "duplicates the event's reference");
+  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"]);
+  return {
+    fields: mstarFields(body.fields, `${path}.fields`),
+    occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
+      frozenOccurrence(entry, `${path}.occurrences[${index}]`),
+    ),
+    transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
+      transition(entry, `${path}.transitions[${index}]`),
+    ),
+    relations: list(body.relations, `${path}.relations`).map((entry, index) =>
+      relation(entry, `${path}.relations[${index}]`),
+    ),
+    provenance: list(body.provenance, `${path}.provenance`).map((entry, index) =>
+      provenanceLink(entry, `${path}.provenance[${index}]`),
+    ),
+    projectMoves: list(body.projectMoves, `${path}.projectMoves`).map((entry, index) =>
+      projectMove(entry, `${path}.projectMoves[${index}]`),
+    ),
+  };
+}
+
+/**
+ * invariant: The event's project subject is the snapshot's normalized project
+ * document - every member present, no derived `head`, no `binding` (the
+ * selected transport scope supplies it) and nothing outside the allowlist.
+ */
+function frozenProjectSubject(value: unknown, path: string, projectKey: string): Record<string, unknown> {
+  const body = record(value, path);
+  if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
+  if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
+  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"]);
+  const projectId = text(body.projectId, `${path}.projectId`);
+  if (projectId !== projectKey) invalid(`${path}.projectId`, "must be the event's project");
+  const milestones = list(body.milestones, `${path}.milestones`).map((entry, index) =>
+    milestone(entry, `${path}.milestones[${index}]`),
+  );
+  if (new Set(milestones.map((entry) => entry.milestoneId)).size !== milestones.length) {
+    invalid(`${path}.milestones`, "must not repeat a milestone id");
+  }
+  const catalogEntities = list(body.catalogEntities, `${path}.catalogEntities`).map((entry, index) =>
+    catalogEntity(entry, `${path}.catalogEntities[${index}]`),
+  );
+  if (new Set(catalogEntities.map((entry) => `${entry.kind}:${entry.id}`)).size !== catalogEntities.length) {
+    invalid(`${path}.catalogEntities`, "must not repeat a (kind, id) pair");
+  }
+  return {
+    projectId,
+    milestones,
+    roadmap: roadmap(body.roadmap, `${path}.roadmap`),
+    catalogEntities,
+    catalogLinks: list(body.catalogLinks, `${path}.catalogLinks`).map((entry, index) =>
+      catalogLink(entry, `${path}.catalogLinks[${index}]`),
+    ),
+  };
+}
+
+function intentBinding(raw: unknown): RemoteIntentBinding {
+  const body = record(raw, "request.binding");
+  allowOnly(body, "request.binding", [
+    "generation", "projectKey", "selectorCommit", "provider", "workspaceId", "teamId", "projectId", "journalIssueId",
+    "writerId",
+  ]);
+  const selectorCommit = text(body.selectorCommit, "request.binding.selectorCommit");
+  if (!GIT_OBJECT_ID.test(selectorCommit)) invalid("request.binding.selectorCommit", "must be a Git object id");
+  const writerId = nullableString(body.writerId, "request.binding.writerId");
+  return {
+    generation: positiveInteger(body.generation, "request.binding.generation"),
+    projectKey: text(body.projectKey, "request.binding.projectKey"),
+    selectorCommit,
+    provider: oneOf(body.provider, ["linear"] as const, "request.binding.provider"),
+    workspaceId: linearId(body.workspaceId, "request.binding.workspaceId"),
+    teamId: linearId(body.teamId, "request.binding.teamId"),
+    projectId: linearId(body.projectId, "request.binding.projectId"),
+    journalIssueId: linearId(body.journalIssueId, "request.binding.journalIssueId"),
+    writerId: writerId === null ? null : linearId(writerId, "request.binding.writerId"),
+  };
+}
+
+function intentExecutionKey(raw: unknown, operationId: string): RemoteIntentExecutionKey {
+  const body = record(raw, "request.executionKey");
+  allowOnly(body, "request.executionKey", ["executionStoreId", "executionEpoch", "operationId"]);
+  const keyed = linearId(body.operationId, "request.executionKey.operationId");
+  if (keyed !== operationId) invalid("request.executionKey.operationId", "must name this intent's operation");
+  return {
+    executionStoreId: text(body.executionStoreId, "request.executionKey.executionStoreId"),
+    executionEpoch: positiveInteger(body.executionEpoch, "request.executionKey.executionEpoch"),
+    operationId: keyed,
+  };
+}
+
+function remoteEvent(raw: unknown, binding: RemoteIntentBinding): RemoteEvent {
+  const body = record(raw, "request.event");
+  allowOnly(body, "request.event", ["version", "repoKey", "projectId", "operationId", "parents", "change"]);
+  if (body.version !== 1) invalid("request.event.version", "must be 1");
+  const projectId = text(body.projectId, "request.event.projectId");
+  if (projectId !== binding.projectKey) invalid("request.event.projectId", "must be the binding's project");
+  const change = record(body.change, "request.event.change");
+  const kind = oneOf(change.kind, REMOTE_CHANGE_KINDS, "request.event.change.kind");
+  const parents = digestHead(body.parents, "request.event.parents");
+  // invariant: `[]` is initial genesis or adoption only: a replacement cites the heads it replaces.
+  if (kind === "issue-replace" && parents.length === 0) {
+    invalid("request.event.parents", "a replacement must cite at least one replaced head");
+  }
+  let frozen: RemoteEventChange;
+  if (kind === "project-replace") {
+    allowOnly(change, "request.event.change", ["kind", "project"]);
+    frozen = { kind, project: frozenProjectSubject(change.project, "request.event.change.project", projectId) };
+  } else {
+    allowOnly(change, "request.event.change", ["kind", "issueRef", "mstar"]);
+    frozen = {
+      kind,
+      issueRef: assertIssueRef(change.issueRef),
+      mstar: frozenIssueSubject(change.mstar, "request.event.change.mstar"),
+    };
+  }
+  return {
+    version: 1,
+    repoKey: text(body.repoKey, "request.event.repoKey"),
+    projectId,
+    operationId: linearId(body.operationId, "request.event.operationId"),
+    parents,
+    change: frozen,
+  };
+}
+
+/** note: A create addresses no native record; every other change appends to one immutable target. */
+function intentTarget(raw: unknown, change: RemoteEventChange, binding: RemoteIntentBinding): string | null {
+  if (change.kind === "issue-create") {
+    if (raw !== null && raw !== undefined) invalid("request.target", "must be null for a create");
+    return null;
+  }
+  const target = linearId(raw, "request.target");
+  if (change.kind === "project-replace" && target !== binding.journalIssueId) {
+    invalid("request.target", "must be the selected journal anchor for a project event");
+  }
+  return target;
+}
+
+/**
+ * `prepareRemoteIntent`: freeze one normalized remote write and commit it as an
+ * `enqueued` intent before anything is reported. The request must address the
+ * checked selector's current binding; the stored row carries the exact canonical
+ * request and its SHA-256. An identical re-prepare returns the stored state; the
+ * same operation id under a different request or binding refuses without
+ * mutation. The lane must be a v3 cache, so a missing or older outbox never
+ * accepts an intent.
+ */
+export async function prepareRemoteIntent(context: StoreContext, request: unknown): Promise<RemoteIntent> {
+  const body = record(request, "request");
+  allowOnly(body, "request", ["binding", "event", "target", "expectedHeads", "executionKey"]);
+  const binding = intentBinding(body.binding);
+  const event = remoteEvent(body.event, binding);
+  const target = intentTarget(body.target, event.change, binding);
+  const expectedHeads = digestHead(body.expectedHeads, "request.expectedHeads");
+  const executionKey = body.executionKey === undefined || body.executionKey === null
+    ? null
+    : intentExecutionKey(body.executionKey, event.operationId);
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  if (selection.phase !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The checked selector generation ${String(selection.generation)} is draining, so no new remote intent is prepared. ` +
+        `Reconcile the outstanding intents and complete the reviewed transition; nothing was enqueued.`,
+    );
+  }
+  if (event.repoKey !== location.repoKey) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `The event names repository ${event.repoKey}, not this checkout's ${location.repoKey}; nothing was enqueued.`,
+    );
+  }
+  const selected = selectedProject(selection, binding.projectKey);
+  const addresses =
+    binding.generation === selection.generation &&
+    binding.selectorCommit === selection.commit &&
+    binding.workspaceId === selected.workspaceId &&
+    binding.teamId === selected.teamId &&
+    binding.projectId === selected.projectId &&
+    binding.journalIssueId === selected.journalIssueId &&
+    binding.writerId === selected.writerId;
+  if (!addresses) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `The request's binding does not address the checked selector commit ${selection.commit} generation ` +
+        `${String(selection.generation)} for project ${selected.localProjectId}; nothing was enqueued.`,
+    );
+  }
+  // note: The frozen request is exactly the contract's four members; the execution key is its own
+  // column, so an ordinary intent and a composite intent never differ in their request hash scope.
+  const frozenRequest = { binding, event, target, expectedHeads };
+  const requestJson = canonicalJson(frozenRequest);
+  const requestHash = createHash("sha256").update(requestJson, "utf8").digest("hex");
+  const executionJson = executionKey === null ? null : canonicalJson(executionKey);
+
+  return withRemoteCacheWrite(context, (handle) => {
+    const db = handle.db;
+    const stored = db
+      .prepare(
+        "select selector_commit, provider, workspace_id, team_id, provider_project_id, journal_issue_id, writer_id " +
+          "from remote_bindings where generation = ? and project_key = ?",
+      )
+      .get(binding.generation, binding.projectKey) as Record<string, unknown> | undefined;
+    const materialized =
+      stored !== undefined &&
+      stored.selector_commit === binding.selectorCommit &&
+      stored.provider === binding.provider &&
+      stored.workspace_id === binding.workspaceId &&
+      stored.team_id === binding.teamId &&
+      stored.provider_project_id === binding.projectId &&
+      stored.journal_issue_id === binding.journalIssueId &&
+      (typeof stored.writer_id === "string" ? stored.writer_id : null) === binding.writerId;
+    if (!materialized) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `The cache does not record this request's binding at generation ${String(binding.generation)} for ` +
+          `${binding.projectKey}; nothing was enqueued.`,
+      );
+    }
+    const existing = db
+      .prepare(
+        "select generation, project_key, request_hash, state, created_at, updated_at, execution_key_json " +
+          "from remote_outbox where operation_id = ?",
+      )
+      .get(event.operationId) as Record<string, unknown> | undefined;
+    if (existing !== undefined) {
+      if (
+        existing.request_hash !== requestHash ||
+        existing.generation !== binding.generation ||
+        existing.project_key !== binding.projectKey ||
+        (typeof existing.execution_key_json === "string" ? existing.execution_key_json : null) !== executionJson
+      ) {
+        throw new StoreError(
+          "remote.operation-conflict",
+          `Operation ${event.operationId} is already recorded under a different request or binding. An operation id is ` +
+            `reused only with the identical binding, request and execution key; inspect it with outbox-show and submit ` +
+            `a new id for a corrected write. Nothing was enqueued.`,
+          { operationId: event.operationId, state: existing.state },
+        );
+      }
+      return intentOf(event.operationId, target, existing, binding, executionKey, true);
+    }
+    const at = nowRfc3339();
+    db.prepare(
+      "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, " +
+        "execution_key_json, state, created_at, updated_at) values (?, ?, ?, ?, ?, ?, 'enqueued', ?, ?)",
+    ).run(event.operationId, binding.generation, binding.projectKey, requestHash, requestJson, executionJson, at, at);
+    return {
+      version: 1,
+      operationId: event.operationId,
+      projectId: binding.projectKey,
+      generation: binding.generation,
+      state: "enqueued",
+      requestHash,
+      target,
+      executionKey,
+      replayed: false,
+      createdAt: at,
+      updatedAt: at,
+    } satisfies RemoteIntent;
+  });
+}
+
+const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
+  "enqueued",
+  "unconfirmed",
+  "confirmed",
+  "conflict",
+  "abandoned",
+];
+
+/** note: The stored row projected for a caller, never a send permit: no attempt id leaves this module. */
+function intentOf(
+  operationId: string,
+  target: string | null,
+  row: Record<string, unknown>,
+  binding: RemoteIntentBinding,
+  executionKey: RemoteIntentExecutionKey | null,
+  replayed: boolean,
+): RemoteIntent {
+  if (
+    row.generation !== binding.generation ||
+    typeof row.created_at !== "string" ||
+    typeof row.updated_at !== "string" ||
+    typeof row.request_hash !== "string" ||
+    !REMOTE_INTENT_STATES.includes(row.state as RemoteIntentState)
+  ) {
+    throw new StoreError(
+      "collaboration.unreadable",
+      `The stored outbox row for operation ${operationId} is malformed; nothing was enqueued or changed.`,
+    );
+  }
+  return {
+    version: 1,
+    operationId,
+    projectId: binding.projectKey,
+    generation: binding.generation,
+    state: row.state as RemoteIntentState,
+    requestHash: row.request_hash,
+    target,
+    executionKey,
+    replayed,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * `outbox-pending`: the current binding's `enqueued` intents only, FIFO by
+ * `(createdAt, operationId)`, as summaries without a send permit or an attempt id.
+ */
+export async function readPendingIntents(context: StoreContext, projectId: string): Promise<RemotePendingIntents> {
+  const project = text(projectId, "projectId");
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  selectedProject(selection, project);
+  const handle = await openRemoteCache(context, "read");
+  try {
+    const rows = handle.db
+      .prepare(
+        "select operation_id, request_hash, request_json, created_at from remote_outbox " +
+          "where generation = ? and project_key = ? and state = 'enqueued' " +
+          "order by created_at, operation_id",
+      )
+      .all(selection.generation, project) as Array<Record<string, unknown>>;
+    return {
+      version: 1,
+      projectId: project,
+      generation: selection.generation,
+      intents: rows.map((row) => pendingIntentOf(row, project)),
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+function pendingIntentOf(row: Record<string, unknown>, project: string): RemotePendingIntent {
+  const unreadable = (): never => {
+    throw new StoreError(
+      "collaboration.unreadable",
+      `The stored outbox row for project ${project} is malformed; nothing was read as a pending intent.`,
+    );
+  };
+  if (typeof row.operation_id !== "string" || typeof row.request_hash !== "string" || typeof row.created_at !== "string") {
+    return unreadable();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof row.request_json === "string" ? row.request_json : "");
+  } catch {
+    return unreadable();
+  }
+  const event = isRecord(parsed) && isRecord(parsed.event) ? parsed.event : undefined;
+  const change = event !== undefined && isRecord(event.change) ? event.change : undefined;
+  const kind = change?.kind;
+  if (typeof kind !== "string" || !REMOTE_CHANGE_KINDS.includes(kind as RemoteEventChange["kind"])) return unreadable();
+  return {
+    operationId: row.operation_id,
+    projectId: project,
+    state: "enqueued",
+    requestHash: row.request_hash,
+    target: isRecord(parsed) && typeof parsed.target === "string" ? parsed.target : null,
+    kind: kind as RemoteEventChange["kind"],
+    createdAt: row.created_at,
+  };
 }
