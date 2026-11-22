@@ -462,6 +462,40 @@ describe("validation command family", () => {
     expect(resolved).toEqual(["unclassified comments: 0"]);
   });
 
+  test("a non-code lint never probes Git", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "SKILL.md");
+    writeFileSync(file, "---\nname: valid-skill\ndescription: A fixture skill for validating documents.\n---\nA valid skill.\n");
+    let calls = 0;
+    const unavailable: CommandEffects["spawn"] = async () => {
+      calls += 1;
+      throw Object.assign(new Error("executable not found in $PATH: git"), { code: "process.not-found", exitCode: 127 });
+    };
+    const result = await definition("lint").execute({ target: file }, context(cwd, unavailable));
+    expect(result.status).toBe("ok");
+    expect(calls).toBe(0);
+  });
+
+  test("a code lint falls back to the invocation directory when Git cannot start", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "scan.ts");
+    writeFileSync(file, "const a = 1;\n// see docs/absent-pointer.md\n");
+    let calls = 0;
+    const unavailable: CommandEffects["spawn"] = async () => {
+      calls += 1;
+      throw Object.assign(new Error("executable not found in $PATH: git"), { code: "process.not-found", exitCode: 127 });
+    };
+    const base = context(cwd, unavailable);
+    const lines: string[] = [];
+    const result = await definition("lint").execute(
+      { target: file },
+      { ...base, effects: { ...base.effects, writeStderr: (line) => lines.push(line) } },
+    );
+    expect(result).toMatchObject({ status: "ok", exitCode: 0 });
+    expect(calls).toBe(1);
+    expect(lines).toEqual(["unclassified comments: 0", "unresolved comment pointers: 1"]);
+  });
+
   test("unknown optional validator type is classified as usage", async () => {
     const cwd = tempRoot();
     const file = path.join(cwd, "SKILL.md");

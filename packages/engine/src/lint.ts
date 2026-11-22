@@ -572,7 +572,7 @@ export type UnclassifiedComment = { line: number; endLine: number; text: string 
  * URL a reviewer can open. Shared with `findCommentPointers` so an accepted
  * shape is always a resolved claim, and case-sensitive so a spelling the shape
  * accepts is exactly one the finder resolves. */
-const POINTER_PATH_SOURCE = "(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
+const POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
 const POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
 
 /** see skills/mstar-coding-behavior/references/comments.md § MUST: four shapes —
@@ -809,7 +809,7 @@ export function findCommentPointers(fileText: string, dialect: SourceDialect = "
     unit.body.split("\n").forEach((text, index) => {
       const line = unit.line + index;
       for (const match of text.replace(URL_SPAN_RE, " ").matchAll(POINTER_PATH_RE)) {
-        pointers.push({ line, startLine: unit.line, endLine: unit.endLine, target: match[0] });
+        pointers.push({ line, startLine: unit.line, endLine: unit.endLine, target: match[0].replace(/^\.\//, "") });
       }
     });
   }

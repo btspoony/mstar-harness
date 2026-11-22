@@ -342,7 +342,7 @@ function pointerResolves(target: string, cwd: string): boolean {
  * (every comment is reported), an empty list means the diff does not touch this
  * file, so it reports none. */
 type TouchedLines = readonly (readonly [number, number])[];
-function lintOne(file: string, cwd: string, type?: LintType, prVariant = false, touched?: TouchedLines): { violations: Violation[]; markers: string[] } {
+function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, type?: LintType, prVariant = false, touched?: TouchedLines): { violations: Violation[]; markers: string[] } {
   const text = readFileSync(file, "utf8");
   // why: the comment rules are the language's, so the file name picks the
   // dialect - a Python `//` is floor division and a `#` opens its comment.
@@ -395,11 +395,16 @@ function lintOne(file: string, cwd: string, type?: LintType, prVariant = false, 
       // pointer is a claim that must resolve at HEAD, so it rides the same
       // ratchet as an unclassified comment.
       for (const pointer of findCommentPointers(text, dialect)) {
-        if (pointerResolves(pointer.target, cwd)) continue;
         const changed = touched === undefined
           ? false
           : touched.some(([start, end]) => pointer.startLine <= end && pointer.endLine >= start);
         if (touched !== undefined && !changed) continue;
+        let resolved = pointerCache.get(pointer.target);
+        if (resolved === undefined) {
+          resolved = pointerResolves(pointer.target, cwd);
+          pointerCache.set(pointer.target, resolved);
+        }
+        if (resolved) continue;
         markers.push(`${UNRESOLVED_POINTER_MARKER_PREFIX}${pointer.line}: ${pointer.target}`);
         if (changed) {
           violations.push({
@@ -657,16 +662,18 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // the change adds or modifies a line of it, and a file the diff does
         // not mention keeps an empty range list so it reports none.
         const changed = input.diffBase === undefined ? undefined : await changedLineRanges(context, input.diffBase);
-        const repoRoot = changed?.root ?? (await gitTop(context)) ?? context.cwd;
+        const needsCode = targets.some((file) => (forced ?? lintType(file)) === "code");
+        const repoRoot = changed?.root ?? (needsCode ? await gitTop(context) : undefined) ?? context.cwd;
+        const pointerCache = new Map<string, boolean>();
         const results = targets.map((file) => {
           const touched = changed === undefined
             ? undefined
             : (changed.ranges.get(path.relative(changed.root, canonicalPath(file)).split(path.sep).join("/")) ?? []);
-          return { file, ...lintOne(file, repoRoot, forced as LintType | undefined, input.prVariant === true, touched) };
+          return { file, ...lintOne(file, repoRoot, pointerCache, forced as LintType | undefined, input.prVariant === true, touched) };
         });
         // why: the count is a summary written beside the envelope, so it is
         // stderr only; a run that linted no code file reports no count.
-        if (targets.some((file) => (forced ?? lintType(file)) === "code")) {
+        if (needsCode) {
           const unclassified = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNCLASSIFIED_MARKER_PREFIX)).length, 0);
           context.effects.writeStderr?.(`unclassified comments: ${unclassified}`);
           const unresolved = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNRESOLVED_POINTER_MARKER_PREFIX)).length, 0);
@@ -813,11 +820,17 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
 }
 /** see skills/mstar-coding-behavior/references/comments.md § MUST — a pointer
  * resolves from the checkout root, not the invocation directory, so a run from
- * a subdirectory still proves repo-relative targets; a cwd outside a git
- * checkout keeps the invocation directory. */
+ * a subdirectory still proves repo-relative targets. A cwd outside a git
+ * checkout, or a host whose spawn seam cannot start git, keeps the invocation
+ * directory; an aborted invocation still propagates. */
 async function gitTop(context: InvocationContext): Promise<string | undefined> {
-  const top = await awaitSpawn(context, ["git", "rev-parse", "--show-toplevel"]);
-  return top.ok && top.stdout !== "" ? canonicalPath(top.stdout) : undefined;
+  try {
+    const top = await awaitSpawn(context, ["git", "rev-parse", "--show-toplevel"]);
+    return top.ok && top.stdout !== "" ? canonicalPath(top.stdout) : undefined;
+  } catch (error) {
+    if (context.signal.aborted) throw error;
+    return undefined;
+  }
 }
 /** why: the new side's count is 0 for a deletion-only hunk, which contributes
  * no changed line, so the count is read separately from the start. */
