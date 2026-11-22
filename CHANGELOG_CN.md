@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [4.8.3] - 2026-11-22
+
+### Added
+
+- **`/codebase-comment-cleanup` 入口。** 新的斜杠命令，把每条代码注释归入 删除 / ADR / issue / 保留并定型 四类，按批次交给 dev 席执行、独立 QC 复核、PM Acceptance 收口，并以实测的 `unclassified-comment net change` 收尾。
+- **注释分诊参考。** `mstar-coding-behavior/references/comment-cleanup.md` 把 Tautology / Excuse / Stale / Decision Record 映射到既有的 Drift / License / Substitute 失效模式；已确认的 Excuse 在删除注释前按 `mstar-project-governance` § Issue capture 捕获，只有需要跨变更留存的决策才要求 ADR 归属。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.3**。
+
 ## [4.8.2] - 2026-11-21
 
 ### Changed
