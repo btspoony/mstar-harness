@@ -26,8 +26,14 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * its own tool rather than folding into `mstar_pr_review`, so a pre-merge check
  * does not read as a review action (measured 33_935; later prose stays inside
  * this budget rather than re-taking it).
+ *
+ * Re-taken after the 5.0 merge: compared in one measurement against
+ * main@7fd419fbe, every family is byte-identical except `mstar_issue_sync`
+ * (972 → 996 chars), whose collaboration-lane contract grew in 5.0. The fold's
+ * own source is unchanged, so the published surface measures 33_957 and this is
+ * command-contract text, not a publication-rule change.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_935;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_957;
 
 type PublishedTool = Readonly<{
   name: string;

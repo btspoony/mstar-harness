@@ -5,7 +5,7 @@ import * as nodeOs from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { MIGRATIONS, encodeExecutionSessionRef, ensureCollaborationAuthority, initializeStore, resolveCollaborationLocation } from "@mstar-harness/engine";
+import { COLLABORATION_MIGRATIONS, MIGRATIONS, encodeExecutionSessionRef, ensureCollaborationAuthority, initializeStore, resolveCollaborationLocation } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import { workflowCloseRecovery } from "../src/families/status.js";
 import type { InvocationContext } from "../src/types.js";
@@ -192,9 +192,10 @@ describe("status command family", () => {
       store.close();
       // invariant: A schema version this build does not support is a STRUCTURED refusal:
       // three distinct facts the command envelope must not drop.
+      const unsupported = Math.max(...COLLABORATION_MIGRATIONS.map((migration) => migration.version)) + 1;
       const writer = new DatabaseSync(resolveCollaborationLocation({ harnessDir: dir }).dbPath);
       try {
-        writer.prepare("insert into schema_version(version, name, checksum, applied_at) values (2, 'future-schema', 'fixture', '2026-11-21')").run();
+        writer.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, 'future-schema', 'fixture', '2026-11-21')").run(unsupported);
       } finally {
         writer.close();
       }
@@ -202,9 +203,9 @@ describe("status command family", () => {
       expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported" });
       if (result.status !== "ok") {
         expect(result.details).toMatchObject({
-          storeSchemaVersion: 2,
-          supportedSchemaMax: 1,
-          firstUnsupportedMigration: 2,
+          storeSchemaVersion: unsupported,
+          supportedSchemaMax: unsupported - 1,
+          firstUnsupportedMigration: unsupported,
         });
       }
     } finally {

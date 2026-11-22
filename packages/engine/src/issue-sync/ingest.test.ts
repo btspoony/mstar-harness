@@ -90,11 +90,16 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
   };
 }
 
+/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
+function fixtureIssueRef(id: string): string {
+  return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
+}
+
 function addIssue(db: StoreDb, id: string, projectId: string = PROJECT): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, ?, ?, 'bug', 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
-  ).run(id, projectId, "Issue " + id, "sync-issue-" + id);
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, ?, ?, 'bug', 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
+  ).run(id, projectId, "Issue " + id, "sync-issue-" + id, fixtureIssueRef(id));
 }
 
 function ingestContext(overrides: Partial<IngestContext> = {}): IngestContext {
