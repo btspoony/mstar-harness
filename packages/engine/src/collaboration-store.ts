@@ -713,6 +713,81 @@ const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>>
   ],
 };
 
+/**
+ * invariant: The v2 delta's enforced layout: the columns that must reject null, the
+ * primary and foreign keys, the unique indexes and the state vocabulary. The
+ * declared DDL is canonical, so admission proves what SQLite actually built
+ * instead of trusting table and column names; a lane that kept its names but
+ * lost a key or a CHECK can never admit a handle whose invariants it cannot
+ * enforce.
+ */
+type KeyLayout = Readonly<{
+  table: string;
+  notNull: readonly string[];
+  primaryKey?: readonly string[];
+  foreignKeys: readonly (readonly [column: string, table: string, target: string])[];
+  uniqueIndexes: readonly (readonly string[])[];
+  checks: readonly string[];
+}>;
+
+const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
+  {
+    table: "collaboration_meta",
+    notNull: [],
+    foreignKeys: [],
+    uniqueIndexes: [],
+    checks: ["check (mode in ('local','mirror','remote'))"],
+  },
+  {
+    table: "issues",
+    notNull: ["issue_ref"],
+    foreignKeys: [["milestone_id", "project_milestones", "milestone_id"]],
+    uniqueIndexes: [["issue_ref"]],
+    checks: [],
+  },
+  {
+    table: "remote_bindings",
+    notNull: [
+      "generation", "project_key", "selector_commit", "provider", "workspace_id", "team_id", "provider_project_id",
+      "journal_issue_id", "verified_at", "verification_json",
+    ],
+    primaryKey: ["generation", "project_key"],
+    foreignKeys: [],
+    uniqueIndexes: [["generation", "provider", "workspace_id", "provider_project_id"]],
+    checks: ["check (typeof(generation) = 'integer' and generation > 0)", "check (provider = 'linear')"],
+  },
+  {
+    table: "remote_observations",
+    notNull: ["generation", "project_key", "revision", "completeness", "received_at"],
+    primaryKey: ["generation", "project_key"],
+    foreignKeys: [
+      ["generation", "remote_bindings", "generation"],
+      ["project_key", "remote_bindings", "project_key"],
+    ],
+    uniqueIndexes: [],
+    checks: [
+      "check (revision >= 0)",
+      "check (completeness in ('complete','partial','unavailable'))",
+      "check ( (completeness = 'unavailable' and snapshot_json is null and as_of is null) or " +
+        "(completeness in ('complete','partial') and snapshot_json is not null and as_of is not null) )",
+    ],
+  },
+  {
+    table: "remote_issue_identities",
+    notNull: ["generation", "project_key", "provider_issue_id"],
+    primaryKey: ["generation", "project_key", "provider_issue_id"],
+    foreignKeys: [
+      ["generation", "remote_observations", "generation"],
+      ["project_key", "remote_observations", "project_key"],
+    ],
+    uniqueIndexes: [
+      ["generation", "issue_ref"],
+      ["generation", "provider_issue_id"],
+    ],
+    checks: [],
+  },
+];
+
 /** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
 const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
   (table) => !COLLABORATION_REMOTE_TABLES.includes(table),
@@ -1024,16 +1099,18 @@ function assertAdmittedTarget(dbPath: string): void {
 }
 
 /**
- * invariant: The closed table inventory, and nothing outside it. A dropped domain table or
- * a foreign/combined database copied onto this path refuses before admission.
+ * invariant: The closed table inventory, the exact columns, and the v2 delta's keys
+ * and CHECKs. A dropped domain table, a foreign/combined database, an extra or
+ * missing column, or a lost key refuses before admission.
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
-  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS);
+  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
+  assertKeyLayout(db, dbPath);
 }
 
-/** note: The pre-upgrade shape, proven before a v1 lane is rebuilt. */
+/** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
 function assertLegacySchema(db: StoreDb, dbPath: string): void {
-  assertInventory(db, dbPath, COLLABORATION_V1_TABLES, COLLABORATION_COLUMNS);
+  assertInventory(db, dbPath, COLLABORATION_V1_TABLES, COLLABORATION_COLUMNS, false);
 }
 
 /** invariant: The closed table inventory and required columns, or a named refusal. */
@@ -1042,6 +1119,7 @@ function assertInventory(
   dbPath: string,
   tablesWanted: readonly string[],
   columnsWanted: Readonly<Record<string, readonly string[]>>,
+  exactColumns: boolean,
 ): void {
   const rows = db.prepare("select name from sqlite_master where type = 'table'").all();
   const present = new Set<string>();
@@ -1059,23 +1137,100 @@ function assertInventory(
         `unexpected: ${unexpected.join(", ") || "none"})`,
     );
   }
-  const damaged = missingColumns(db, columnsWanted);
+  const damaged = columnDrift(db, columnsWanted, exactColumns);
   if (damaged.length > 0) {
-    throw unreadable(dbPath, `its schema is missing required columns: ${damaged.join("; ")}`);
+    throw unreadable(dbPath, `its schema does not carry the required columns: ${damaged.join("; ")}`);
   }
 }
 
-/** note: Per table, the required columns `db` does not carry; a damaged shape names each loss. */
-function missingColumns(db: StoreDb, required: Readonly<Record<string, readonly string[]>>): string[] {
+/** note: Per table, the required columns `db` does not carry, and - when exact - the columns it adds. */
+function columnDrift(
+  db: StoreDb,
+  required: Readonly<Record<string, readonly string[]>>,
+  exact: boolean,
+): string[] {
   const damaged: string[] = [];
   for (const [table, columnsWanted] of Object.entries(required)) {
-    const columns = new Set(
-      (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((column) => column.name),
+    const columns = (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((column) =>
+      String(column.name),
     );
-    const lost = columnsWanted.filter((column) => !columns.has(column));
-    if (lost.length > 0) damaged.push(`${table}(${lost.join(", ")})`);
+    const lost = columnsWanted.filter((column) => !columns.includes(column));
+    const added = exact ? columns.filter((column) => !columnsWanted.includes(column)) : [];
+    if (lost.length > 0 || added.length > 0) {
+      damaged.push(`${table}(missing: ${lost.join(", ") || "none"}; unexpected: ${added.join(", ") || "none"})`);
+    }
   }
   return damaged;
+}
+
+/**
+ * invariant: The v2 delta's actual keys and vocabulary, read from the database's own
+ * catalog: `table_info` for nullability and primary-key order,
+ * `foreign_key_list`, `index_list`/`index_info` for unique indexes, and the
+ * declared SQL's CHECK clauses. A lane with a retained name and checksum but a
+ * lost constraint is damaged, not current.
+ */
+function assertKeyLayout(db: StoreDb, dbPath: string): void {
+  const refusal = (table: string, detail: string): never => {
+    throw unreadable(dbPath, `its ${table} ${detail}`);
+  };
+  for (const layout of COLLABORATION_KEY_LAYOUT) {
+    const columns = db.prepare(`pragma table_info(${layout.table})`).all() as Array<{
+      name?: unknown;
+      notnull?: unknown;
+      pk?: unknown;
+    }>;
+    const byName = new Map(columns.map((column) => [String(column.name), column]));
+    const nullable = layout.notNull.filter((column) => byName.get(column)?.notnull !== 1);
+    if (nullable.length > 0) refusal(layout.table, `accepts null in ${nullable.join(", ")}`);
+    if (layout.primaryKey !== undefined) {
+      const actual = columns
+        .filter((column) => typeof column.pk === "number" && column.pk > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk))
+        .map((column) => String(column.name))
+        .join(",");
+      const wanted = layout.primaryKey.join(",");
+      if (actual !== wanted) refusal(layout.table, `primary key is (${actual}) instead of (${wanted})`);
+    }
+    const foreignKeys = (db.prepare(`pragma foreign_key_list(${layout.table})`).all() as Array<{
+      from?: unknown;
+      table?: unknown;
+      to?: unknown;
+    }>)
+      .map((row) => `${String(row.from)}->${String(row.table)}.${String(row.to)}`)
+      .sort()
+      .join("|");
+    const wantedKeys = layout.foreignKeys
+      .map(([column, table, target]) => `${column}->${table}.${target}`)
+      .sort()
+      .join("|");
+    if (foreignKeys !== wantedKeys) refusal(layout.table, `foreign keys are (${foreignKeys || "none"})`);
+    const uniqueIndexes = (db.prepare(`pragma index_list(${layout.table})`).all() as Array<{
+      name?: unknown;
+      unique?: unknown;
+    }>)
+      .filter((index) => index.unique === 1 && typeof index.name === "string")
+      .map((index) =>
+        (db.prepare(`pragma index_info(${String(index.name)})`).all() as Array<{ name?: unknown }>)
+          .map((column) => String(column.name))
+          .join(","),
+      );
+    for (const wanted of layout.uniqueIndexes) {
+      if (!uniqueIndexes.includes(wanted.join(","))) {
+        refusal(layout.table, `lacks a unique index on (${wanted.join(", ")})`);
+      }
+    }
+    const declared = db
+      .prepare("select sql from sqlite_master where type = 'table' and name = ?")
+      .get(layout.table) as { sql?: unknown } | undefined;
+    const definition =
+      declared !== undefined && typeof declared.sql === "string"
+        ? declared.sql.replace(/\s+/g, " ").toLowerCase()
+        : "";
+    for (const check of layout.checks) {
+      if (!definition.includes(check)) refusal(layout.table, `lacks the CHECK ${check}`);
+    }
+  }
 }
 
 function readMeta(db: StoreDb): CollaborationMeta {
@@ -2334,7 +2489,7 @@ function remoteCacheScope(context: StoreContext): { location: CollaborationLocat
 }
 
 /** note: The lane's own identity must equal the checkout binding's: a replaced generation is stale. */
-function assertRemoteCacheIdentity(authority: CollaborationAuthority, binding: CollaborationBinding): void {
+export function assertRemoteCacheIdentity(authority: CollaborationAuthority, binding: CollaborationBinding): void {
   if (binding.version !== 3 || binding.storeId !== authority.storeId || binding.epoch !== authority.epoch) {
     throw new StoreError(
       "collaboration.stale-binding",

@@ -15,6 +15,7 @@
  * recorded as an invalidation (the cache stops serving) and returned as its
  * named refusal - never as an empty or zero result.
  */
+import { existsSync } from "node:fs";
 import {
   readCollaborationBinding,
   initializeRemoteCacheStore,
@@ -23,10 +24,12 @@ import {
   writeRemoteCollaborationBinding,
   withRemoteCacheWrite,
   assertIssueRef,
+  assertRemoteCacheIdentity,
   type CollaborationAuthority,
   type CollaborationBinding,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
+import { ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES } from "./issue.js";
 import {
   resolveCollaborationLocation,
   type CollaborationLocation,
@@ -137,7 +140,7 @@ export type RemoteMstarIssue = Readonly<{
   occurrences: readonly Record<string, unknown>[];
   transitions: readonly Record<string, unknown>[];
   relations: readonly Record<string, unknown>[];
-  provenance: Record<string, unknown> | readonly Record<string, unknown>[];
+  provenance: readonly Record<string, unknown>[];
   projectMoves: readonly Record<string, unknown>[];
 }>;
 
@@ -152,7 +155,8 @@ export type RemoteIssue = Readonly<{
 
 export type RemoteSnapshotProject = Readonly<{
   projectId: string;
-  head: readonly string[];
+  /** note: `null` only for a verified empty project journal. */
+  head: readonly string[] | null;
   binding: ProviderProjectScope;
   milestones: readonly RemoteMilestone[];
   roadmap: RemoteRoadmap | null;
@@ -197,6 +201,8 @@ const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** note: A stable history event id carries the same lowercase UUID shape as every portable key. */
+const UUID = LINEAR_ID;
 
 const CAPABILITY_KEYS = ["fullRead", "appendOnly", "exactLookup", "fieldFidelity", "privateAudience"] as const;
 
@@ -286,8 +292,33 @@ function oneOf<const T extends string>(value: unknown, allowed: readonly T[], pa
   return value as T;
 }
 
-function objectList(value: unknown, path: string): readonly Record<string, unknown>[] {
-  return list(value, path).map((entry, index) => record(entry, `${path}[${index}]`));
+/** note: Reject every member the contract does not name, so no unlisted material reaches the cache. */
+function allowOnly(body: Record<string, unknown>, path: string, allowed: readonly string[]): void {
+  for (const key of Object.keys(body)) {
+    if (!allowed.includes(key)) invalid(`${path}.${key}`, "is not a contract field");
+  }
+}
+
+function stringList(value: unknown, path: string): string[] {
+  return list(value, path).map((entry, index) => text(entry, `${path}[${index}]`));
+}
+
+/** note: A nullable member: absent or null is null, otherwise it must be a string. */
+function nullableString(value: unknown, path: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") invalid(path, "must be a string or null");
+  return value;
+}
+
+function nullableInstant(value: unknown, path: string): string | null {
+  if (value === undefined || value === null) return null;
+  return instant(value, path);
+}
+
+function eventId(value: unknown, path: string): string {
+  const raw = text(value, path);
+  if (!UUID.test(raw)) invalid(path, "must be a stable event UUID");
+  return raw;
 }
 
 function linearId(value: unknown, path: string): string {
@@ -445,19 +476,155 @@ function catalogLink(value: unknown, path: string): RemoteCatalogLink {
   };
 }
 
+/**
+ * invariant: The MStar subject's allowlist. `fields` preserves exactly the contract's
+ * domain fields - sourced from the issue module's vocabularies - and every
+ * history element carries its existing business fields plus a stable event UUID,
+ * never a SQLite row id or the implicit parent issue reference.
+ */
+const MSTAR_FIELD_KEYS = [
+  "title", "kind", "severity", "disposition", "impact", "acceptance", "owner", "registeredAt", "closedAt",
+  "closureNote", "createdAt", "updatedAt", "revision", "milestoneId",
+] as const;
+
+function mstarFields(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, MSTAR_FIELD_KEYS);
+  return {
+    title: text(body.title, `${path}.title`),
+    kind: oneOf(body.kind, ISSUE_KINDS, `${path}.kind`),
+    severity: oneOf(body.severity, ISSUE_SEVERITIES, `${path}.severity`),
+    disposition: oneOf(body.disposition, ISSUE_DISPOSITIONS, `${path}.disposition`),
+    impact: text(body.impact, `${path}.impact`),
+    acceptance: text(body.acceptance, `${path}.acceptance`),
+    owner: nullableString(body.owner, `${path}.owner`),
+    registeredAt: nullableInstant(body.registeredAt, `${path}.registeredAt`),
+    closedAt: nullableInstant(body.closedAt, `${path}.closedAt`),
+    closureNote: nullableString(body.closureNote, `${path}.closureNote`),
+    createdAt: instant(body.createdAt, `${path}.createdAt`),
+    updatedAt: instant(body.updatedAt, `${path}.updatedAt`),
+    revision: positiveInteger(body.revision, `${path}.revision`),
+    milestoneId: nullableString(body.milestoneId, `${path}.milestoneId`),
+  };
+}
+
+const OCCURRENCE_KEYS = [
+  "eventId", "occurrenceKey", "sourceKind", "sourceIdentity", "rootCauseKey", "acceptanceKey", "location",
+  "observedBehavior", "evidence", "discoveredAt", "recordedAt",
+] as const;
+
+function occurrence(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, OCCURRENCE_KEYS);
+  return {
+    eventId: eventId(body.eventId, `${path}.eventId`),
+    occurrenceKey: text(body.occurrenceKey, `${path}.occurrenceKey`),
+    sourceKind: text(body.sourceKind, `${path}.sourceKind`),
+    sourceIdentity: text(body.sourceIdentity, `${path}.sourceIdentity`),
+    rootCauseKey: text(body.rootCauseKey, `${path}.rootCauseKey`),
+    acceptanceKey: text(body.acceptanceKey, `${path}.acceptanceKey`),
+    location: text(body.location, `${path}.location`),
+    observedBehavior: text(body.observedBehavior, `${path}.observedBehavior`),
+    evidence: stringList(body.evidence, `${path}.evidence`),
+    discoveredAt: nullableInstant(body.discoveredAt, `${path}.discoveredAt`),
+    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
+  };
+}
+
+const TRANSITION_KEYS = [
+  "eventId", "fromDisposition", "toDisposition", "actor", "occurredAt", "recordedAt", "reason", "evidence",
+  "issueRevision",
+] as const;
+
+function transition(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, TRANSITION_KEYS);
+  if (!("evidence" in body)) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
+  return {
+    eventId: eventId(body.eventId, `${path}.eventId`),
+    fromDisposition: oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`),
+    toDisposition: oneOf(body.toDisposition, ISSUE_DISPOSITIONS, `${path}.toDisposition`),
+    actor: nullableString(body.actor, `${path}.actor`),
+    occurredAt: nullableInstant(body.occurredAt, `${path}.occurredAt`),
+    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
+    reason: text(body.reason, `${path}.reason`),
+    evidence: body.evidence,
+    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+  };
+}
+
+const RELATION_KEYS = ["relation", "target"] as const;
+
+function relation(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, RELATION_KEYS);
+  return {
+    relation: oneOf(body.relation, ISSUE_RELATIONS, `${path}.relation`),
+    // note: A dangling target stays as the spellable reference; the read boundary renders it unresolved.
+    target: assertIssueRef(text(body.target, `${path}.target`)),
+  };
+}
+
+const PROVENANCE_KEYS = [
+  "eventId", "kind", "target", "sourceHash", "origin", "legacyProject", "legacyBucket", "legacyEntryId",
+  "legacyJson", "importedAt",
+] as const;
+
+function provenanceLink(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, PROVENANCE_KEYS);
+  return {
+    eventId: eventId(body.eventId, `${path}.eventId`),
+    kind: oneOf(body.kind, ISSUE_PROVENANCE_KINDS, `${path}.kind`),
+    target: text(body.target, `${path}.target`),
+    sourceHash: text(body.sourceHash, `${path}.sourceHash`),
+    origin: oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`),
+    legacyProject: nullableString(body.legacyProject, `${path}.legacyProject`),
+    legacyBucket: nullableString(body.legacyBucket, `${path}.legacyBucket`),
+    legacyEntryId: nullableString(body.legacyEntryId, `${path}.legacyEntryId`),
+    legacyJson: nullableString(body.legacyJson, `${path}.legacyJson`),
+    importedAt: nullableInstant(body.importedAt, `${path}.importedAt`),
+  };
+}
+
+const PROJECT_MOVE_KEYS = ["eventId", "fromProject", "toProject", "actor", "reason", "occurredAt", "issueRevision"] as const;
+
+function projectMove(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, PROJECT_MOVE_KEYS);
+  return {
+    eventId: eventId(body.eventId, `${path}.eventId`),
+    fromProject: text(body.fromProject, `${path}.fromProject`),
+    toProject: text(body.toProject, `${path}.toProject`),
+    actor: text(body.actor, `${path}.actor`),
+    reason: text(body.reason, `${path}.reason`),
+    occurredAt: instant(body.occurredAt, `${path}.occurredAt`),
+    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+  };
+}
+
+/** note: Each complete subject carries all eight members; a partial coverage is a stream gap, not missing history. */
 function mstarIssue(value: unknown, path: string): RemoteMstarIssue {
   const body = record(value, path);
-  const provenance = body.provenance;
-  if (!isRecord(provenance) && !Array.isArray(provenance)) invalid(`${path}.provenance`, "must be an object or array");
   return {
     issueRef: assertIssueRef(text(body.issueRef, `${path}.issueRef`)),
     head: digestHead(body.head, `${path}.head`),
-    fields: record(body.fields, `${path}.fields`),
-    occurrences: objectList(body.occurrences, `${path}.occurrences`),
-    transitions: objectList(body.transitions, `${path}.transitions`),
-    relations: objectList(body.relations, `${path}.relations`),
-    provenance: provenance as Record<string, unknown> | readonly Record<string, unknown>[],
-    projectMoves: objectList(body.projectMoves, `${path}.projectMoves`),
+    fields: mstarFields(body.fields, `${path}.fields`),
+    occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
+      occurrence(entry, `${path}.occurrences[${index}]`),
+    ),
+    transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
+      transition(entry, `${path}.transitions[${index}]`),
+    ),
+    relations: list(body.relations, `${path}.relations`).map((entry, index) =>
+      relation(entry, `${path}.relations[${index}]`),
+    ),
+    provenance: list(body.provenance, `${path}.provenance`).map((entry, index) =>
+      provenanceLink(entry, `${path}.provenance[${index}]`),
+    ),
+    projectMoves: list(body.projectMoves, `${path}.projectMoves`).map((entry, index) =>
+      projectMove(entry, `${path}.projectMoves[${index}]`),
+    ),
   };
 }
 
@@ -555,7 +722,8 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
     coverage: coverage(body.coverage, "submission.snapshot.coverage"),
     project: {
       projectId,
-      head: digestHead(project.head, "submission.snapshot.project.head"),
+      // note: `null` is the verified empty project journal, never an absent traversal.
+      head: project.head === null ? null : digestHead(project.head, "submission.snapshot.project.head"),
       binding,
       milestones,
       roadmap: roadmap(project.roadmap, "submission.snapshot.project.roadmap"),
@@ -628,6 +796,23 @@ function assertCheckAddresses(check: ScopeCheck, selected: CollaborationSelector
     throw new StoreError(
       "remote.scope-mismatch",
       `The verified writer for ${check.projectId} is not the writer the checked selector names. Nothing was written.`,
+    );
+  }
+}
+
+/**
+ * invariant: A bind admits only a check the host just made: never dated in the future and
+ * never older than the 60-second TTL. An expired positive check can bootstrap
+ * no authority, exactly like an observation.
+ */
+function assertCheckCurrent(check: ScopeCheck, now: number): void {
+  const checkedAt = Date.parse(check.checkedAt);
+  if (checkedAt > now + MAX_CLOCK_SKEW_MS || now - checkedAt > SCOPE_CHECK_TTL_MS) {
+    throw new StoreError(
+      "collaboration.observation-stale",
+      `The check for ${check.projectId} at ${check.checkedAt} is not current: a positive access check must be dated ` +
+        `within ${String(SCOPE_CHECK_TTL_MS / 1000)} seconds of this process and never in the future. Reverify with the ` +
+        `host; nothing was written.`,
     );
   }
 }
@@ -781,7 +966,11 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
     const projects = rows.map((row): RemoteProjectStatus => {
       const observation = observations.get(row.project_key);
       const complete = observation?.completeness === "complete";
-      const fresh = complete && now - Date.parse(row.verified_at) <= SCOPE_CHECK_TTL_MS;
+      const outcome = outcomeLabel(row.verification_json);
+      // invariant: Serving needs a current positive access check AND a complete snapshot. The
+      // freshness clock starts at the latest check, so a revocation or a refused check can
+      // never be reported fresh off the binding's original bind time.
+      const current = outcome === "verified" && Math.abs(now - Date.parse(row.verified_at)) <= SCOPE_CHECK_TTL_MS;
       return {
         projectId: row.project_key,
         scope: {
@@ -793,12 +982,12 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
         journalIssueId: row.journal_issue_id,
         writerId: row.writer_id,
         verifiedAt: row.verified_at,
-        outcome: outcomeLabel(row.verification_json),
+        outcome,
         revision: observation?.revision ?? 0,
         completeness: observation?.completeness ?? "unavailable",
         asOf: observation?.as_of ?? null,
         code: observation?.code ?? null,
-        freshness: fresh ? "fresh" : complete ? "expired" : "incomplete",
+        freshness: current && complete ? "fresh" : complete ? "expired" : "incomplete",
       };
     });
     if (projectId !== undefined && !projects.some((entry) => entry.projectId === projectId)) {
@@ -807,14 +996,17 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
         `Project ${projectId} has no binding in the cache reached by this checkout. Run the reviewed remote bind; nothing was changed.`,
       );
     }
-    const unavailable = projects.find((entry) => entry.completeness !== "complete");
+    const unavailable = projects.find((entry) => entry.freshness !== "fresh");
     return status(
       projects.length > 0 && unavailable === undefined,
       projects.length === 0
         ? "remote.unavailable"
         : unavailable === undefined
           ? null
-          : unavailable.code ?? "collaboration.observation-incomplete",
+          : unavailable.code ??
+            (unavailable.freshness === "expired"
+              ? "collaboration.observation-stale"
+              : "collaboration.observation-incomplete"),
       projects,
     );
   } finally {
@@ -948,9 +1140,10 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     );
   }
 
-  // note: Exactly one positive check per selected project, and no check for a project the
-  // selector does not select.
+  // note: Exactly one positive, current check per selected project, and no check for a
+  // project the selector does not select.
   const checks = new Map<string, ScopeCheck>();
+  const now = Date.now();
   for (const check of batch.checks) {
     const selected = selectedProject(selection, check.projectId);
     if (checks.has(check.projectId)) {
@@ -961,6 +1154,7 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     }
     assertCheckAddresses(check, selected);
     if (check.outcome.kind !== "verified") throw negativeRefusal(check.outcome);
+    assertCheckCurrent(check, now);
     checks.set(check.projectId, check);
   }
   for (const selected of selection.projects) {
@@ -996,7 +1190,12 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     );
   }
 
+  // invariant: A rebind continues the cache this checkout is bound to. A lane that is
+  // present under another store id or epoch is a replacement and is refused; only a
+  // vanished cache (Data Model: bind initializes a missing lane) may adopt a new identity.
+  const cachePresent = existsSync(location.dbPath);
   const staged = await initializeRemoteCacheStore(location);
+  if (cachePresent && recorded !== null && recorded.version === 3) assertRemoteCacheIdentity(staged, recorded);
   const outcome = await writeRemoteCacheStage(location, ({ db, authority }) => {
     assertFreshLane(authority, db);
     const latest = db
@@ -1049,6 +1248,22 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     for (const check of checks.values()) {
       const selected = selectedProject(selection, check.projectId);
       if (check.outcome.kind !== "verified") throw negativeRefusal(check.outcome);
+      // invariant: A verification never moves a binding's evidence backwards: an older check
+      // cannot overwrite a newer one (an identical replay carries the same instant).
+      const previous = db
+        .prepare("select verified_at from remote_bindings where generation = ? and project_key = ?")
+        .get(batch.generation, selected.localProjectId);
+      if (
+        isRecord(previous) &&
+        typeof previous.verified_at === "string" &&
+        Date.parse(check.checkedAt) < Date.parse(previous.verified_at)
+      ) {
+        throw new StoreError(
+          "collaboration.observation-stale",
+          `The check for ${selected.localProjectId} is older than the binding's recorded verification ` +
+            `(${previous.verified_at}); out-of-order host times are refused. Nothing was written.`,
+        );
+      }
       upsert.run(
         batch.generation,
         selected.localProjectId,
@@ -1246,16 +1461,25 @@ function recordObservation(
       `The cache holds no observation row for ${submission.check.projectId}; rerun the reviewed remote bind. Nothing was written.`,
     );
   }
-  if (submission.expectRevision !== revision) {
-    throw new StoreError(
-      "collaboration.observation-stale",
-      `The submission expects observation revision ${String(submission.expectRevision)}, but the cache holds ` +
-        `${String(revision)} for ${submission.check.projectId}. Re-read the scope and resubmit; nothing was written.`,
-    );
-  }
   const next = revision + 1;
   const at = nowRfc3339();
+  // invariant: The check itself becomes the binding's latest evidence before either branch,
+  // so status, freshness and ordering all read the verification a reader can see. A
+  // negative check carries no writer: it proves no authorized sender exists.
+  db.prepare(
+    "update remote_bindings set verified_at = ?, verification_json = ?, writer_id = ? " +
+      "where generation = ? and project_key = ?",
+  ).run(
+    submission.check.checkedAt,
+    JSON.stringify(serializeCheck(submission.check)),
+    submission.check.outcome.kind === "verified" ? submission.check.outcome.writerId : null,
+    submission.generation,
+    submission.check.projectId,
+  );
   if (negative !== null) {
+    // invariant: A revocation invalidates serving as soon as it is submitted. It never waits
+    // for the snapshot replacement CAS to match: a host that last read an older revision
+    // must still revoke.
     db.prepare(
       "update remote_observations set revision = ?, as_of = null, completeness = 'unavailable', code = ?, " +
         "snapshot_json = null, received_at = ? where generation = ? and project_key = ?",
@@ -1265,6 +1489,13 @@ function recordObservation(
       submission.check.projectId,
     );
     return { refused: negative };
+  }
+  if (submission.expectRevision !== revision) {
+    throw new StoreError(
+      "collaboration.observation-stale",
+      `The submission expects observation revision ${String(submission.expectRevision)}, but the cache holds ` +
+        `${String(revision)} for ${submission.check.projectId}. Re-read the scope and resubmit; nothing was written.`,
+    );
   }
   const snapshotValue = submission.snapshot;
   if (snapshotValue === null) {
