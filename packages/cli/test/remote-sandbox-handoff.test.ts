@@ -12,25 +12,23 @@
  * independently confirmed, and `recoverable` says whether a surviving copy exists (`null`
  * when survival is neither proven nor disproven).
  *
- * LIMITATION: the fixture's `observe` carries the provider's native issue and does not
- * replay a confirmed adoption into later snapshots (recorded in the Task 2 notes). The
- * marked record is therefore materialized from the confirmed event the provider issued
- * through `lookup` — the provider's exact record — never invented by this test.
+ * B consumes only what a provider traversal and the bare origin carry: the fixture renders
+ * the provider's own confirmed records into its snapshots, so nothing A held is passed in.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { remoteEventHead, type RemoteEvent } from "@mstar-harness/engine";
+import type { RemoteSnapshot } from "@mstar-harness/engine";
 import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
   TRACKED_BRANCH,
   RemoteCollaborationFixture,
-  type ObservationDocument,
   type OutboxIntent,
   type OutboxPermit,
+  type ProviderIssueRecord,
   type RemoteSandbox,
   type SandboxCommand,
 } from "./support/remote-collaboration-fixture";
@@ -53,9 +51,8 @@ type HandoffReport = Readonly<{
 /** note: What survived A's removal, plus the facts the handoff assertions compare against. */
 type HandoffSource = Readonly<{
   fixture: RemoteCollaborationFixture;
-  event: RemoteEvent;
-  issueRef: string;
-  receipt: Readonly<{ outcome: unknown }>;
+  /** note: The provider's own confirmed record — the first durable source, never A's copy. */
+  record: ProviderIssueRecord;
   /** note: The bare origin's local transport path, discovered through A's clone. */
   bare: string;
   commit: string;
@@ -87,26 +84,44 @@ function seedWorkflow(storePath: string): void {
 }
 
 /**
- * The Git component: the bare origin must still carry A's pushed commit on the tracked
- * branch. A probe that cannot reach the origin decides nothing — a lost branch and an
- * unreachable server look the same from here.
+ * The Git component: A's pushed commit must still survive in the origin. A commit any ref
+ * still reaches is present; an unreferenced copy is not a durable result (Git may prune it)
+ * and an object that is gone is a proven loss. A probe that cannot read the origin decides
+ * nothing — a deleted branch and an unreachable server look the same from here.
  */
 function gitSource(bare: string, commit: string): SourceState {
-  let output: string;
   try {
-    output = git(process.cwd(), ["ls-remote", bare, `refs/heads/${TRACKED_BRANCH}`]);
+    git(process.cwd(), ["-C", bare, "rev-parse", "--git-dir"]);
   } catch {
     return "unknown";
   }
-  if (output === "") return "absent";
-  return output.startsWith(commit) ? "present" : "absent";
+  try {
+    git(process.cwd(), ["-C", bare, "cat-file", "-e", commit]);
+  } catch (error) {
+    const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : null;
+    // note: `cat-file -e` answers 1 for an absent object; any other failure is not proof.
+    return status === 1 ? "absent" : "unknown";
+  }
+  const refs = git(process.cwd(), ["-C", bare, "for-each-ref", "--contains", commit, "--format=%(refname)"]);
+  return refs === "" ? "unknown" : "present";
 }
 
-/** note: The provider component: a complete traversal that still carries the confirmed record. */
-function providerSource(fixture: RemoteCollaborationFixture): SourceState {
-  const observation = fixture.observe(REMOTE_PROJECT, 0);
-  const snapshot = observation.snapshot as { issues?: readonly { identity?: { issueId?: string } }[] } | null;
-  return (snapshot?.issues ?? []).some((issue) => issue.identity?.issueId === FIXTURE_ISSUE_ID) ? "present" : "absent";
+/**
+ * The provider component: the complete traversal must still carry the confirmed record —
+ * the issue's MStar marker at the exact reference and head. A visible native issue without
+ * the marker is not the record, and a traversal that is not complete decides nothing.
+ */
+function providerSource(fixture: RemoteCollaborationFixture, expected: ProviderIssueRecord): SourceState {
+  // note: The fixture builds this document; its snapshot crosses the DTO as opaque JSON.
+  const snapshot = fixture.observe(REMOTE_PROJECT, 0).snapshot as RemoteSnapshot | null;
+  if (snapshot?.coverage.kind !== "complete") return "unknown";
+  const carried = snapshot.issues.some(
+    (issue) =>
+      issue.mstar !== null &&
+      issue.mstar.issueRef === expected.issueRef &&
+      issue.mstar.head.includes(expected.head[0] ?? ""),
+  );
+  return carried ? "present" : "absent";
 }
 
 /**
@@ -176,11 +191,6 @@ function handoffFromA(fixture: RemoteCollaborationFixture): HandoffSource {
     "--input", a.writeJson("adopt", adoptionDocument(OPERATION)),
   ]);
   expect(adopted.data.state).toBe("enqueued");
-  const frozen = a.runJson([...REMOTE, "outbox-show", "--harness", a.harness, "--operation", OPERATION]);
-  const event = frozen.data.event as RemoteEvent | undefined;
-  if (event === undefined) throw new Error(`fixture: outbox-show withheld the frozen event: ${frozen.result.stderr}`);
-  const change = event.change;
-  if (change.kind === "project-replace") throw new Error("fixture: the frozen change is not an issue change");
 
   // note: The effect lands and the response is lost; nothing but unique exact evidence may
   // settle it, and a replayed dispatch never issues a second send permit.
@@ -207,6 +217,10 @@ function handoffFromA(fixture: RemoteCollaborationFixture): HandoffSource {
     "--input", a.writeJson("reconcile", unique),
   ]);
   expect(reconciled.data.state).toBe("confirmed");
+  // note: The provider's own record is the handoff's first durable source; the test holds it
+  // as the expected subject, never A's frozen event or outbox receipt.
+  const record = fixture.confirmedIssue(OPERATION);
+  if (record === null) throw new Error("fixture: the provider does not hold the confirmed adoption");
 
   writeFileSync(join(a.repo, HANDOFF_FILE), "# Handoff result\n\nOne confirmed remote change and one tracked result.\n");
   git(a.repo, ["add", HANDOFF_FILE]);
@@ -225,30 +239,13 @@ function handoffFromA(fixture: RemoteCollaborationFixture): HandoffSource {
 
   // invariant: Both durable copies are observable BEFORE removal, so B never depends on an
   // end-of-session flush; then A, its cache and its execution store are gone.
-  expect(providerSource(fixture)).toBe("present");
+  expect(providerSource(fixture, record)).toBe("present");
   expect(gitSource(bare, commit)).toBe("present");
   rmSync(a.dir, { recursive: true, force: true });
   expect(existsSync(a.dir)).toBe(false);
   expect(existsSync(aCache)).toBe(false);
 
-  return { fixture, event, issueRef: change.issueRef, receipt: unique, bare, commit, aStoreId, aCache };
-}
-
-/** note: B's snapshot: the provider's traversal carrying the record A confirmed. */
-function observationWithConfirmedChange(source: HandoffSource): ObservationDocument {
-  const base = source.fixture.observe(REMOTE_PROJECT, 0);
-  const snapshot = base.snapshot as { issues?: readonly Record<string, unknown>[] };
-  const native = snapshot.issues?.[0];
-  if (native === undefined) throw new Error("fixture: the provider traversal no longer carries the confirmed issue");
-  const change = source.event.change;
-  if (change.kind === "project-replace") throw new Error("fixture: the confirmed change is not an issue change");
-  return {
-    ...base,
-    snapshot: {
-      ...snapshot,
-      issues: [{ ...native, mstar: { issueRef: source.issueRef, head: [remoteEventHead(source.event)], ...change.mstar } }],
-    },
-  };
+  return { fixture, record, bare, commit, aStoreId, aCache };
 }
 
 /** note: B's independent bootstrap: fresh clone, fresh execution lane, then the confirmed read. */
@@ -269,13 +266,21 @@ function reconstruct(source: HandoffSource): Readonly<{ b: RemoteSandbox; shown:
   } finally {
     store.close();
   }
-  expect(b.observe(observationWithConfirmedChange(source)).data).toMatchObject({
+  // invariant: B submits exactly the provider's traversal — the fixture's own snapshot of the
+  // records the provider still holds — and the pushed clone; A contributed no document.
+  expect(b.observe(source.fixture.observe(REMOTE_PROJECT, 0)).data).toMatchObject({
     projectId: REMOTE_PROJECT.localProjectId,
     revision: 1,
     completeness: "complete",
   });
   expect(source.fixture.cachePath(b)).not.toBe(source.aCache);
-  return { b, shown: b.runJson(["issue", "show", "--id", source.issueRef, "--harness", b.harness]) };
+
+  // note: B addresses the issue by the reference its own read produced.
+  const listed = b.runJson(["issue", "list", "--harness", b.harness]);
+  const items = listed.data.items as Array<Record<string, unknown>>;
+  const issueRef = items[0]?.issueRef;
+  if (typeof issueRef !== "string") throw new Error(`fixture: B listed no marked issue: ${listed.result.stderr}`);
+  return { b, shown: b.runJson(["issue", "show", "--id", issueRef, "--harness", b.harness]) };
 }
 
 describe("remote handoff", () => {
@@ -296,14 +301,12 @@ describe("remote handoff", () => {
     const source = handoffFromA(fixture);
     const { b, shown } = reconstruct(source);
 
-    const change = source.event.change;
-    if (change.kind === "project-replace") throw new Error("fixture: the confirmed change is not an issue change");
-    const fields = change.mstar.fields as Record<string, unknown>;
+    const fields = source.record.subject.fields as Record<string, unknown>;
     expect(shown.exitCode).toBe(0);
-    // invariant: The exact subject A's confirmed event carries, under the same IssueRef.
+    // invariant: The exact subject the provider's own record carries, under the same IssueRef.
     expect(shown.data).toMatchObject({
-      id: source.issueRef,
-      issueRef: source.issueRef,
+      id: source.record.issueRef,
+      issueRef: source.record.issueRef,
       projectId: REMOTE_PROJECT.localProjectId,
       title: OBSERVED_NATIVE_TITLE,
       kind: fields.kind,
@@ -328,26 +331,37 @@ describe("remote handoff", () => {
     expect(listed.data).toMatchObject({ total: 1 });
     expect(listed.data.providerIssues).toBeUndefined();
     expect((listed.data.items as Array<Record<string, unknown>>)[0]).toMatchObject({
-      issueRef: source.issueRef,
+      issueRef: source.record.issueRef,
       title: OBSERVED_NATIVE_TITLE,
     });
 
     // invariant: Nothing was flushed at the end of A's session - both copies are probed
     // AFTER A's removal, and the handoff is complete rather than unavailable.
-    expect(source.receipt.outcome).toMatchObject({ kind: "confirmed" });
     expect(
-      handoffReport({ provider: providerSource(fixture), git: gitSource(source.bare, source.commit) }),
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toBeNull();
+
+    // invariant: A later descendant push still contains A's result, so survival follows the
+    // history rather than the branch tip.
+    writeFileSync(join(b.repo, "later-work.md"), "later\n");
+    git(b.repo, ["add", "later-work.md"]);
+    git(b.repo, ["commit", "-q", "-m", "later work on the tracked branch"]);
+    git(b.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
+    expect(gitSource(source.bare, source.commit)).toBe("present");
   }, 90_000);
 
   test("remote handoff: a lost provider copy is named while the pushed Git result survives", () => {
     const fixture = host("provider-loss");
     const source = handoffFromA(fixture);
-    // note: The provider's traversal no longer carries the confirmed record, and the
-    // fixture is the only provider copy, so nothing can restore it.
-    fixture.setIssues([]);
+    // note: The provider loses the record itself; the native issue stays readable and
+    // unmarked, and the fixture is the only provider copy, so nothing can restore it.
+    fixture.discardEffects(OPERATION);
+    const traversal = fixture.observe(REMOTE_PROJECT, 0).snapshot as RemoteSnapshot;
+    expect(traversal.issues.map((issue) => issue.identity.issueId)).toContain(FIXTURE_ISSUE_ID);
+    expect(traversal.issues.every((issue) => issue.mstar === null)).toBe(true);
+    expect(providerSource(fixture, source.record)).toBe("absent");
     expect(
-      handoffReport({ provider: providerSource(fixture), git: gitSource(source.bare, source.commit) }),
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toEqual({ code: "remote.handoff-unavailable", missing: ["provider"], recovered: ["git"], recoverable: false });
 
     const b = fixture.sandbox("b");
@@ -358,36 +372,54 @@ describe("remote handoff", () => {
     expect(b.observe(fixture.observe(REMOTE_PROJECT, 0)).data).toMatchObject({ revision: 1, completeness: "complete" });
 
     // invariant: The missing change is reported, never guessed into a create or a success.
-    const shown = b.runJson(["issue", "show", "--id", source.issueRef, "--harness", b.harness]);
+    // The native issue stays visible as provider-only content, never as an MStar record.
+    const shown = b.runJson(["issue", "show", "--id", source.record.issueRef, "--harness", b.harness]);
     expect(shown.exitCode).toBe(1);
     expect(shown.code).toBe("issue.not-found");
     const listed = b.runJson(["issue", "list", "--harness", b.harness]);
     expect(listed.data).toMatchObject({ total: 0 });
-    expect(listed.data.providerIssues).toBeUndefined();
+    expect(listed.data.providerIssues).toEqual([
+      expect.objectContaining({ kind: "provider-only", issueRef: null, title: OBSERVED_NATIVE_TITLE }),
+    ]);
   }, 90_000);
 
   test("remote handoff: a lost Git copy is named while the provider record survives", () => {
     const fixture = host("git-loss");
     const source = handoffFromA(fixture);
-    // note: The tracked branch is deleted after A is gone, so its pushed commit has no
-    // surviving copy; the provider record is untouched.
+    // note: The tracked branch is deleted and its unreachable objects are pruned, so the
+    // origin holds no surviving copy; the provider record is untouched.
     git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
-    expect(providerSource(fixture)).toBe("present");
+    git(source.bare, ["prune", "--expire=now"]);
+    expect(providerSource(fixture, source.record)).toBe("present");
     expect(gitSource(source.bare, source.commit)).toBe("absent");
     expect(
-      handoffReport({ provider: providerSource(fixture), git: gitSource(source.bare, source.commit) }),
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toEqual({ code: "remote.handoff-unavailable", missing: ["git"], recovered: ["provider"], recoverable: false });
     // invariant: No clone can stand in for the lost tracked result.
     expect(() => fixture.sandbox("b")).toThrow();
   }, 90_000);
 
+  test("remote handoff: a deleted branch whose objects survive keeps Git survival unknown", () => {
+    const fixture = host("git-dangling");
+    const source = handoffFromA(fixture);
+    // note: Deleting the branch leaves the commit's objects in the origin with no ref holding
+    // them, so the loss is unproven: a `false` verdict here would be a false claim.
+    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    expect(gitSource(source.bare, source.commit)).toBe("unknown");
+    expect(providerSource(fixture, source.record)).toBe("present");
+    expect(
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
+    ).toEqual({ code: "remote.handoff-unavailable", missing: ["git"], recovered: ["provider"], recoverable: null });
+  }, 90_000);
+
   test("remote handoff: losing both durable copies is irrecoverable", () => {
     const fixture = host("both-loss");
     const source = handoffFromA(fixture);
-    fixture.setIssues([]);
+    fixture.discardEffects(OPERATION);
     git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    git(source.bare, ["prune", "--expire=now"]);
     const report = handoffReport({
-      provider: providerSource(fixture),
+      provider: providerSource(fixture, source.record),
       git: gitSource(source.bare, source.commit),
     });
     expect(report).toEqual({
@@ -405,10 +437,10 @@ describe("remote handoff", () => {
     // note: The transport disappears, so the host cannot tell a deleted branch from an
     // unreachable server; a guessed boolean would be a false claim either way.
     rmSync(source.bare, { recursive: true, force: true });
-    expect(providerSource(fixture)).toBe("present");
+    expect(providerSource(fixture, source.record)).toBe("present");
     expect(gitSource(source.bare, source.commit)).toBe("unknown");
     expect(
-      handoffReport({ provider: providerSource(fixture), git: gitSource(source.bare, source.commit) }),
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toEqual({ code: "remote.handoff-unavailable", missing: ["git"], recovered: ["provider"], recoverable: null });
   }, 90_000);
 });
