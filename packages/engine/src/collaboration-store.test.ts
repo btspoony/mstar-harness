@@ -6882,6 +6882,57 @@ describe("remote outbox qc fixes", () => {
     expect(await readRemoteIntent(cache.context, resolutionId)).toMatchObject({ disclosure: "metadata", event: null });
   }, 30_000);
 
+  test("a same-instant bind never restores the writer an unsafe-fidelity observation revoked", async () => {
+    const fixture = remoteFixture("outbox-unsafe-bind-tie");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const dbPath = locationAt(fixture.repo).dbPath;
+    // note: One host instant carries both the bind and the observation refused for it.
+    const check = positiveCheck({ checkedAt: new Date(Date.now() - 2_000).toISOString() });
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [check] });
+    const base = completeSnapshot(check);
+    const subject = base.issues[0]!.mstar!;
+    const unsafeSnapshot = {
+      ...base,
+      issues: [
+        {
+          ...base.issues[0]!,
+          mstar: {
+            ...subject,
+            provenance: [{ ...subject.provenance[0]!, legacyRecord: { title: "x".repeat(600), lifecycle: "active" } }],
+          },
+        },
+        base.issues[1]!,
+      ],
+    };
+    const refused = await ingestRemoteObservation(context, {
+      ...observation(check, { selectorCommit: commit, generation: 3, expectRevision: 0 }),
+      snapshot: unsafeSnapshot,
+    }).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: "remote.unsafe-fidelity" });
+
+    // invariant: The decoder refused that snapshot at the instant the bind recorded, so a bind
+    // carrying the same positive check may not overwrite the recorded negative outcome.
+    await expect(
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [check] }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+    const evidence = bindingEvidence(dbPath);
+    expect(evidence.verified_at).toBe(check.checkedAt);
+    expect(JSON.parse(evidence.verification_json)).toMatchObject({ outcome: { kind: "unsafe-fidelity" } });
+    expect(evidence.writer_id).toBeNull();
+
+    // invariant: The observation itself may replay exactly that refused submission at the same
+    // instant, and the replay records the refusal again instead of restoring the binding.
+    const replay = await ingestRemoteObservation(context, {
+      ...observation(check, { selectorCommit: commit, generation: 3, expectRevision: 1 }),
+      snapshot: unsafeSnapshot,
+    }).catch((error: unknown) => error);
+    expect(replay).toMatchObject({ code: "remote.unsafe-fidelity" });
+    const replayed = bindingEvidence(dbPath);
+    expect(JSON.parse(replayed.verification_json)).toMatchObject({ outcome: { kind: "unsafe-fidelity" } });
+    expect(replayed.writer_id).toBeNull();
+  }, 30_000);
+
   test("an abandoned outbox resolution is replaceable and keeps its audit row", async () => {
     const cache = await outboxCache("outbox-replace-abandoned");
     const conflictedId = "00000000-0000-4000-8000-000000000801";
