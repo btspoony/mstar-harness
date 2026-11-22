@@ -251,14 +251,14 @@ function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
     description: verb === "export"
       ? "Export the current execution state as a canonical reporting artifact."
       : verb === "restore-preview"
-        ? "Store execution restore-preview from a standalone store backup. Receipt retention is an expected source of backup-only `execution` " +
+        ? "Store execution restore-preview from a standalone store backup. This is the EXECUTION authority's own recovery only: issue, catalog and project authority live in the repository's collaboration store and are restored with `store collaboration restore`, never by an execution image. Receipt retention is an expected source of backup-only `execution` " +
           "operation rows: a terminal close or adoption prunes that workflow's operation receipts (each listed in a preview of an older point with " +
           "`liveRevision: null`), the init-time purge beside the in-place epoch bump clears the superseded epoch's, and a restore preserves " +
           "prior-epoch receipt rows as history under its frozen bytes-plus-one-epoch contract, outside the current epoch's replay scope, so " +
           "restoring any of them is harmless and re-arms nothing. `result_json` payloads are write-time versioned: graph rows written " +
           "before the slimming change keep their full form, later rows carry the slim envelope, so inventory digests compare write-time " +
           "bytes per row and mixed forms never produce same-key content drift."
-        : `Store execution ${verb} from a standalone store backup.`,
+        : `Store execution ${verb} from a standalone store backup. Execution only: a collaboration authority is never written, replaced or quarantined here — use mstar store collaboration restore for the collaboration image of a verified pair.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }

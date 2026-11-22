@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { initializeStore, readRoadmapAuthority, registerCatalogEntity, type StoreContext } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readRoadmapAuthority, registerCatalogEntity, type StoreContext } from "@mstar-harness/engine";
+import { writeFixtureRepoId } from "./harness";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -42,11 +43,13 @@ async function fixture(name: string): Promise<{ dir: string; context: StoreConte
   // why: A real Git main worktree whose `.mstar` is the fixed harness root.
   const dir = mkdtempSync(join(ROOT, name));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFixtureRepoId(dir);
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context = { harnessDir: join(dir, ".mstar") };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   await registerCatalogEntity(context, {
     kind: "project", id: "proj-roadmap", title: "Roadmap proof", rootKind: "projects", relativePath: "proj-roadmap",
   }, { operationId: `register-${name}`, actor: "roadmap-test" });
@@ -62,6 +65,9 @@ describe("roadmap CLI", () => {
     const reviewFile = join(dir, "review.json");
     writeFileSync(source, MARKDOWN);
     const revisionBefore = await readRoadmapAuthority(context, "proj-roadmap");
+    // invariant: Each read stamps its own snapshot instant; the roads must be unchanged.
+    const { collaboration: evidenceBefore, ...readBefore } = revisionBefore;
+    expect(evidenceBefore.completeness).toBe("complete");
 
     const help = run(["roadmap", "--help"], dir);
     expect(help.status).toBe(0);
@@ -70,7 +76,10 @@ describe("roadmap CLI", () => {
     expect(preview.status).toBe(0);
     const reviewed = data(preview);
     expect(reviewed.expectedRoadmapRevision).toBe("absent");
-    expect(await readRoadmapAuthority(context, "proj-roadmap")).toEqual(revisionBefore);
+    const afterPreview = await readRoadmapAuthority(context, "proj-roadmap");
+    const { collaboration: evidenceAfter, ...readAfter } = afterPreview;
+    expect(evidenceAfter.completeness).toBe("complete");
+    expect(readAfter).toEqual(readBefore);
     writeFileSync(reviewFile, `${preview.stdout}\n`);
 
     const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-proof"], dir);

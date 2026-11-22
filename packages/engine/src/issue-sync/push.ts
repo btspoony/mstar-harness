@@ -334,8 +334,11 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
  *
  * Per-item failures are REPORTED, not thrown: an unknown local id or an
  * out-of-contract transition is that item's refusal, so one bad entry cannot
- * abort a whole run's report. A lease refusal is the exception — the run no
- * longer owns the direction, so the whole run stops.
+ * abort a whole run's report. Two failures are the exception and stop the whole
+ * batch: a lease refusal (the run no longer owns the direction) and any error
+ * that is not a ledger refusal at all. The second matters because a row and its
+ * receipt share one transaction: a storage failure after the row update must roll
+ * the batch back, never be reported as a committed per-item refusal.
  *
  * A `confirmed` result is refused as that item's failure when the row is a
  * `pending` create this run did not open (see `openedByThisRun`): recording an
@@ -473,8 +476,10 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
   } catch (error) {
     // why: A lease refusal is not this item's cause: the run no longer owns the
     // direction, so the whole run must stop instead of being reported per item.
-    if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
-    return { localId, outcome: "refused", externalId: null, cause: error instanceof Error ? error.message : String(error) };
+    // Neither is a failure that is not a ledger refusal: it may have landed after
+    // the row was written, so only a rollback keeps the row and its receipt together.
+    if (!(error instanceof SyncError) || error.code === "sync.run-taken") throw error;
+    return { localId, outcome: "refused", externalId: null, cause: error.message };
   }
 }
 
@@ -561,9 +566,11 @@ function failed(
       else recordRefusal(db, { ...input, error: message });
     }
   } catch (error) {
-    // A lease refusal is not this item's cause: the run no longer owns the
+    // invariant: A lease refusal is not this item's cause: the run no longer owns the
     // direction, so the whole run must stop instead of being reported per item.
-    if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
+    // A non-ledger failure may have committed this row before the receipt failed,
+    // so it aborts the batch rather than becoming this item's refusal.
+    if (!(error instanceof SyncError) || error.code === "sync.run-taken") throw error;
     // The returned outcome still carries the cause.
   }
   return { localId, outcome: "refused", externalId: null, cause: message };

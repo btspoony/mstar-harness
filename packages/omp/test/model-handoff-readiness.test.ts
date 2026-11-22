@@ -37,6 +37,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   createFsStore,
+  ensureCollaborationAuthority,
   initializeStore,
   mutateExecutionPlan,
   mutateExecutionWorkflow,
@@ -136,15 +137,16 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-readiness-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
   const workflowsDir = join(harness, "workflows");
@@ -387,15 +389,16 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-readiness2-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   // No `status.json` and no `workflows/` directory: the execution authority is
   // initialized over an empty execution workspace, so no retired document can
@@ -442,6 +445,7 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionAuthority({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

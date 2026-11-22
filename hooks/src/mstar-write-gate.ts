@@ -12,11 +12,10 @@
 // write is refused (`store.direct-write-refused`), and a project register is
 // routed through the DB-aware authority check — refused as
 // `project.register.retired` while the issue store is the active findings
-// authority, refused as `store.authority-unavailable` when that authority
-// cannot be read at all (below-floor runtime / missing `node:sqlite`
-// capability / corrupt / drifted / busy), and shape-validated only while no
-// store or a staged store leaves the register the live authority (issue
-// contract §7: before activation new findings still go to the register). The
+// authority, and refused as `store.authority-unavailable` in every other
+// lane state (below-floor runtime / missing `node:sqlite` capability /
+// corrupt / drifted / busy / staged / absent): no pre-activation register
+// permission or shape-validation-only path exists. The
 // runtime floor is read from the ACTUAL runtime (engine `detectStoreRuntime`
 // — the Bun global first, never Bun's emulated `process.versions.node`) and
 // asserted in-process: this hook is spawned as native `node`, so it needs the
@@ -75,14 +74,13 @@ import {
   harnessDocKindOfTarget,
   isStoreAuthorityTarget,
   landedPathOf,
-  queryDashboard,
+  probeCollaborationAuthority,
   resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveRepoEnforcement,
   SymlinkResolutionError,
   validateStatusWriteDoc,
   violationLine,
-  withStoreRead,
 } from "@mstar-harness/engine";
 import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 
@@ -133,15 +131,12 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/** What the issue store says about a register target (G4b): `retired` =
- * active store (the register is migration history), `legacy` = no store /
- * staged store (pre-activation, the register is still the live authority),
- * `unavailable` = the authority could not be read and the write fails closed.
- * One read envelope (`withStoreRead` + the `issues` view: no projection
- * refresh, no source I/O) is the whole probe. */
+/** What the collaboration lane says about a register target (G4b):
+ * `retired` = ACTIVE lane (the register is migration history), `unavailable` =
+ * missing, staged or unreadable lane (the write fails closed — a missing lane
+ * is never a pre-activation permission). */
 type AuthorityRoute =
-  | { kind: "legacy" }
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
@@ -150,31 +145,10 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
-  try {
-    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
-    return { kind: "retired", storeRevision: envelope.storeRevision };
-  } catch (error) {
-    const refusal = refusalOf(error);
-    return PRE_ACTIVATION_CODES.includes(refusal.code)
-      ? { kind: "legacy" }
-      : { kind: "unavailable", ...refusal };
-  }
-}
-
-/** The nearest ancestor holding a `.mstar` directory (the caller's own harness). */
-function nearestHarnessDir(target: string): string | null {
-  let dir = dirname(target);
-  for (;;) {
-    const candidate = join(dir, ".mstar");
-    try {
-      if (statSync(candidate).isDirectory()) return candidate;
-    } catch {
-      // keep walking up
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
+  const probe = await probeCollaborationAuthority({ harnessDir });
+  return probe.kind === "active"
+    ? { kind: "retired", storeRevision: probe.authority.revision }
+    : { kind: "unavailable", code: probe.code, message: probe.message };
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -189,11 +163,10 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
 }
 
 /** The harness root of the register a write LANDS on through a symlink alias
- * (stricter-wins veto): the landed destination of an alias is itself an
- * authority candidate even when the caller's own path already classified as a
- * register elsewhere — classified by the exact-case marker probe first, then
- * the FW-3 folded shape walk. `null` when the write is not an alias or does
- * not land on a register. */
+ * (stricter-wins veto): the landed destination is the authority the bytes
+ * belong to even when the caller's own path already classified as a register
+ * elsewhere. `null` when the write is not an alias or does not land on a
+ * register. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(landed);
@@ -219,11 +192,11 @@ function storeDirectWriteRefusal(targetPath: string): ValidationResult {
   );
 }
 
-function registerRetiredRefusal(storeRevision: number): ValidationResult {
+function registerRetiredRefusal(storeRevision: number | null): ValidationResult {
   return authorityViolation(
     REGISTER_RETIRED_CODE,
-    "project registers are retired migration history \u2014 the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+    "project registers are retired migration history \u2014 the repository collaboration database (revision " +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
   );
 }
@@ -493,43 +466,16 @@ try {
     if (target === null && registerDir === null) continue; // not a gated coordination write — silent pass
 
     if (registerDir !== null) {
-      const route = await readAuthorityRoute(registerDir);
-      if (route.kind === "retired") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
-          registerRetiredRefusal(route.storeRevision),
-        ]);
-      }
-      if (route.kind === "unavailable") {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
-          authorityUnavailableRefusal(route),
-        ]);
-      }
-      // `legacy`: pre-activation (no store / staged store) — the register is
-      // still the live authority, so its document validator decides below.
-      // Stricter-wins veto: the write may LAND on another harness's register
-      // through a symlink alias while only the source authority was checked
-      // — classify the landed destination too, and its authority refusals
-      // veto the legacy fall-through. Both contexts pre-activation keep the
-      // legacy path (issue contract §7); the landed store database is already
-      // refused by the S-G4b-03 store check above.
-      if (route.kind === "legacy") {
-        const landedDir = landedRegisterDirOf(targetPath, landed);
-        if (landedDir !== null && landedDir !== registerDir) {
-          const landedRoute = await readAuthorityRoute(landedDir);
-          if (landedRoute.kind === "retired") {
-            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
-              registerRetiredRefusal(landedRoute.storeRevision),
-            ]);
-          }
-          if (landedRoute.kind === "unavailable") {
-            blockAuthorityWrite(toolName, displayTarget(targetPath, landedDir), [
-              authorityUnavailableRefusal(landedRoute),
-            ]);
-          }
-        }
-      }
+      const route = await readAuthorityRoute(landedRegisterDirOf(targetPath, landed) ?? registerDir);
+      blockAuthorityWrite(toolName, displayTarget(targetPath, registerDir), [
+        route.kind === "retired" ? registerRetiredRefusal(route.storeRevision) : authorityUnavailableRefusal(route),
+      ]);
     }
-    const gated = target ?? { harnessDir: registerDir!, kind: "register" as const };
+    // A register target with no register route cannot occur (registerDir is
+    // non-null for every register classification), so the document validator
+    // below only ever sees status/snapshot documents.
+    const gated = target;
+    if (gated === null) continue;
 
     // `content` as a string is the new document; anything else (including
     // new_string/old_string edits and ApplyPatch shapes) validates the
@@ -546,11 +492,8 @@ try {
 
     // The enforcement axis belongs to the caller's path (the source of a
     // symlink alias), not the landed destination the document is classified
-    // against: a pre-activation source keeps its own repository policy.
-    const enforcementHost = gated.kind === "register"
-      ? nearestHarnessDir(targetPath) ?? gated.harnessDir
-      : gated.harnessDir;
-    const enforcement = resolveRepoEnforcement(enforcementHost);
+    // against.
+    const enforcement = resolveRepoEnforcement(gated.harnessDir);
     if (!enforcement.hard) continue; // soft mode — silent pass (omp Gate-1 parity)
 
     const display = displayTarget(targetPath, gated.harnessDir);

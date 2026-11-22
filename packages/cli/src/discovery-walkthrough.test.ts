@@ -23,6 +23,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { writeFixtureRepoId } from "../test/harness";
 
 const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
 
@@ -35,6 +36,8 @@ function runCli(args: readonly string[], cwd: string, keepHostSession = false): 
   delete env.MSTAR_EXECUTION_IDENTITY;
   delete env.DSH_SESSION_ID;
   delete env.SDD_DIR;
+  delete env.MSTAR_LEAF_SEAT;
+  delete env.DSH_MSTAR_LEAF_SEAT;
   if (!keepHostSession) delete env.MSTAR_HOST_SESSION_ID;
   try {
     const stdout = execFileSync(process.execPath, [CLI_ENTRY, ...args], {
@@ -68,6 +71,7 @@ describe("#324 fixture discovery walkthrough", () => {
   test("a close's inputs are derivable from the CLI surfaces in \u22643 calls per input", () => {
     // Fixture store: one call creates and activates the ACTIVE authority.
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: fixture });
+    writeFixtureRepoId(fixture);
     mkdirSync(harnessDir, { recursive: true });
     const plansDir = path.join(harnessDir, "plans");
     mkdirSync(plansDir, { recursive: true });
@@ -177,6 +181,7 @@ describe("#324 fixture discovery walkthrough", () => {
     const wrongScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s2-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: wrongFixture });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: wrongScratch });
+    writeFixtureRepoId(wrongFixture);
     mkdirSync(path.join(wrongHarness, "plans"), { recursive: true });
     writeFileSync(path.join(wrongHarness, "plans", "p-walk.md"), "# Walk plan\n\n**plan_id:** p-walk\n\nbody\n");
     try {
@@ -238,6 +243,7 @@ describe("#324 fixture discovery walkthrough", () => {
     const legacyScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s3-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: legacyFixture });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: legacyScratch });
+    writeFixtureRepoId(legacyFixture);
     mkdirSync(path.join(legacyHarness, "plans"), { recursive: true });
     writeFileSync(path.join(legacyHarness, "plans", "p-legacy.md"), "# Legacy plan\n\n**plan_id:** p-legacy\n\nbody\n");
     try {

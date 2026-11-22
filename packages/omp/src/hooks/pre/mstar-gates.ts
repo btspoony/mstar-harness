@@ -1,13 +1,13 @@
 /**
- * omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
+ * invariant: omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
  * mode blocks engine-validated violations; soft dispatch findings are logged,
  * while authority refusals remain unconditional.
  *
  * Gate 1 protects execution-owned coordination paths and issue/catalog authority
- * paths. ACTIVE execution DB state is the only recognized authority: retired
- * file documents and project registers are refused, and missing, staged or
- * unreadable authority state fails closed rather than falling through to a
- * document validator.
+ * paths. Retired file documents are judged by the ACTIVE execution DB state;
+ * project registers by the collaboration lane's ACTIVE record — a missing,
+ * staged or unreadable lane fails closed rather than falling through to a
+ * document validator. Neither domain's verdict is inferred from the other.
  *
  * Target classification and write validation come from the shared
  * `@mstar-harness/engine` gates module. The local hook supplies event shape,
@@ -28,13 +28,12 @@ import {
   isStoreAuthorityTarget,
   landedPathOf,
   parseAssignmentFields,
-  queryDashboard,
+  probeCollaborationAuthority,
   resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveRepoEnforcement,
   SymlinkResolutionError,
   violationLine,
-  withStoreRead,
 } from "@mstar-harness/engine";
 import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -111,11 +110,12 @@ function refusalOf(error: unknown): { code: string; message: string } {
 }
 
 /**
- * Resolve the ACTIVE issue-store authority. An unavailable, missing or staged
- * store refuses; no document-backed fallback is admitted.
+ * invariant: Resolve the ACTIVE collaboration (issue/catalog) authority. An unavailable,
+ * missing or staged lane refuses; no execution-store read and no
+ * document-backed fallback is admitted.
  */
 type AuthorityRoute =
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
@@ -124,12 +124,10 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
-  try {
-    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
-    return { kind: "retired", storeRevision: envelope.storeRevision };
-  } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
-  }
+  const probe = await probeCollaborationAuthority({ harnessDir });
+  return probe.kind === "active"
+    ? { kind: "retired", storeRevision: probe.authority.revision }
+    : { kind: "unavailable", code: probe.code, message: probe.message };
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -143,12 +141,11 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** The harness root of the register a write LANDS on through a symlink alias
- * (stricter-wins veto): the landed destination of an alias is itself an
- * authority candidate even when the caller's own path already classified as a
- * register elsewhere — classified by the exact-case marker probe first, then
- * the FW-3 folded shape walk. `null` when the write is not an alias or does
- * not land on a register. */
+/** note: The harness root of the register a write LANDS on through a symlink alias
+ * (stricter-wins veto): the landed destination is the authority the bytes
+ * belong to even when the caller's own path already classified as a register
+ * elsewhere. `null` when the write is not an alias or does not land on a
+ * register. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(landed);
@@ -173,11 +170,11 @@ function storeDirectWriteRefusal(rawPath: string): { block: true; reason: string
   );
 }
 
-function registerRetiredRefusal(storeRevision: number): { block: true; reason: string } {
+function registerRetiredRefusal(storeRevision: number | null): { block: true; reason: string } {
   return authorityRefusal(
     REGISTER_RETIRED_CODE,
     "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
   );
 }
@@ -293,7 +290,7 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
           caseFoldedRegisterRoot(resolved) ??
           (landed !== resolved ? caseFoldedRegisterRoot(landed) : null));
     if (registerDir !== null) {
-      const route = await readAuthorityRoute(registerDir);
+      const route = await readAuthorityRoute(landedRegisterDirOf(resolved, landed) ?? registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
       return authorityUnavailableRefusal(route, "the issue authority", "register write");
     }

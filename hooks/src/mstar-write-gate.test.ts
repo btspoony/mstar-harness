@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +28,10 @@ interface Fixture {
 }
 
 function buildHarness(id: string, mstarc?: string): Fixture {
-  const root = mkdtempSync(join(tmpdir(), `${id}-`));
+  // why: realpath'd root — the gate displays harness-relative targets only
+  // when the target and the harness agree canonically (macOS /var →
+  // /private/var would otherwise force the absolute form).
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${id}-`)));
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects"), { recursive: true });

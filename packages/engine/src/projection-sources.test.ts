@@ -24,9 +24,12 @@
  *   its digests leak no absolute path.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   catalogRootDir,
   linkCatalogEntities,
@@ -34,12 +37,21 @@ import {
   type CatalogOperation,
 } from "./catalog.js";
 import { captureProjectionSources, PROJECTION_FORMAT_VERSION } from "./projection.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-projection-sources-"));
+const TEST_HOME = join(ROOT, "home");
+mkdirSync(TEST_HOME, { recursive: true });
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => TEST_HOME);
+});
 const STARTED_AT = "2026-09-18T01:00:00.000Z";
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 afterEach(() => {
@@ -62,11 +74,27 @@ type Fixture = {
  */
 async function fixture(name: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], {
+    cwd: workspace,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  writeFileSync(join(workspace, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
   return {
     workspace,
     harness,

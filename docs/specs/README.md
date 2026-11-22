@@ -14,10 +14,11 @@ The repository separates long-lived writing into three layers by purpose:
 
 ## Current state
 
-The corpus currently carries three architecture pages:
+The corpus currently carries four architecture pages:
 
 - [`architecture/overview.md`](architecture/overview.md) — system layers and data flow: repo layout, engine, commands, CLI/MCP, host plugins, skills/agents; where authority lives.
-- [`architecture/store-authority.md`](architecture/store-authority.md) — `{HARNESS_DIR}/store.db` as the single state authority: table domains, execution lifecycle, pre-activation fallbacks, read/write refusal surface.
+- [`architecture/store-authority.md`](architecture/store-authority.md) — `{HARNESS_DIR}/store.db` as the execution state authority: table domains, execution lifecycle, pre-activation state, read/write refusal surface.
+- [`architecture/collaboration-authority.md`](architecture/collaboration-authority.md) — the repository's user-level collaboration authority: identity and mode, staged/active lifecycle, cutover fence, read completeness and gate evidence, composite receipts, backup/restore.
 - [`architecture/document-corpus.md`](architecture/document-corpus.md) — the tracked document corpora and their boundaries: knowledge vs specs vs adr, process artifacts, path resolution chains, git tracking policy, catalog registration.
 
 Every page follows the same sections in order — `Scope`, `Current state`, `Invariants`, `Where it lives`, `Change obligations` — and filenames carry no version number, date prefix, or iteration id.
@@ -29,13 +30,13 @@ Every page follows the same sections in order — `Scope`, `Current state`, `Inv
 - **Decisions outlive plans → ADR.** A decision whose rationale must survive the plan or PR that produced it goes to `docs/adr/`, not into these pages; a spec states the resulting current behavior and may link the ADR.
 - **No plan text.** These pages contain no acceptance criteria, local plan/iteration identifiers, merge references, or harness-internal process paths.
 - **English, tracked.** Documents are English Markdown, Git-tracked.
-- **The registry is the store.** The catalog registry of spec documents is `{HARNESS_DIR}/store.db` (`mstar catalog list`); tables in these pages — including this one — are prose navigation, never registries.
+- **The registry is the collaboration database.** The catalog registry of spec documents is the repository's user-level collaboration database (`mstar catalog list`); tables in these pages — including this one — are prose navigation, never registries.
 
 ## Where it lives
 
 - Bodies: `docs/specs/` at the repository root, with one subdirectory per subject area (`architecture/` today).
 - Resolution: `.mstarc` `[config] specs_dir=docs/specs` is authoritative and skips the candidate chain; `mstar path resolve` prints the resolved `specsDir`.
-- Registration: catalog rows in `{HARNESS_DIR}/store.db` carry identity, path, kind, description, relations, and lifecycle; registered plan inputs freeze a revision into `execution_inputs`.
+- Registration: catalog rows in the repository's user-level collaboration database carry identity, path, kind, description, relations, and lifecycle; registered plan inputs freeze a revision into the execution store's `execution_inputs`.
 
 ## Change obligations
 

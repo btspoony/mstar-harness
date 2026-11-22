@@ -47,7 +47,14 @@ export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
 import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
-import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationObservation,
+  type CollaborationStamp,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
 import {
   normalizeSeverity,
   validateResidual,
@@ -222,78 +229,183 @@ export function validateProjectRegister(doc: unknown): GateResult {
 }
 
 /**
- * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
- * issue-governance cutover G2a): the authoritative input is the issue store
- * (`store.db`) — every OPEN issue linked to the plan through `provenance`
- * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows
- * retain the scoped default), recorded by a plan-scoped operation.
- * The legacy register is never consulted at runtime; `validateProjectRegister`
- * remains a migration-only validator.
+ * The collaboration read contract types are owned by `collaboration-store.ts`
+ * (beside the handle that builds them) and re-exported here for the existing
+ * domain imports.
+ */
+export type { CollaborationObservation, CollaborationScope } from "./collaboration-store.js";
+
+/** A complete plan-scoped findings observation: the open local issues it read. */
+export type FindingsObservation = Extract<CollaborationObservation, { completeness: "complete" }> &
+  Readonly<{ open: readonly { id: string; severity: Severity }[] }>;
+
+/**
+ * One complete plan-local findings observation (contract §Read/Completeness and
+ * Gates): every OPEN **local** issue linked to the plan through `provenance`
+ * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows retain
+ * the scoped default), read from the collaboration lane in ONE snapshot.
+ *
+ * Fail-closed: a missing (`collaboration.not-initialized`), corrupt
+ * (`collaboration.unreadable`) or staged (`collaboration.not-active`) authority
+ * refuses — an unreadable lane is never "no findings". A mirrored external row
+ * is not a local finding; the gate counts the work this repo owes.
+ */
+export async function observePlanFindings(context: StoreContext, planId: string): Promise<FindingsObservation> {
+  if (typeof planId !== "string" || planId.trim() === "") {
+    throw new Error("observePlanFindings requires a non-empty plan id");
+  }
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    const db = handle.db;
+    // note: One deferred read snapshot: the revision stamped on the observation and
+    // the rows it was evaluated against come from the same instant.
+    db.exec("begin");
+    try {
+      const observation = readCollaborationObservation(handle, { kind: "plan", key: planId });
+      const rows = db
+        .prepare(
+          "select issues.id as id, issues.severity as severity from issues " +
+            "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
+            "where issues.disposition = 'open' and issues.provider = 'local' order by issues.id asc",
+        )
+        .all(planId) as Array<{ id: string; severity: string }>;
+      return {
+        ...observation,
+        open: rows.map((row) => ({ id: row.id, severity: normalizeSeverity(row.severity) as Severity })),
+      };
+    } finally {
+      db.exec("commit");
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * The findings decision table (status-and-residuals.md § Findings cleanup
+ * modes; issue-governance cutover G2a), applied to one observation.
  *
  * `zero-residual`: every open linked issue is a violation — a disposition is a
  * separate authorized act (contract §4), so an open issue cannot ride along.
  * `allow-residual` (default): open issues are fine unless an unresolved
  * Critical remains.
+ */
+function findingsGateDecision(
+  observation: FindingsObservation,
+  mode: FindingsCleanupMode,
+): GateResult {
+  const violations: ValidationResult[] = [];
+  for (const row of observation.open) {
+    const label = row.id;
+    if (row.severity === "critical") {
+      violations.push(
+        mode === "zero-residual"
+          ? violation(
+              "high",
+              "findings.zero-residual-critical",
+              `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
+            )
+          : violation("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`),
+      );
+    } else if (mode === "zero-residual") {
+      violations.push(
+        violation(
+          "medium",
+          "findings.zero-residual-open-issue",
+          `${label}: an open issue cannot remain under zero-residual \u2014 close it through the authorized disposition path before handoff`,
+        ),
+      );
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+/**
+ * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
+ * issue-governance cutover G2a): the authoritative input is the collaboration
+ * lane's issue rows. The gate returns the complete observation it decided on so
+ * a consumer (completion evidence) can record the accepted scope, stamp,
+ * revision and snapshot time; the legacy register is never consulted at
+ * runtime (`validateProjectRegister` remains a migration-only validator).
  *
- * Fail-closed: the authority must be readable AND active, or the gate throws
- * — a missing (`store.not-initialized`), corrupt (`store.corrupt`) or staged
- * (`store.not-active`) store is never read as "no findings".
+ * An unreadable, missing or staged authority refuses through
+ * `observePlanFindings` — a mismatched or unavailable lane is never an empty
+ * findings list.
  */
 export async function findingsCleanupGate(
   context: StoreContext,
   planId: string,
   opts?: { mode?: FindingsCleanupMode },
-): Promise<GateResult> {
-  if (typeof planId !== "string" || planId.trim() === "") {
-    throw new Error("findingsCleanupGate requires a non-empty plan id");
+): Promise<GateResult & { collaboration: FindingsObservation }> {
+  const observation = await observePlanFindings(context, planId);
+  const decision = findingsGateDecision(observation, opts?.mode ?? "allow-residual");
+  return { ...decision, collaboration: observation };
+}
+
+/**
+ * The two named findings-evidence refusals (contract §Operator commands and
+ * refusals): the required scope was not fully proved, or the preflight
+ * observation no longer applies.
+ */
+export type FindingsEvidenceCode = "collaboration.observation-incomplete" | "collaboration.observation-stale";
+
+/**
+ * A findings decision could not be re-proved against current scope. `details`
+ * names the scope and both snapshots, so the caller repeats the same gate
+ * against current scope instead of retrying the stale one.
+ */
+export class FindingsEvidenceError extends Error {
+  readonly code: FindingsEvidenceCode;
+  readonly details: Record<string, unknown>;
+
+  constructor(code: FindingsEvidenceCode, message: string, details: Record<string, unknown> = {}) {
+    super(`[${code}] ${message}`);
+    this.name = "FindingsEvidenceError";
+    this.code = code;
+    this.details = details;
   }
-  const mode = opts?.mode ?? "allow-residual";
-  const handle = await openStore(context, "read");
-  try {
-    const db = handle.db;
-    const meta = readStoreAuthority(db);
-    if (meta.authorityState !== "active") {
-      throw new IssueError(
-        "store.not-active",
-        `The issue store is ${typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
-      );
-    }
-    assertIssueProvenanceSchema(db);
-    const rows = db
-      .prepare(
-        "select issues.id as id, issues.severity as severity from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
-          // A mirrored external row is not a local finding: this gate counts the
-          // work this repo owes, and an imported Linear issue is not that.
-          "where issues.disposition = 'open' and issues.provider = 'local' order by issues.id asc",
-      )
-      .all(planId) as Array<{ id: string; severity: string }>;
-    const violations: ValidationResult[] = [];
-    for (const row of rows) {
-      const label = row.id;
-      if (normalizeSeverity(row.severity) === "critical") {
-        violations.push(
-          mode === "zero-residual"
-            ? violation(
-                "high",
-                "findings.zero-residual-critical",
-                `${label}: unresolved critical blocks approval under zero-residual \u2014 fix now or close via explicit risk acceptance`,
-              )
-            : violation("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`),
-        );
-      } else if (mode === "zero-residual") {
-        violations.push(
-          violation(
-            "medium",
-            "findings.zero-residual-open-issue",
-            `${label}: an open issue cannot remain under zero-residual \u2014 close it through the authorized disposition path before handoff`,
-          ),
-        );
-      }
-    }
-    return { ok: violations.length === 0, violations };
-  } finally {
-    handle.close();
+}
+
+/**
+ * The pre-commit applicability re-sample of one findings decision: the complete
+ * observation a gate decided on must still name the same plan scope, authority
+ * stamp and revision. The recorded evidence is untrusted input here (a stored
+ * completion record is re-read, not re-observed), so a scope this repo cannot
+ * re-observe refuses as `observation-incomplete`; a moved lane refuses as
+ * `observation-stale` and names both snapshots. The evidence itself is never
+ * rewritten — the caller repeats the same gate against current scope.
+ */
+export async function assertPlanFindingsCurrent(
+  context: StoreContext,
+  observed: FindingsObservation,
+): Promise<void> {
+  const { scope } = observed;
+  if (scope.kind !== "plan" || scope.key.trim() === "") {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-incomplete",
+      `The findings evidence names ${scope.kind} scope ${JSON.stringify(scope.key)}, which this gate cannot re-observe as a plan. Repeat the gate with the plan id it was decided for.`,
+      { scope },
+    );
+  }
+  const current = await observePlanFindings(context, scope.key);
+  const { repoKey, mode, storeId, epoch } = observed.authority;
+  const authority = current.authority;
+  if (
+    authority.repoKey !== repoKey ||
+    authority.mode !== mode ||
+    authority.storeId !== storeId ||
+    authority.epoch !== epoch ||
+    current.revision !== observed.revision
+  ) {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-stale",
+      "The collaboration findings observation changed after the preflight gate; repeat the same gate against current scope so it is judged against a current complete observation.",
+      {
+        plan_id: scope.key,
+        observed: { asOf: observed.asOf, authority: observed.authority, revision: observed.revision },
+        current: { asOf: current.asOf, authority: current.authority, revision: current.revision },
+      },
+    );
   }
 }
 
@@ -401,25 +513,7 @@ export type ProjectBindingReceipt = {
 };
 
 function bindingWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  return openStore(context, "write").then((handle) => {
-    try {
-      handle.db.exec("begin immediate");
-      try {
-        const result = fn(handle.db);
-        handle.db.exec("commit");
-        return result;
-      } catch (error) {
-        try {
-          handle.db.exec("rollback");
-        } catch {
-          /* the original error is the one worth reporting */
-        }
-        throw error;
-      }
-    } finally {
-      handle.close();
-    }
-  });
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
 function bindingRow(db: StoreDb, projectId: string): ProjectBinding | null {
@@ -445,19 +539,34 @@ function bindingRow(db: StoreDb, projectId: string): ProjectBinding | null {
  * `linear.binding-absent` (plan Task 5 read path). Read-only: no projection
  * refresh, no mutation, so a dashboard or import entry can ask it freely.
  */
-export async function readProjectBinding(context: StoreContext, projectId: string): Promise<ProjectBindingRead> {
+export async function readProjectBinding(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectBindingRead & { collaboration: CompleteCollaborationObservation }> {
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
   }
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
-    const binding = bindingRow(handle.db, projectId.trim());
-    if (binding !== null) return { kind: "bound", binding };
+    const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, { kind: "project", key: projectId.trim() });
+    const binding = bindingRow(db, projectId.trim());
+    db.exec("commit");
+    if (binding !== null) return { kind: "bound", binding, collaboration };
     return {
       kind: "absent",
       code: "linear.binding-absent",
       message: `Project ${projectId.trim()} mirrors no external project yet. Bind one with \`mstar project bind --project ${projectId.trim()} --provider linear --remote-project <name-or-id> --operation <id>\`.`,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // note: connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
@@ -471,9 +580,9 @@ export async function readProjectBinding(context: StoreContext, projectId: strin
  * - the identical pair → a no-op success (`changed: false`), never a refusal
  *
  * `workspace`/`team` are the `.mstarc` connection facts supplied by the
- * caller; this module never reads configuration. One `begin immediate` … `commit`
+ * caller; this module never reads configuration. One collaboration write
  * transaction per call (house transaction ownership), with the row mutation
- * and its `store_operations` receipt committing together.
+ * and its `collaboration_operations` receipt committing together.
  */
 export function bindProject(
   context: StoreContext,
@@ -505,7 +614,7 @@ export function bindProject(
     const hash = createHash("sha256")
       .update(JSON.stringify({ domain: "project-binding", projectId: id, provider, workspace, team, remoteProject }))
       .digest("hex");
-    const prior = db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(mutation.operationId.trim()) as
+    const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space = 'standalone' and operation_id = ?").get(mutation.operationId.trim()) as
       | { request_hash: string; result_json: string }
       | undefined;
     if (prior !== undefined) {
@@ -515,8 +624,9 @@ export function bindProject(
       return JSON.parse(prior.result_json) as ProjectBindingReceipt;
     }
 
-    if (readStoreAuthority(db).authorityState !== "active") {
-      throw new BindingError("store.not-active", "Project binding requires an active store.");
+    const state = db.prepare("select authority_state from collaboration_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+    if (state?.authority_state !== "active") {
+      throw new BindingError("store.not-active", "Project binding requires an active collaboration authority.");
     }
     if (db.prepare("select 1 from catalog_entities where kind = 'project' and id = ?").get(id) === undefined) {
       throw new BindingError(
@@ -524,7 +634,8 @@ export function bindProject(
         `Project ${id} is not registered in the catalog. Register it with \`mstar catalog register\` (or reconcile the catalog) before binding it to ${provider}.`,
       );
     }
-    const storeRevision = (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+    const current = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number };
+    const storeRevision = current.revision;
     if (mutation.expectedStoreRevision !== undefined && storeRevision !== mutation.expectedStoreRevision) {
       throw new BindingError("linear.revision-conflict", `Store revision changed since ${mutation.expectedStoreRevision} was observed (now ${storeRevision}).`);
     }
@@ -565,10 +676,11 @@ export function bindProject(
         `Project ${id} already mirrors ${existing.provider} project ${existing.remoteProject} (workspace ${existing.workspace}); re-binding it to ${remoteProject} is refused. Bind the intended remote project to its own store project instead.`,
       );
     }
-    if (changed) db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    const currentStoreRevision = (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+    if (changed) db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    const revisionRow = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number };
+    const currentStoreRevision = revisionRow.revision;
     const receipt: ProjectBindingReceipt = { projectId: id, provider, remoteProject, revision, storeRevision: currentStoreRevision, changed };
-    db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?,?,?,?)").run(
+    db.prepare("insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) values ('standalone', ?, ?, ?, ?)").run(
       mutation.operationId.trim(),
       hash,
       JSON.stringify(receipt),

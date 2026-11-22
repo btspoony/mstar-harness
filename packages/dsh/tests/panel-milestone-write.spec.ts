@@ -17,7 +17,7 @@ import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts
 import { stubGateway } from './gateway-stub.ts'
 import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
 import { createMilestoneWrites, writeOperationIds } from '../src/client/panel/panel-shell.tsx'
-import { openStore, registerCatalogEntity } from '@mstar-harness/engine'
+import { registerCatalogEntity, withCollaborationWrite } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
   mstarMilestoneAddInvocation,
@@ -108,13 +108,11 @@ async function seedProject(harnessDir: string): Promise<void> {
  * holds a non-empty milestone without depending on the assign CHANNEL.
  */
 async function assignDirectly(harnessDir: string, milestoneId: string | null, issueId: string): Promise<void> {
-  const handle = await openStore({ harnessDir }, 'write')
-  try {
-    handle.db.prepare('update issues set milestone_id=? where id=?').run(milestoneId, issueId)
-    handle.db.prepare('update store_meta set revision=revision+1 where id=1').run()
-  } finally {
-    handle.close()
-  }
+  // note: Issues are collaboration facts after the cutover: assign on that lane (the
+  // execution store holds no issue rows).
+  await withCollaborationWrite({ harnessDir }, ({ db }) => {
+    db.prepare('update issues set milestone_id=? where id=?').run(milestoneId, issueId)
+  })
 }
 
 function liveSession(app: BootResult, id: string, cwd: string): void {

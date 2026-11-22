@@ -2,10 +2,14 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import * as storeDb from "./store-db.js";
 import { getCatalog } from "./catalog.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   abortCatalogExecution,
   listPendingCatalogRegistrations,
@@ -19,6 +23,13 @@ import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
+/**
+ * note: The collaboration lane is user-level, so every fixture pins `homedir` to a
+ * temporary home: a real spy on the live module binding, restored after each
+ * case. A registration publishes into this repository's ACTIVE lane.
+ */
+const HOME = mkdtempSync(join(tmpdir(), "catalog-registration-home-"));
+let homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 
 describe("ACTIVE catalog execution registration and legacy recovery", () => {
   let root: string | undefined;
@@ -26,15 +37,37 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     setArtifactStore(undefined);
     if (root !== undefined) rmSync(root, { recursive: true, force: true });
     root = undefined;
+    homeSpy.mockRestore();
+    homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
   });
 
   async function fixture(name: string): Promise<{ harnessDir: string; context: StoreContext; execution: ExecutionContext }> {
     root = mkdtempSync(join(tmpdir(), `catalog-registration-${name}-`));
     const harnessDir = join(root, ".mstar");
     mkdirSync(harnessDir, { recursive: true });
+    spawnSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=catalog-registration-${name}\n`);
     const context: StoreContext = { harnessDir };
     const initialized = await initializeStore(context);
     initialized.close();
+    const location = resolveCollaborationLocation(context);
+    await initializeCollaborationStore(location);
+    const lane = new DatabaseSync(location.dbPath);
+    let storeId = "";
+    let epoch = 0;
+    try {
+      lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+        new Date().toISOString(),
+      );
+      const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+        | { store_id?: unknown; authority_epoch?: unknown }
+        | undefined;
+      if (typeof row?.store_id === "string") storeId = row.store_id;
+      if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+    } finally {
+      lane.close();
+    }
+    writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
     setArtifactStore(createFsStore(harnessDir));
     const workflowId = `wf-${name}`;
     return {

@@ -21,6 +21,7 @@ import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
   findingsCleanupGate,
+  probeCollaborationAuthority,
   readJson,
   resolveProjectDir,
   resolveWorkflowDir,
@@ -248,7 +249,7 @@ export async function validateStatusValue(doc: unknown, kind: HarnessDocKind, ha
 async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: string): Promise<ValidationResult[]> {
   const record = asRecord(doc)
   if (record === undefined) return []
-  const violations: ValidationResult[] = []
+  const plans: Array<{ planId: string; mode: 'zero-residual' | 'allow-residual' }> = []
   for (const row of Array.isArray(record.plans) ? record.plans : []) {
     const planRow = asRecord(row)
     const metadata = planRow === undefined ? undefined : asRecord(planRow.metadata)
@@ -256,8 +257,33 @@ async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: strin
     if (mode !== 'zero-residual' && mode !== 'allow-residual') continue
     const planId = typeof planRow?.id === 'string' ? planRow.id : typeof planRow?.plan_id === 'string' ? planRow.plan_id : undefined
     if (planId === undefined) continue
+    plans.push({ planId, mode })
+  }
+  if (plans.length === 0) return []
+  // invariant: ONE lane probe decides whether any findings gate can be evaluated. This is
+  // the same verdict the write-authority gate and the other hosts report, so a
+  // missing, staged or unreadable collaboration store names ONE cause instead
+  // of a per-row restatement — and it is never "no findings".
+  const authority = await probeCollaborationAuthority({ harnessDir })
+  if (authority.kind !== 'active') {
+    return [
+      {
+        ok: false,
+        severity: 'high',
+        code: CLEANUP_AUTHORITY_UNAVAILABLE_CODE,
+        message:
+          `the findings cleanup gate for ${plans.map((row) => row.planId).join(', ')} cannot be evaluated: ` +
+          `[${authority.code}] ${authority.message}`,
+        fix:
+          'restore the collaboration authority (mstar store init, or the reviewed collaboration apply/activate sequence) — ' +
+          'an unavailable findings authority is never treated as no findings',
+      },
+    ]
+  }
+  const violations: ValidationResult[] = []
+  for (const row of plans) {
     try {
-      const gate = await findingsCleanupGate({ harnessDir }, planId, { mode })
+      const gate = await findingsCleanupGate({ harnessDir }, row.planId, { mode: row.mode })
       violations.push(...gate.violations)
     } catch (error) {
       const code = (error as { code?: unknown } | null | undefined)?.code
@@ -266,9 +292,11 @@ async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: strin
         severity: 'high',
         code: CLEANUP_AUTHORITY_UNAVAILABLE_CODE,
         message:
-          `the findings cleanup gate for plan ${planId} cannot be evaluated: ` +
+          `the findings cleanup gate for plan ${row.planId} cannot be evaluated: ` +
           `${typeof code === 'string' && code !== '' ? `[${code}] ` : ''}${(error as Error).message}`,
-        fix: 'restore the issue store (mstar store init|upgrade|migrate) — an unreadable findings authority is never treated as no findings',
+        fix:
+          'restore the collaboration authority (mstar store init, or the reviewed collaboration apply/activate sequence) — ' +
+          'an unavailable findings authority is never treated as no findings',
       })
     }
   }

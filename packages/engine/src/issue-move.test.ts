@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueError, moveIssue, type CaptureInput, type IssueReceipt } from "./issue.js";
+import { registerCatalogEntity } from "./catalog.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
+import { historicalStore } from "./store-migration-fixtures.js";
 import { initializeStore, MIGRATIONS, openStore, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-move-"));
@@ -38,7 +43,12 @@ function capture(projectId: string, occurrenceKey: string, keys = triple): Captu
   };
 }
 function revision(): number {
-  return (db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    return (lane.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+  } finally {
+    lane.close();
+  }
 }
 function issueRow(id: string): { project_id: string; identity_key: string; milestone_id: string | null; revision: number } {
   return db.prepare("select project_id, identity_key, milestone_id, revision from issues where id = ?").get(id) as {
@@ -49,18 +59,26 @@ function issueRow(id: string): { project_id: string; identity_key: string; miles
   };
 }
 function operation(operationId: string): unknown {
-  return db.prepare("select 1 from store_operations where operation_id = ?").get(operationId);
+  return db.prepare("select 1 from collaboration_operations where operation_id = ?").get(operationId);
 }
 
 beforeAll(async () => {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   mkdirSync(context.harnessDir, { recursive: true });
-  db = (await initializeStore(context)).db;
+  (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
+  db = new DatabaseSync(resolveCollaborationLocation(context).dbPath) as unknown as StoreDb;
   for (const id of [projectA, projectB]) {
-    db.prepare(
-      "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')",
-    ).run(id, id, `${id}/roadmap.md`);
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id, title: id, rootKind: "projects", relativePath: `${id}/roadmap.md` },
+      { operationId: `register-${id}`, actor: "issue-move.test" },
+    );
   }
   movedIssue = await captureIssue(context, capture(projectA, "occ-moved"), { actor: "project-manager", operationId: "capture-moved" });
   const milestone = await addMilestone(
@@ -100,7 +118,7 @@ describe("issue project move", () => {
     });
     expect(revision()).toBe(before + 1);
     const storedReceipt = db
-      .prepare("select result_json from store_operations where operation_id = ?")
+      .prepare("select result_json from collaboration_operations where operation_id = ?")
       .get("move-succeeds") as { result_json: string };
     expect(JSON.parse(storedReceipt.result_json)).toMatchObject({
       issueId: movedIssue.issueId,
@@ -290,21 +308,11 @@ describe("issue project move", () => {
   test("a schema-12 store gains the empty project-move ledger on upgrade and keeps its issues", async () => {
     const legacy: StoreContext = { harnessDir: join(root, "v12-harness") };
     mkdirSync(legacy.harnessDir, { recursive: true });
-    const legacyHandle = await initializeStore(legacy);
-    legacyHandle.db.prepare(
+    const legacyHandle = historicalStore(legacy.harnessDir, 12);
+    legacyHandle.prepare(
       "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
         "values('I-900001', 'legacy-project', 'Legacy finding', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'legacy-identity')",
     ).run();
-    legacyHandle.db.exec("drop table issue_project_moves");
-    legacyHandle.db.exec("alter table projection_compasses drop column plans_json");
-    // Rewind to a schema-12 store: drop every object introduced by migration 13
-    // and later, then remove those rows from schema_version. Keeping this list in
-    // step with the migration tail is the cost of a hand-built legacy fixture.
-    legacyHandle.db.exec("drop table if exists issue_sync_state");
-    legacyHandle.db.exec("drop table if exists sync_cursor");
-    legacyHandle.db.exec("drop table if exists project_bindings");
-    legacyHandle.db.exec("drop table if exists sync_runs");
-    legacyHandle.db.prepare("delete from schema_version where version >= 13").run();
     legacyHandle.close();
 
     expect(await upgradeStore(legacy)).toEqual({ schemaVersion: MIGRATIONS.length });
@@ -349,7 +357,7 @@ describe("issue project move", () => {
     expect(receipt.revision).toBe(issue.revision + 1);
     expect(receipt.clearedMilestoneId).toBe(dropped.milestoneId);
     const stored = db
-      .prepare("select result_json from store_operations where operation_id = ?")
+      .prepare("select result_json from collaboration_operations where operation_id = ?")
       .get("move-dropped-milestone") as { result_json: string };
     expect(JSON.parse(stored.result_json)).toMatchObject({
       fromProject: projectA,

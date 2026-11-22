@@ -10,8 +10,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
-import { receiptStable, runCli } from "./harness";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
+import { receiptStable, runCli, writeFixtureRepoId } from "./harness";
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -22,10 +22,12 @@ function identity(sessionId = SESSION, workflowId = WF): ExecutionIdentity { ret
 async function fixture(): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "plan-coordination-"))); roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar"); mkdirSync(join(harness, "plans"), { recursive: true });
   write(join(harness, "plans", `${PLAN}.md`), `# Plan coordination\n\n**plan_id:** ${PLAN}\n`);
   const context = { harnessDir: harness }; const store = await initializeStore(context); store.close();
+  await ensureCollaborationAuthority(context);
   const worktree = join(root, "feature"); execFileSync("git", ["worktree", "add", "-q", "-b", "feature/plan-coordination", worktree], { cwd: root });
   return { root, harness, context, worktree };
 }

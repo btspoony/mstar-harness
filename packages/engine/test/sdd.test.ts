@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { registerCatalogEntity } from "../src/catalog.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "../src/execution-store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
@@ -855,6 +856,10 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   writeFileSync(join(primary, "src", "module.ts"), "export const primary = true;\n");
   git(["add", "-A"], primary);
   git(["commit", "-q", "-m", "primary base"], primary);
+  writeFileSync(
+    join(primary, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${primary.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
 
   const control = join(root, "control");
   git(["worktree", "add", "-q", "-b", "codex/iter-integration", control], primary);
@@ -917,6 +922,7 @@ async function ensureAuthority(f: ExecutionFixture): Promise<StoreContext> {
   if (!existsSync(join(f.harnessDir, "store.db"))) {
     (await initializeStore(context)).close();
   }
+  await ensureCollaborationAuthority(context);
   return context;
 }
 

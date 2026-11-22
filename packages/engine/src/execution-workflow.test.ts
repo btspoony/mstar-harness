@@ -57,7 +57,7 @@ import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.j
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
 import { prepareAmendmentComponent } from "../src/coordination.js";
-import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, ensureCollaborationAuthority, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import { deliveryBranchOf, deliveryEvidenceViolations, storedDeliveryEvidence } from "../src/workflow.js";
@@ -257,9 +257,14 @@ async function workflowFixture(
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
   const harnessRoot = join(repoRoot, ".mstar");
   mkdirSync(harnessRoot, { recursive: true });
+  writeFileSync(
+    join(repoRoot, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${repoRoot.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   const initialized = await readExecutionState(context);
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);

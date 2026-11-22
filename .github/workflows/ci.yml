@@ -1117,8 +1117,12 @@ jobs:
             # while the other keeps the total above a shared threshold. The values
             # are measured, and recorded beside their command, in comments.md
             # § Gate steps and range; lower one only for a genuine cleanup.
+            # 2026-11-22: the changed-lines comment classification (commit
+            # be885a003) moved newly-shaped prose out of this corpus and measured
+            # 12,826 under packages/ with the command below, so that floor follows
+            # the cleanup to 12,800; scripts/ stays 800 (measured 818).
             case "$root" in
-              packages) floor=13000 ;;
+              packages) floor=12800 ;;
               scripts) floor=800 ;;
             esac
             echo "unclassified comment corpus ($root): ${count:-0} (floor $floor)"

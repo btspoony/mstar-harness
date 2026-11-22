@@ -18,6 +18,7 @@ import {
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
 
 const inputSchema = z.object({
   project: z.string().optional(), file: z.string().optional(), review: z.string().optional(), apply: z.boolean().optional(), operation: z.string().optional(),
@@ -122,18 +123,19 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } , recovery: id === "roadmap.import"
+  const facts = engineErrorFacts(error);
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id, ...facts.details } , recovery: facts.recovery ?? (id === "roadmap.import"
         ? "Align the source document with the saved review and observed project and roadmap revisions. Run mstar roadmap import --operation <operation-id>."
         : id === "roadmap.replace"
           ? "The current project and roadmap revisions and complete intended roadmap content are required. Run mstar roadmap replace --project <project> --file <roadmap-file> --operation <operation-id>."
           : id === "roadmap.show"
             ? "Verify the registered project id and resolve the reported store-read cause. Run mstar roadmap show --project <project>."
-            : "Verify the project id names an existing registered project. Run mstar roadmap export --project <project>."});
+            : "Verify the project id names an existing registered project. Run mstar roadmap export --project <project>.")});
 }
 function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
 }
-function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
+function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number | null): string {
   const lines = [
     "---",
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
@@ -144,7 +146,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     "",
     "# Roadmap",
     "",
-    `Store revision: ${storeRevision}`,
+    `Store revision: ${storeRevision ?? "unobserved"}`,
     "",
     "## Direction",
     "",
@@ -169,7 +171,13 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
       // `content` is the same read's validated parse of `roadmap.contentMarkdown`,
       // a projection of the stored record rather than a second authority (A02).
-      return success(id, { projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content: read.roadmap === null ? null : read.content });
+      return success(id, {
+        projectId: read.projectId,
+        projectRevision: read.projectRevision,
+        roadmap: read.roadmap,
+        content: read.roadmap === null ? null : read.content,
+        collaboration: read.collaboration,
+      });
     }
     if (verb === "import") {
       if (input.apply) {
@@ -216,12 +224,19 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       const projectId = usage(input.project, "--project");
       const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId }));
       const roadmap = envelope.data;
-      if (roadmap === null) throw new RoadmapError("roadmap.project-not-found", `Catalog project ${projectId} does not exist.`);
+      if (roadmap === null) {
+        // why: The observation this read established still describes the scope it
+        // could not answer: a refusal reports it instead of a fabricated record.
+        throw Object.assign(
+          new RoadmapError("roadmap.project-not-found", `Catalog project ${projectId} does not exist.`),
+          { details: { collaboration: envelope.collaboration } },
+        );
+      }
       const data = format === "markdown"
         ? exportMarkdown(roadmap, envelope.storeRevision)
         : {
           version: 2, projectId: roadmap.projectId, storeRevision: envelope.storeRevision, catalogRevision: envelope.catalogRevision,
-          projection: envelope.projection, contentMarkdown: roadmap.content?.contentMarkdown ?? null, direction: roadmap.content?.direction ?? null,
+          projection: envelope.projection, collaboration: envelope.collaboration, contentMarkdown: roadmap.content?.contentMarkdown ?? null, direction: roadmap.content?.direction ?? null,
           milestones: roadmap.milestones,
         };
       return success(id, data);

@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
 import { readExecutionAuthority, readExecutionCleanupState } from "./execution-read.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
@@ -15,9 +17,16 @@ afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 const TS = "2026-10-04T00:00:00.000Z";
 
 async function fixture(label: string): Promise<StoreContext> {
-  const context: StoreContext = { harnessDir: mkdtempSync(join(ROOT, `${label}-`)) };
+  const harnessDir = mkdtempSync(join(ROOT, `${label}-`));
+  execFileSync("git", ["init", "-q"], { cwd: harnessDir, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(harnessDir, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${harnessDir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
+  const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   const initialized = await readExecutionState(context);
   const workflowId = `wf-${label}`;
   const planId = `plan-${label}`;

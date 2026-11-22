@@ -24,11 +24,10 @@ export type WriteGateEngineApi = Pick<
  | "harnessDocKindOfTarget"
  | "isStoreAuthorityTarget"
  | "landedPathOf"
- | "queryIssueFlow"
+ | "probeCollaborationAuthority"
  | "resolveExecutionReadRoute"
  | "resolveRepoEnforcement"
  | "validateStatusWriteDoc"
- | "withStoreRead"
 >;
 
 type WriteGateServices = {
@@ -65,10 +64,8 @@ function malformedPath(field: "filePath" | "path"): Tool.Error {
  );
 }
 
-function classifyDocument(api: WriteGateEngineApi, inputPath: string, landedPath: string): GatedDocument | null {
- return api.harnessDocKindOfTarget(inputPath)
- ?? api.caseFoldedDocKind(inputPath)
- ?? (landedPath === inputPath ? null : api.harnessDocKindOfTarget(landedPath) ?? api.caseFoldedDocKind(landedPath));
+function classifyOne(api: WriteGateEngineApi, path: string): GatedDocument | null {
+ return api.harnessDocKindOfTarget(path) ?? api.caseFoldedDocKind(path);
 }
 
 function authorityError(code: string, message: string): AuthorityRefusal {
@@ -81,13 +78,13 @@ function authorityError(code: string, message: string): AuthorityRefusal {
 async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocument): Promise<AuthorityRefusal | null> {
  if (target.kind === "status" || target.kind === "snapshot") {
  try {
- // ACTIVE-only: the engine's route decision retires the file execution
+ // invariant: ACTIVE-only: the engine's route decision retires the file execution
  // route entirely — status/snapshot writes are vetoed while the
  // authority is ACTIVE. A pre-activation harness (`store.not-initialized`
  // / `store.not-active`) is NO verdict: the compass-governed document
- // lint below decides, mirroring the register route's legacy
- // disposition. Any other refusal leaves the authority UNKNOWN and
- // fails closed; there is no file-route fallback.
+ // lint below decides (the register route has no such pre-activation
+ // permission any more). Any other refusal leaves the authority UNKNOWN
+ // and fails closed; there is no file-route fallback.
  await api.resolveExecutionReadRoute({ harnessDir: target.harnessDir });
  return authorityError("execution.direct-write-refused", "The ACTIVE execution authority retires this file as a persistence route");
  } catch (error) {
@@ -98,12 +95,13 @@ async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocumen
  }
 
  try {
- await api.withStoreRead({ harnessDir: target.harnessDir }, api.queryIssueFlow());
- return authorityError("project.register.retired", "The ACTIVE issue/catalog authority retires project residual registers");
+ const probe = await api.probeCollaborationAuthority({ harnessDir: target.harnessDir });
+ if (probe.kind === "active") {
+ return authorityError("project.register.retired", "The ACTIVE collaboration authority retires project residual registers");
+ }
+ return authorityError("store.authority-unavailable", `The collaboration authority is ${probe.kind} (${probe.code}: ${probe.message})`);
  } catch (error) {
- const code = errorCode(error);
- if (code !== undefined && PRE_ACTIVATION_CODES.has(code)) return null;
- return authorityError("store.authority-unavailable", `The issue/catalog authority could not be read (${code ?? "unknown"}: ${error instanceof Error ? error.message : String(error)})`);
+ return authorityError("store.authority-unavailable", `The collaboration authority could not be read (${errorCode(error) ?? "unknown"}: ${error instanceof Error ? error.message : String(error)})`);
  }
 }
 
@@ -201,11 +199,32 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
  );
  }
 
- const target = classifyDocument(api, requested, landed);
- if (target === null) return;
+ const requestedDoc = classifyOne(api, requested);
+ const landedDoc = landed === requested ? null : classifyOne(api, landed);
+ // invariant: The bytes a write lands on carry their own authority: a requested
+ // execution document that resolves to a register must face the register
+ // gate, and a requested register that resolves elsewhere must still face
+ // its own. Both distinct classifications are decided (register first), so
+ // neither direction can mask the other's authority.
+ const documents: GatedDocument[] = [];
+ for (const doc of [landedDoc, requestedDoc]) {
+ if (doc === null) continue;
+ if (documents.some((seen) => seen.harnessDir === doc.harnessDir && seen.kind === doc.kind)) continue;
+ documents.push(doc);
+ }
+ if (documents.length === 0) return;
 
- const authorityRefusal = await authorityRefusalFor(api, target);
+ const ordered = [
+ ...documents.filter((doc) => doc.kind === "register"),
+ ...documents.filter((doc) => doc.kind !== "register"),
+ ];
+ for (const doc of ordered) {
+ const authorityRefusal = await authorityRefusalFor(api, doc);
  if (authorityRefusal !== null) throw refusal(authorityRefusal.code, authorityRefusal.message);
+ }
+
+ const target = requestedDoc ?? landedDoc;
+ if (target === null) return;
  await validateDocument(api, event, input, requested, target, logger);
 }
 

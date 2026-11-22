@@ -34,6 +34,7 @@ import {
 } from "./projects-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -68,6 +69,17 @@ const listEnvelope = (
   generation: number | null = 7,
 ) => ({ data: { items, total } as ProjectListDTO, projection: { ...projection, generation } });
 
+/** note: An explicit partial observation, as a source that could not prove its scope reports. */
+const partialObservation = {
+  scope: { kind: "query" as const, key: "projects" },
+  completeness: "partial" as const,
+  asOf: "2026-11-21T00:00:00.000Z",
+  authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+  revision: 3,
+  catalogRevision: 1,
+  code: "collaboration.observation-incomplete",
+};
+
 const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
   projectId: "engine",
   catalog: catalogEntry() as unknown as RoadmapDTO["catalog"],
@@ -96,6 +108,25 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
 };
 
 describe("the projects list", () => {
+  test("a required collaboration gap is a failed read, not an empty project list", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([project()]),
+          storeRevision: 1,
+          catalogRevision: 1,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readProjects(gapped);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(projectsOutcome(result).kind).toBe("failed");
+  });
+
   test("outcome 1 — a healthy read lists the projects with their open counts", () => {
     const html = renderList([project(), project({ id: "_default", title: "Default" }, 0)]);
     expect(html).toContain("engine");
@@ -179,6 +210,22 @@ describe("the roadmap read", () => {
     expect(result.identity.title).toBe("Default");
     expect(result.identity.lifecycle).toBe("staging");
     expect(result.identity.path).toBe("projects:engine");
+  });
+
+  test("a required collaboration gap is a failure, never an absent roadmap", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: roadmap(),
+          storeRevision: 1,
+          catalogRevision: 1,
+          projection,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    expect(await readRoadmap(gapped, "engine")).toMatchObject({ status: "error" });
   });
 
   test("a roadmap with no content at all is empty, a different arm", () => {

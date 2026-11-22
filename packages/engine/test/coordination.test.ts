@@ -27,6 +27,7 @@ import {
 } from "../src/coordination.js";
 import { commitExecutionRegistration } from "../src/execution-registration.js";
 import { readExecutionAuthority } from "../src/execution-read.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, openStore } from "../src/store-db.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import {
@@ -74,6 +75,7 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
     rmSync(join(dbRoot.harness, "workflows"), { recursive: true });
     const store = await initializeStore({ harnessDir: dbRoot.harness });
     store.close();
+    await ensureCollaborationAuthority({ harnessDir: dbRoot.harness });
     // `store init` activates execution authority together with the schema, so
     // the root token is read (not re-initialized) before the registration CAS.
     const initialized = await readExecutionAuthority({ harnessDir: dbRoot.harness });

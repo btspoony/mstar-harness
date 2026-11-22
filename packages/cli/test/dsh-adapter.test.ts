@@ -794,6 +794,9 @@ describe("dshAdapter.runInstallDoctor", () => {
 // enough to the CI runner's cost that a single slow start fails the suite.
 // The budget is set per test: bun's `describe` takes no options object.
 describe("CLI init --target dsh (fake dsh on PATH)", () => {
+  /** why: `--no-global-cli` is the CLI's no-network opt-out: without it the version
+   * decision follows the published latest instead of this checkout's manifest. */
+  const INIT_ARGS = ["init", "--target", "dsh", "--no-global-cli"];
   const fakePathEnv = (fake: FakeDsh): Record<string, string> => ({
     PATH: `${fake.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
     HOME: fake.homeDir,
@@ -803,7 +806,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
   test("wires --target dsh through the adapter (two adds, exit 0)", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
-      const result = runCli(["init", "--target", "dsh"], { env: fakePathEnv(fake) });
+      const result = runCli([...INIT_ARGS], { env: fakePathEnv(fake) });
       expect(result.stdout).toContain(`installed: ${MSTAR_SPEC}`);
       expect(result.stdout).toContain(`installed: ${FALLBACKS_SPEC}`);
       expect(addLines(fake)).toEqual([
@@ -818,7 +821,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
   test("--no-fallbacks maps to a single mstar add", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY);
     try {
-      const result = runCli(["init", "--target", "dsh", "--no-fallbacks"], { env: fakePathEnv(fake) });
+      const result = runCli([...INIT_ARGS, "--no-fallbacks"], { env: fakePathEnv(fake) });
       expect(result.stdout).toContain(`skipped-by-flag: ${FALLBACKS_SPEC}`);
       expect(addLines(fake)).toEqual([`plugin --profile web add ${MSTAR_SPEC}`]);
     } finally {
@@ -829,7 +832,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
   test("incompatibility refusal surfaces dsh's recovery line and exits 1", { timeout: 30_000 }, () => {
     const fake = makeFakeDsh(DUMP_EMPTY, { addExit: 1, addText: DSH_INCOMPATIBLE_OUTPUT });
     try {
-      const result = runCli(["init", "--target", "dsh"], { env: fakePathEnv(fake) });
+      const result = runCli([...INIT_ARGS], { env: fakePathEnv(fake) });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(`Setup failed: Cannot install ${MSTAR_SPEC} via dsh`);
       expect(result.stderr).toContain(FAKE_DSH_RUNTIME_TOKEN);
@@ -847,7 +850,7 @@ describe("CLI init --target dsh (fake dsh on PATH)", () => {
     if (!gitPath) throw new Error("git is required to run the CLI fixture");
     symlinkSync(gitPath, join(emptyDir, "git"));
     try {
-      const result = runCli(["init", "--target", "dsh"], { env: { PATH: emptyDir } });
+      const result = runCli([...INIT_ARGS], { env: { PATH: emptyDir } });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("Setup failed: dsh CLI not found on PATH");
     } finally {

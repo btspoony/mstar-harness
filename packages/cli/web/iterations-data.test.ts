@@ -25,6 +25,7 @@ import {
 } from "./iterations-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -70,7 +71,20 @@ const listEnvelope = (
   storeRevision: 1224,
   catalogRevision: 9,
   projection: { ...projection, generation },
+  collaboration: null,
+  execution: null,
 });
+
+/** note: An explicit partial observation, as a source that could not prove its scope reports. */
+const partialObservation = {
+  scope: { kind: "query" as const, key: "iterations" },
+  completeness: "partial" as const,
+  asOf: "2026-11-21T00:00:00.000Z",
+  authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+  revision: 3,
+  catalogRevision: 1,
+  code: "collaboration.observation-incomplete",
+};
 
 const renderList = (
   items: IterationDTO[],
@@ -91,6 +105,28 @@ describe("the list read", () => {
     expect(iterationsPath("engine")).toBe("/api/iterations?limit=200&offset=0&project=engine");
     expect(iterationsPath("engine", 200)).toBe("/api/iterations?limit=200&offset=200&project=engine");
     expect(iterationDetailPath("iter/1")).toBe("/api/iterations/iter%2F1");
+  });
+
+  test("a required collaboration gap is a failed read, not an iteration list", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([iteration()], 1),
+          collaboration: {
+            scope: { kind: "query", key: "iterations" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readIterations(gapped, null);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.not-initialized");
+    expect(iterationsOutcome(result).kind).toBe("failed");
   });
 
   test("outcome 1 — a healthy read lists the iterations", () => {
@@ -215,6 +251,26 @@ describe("the detail read", () => {
       })) as unknown as typeof fetch;
     const result = await readIterationDetail(refused, "iter-1");
     expect(result).toEqual({ status: "error", message: "the store is staged" });
+  });
+
+  test("a required collaboration gap is a failure, never an absence", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: iteration(),
+          storeRevision: 1,
+          catalogRevision: 1,
+          projection,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readIterationDetail(gapped, "iter-1");
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(iterationDetailOutcome(result).kind).toBe("failed");
   });
 
   test("a body that is not an envelope is a failure", async () => {

@@ -38,15 +38,16 @@
  *   projection-derived views while the authority is active and keeps serving
  *   the issue views.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionState,
@@ -54,13 +55,36 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { readDashboardView } from "../../commands/src/dashboard/store-read";
-import { cliEnv, runCli as harnessRunCli, type RunResult } from "./harness";
+import { cliEnv, runCli as harnessRunCli, writeFixtureRepoId, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-execution-read";
 const PLAN_ID = "20260920-execution-read-plan";
 const TS = "2026-09-21T00:00:00.000Z";
 
 const roots: string[] = [];
+
+/** why: The collaboration binding registry lives under `<homedir>/.mstar/repos`,
+ * so the fixture's in-process binding and the spawned CLI must agree on HOME.
+ * A sibling suite member that leaves ambient HOME state behind can otherwise
+ * split them: the CLI then cannot see the binding, ownership is unproven, and
+ * the corrupt-execution probe escapes as `collaboration.unreadable` instead of
+ * the store's own `store.corrupt`. Pin BOTH spellings to one private root for
+ * this file — `process.env.HOME` (what the spawned CLI inherits) and
+ * `os.homedir()` (what in-process engine calls resolve) — and restore both.
+ */
+const FILE_HOME = mkdtempSync(join(nodeOs.tmpdir(), "execution-read-home-"));
+const AMBIENT_HOME = process.env.HOME;
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  process.env.HOME = FILE_HOME;
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FILE_HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  if (AMBIENT_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = AMBIENT_HOME;
+  rmSync(FILE_HOME, { recursive: true, force: true });
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -75,9 +99,10 @@ interface Fixture {
 
 /** A temp workspace shaped like a real one: a Git main worktree with `.mstar`. */
 function workspace(label: string): Fixture {
-  const root = mkdtempSync(join(tmpdir(), `${label}-`));
+  const root = mkdtempSync(join(nodeOs.tmpdir(), `${label}-`));
   roots.push(root);
   execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFixtureRepoId(root);
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   return { root, harnessDir, context: { harnessDir } };
@@ -90,11 +115,14 @@ function writeJson(path: string, value: unknown): void {
 
 /** why: Run the real CLI entry from the fixture root. The shared spawn env pins out
  * the ambient harness and identity vars; per-case extras go on top. The root
- * itself comes from the fixture checkout — the env pin is retired. */
+ * itself comes from the fixture checkout — the env pin is retired. `HOME` is
+ * pinned to this file's private root explicitly, so the spawned CLI reads the
+ * same binding registry the fixture's in-process writes landed in, even if a
+ * sibling file's ambient HOME is leaking through `process.env`. */
 function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, string> = {}): RunResult {
   return harnessRunCli(args, {
     cwd: fixture.root,
-    env: { ...cliEnv(), ...extraEnv },
+    env: { ...cliEnv(), HOME: FILE_HOME, ...extraEnv },
   });
 }
 
@@ -119,6 +147,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const fixture = workspace(label);
   const handle = await initializeStore(fixture.context);
   handle.close();
+  await ensureCollaborationAuthority(fixture.context);
   const initialized = await readExecutionState(fixture.context);
   await registerCatalogEntity(
     fixture.context,
@@ -483,10 +512,11 @@ describe("execution-cross-domain", () => {
     expect(
       projected !== null && typeof projected === "object" && "code" in projected ? projected.code : undefined,
     ).toBe("store.corrupt");
-    const issues = await readDashboardView({ context: fixture.context, view: "issues" }).catch((error: unknown) => error);
-    expect(issues !== null && typeof issues === "object" && "code" in issues ? issues.code : undefined).toBe(
-      "store.corrupt",
-    );
+    // invariant: The split boundary: the issues view's authority is the repository lane,
+    // which is healthy — a corrupt execution store must not fail it, and the
+    // empty answer is the lane's own genuine zero.
+    const issues = await readDashboardView({ context: fixture.context, view: "issues" });
+    expect(issues.data).toBeDefined();
 
     // The retired bytes are untouched — byte for byte: never promoted, never
     // rewritten. The snapshot, the root register and the session envelope are

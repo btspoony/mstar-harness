@@ -69,6 +69,7 @@ export type {
 } from "./path.js";
 export type { LinearBinding, LinearBindingRefusal, LinearFacetMapping, MstarcConfig, MstarcStringKey, RepoLinearBinding } from "./mstarc.js";
 export {
+  COLLABORATION_SECTION,
   LINEAR_MAPPING_SECTION,
   LINEAR_SECTION,
   MSTARC_FILE,
@@ -86,6 +87,41 @@ export {
   readRepoLinearBinding,
   resolveRepoRoot,
 } from "./mstarc.js";
+export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
+export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+// note: The collaboration lane's own store: independent staged schema, create-only
+// publication and active-only handles. No execution table or method.
+export type {
+  CollaborationAdoption,
+  CollaborationAuthority,
+  CollaborationAuthorityProbe,
+  CollaborationBinding,
+  CollaborationStamp,
+  CollaborationStoreHandle,
+} from "./collaboration-store.js";
+export {
+  adoptCollaborationBinding,
+  initializeCollaborationStore,
+  openCollaborationStore,
+  probeCollaborationAuthority,
+  readCollaborationAuthority,
+  readCollaborationBinding,
+  withCollaborationWrite,
+  writeCollaborationBinding,
+} from "./collaboration-store.js";
+// note: The one-way authority cutover: reviewed manifest, verified staged copy,
+// activation claim, durable source fence, guarded publication and replay.
+export type {
+  CutoverActivationOptions,
+  CutoverManifest,
+  CutoverReceipt,
+  CutoverSource,
+} from "./collaboration-cutover.js";
+export {
+  activateCollaborationCutover,
+  applyCollaborationCutover,
+  planCollaborationCutover,
+} from "./collaboration-cutover.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
@@ -304,6 +340,9 @@ export {
 } from "./iteration.js";
 export type {
   BindingErrorCode,
+  CollaborationObservation,
+  CollaborationScope,
+  FindingsObservation,
   ProjectBinding,
   ProjectBindingMutation,
   ProjectBindingRead,
@@ -325,6 +364,7 @@ export {
   bindProject,
   findingsCleanupGate,
   listProjectReferenceFiles,
+  observePlanFindings,
   readProjectBinding,
   validateProjectRegister,
   validateRoadmap,
@@ -682,6 +722,15 @@ export {
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
+// note: The cross-domain composite contract: the admitted intent, its local effect key
+// and the collaboration receipt. The frame itself stays internal to the engine;
+// only the admitted owning verb may run one.
+export type {
+  CollaborationEffectReceipt,
+  CompositeIntent,
+  CompositeKey,
+  CompositeKind,
+} from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
@@ -746,8 +795,9 @@ export {
 // transport and no credential, so no provider interface, page envelope or
 // failure list lives here — a listing is the caller's own array.
 export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
-// Sync ledger (migration 15): the per-item state machine and its read path.
-// Every mutation owns its transaction; a caller composes the verbs sequentially.
+// invariant: Sync ledger: the per-item state machine and its read path on the collaboration
+// authority. The transport owns the collaboration write transaction
+// (`withCollaborationWrite`); the verbs compose inside it and never begin one.
 export type {
   AcquireRunInput,
   CursorInput,
@@ -783,6 +833,7 @@ export {
   releaseRun,
   replanItem,
   resetCursor,
+  withSyncWrite,
   writeCursor,
 } from "./issue-sync.js";
 // why: One-way push (M1): candidates, the payload plan, the ledger protocol, the
@@ -990,6 +1041,7 @@ export type {
   DashboardFilters,
   DashboardView,
   DashboardViewData,
+  ExecutionObservation,
   ExecutionReadRoute,
   ExecutionSourceRead,
   IssueFlow,
@@ -1001,6 +1053,7 @@ export type {
   IterationPlanDTO,
   LeaseDTO,
   MilestoneDTO,
+  OpenIssueRollup,
   OverviewDTO,
   OverviewMember,
   ProjectListDTO,
@@ -1011,6 +1064,7 @@ export type {
   RoadmapDTO,
   StoreReadErrorCode,
   StoreReadQuery,
+  StoreReadSources,
   WorkflowDTO,
   WorkflowListDTO,
   WorkflowPlanDTO,
@@ -1019,6 +1073,7 @@ export {
   StoreReadError,
   queryDashboard,
   queryIssueFlow,
+  queryOpenIssueRollup,
   readExecutionSource,
   resolveCurrentAuthority,
   resolveExecutionReadRoute,
@@ -1083,7 +1138,9 @@ export type {
   AttestationDisposition,
   BackupExecutionMeta,
   BackupReceipt,
+  CollaborationBackupImage,
   InstalledConsumerAttestation,
+  RepositoryBackupReceipt,
   RetiredRegister,
   RetiredSection,
   RetirementReceipt,
@@ -1102,8 +1159,11 @@ export {
   appliedReceiptFor,
   assertAuthorityCurrent,
   assertBackupDescribesStore,
+  backupRepositoryStores,
   backupStore,
   currentAuthorityHandle,
+  ensureCollaborationAuthority,
+  restoreCollaborationBackup,
   retireStoreSources,
   StoreActivationError,
   validateActivationAttestation,

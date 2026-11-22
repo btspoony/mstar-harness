@@ -4,11 +4,12 @@ import {
   decodeExecutionSessionRef,
   executionContextFor,
   findingsCleanupGate,
-  listIssues,
   mutateExecutionWorkflow,
+  queryOpenIssueRollup,
   readExecutionAuthority,
   resolveCurrentAuthority,
   resolveProcessHarnessDir,
+  withStoreRead,
   type ExecutionToken,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
@@ -369,10 +370,26 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         try {
           const harnessDir = executionHarness(context, parsed.data.harness) ?? context.cwd;
           const gate = await findingsCleanupGate({ harnessDir }, parsed.data.planId, parsed.data.mode ? { mode: parsed.data.mode } : undefined);
-          return gate.ok ? ok("status.findings-cleanup", { planId: parsed.data.planId, violations: [] }) : refused("status.findings-cleanup", gate.violations[0]?.code ?? "findings.cleanup-refused", "Findings cleanup gate failed", { violations: gate.violations }, "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.");
+          return gate.ok
+            ? ok("status.findings-cleanup", { planId: parsed.data.planId, violations: [], collaboration: gate.collaboration })
+            : refused(
+                "status.findings-cleanup",
+                gate.violations[0]?.code ?? "findings.cleanup-refused",
+                "Findings cleanup gate failed",
+                { violations: gate.violations, collaboration: gate.collaboration },
+                "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.",
+              );
         } catch (error) {
-          const code = engineCode(error, "findings.cleanup-refused");
-          return refused("status.findings-cleanup", code || "findings.cleanup-refused", messageOf(error), undefined, "Correct the reported findings-cleanup problem, then rerun mstar status findings-cleanup <plan-id>.");
+          // note: The engine's own code, structured details and recovery are the
+          // refusal contract: forward them, defaulting only when it supplied none.
+          const facts = engineErrorFacts(error);
+          return refused(
+            "status.findings-cleanup",
+            facts.code ?? "findings.cleanup-refused",
+            messageOf(error),
+            facts.details,
+            facts.recovery ?? "Correct the reported findings-cleanup problem, then rerun mstar status findings-cleanup <plan-id>.",
+          );
         }
       },
     }),
@@ -385,22 +402,25 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         if (!parsed.success) return invalid("status.tech-debt", parsed.error);
         try {
           const harnessDir = executionHarness(context, parsed.data.harness) ?? context.cwd;
-          const bySeverity: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
-          const byProject: Record<string, number> = {};
-          let totalOpen = 0;
-          for (let offset = 0; ; offset += 200) {
-            const page = await listIssues({ harnessDir }, { disposition: "open", limit: 200, offset });
-            totalOpen = page.total;
-            for (const issue of page.items) {
-              bySeverity[issue.severity] = (bySeverity[issue.severity] ?? 0) + 1;
-              byProject[issue.projectId] = (byProject[issue.projectId] ?? 0) + 1;
-            }
-            if (page.items.length === 0 || offset + page.items.length >= page.total) break;
-          }
-          return ok("status.tech-debt", { total_open: totalOpen, by_severity: bySeverity, by_project: Object.fromEntries(Object.entries(byProject).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
+          // invariant: One scoped collaboration snapshot answers the totals, both groupings
+          // and the evidence this command reports; paging a changing table never
+          // produced a total. `collaboration` is that read's own observation.
+          const envelope = await withStoreRead({ harnessDir }, queryOpenIssueRollup());
+          return ok("status.tech-debt", {
+            total_open: envelope.data.totalOpen,
+            by_severity: envelope.data.bySeverity,
+            by_project: envelope.data.byProject,
+            collaboration: envelope.collaboration,
+          });
         } catch (error) {
-          const code = engineCode(error, "issue.store-refused");
-          return refused("status.tech-debt", code || "issue.store-refused", messageOf(error), undefined, "Correct the reported issue-store problem, then run mstar status tech-debt.");
+          const facts = engineErrorFacts(error);
+          return refused(
+            "status.tech-debt",
+            facts.code ?? "issue.store-refused",
+            messageOf(error),
+            facts.details,
+            facts.recovery ?? "Correct the reported issue-store problem, then run mstar status tech-debt.",
+          );
         }
       },
     }),

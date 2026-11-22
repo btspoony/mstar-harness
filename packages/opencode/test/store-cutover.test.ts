@@ -1,5 +1,5 @@
 /**
- * store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
+ * invariant: store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
  * boundary: what the store cutover refuses once it is the authority, and
  * what it leaves untouched.
  *
@@ -9,27 +9,36 @@
  * must act on the structured result):
  *
  * 1. `{HARNESS_DIR}/store.db` (`-wal`/`-shm`) is never hand-writable.
- * 2. A project register is decided by the DB-aware authority route against
- *    REAL stores built by the engine (`initializeStore` / `openStore`, real
- *    `node:sqlite` migrations): active → `project.register.retired`, staged
- *    or missing → pre-activation (the register validator still answers, issue
- *    contract §7), unreadable → `store.authority-unavailable`.
+ * 2. A project register is decided by the collaboration-authority probe
+ *    against REAL stores built by the engine (`initializeStore` / `openStore`,
+ *    real `node:sqlite` migrations): active → `project.register.retired`,
+ *    missing or staged → `store.authority-unavailable` (never a pre-activation
+ *    register permission), unreadable → `store.authority-unavailable` with the
+ *    probe's own cause.
  * 3. Every gated coordination document probes the authority route first
  *    (§4.3/§5: the decision precedes any document read) and an unrelated write
- *    never enters the route at all; on a pre-activation harness the probe
- *    answers `files` and the document lint is unchanged. Plan S4 adds the
- *    execution authority to that route: a retired root register or snapshot
- *    write is refused `execution.direct-write-refused` while it is ACTIVE.
+ *    never enters the route at all; absent EXECUTION authority is no verdict
+ *    for status/snapshot documents, so their document lint is unchanged. Plan
+ *    S4 adds the execution authority to that route: a retired root register or
+ *    snapshot write is refused `execution.direct-write-refused` while it is
+ *    ACTIVE.
  * 4. The runtime floor comes from the ACTUAL runtime (engine
  *    `detectStoreRuntime`: the Bun global first, never Bun's emulated
  *    `process.versions.node`).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import {
+  ensureCollaborationAuthority,
+  initializeCollaborationStore,
+  initializeStore,
+  probeCollaborationAuthority,
+  resolveCollaborationLocation,
+} from "@mstar-harness/engine";
 import {
   MorningStarHarnessPlugin,
   validateStatusWrite,
@@ -50,6 +59,19 @@ afterEach(() => {
 
 const projects: string[] = [];
 
+/** note: Isolated user home for the collaboration lane; restored when the file ends. */
+const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "opencode-g4b-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+});
+afterAll(() => {
+  // why: A leaked spy would redirect every later test file at this deleted
+  // directory and make the suite order-dependent.
+  homeSpy?.mockRestore();
+  rmSync(FIXTURE_HOME, { recursive: true, force: true });
+});
+
 afterEach(() => {
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
@@ -60,7 +82,7 @@ const invalidRegister = { entries: { "plan-a": { id: "R1" } } };
 
 /** Temp project rooted in a real git work tree (harness resolution boundary),
  * with the default `.mstar` layout. */
-function makeHarnessProject(): { project: string; harness: string; statusPath: string; registerPath: string; storeDb: string } {
+function makeHarnessProject(enforcement?: "hard" | "soft"): { project: string; harness: string; statusPath: string; registerPath: string; storeDb: string } {
   const project = mkdtempSync(join(tmpdir(), "mstar-opencode-g4b-"));
   projects.push(project);
   execFileSync("git", ["init", "-q", project], { stdio: "ignore" });
@@ -69,6 +91,13 @@ function makeHarnessProject(): { project: string; harness: string; statusPath: s
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   const statusPath = join(harness, "status.json");
   writeFileSync(statusPath, JSON.stringify(validStatus, null, 2));
+  // why: A collaboration identity: the register route reads that lane, and the
+  // fixture home keeps its store out of the real home.
+  const repoId = `opencode-${project.split(/[\\/]/).pop()!.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}`;
+  writeFileSync(
+    join(project, ".mstarc"),
+    `${enforcement === undefined ? "" : `[config]\nenforcement=${enforcement}\n\n`}[collaboration]\nmode=local\nrepo_id=${repoId}\n`,
+  );
   return {
     project,
     harness,
@@ -78,23 +107,23 @@ function makeHarnessProject(): { project: string; harness: string; statusPath: s
   };
 }
 
-/** REAL active store through the engine's own initializer. */
+/** note: REAL ACTIVE authorities (the `store init` pair). */
 async function seedActiveStore(harness: string): Promise<void> {
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
 }
 
+/** invariant: REAL staged-only collaboration lane (built, never activated). */
 async function seedStagedStore(harness: string): Promise<void> {
-  await seedActiveStore(harness);
-  const write = await openStore({ harnessDir: harness }, "write");
-  write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-  write.close();
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
 }
 
-/** Unreadable authority through the REAL engine channel (`store.corrupt`). */
-function corruptStore(harness: string): void {
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(join(harness, `store.db${suffix}`), { force: true });
-  mkdirSync(join(harness, "store.db"), { recursive: true });
+/** note: Unreadable COLLABORATION authority through the REAL engine channel. */
+function corruptCollaboration(harness: string): void {
+  const dbPath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
+  rmSync(dbPath, { force: true });
+  mkdirSync(dbPath, { recursive: true });
 }
 
 /** Capture `[mstar-harness]` log lines by level. */
@@ -118,33 +147,35 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(entries[0]![1]).toContain("project.register.retired");
   });
 
-  test("an unreadable authority refuses fail-closed with the engine refusal", async () => {
+  test("an unreadable collaboration authority refuses fail-closed with the engine refusal", async () => {
     const fixture = makeHarnessProject();
-    corruptStore(fixture.harness);
+    await seedActiveStore(fixture.harness);
+    corruptCollaboration(fixture.harness);
     const { entries, log } = capture();
 
     const result = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(result?.hardBlocked).toBe(true);
     expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
-    expect(result?.violations[0]!.message).toContain("store.corrupt");
+    expect(result?.violations[0]!.message).toContain("collaboration.unreadable");
     expect(entries.some(([level]) => level === "error")).toBe(true);
   });
 
-  test("pre-activation keeps the register validator AND the enforcement axis", async () => {
+  test("without an ACTIVE collaboration lane the register is refused by authority in both enforcement modes", async () => {
     for (const state of ["missing", "staged"] as const) {
-      const fixture = makeHarnessProject();
-      if (state === "staged") await seedStagedStore(fixture.harness);
-      const { entries, log } = capture();
+      for (const enforcement of ["hard", "soft"] as const) {
+        const fixture = makeHarnessProject(enforcement);
+        if (state === "staged") await seedStagedStore(fixture.harness);
+        const { entries, log } = capture();
 
-      const invalid = await validateStatusWrite(fixture.registerPath, { doc: invalidRegister, log });
-      expect(invalid?.ok).toBe(false);
-      expect(invalid?.hardBlocked).toBe(false); // soft-mode register lint — warn only
-      expect(invalid?.violations.some((violation) => violation.code.startsWith("project.register."))).toBe(true);
-      expect(entries.every(([level]) => level === "warn")).toBe(true);
-
-      const valid = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-      expect(valid?.ok).toBe(true);
-      expect(valid?.hardBlocked).toBe(false);
+        const result = await validateStatusWrite(fixture.registerPath, { doc: invalidRegister, log });
+        expect(result?.ok).toBe(false);
+        expect(result?.hardBlocked).toBe(true); // note: authority invariant, not the enforcement axis
+        expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
+        expect(result?.violations[0]!.message).toContain(
+          state === "staged" ? "collaboration.not-active" : "collaboration.not-initialized",
+        );
+        expect(entries.some(([level]) => level === "error")).toBe(true);
+      }
     }
   });
 
@@ -199,37 +230,34 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(entries.some(([level]) => level === "error")).toBe(true);
   });
 
-  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-004)", async () => {
+  test("a CASE-VARIANT register without an ACTIVE lane still refuses by authority (qc2-F-004)", async () => {
     for (const state of ["missing", "staged"] as const) {
       const fixture = makeHarnessProject();
       if (state === "staged") await seedStagedStore(fixture.harness);
       const { entries, log } = capture();
       const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
 
-      // The folded shape walk classifies the case-variant basename as a
-      // register document (dsh/omp/ZCode parity): the register shape
-      // validator decides — not the authority route, not silence.
-      const invalid = await validateStatusWrite(caseVariant, { doc: invalidRegister, log });
-      expect(invalid?.ok).toBe(false);
-      expect(invalid?.hardBlocked).toBe(false); // soft-mode register lint — warn only
-      expect(invalid?.violations.some((violation) => violation.code.startsWith("project.register."))).toBe(true);
-      expect(entries.every(([level]) => level === "warn")).toBe(true);
-
-      const valid = await validateStatusWrite(caseVariant, { doc: validRegister, log });
-      expect(valid?.ok).toBe(true);
-      expect(valid?.hardBlocked).toBe(false);
+      // invariant: The folded shape walk classifies the case-variant basename as a
+      // register document (dsh/omp/ZCode parity): the collaboration authority
+      // decides, and a missing/staged lane is a refusal — never the document
+      // validator and never silence.
+      const result = await validateStatusWrite(caseVariant, { doc: invalidRegister, log });
+      expect(result?.ok).toBe(false);
+      expect(result?.hardBlocked).toBe(true);
+      expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
+      expect(entries.some(([level]) => level === "error")).toBe(true);
     }
   });
 
-  test("unrelated writes bypass the authority route; a missing store leaves coordination writes to their document lint (plan S4)", async () => {
+  test("unrelated writes bypass the authority route; a missing lane still refuses the register (plan S4)", async () => {
     const fixture = makeHarnessProject();
     const { log } = capture();
 
     writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
 
-    // No store = the pre-activation state: absence is not an authority
-    // verdict, so the valid document passes and nothing is fail-closed.
+    // why: No execution store = the pre-activation state: absence is not an
+    // execution verdict, so the valid status document passes.
     const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
     expect(status?.ok).toBe(true);
     expect(status?.hardBlocked).toBe(false);
@@ -241,10 +269,21 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(snapshot?.ok).toBe(false);
     expect(snapshot?.violations[0]?.code).toBe("workflow.snapshot.missing-status");
 
-    // The register is the one document whose route reads the store: with no
-    // store it keeps its own validator, never a refusal.
+    // invariant: The register is the one document whose route reads the collaboration
+    // lane: with no ACTIVE lane it refuses by authority, never by shape.
     const register = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(register?.ok).toBe(true);
+    expect(register?.hardBlocked).toBe(true);
+    expect(register?.violations[0]!.code).toBe("store.authority-unavailable");
+    expect(register?.violations[0]!.message).toContain("collaboration.not-initialized");
+  })
+
+  test("collaboration-only: the register is retired without an execution store", async () => {
+    const fixture = makeHarnessProject();
+    await ensureCollaborationAuthority({ harnessDir: fixture.harness });
+    expect(await probeCollaborationAuthority({ harnessDir: fixture.harness })).toMatchObject({ kind: "active" });
+    const result = await validateStatusWrite(fixture.registerPath, { doc: validRegister });
+    expect(result?.hardBlocked).toBe(true);
+    expect(result?.violations[0]!.code).toBe("project.register.retired");
   })
 
   test("a symlink alias that resolves into the harness is the authority itself (S-G4b-03)", async () => {

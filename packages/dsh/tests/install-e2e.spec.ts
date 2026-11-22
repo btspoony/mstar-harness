@@ -66,7 +66,8 @@
  * on the runner PATH (skip-guard below; the registry probe would pass).
  */
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -82,8 +83,12 @@ const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
 /** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
- * disposable home, never from the ambient control checkout's own `.mstarc`. */
+ * disposable home, never from the ambient control checkout's own `.mstarc`. The
+ * cwd is itself a declared git repo, or the init bootstrap's upward identity
+ * probe escapes it and writes a `.mstarc` into `$TMPDIR` itself. */
 const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
+execFileSync('git', ['init', '-q', '-b', 'main', cliCwd], { stdio: 'ignore' })
+writeFileSync(join(cliCwd, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-cli-cwd-${cliCwd.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
 /** The repo's own build mirror (synced by bundle-assets; gitignored). */
 const LOCAL_MIRROR = join(packageRoot, 'harness-agents')
 /** The profile the dsh CLI fixes for installs (dsh adapter `web`). */
@@ -267,7 +272,7 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     const peersDir = join(profileDir(dshHome), 'node_modules/@deepseek-ai')
     console.log(`install-e2e: peers materialized under DSH_HOME profile: ${existsSync(peersDir)} (host provides seams)`)
 
-    // 4. Version/surface probe of the DEFAULT install. The dsh CLI pins
+    // invariant: 4. Version/surface probe of the DEFAULT install. The dsh CLI pins
     //    `^2.2.0` in the profile manifest; pnpm's minimumReleaseAge gate
     //    excludes fresh publishes (< ~1 day) from RANGE resolution, so the
     //    default add can land on a version without the seeds surface. When
@@ -275,11 +280,17 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     //    explicit version bypasses the age gate — the default path
     //    converges once the publish passes the window). Recorded as a
     //    deviation in the SDD report; never a silent skip.
+    //    The pin is UNCONDITIONAL on the repo's shipped version: the boot
+    //    step resolves the local worktree's engine dist (single-instance
+    //    cordis), and a published plugin newer than this branch (npm lag)
+    //    imports engine exports this dist does not carry.
     const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
-    if (!hasSeedsSurface(installedMstarDir(dshHome))) {
+    {
       const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} WITHOUT the seeds surface — re-adding pinned @${repoVersion} (pnpm minimumReleaseAge range-resolution gate)`)
-      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `@mstar-harness/dsh@${repoVersion}`], 300_000)
+      if (installedVersion !== repoVersion || !hasSeedsSurface(installedMstarDir(dshHome))) {
+        console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} — re-adding pinned @${repoVersion} (npm lag / pnpm minimumReleaseAge range-resolution gate)`)
+        runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `@mstar-harness/dsh@${repoVersion}`], 300_000)
+      }
       const pinned = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
       expect(pinned).toBe(repoVersion)
       expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
@@ -290,8 +301,6 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
       expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
       expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after pinned re-add').toBe(1)
       console.log(`install-e2e: pinned add installed @mstar-harness/dsh@${pinned} with the full seeds surface`)
-    } else {
-      console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} WITH the seeds surface — no pin needed`)
     }
 
     // 4b. Role-preset channel + seam-probe surface vintage (plan Task 2):

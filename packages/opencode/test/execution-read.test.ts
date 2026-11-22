@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionState,
   registerCatalogEntity,
@@ -70,6 +71,7 @@ function makeHarnessProject(): {
   const project = mkdtempSync(join(tmpdir(), "mstar-opencode-s4-"));
   projects.push(project);
   execFileSync("git", ["init", "-q", project], { stdio: "ignore" });
+  writeFileSync(join(project, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=opencode-s4-${project.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   const harness = join(project, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
@@ -92,6 +94,7 @@ function makeHarnessProject(): {
 async function seedActiveExecutionAuthority(harness: string, statusPath: string): Promise<void> {
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

@@ -15,6 +15,7 @@
  * knowledge/README.md, and CONCEPTS.md).
  */
 import * as fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,6 +30,7 @@ import {
 import { registerCatalogEntity } from "../src/catalog.js";
 import { resolveKnowledgeDir } from "../src/path.js";
 import { createFsStore } from "../src/store.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 
 const hasCode = (g: { violations: { code: string }[] }, code: string) =>
@@ -341,6 +343,11 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
   /** A workspace with a real `.mstar` harness, knowledge bodies and a store. */
   async function knowledgeWorkspace(name: string, bodies: string[]): Promise<{ root: string; context: StoreContext }> {
     const root = mkdtempSync(join(tmp, name));
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+    writeFileSync(
+      join(root, ".mstarc"),
+      `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+    );
     const harness = join(root, ".mstar");
     mkdirSync(join(harness, "plans"), { recursive: true });
     for (const relative of bodies) {
@@ -350,6 +357,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
     const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
+    await ensureCollaborationAuthority(context);
     return { root, context };
   }
 

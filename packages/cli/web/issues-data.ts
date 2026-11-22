@@ -21,7 +21,7 @@
  */
 import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
 import {
   DISPOSITIONS,
   ISSUE_KINDS,
@@ -113,6 +113,8 @@ export async function readIssues(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<IssuePage>(body);
     if (envelope === null) return { status: "error", message: "The issue list answered with something that is not a read envelope." };
+    const gap = requiredCollaborationRefusal(envelope);
+    if (gap !== null) return { status: "error", message: gap };
     return { status: "ready", envelope };
   } catch {
     return { status: "error", message: UNREACHABLE };
@@ -145,6 +147,10 @@ export async function readIssueDetail(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<IssueDetail>(body);
     if (envelope === null) return { status: "error", message: "The issue read answered with something that is not a read envelope." };
+    // note: Without a complete collaboration observation a null payload is not absence:
+    // the record may exist in rows this read could not vouch for.
+    const gap = requiredCollaborationRefusal(envelope);
+    if (gap !== null) return { status: "error", message: gap };
     if (envelope.data === null) return { status: "absent" };
     return { status: "ready", envelope };
   } catch {

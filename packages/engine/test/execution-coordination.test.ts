@@ -24,6 +24,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "../src/collaboration-store.js";
+import { resolveCollaborationLocation } from "../src/collaboration-identity.js";
 import {
   mutateExecutionPlan,
   prepareExecutionPlan,
@@ -99,6 +101,16 @@ function rows(context: StoreContext, sql: string): Array<Record<string, unknown>
   return withRaw(context, (db) => db.prepare(sql).all() as Array<Record<string, unknown>>);
 }
 
+/** note: Raw collaboration-lane connection for issue/provenance fixture edits. */
+function withRawCollaboration<T>(context: StoreContext, body: (db: StoreDb) => T): T {
+  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    return body(db as unknown as StoreDb);
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * The accepted state a refusal must leave untouched, as one comparable value:
  * the authority revisions plus the rows an operation would add.
@@ -159,9 +171,22 @@ async function seededWorkflow(
     stdio: ["ignore", "ignore", "ignore"],
   });
   mkdirSync(harnessDir, { recursive: true });
+  writeFileSync(
+    join(workspace, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${workspace.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(TS);
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
   const initialized = await readExecutionState(context);
   for (const planId of planIds) await registerPlan(context, planId);
   const coordinatorCaller = trustedCaller(COORDINATOR_ID);
@@ -384,7 +409,7 @@ async function refusalOf(run: () => Promise<unknown>): Promise<{ code?: string; 
  * provenance join (the authority the findings gate reads).
  */
 async function linkedPlanIssues(context: StoreContext, planId: string): Promise<Array<{ id: string; revision: number }>> {
-  return withRaw(context, (db) =>
+  return withRawCollaboration(context, (db) =>
     db
       .prepare(
         "select issues.id as id, issues.revision as revision from issues " +
@@ -397,7 +422,7 @@ async function linkedPlanIssues(context: StoreContext, planId: string): Promise<
 
 /** Record one plan provenance link in the fixture's own store transaction. */
 async function linkIssueToPlan(context: StoreContext, issueId: string, planId: string): Promise<void> {
-  withRaw(context, (db) => {
+  withRawCollaboration(context, (db) => {
     db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)").run(
       issueId,
       planId,
@@ -844,7 +869,11 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
       }),
     );
     expect(refusal.code).toBe("issue.revision-conflict");
-    expect(await getIssue(context, target!.id)).toEqual(issueBefore);
+    const after = await getIssue(context, target!.id);
+    expect({ ...after, collaboration: { ...after.collaboration, asOf: "same" } }).toEqual({
+      ...issueBefore,
+      collaboration: { ...issueBefore.collaboration, asOf: "same" },
+    });
     expect(footprint(context)).toEqual(before);
   });
 });

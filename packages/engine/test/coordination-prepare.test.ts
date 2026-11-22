@@ -23,6 +23,7 @@ import {
   type ExecutionCaller,
   type ExecutionContext,
 } from "../src/execution-store.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
@@ -50,6 +51,7 @@ async function dbPrepareFixture(deliveryKind: "development" | "verification/repo
   rmSync(join(fixture.harness, "status.json"), { force: true });
   rmSync(join(fixture.harness, "workflows"), { recursive: true, force: true });
   (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
   await registerCatalogEntity(context, { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` }, {
     operationId: "register-prepare-guard-plan",
     actor: "coordination-prepare.test",

@@ -4,10 +4,21 @@
  * and its help text.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { DatabaseSync } from "node:sqlite";
+import {
+  ensureCollaborationAuthority,
+  initializeCollaborationStore,
+  initializeStore,
+  openCollaborationStore,
+  readCollaborationAuthority,
+  registerCatalogEntity,
+  resolveCollaborationLocation,
+  writeCollaborationBinding,
+} from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 
@@ -22,9 +33,23 @@ const LINEAR_BLOCK = "[linear]\nenabled=true\nmode=mirror\nworkspace=acme\nteam=
 async function repo(mstarc: string | null, projects: string[] = ["proj-a"]): Promise<InvocationContext> {
   const root = mkdtempSync(path.join(os.tmpdir(), "commands-project-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
+  const collaboration = `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`;
+  writeFileSync(path.join(root, ".mstarc"), mstarc === null ? collaboration : `${mstarc}${collaboration}`);
   await (await initializeStore({ harnessDir: harness })).close();
+  const location = resolveCollaborationLocation({ harnessDir: harness });
+  await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding({ harnessDir: harness }, await readCollaborationAuthority({ harnessDir: harness }));
   for (const id of projects) {
     await registerCatalogEntity(
       { harnessDir: harness },
@@ -32,7 +57,7 @@ async function repo(mstarc: string | null, projects: string[] = ["proj-a"]): Pro
       { operationId: `register-${id}`, actor: "test" },
     );
   }
-  if (mstarc !== null) writeFileSync(path.join(root, ".mstarc"), mstarc);
+  if (mstarc === null) rmSync(path.join(root, ".mstarc"), { force: true });
   const effects: CommandEffects = {
     async readInput() { return ""; },
     async spawn() { throw new Error("not used"); },
@@ -163,7 +188,7 @@ describe("mstar project bind", () => {
     const before = await issueCounts(context.controlRoot);
     await bind({ project: "proj-a", provider: "linear", remoteProject: "Team Roadmap", operation: "op-1" }, context);
     expect(await issueCounts(context.controlRoot)).toEqual(before);
-    const handle = await openStore({ harnessDir: context.controlRoot }, "read");
+    const handle = await openCollaborationStore({ harnessDir: context.controlRoot }, "read");
     try {
       expect((handle.db.prepare("select count(*) as n from project_bindings").get() as { n: number }).n).toBe(1);
     } finally {
@@ -198,12 +223,19 @@ describe("QC fix wave", () => {
     mkdirSync(root, { recursive: true });
     const harness = path.join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+    writeFileSync(
+      path.join(root, ".mstarc"),
+      `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+    );
     await (await initializeStore({ harnessDir: harness })).close();
+    await ensureCollaborationAuthority({ harnessDir: harness });
     await registerCatalogEntity(
       { harnessDir: harness },
       { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "projects/proj-a" },
       { operationId: "register-proj-a", actor: "test" },
     );
+    rmSync(path.join(root, ".mstarc"), { force: true });
     const context: InvocationContext = {
       cwd: root,
       controlRoot: harness,

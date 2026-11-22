@@ -64,13 +64,13 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
-  queryDashboard,
+  queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
   listRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -110,13 +110,10 @@ export const DEFAULT_CATALOG_TTL_MS = 60_000
 const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
 /**
- * How many open issues one catalog refresh will enumerate before it discloses
- * that the rollup is a partial view (the count then carries the page bound in
- * its text). The issue page API caps one request at 200 rows, so the rollup
- * pages; the usual harness has tens of open issues and never reaches the cap.
+ * One issue page's row cap (issue contract §5: `limit` max 200) — the
+ * knowledge-digest page size. The open-issue rollup itself is ONE scoped SQL
+ * aggregate (`queryOpenIssueRollup`), never a page walk.
  */
-const ISSUE_ROLLUP_MAX_PAGES = 5
-/** One issue page's row cap (issue contract §5: `limit` max 200). */
 const ISSUE_PAGE_LIMIT = 200
 
 /** The plugin's own manifest version (single-version invariant; own manifest first). */
@@ -711,16 +708,19 @@ export function gateSegment(gate: IterationGateView): string {
 
 /**
  * The PANEL-relevant projection of one payload, as the panel side of the
- * emission digest's comparison: the payload JSON with
- * `state.storeFacts.storeRevision` normalized to `null`.
+ * emission digest's comparison: the payload JSON with the collaboration
+ * observation's volatile fields (`state.storeFacts.storeRevision`,
+ * `state.storeFacts.asOf`) normalized away.
  *
- * Why exactly that field: emitting persists the payload (`persistEngineStatusSnapshot`),
- * and that store write advances the shared store revision 1:1 — so comparing
- * raw payloads would read the emission's own side effect as a change and
- * re-persist every step, recreating the per-turn repetition the change-driven
- * cadence removes. Every other payload field is either static or a real fact
- * the panel renders (e.g. `state.residualFindings[].title` changes the panel
- * without changing the row text, so it must still trigger a persist).
+ * Why exactly those fields: emitting persists the payload
+ * (`persistEngineStatusSnapshot`), and that store write advances the shared
+ * store revision 1:1 — so comparing raw payloads would read the emission's own
+ * side effect as a change and re-persist every step, recreating the per-turn
+ * repetition the change-driven cadence removes. `asOf` is when each read
+ * established its own snapshot, so it changes on every build by construction.
+ * Every other payload field is either static or a real fact the panel renders
+ * (e.g. `state.residualFindings[].title` changes the panel without changing the
+ * row text, so it must still trigger a persist).
  *
  * This is deliberately WIDER than the model row: the row renders a compact
  * delta, so a projection change that the row cannot show (`state.residuals`,
@@ -737,7 +737,10 @@ export function panelDigestOf(payload: MstarEngineStatusPayload): string {
   if (state === null || state.storeFacts === undefined) return JSON.stringify(payload)
   return JSON.stringify({
     ...payload,
-    state: { ...state, storeFacts: { ...state.storeFacts, storeRevision: null } },
+    state: {
+      ...state,
+      storeFacts: { ...state.storeFacts, storeRevision: null, asOf: null },
+    },
   })
 }
 
@@ -963,6 +966,8 @@ const UNREAD_STORE_FACTS: StoreFacts = {
     kind: 'unavailable',
     projection: null,
     storeRevision: null,
+    completeness: 'unavailable',
+    asOf: null,
     diagnostic: 'the issue/catalog store was not read for this build',
   },
   roadmap: {
@@ -1010,30 +1015,37 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
   const roadmap = await readProjectRoadmapFacts(context)
   try {
-    const envelope = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT } }))
-    const items: Array<IssuePage['items'][number]> = [...envelope.data.items]
-    // The rollup counts EVERY open issue: page through the authority's own
-    // order until the reported total is covered (bounded — a capped count
-    // then discloses the bound instead of silently undercounting).
-    let pages = 1
-    while (items.length < envelope.data.total && pages < ISSUE_ROLLUP_MAX_PAGES) {
-      const next = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT, offset: items.length } }))
-      if (next.data.items.length === 0) break
-      items.push(...next.data.items)
-      pages += 1
+    // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
+    // preview come from the same read, so no offset page from a different
+    // generation can be added to this one.
+    const envelope = await withStoreRead(context, queryOpenIssueRollup())
+    const observation = envelope.collaboration
+    if (observation === null || observation.completeness === 'unavailable') {
+      return {
+        source: {
+          kind: 'unavailable',
+          projection: null,
+          storeRevision: null,
+          completeness: 'unavailable',
+          asOf: null,
+          diagnostic: observation === null ? 'the collaboration authority did not answer this rollup' : `[${observation.code}] the collaboration authority reported no usable rollup`,
+        },
+        roadmap,
+        residuals: [],
+        residualFindings: null,
+        knowledge: null,
+      }
     }
-    const counts = new Map<HarnessResidualSeverity, number>()
-    for (const item of items) counts.set(item.severity, (counts.get(item.severity) ?? 0) + 1)
+    const rollup = envelope.data
     const residuals: HarnessResidualView[] = []
     for (const severity of ISSUE_SEVERITIES) {
-      const count = counts.get(severity)
+      const count = rollup.bySeverity[severity]
       if (count !== undefined && count > 0) residuals.push({ severity, count })
     }
-    // The detail rows keep the AUTHORITY's order (severity rank desc → last
-    // real activity desc → id asc) and its own severity string; `planId`
-    // stays empty — an issue is plan-independent, and its plan/iteration
-    // links are provenance, not a column of a summary row.
-    const residualFindings: ResidualFindingView[] = items.slice(0, 10).map((item) => ({
+    // The preview keeps the authority's own order; `planId` stays empty — an
+    // issue is plan-independent, and its plan/iteration links are provenance,
+    // not a column of a summary row.
+    const residualFindings: ResidualFindingView[] = rollup.recent.map((item) => ({
       planId: '',
       id: item.id,
       severity: item.severity,
@@ -1042,9 +1054,11 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
     return {
       source: {
         kind: 'store',
-        projection: envelope.projection.freshness,
+        projection: envelope.projection.observed ? envelope.projection.freshness : null,
         storeRevision: envelope.storeRevision,
-        diagnostic: storeProjectionDiagnostic(envelope.projection, items.length, envelope.data.total),
+        completeness: observation.completeness,
+        asOf: observation.asOf,
+        diagnostic: storeProjectionDiagnostic(envelope.projection, observation),
       },
       residuals,
       roadmap,
@@ -1057,6 +1071,8 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         kind: 'unavailable',
         projection: null,
         storeRevision: null,
+        completeness: 'unavailable',
+        asOf: null,
         diagnostic: storeRefusalText(error),
       },
       roadmap,
@@ -1068,18 +1084,24 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
 }
 
 /**
- * The disclosure text of ONE store-backed read: `null` while the projection is
- * current and the count whole, otherwise the named reason — a STALE or
- * UNAVAILABLE projection (execution views may lag; the issue rows read here
- * are authoritative either way) and/or the paging bound.
+ * invariant: The disclosure text of ONE store-backed read: `null` while the projection is
+ * current and the collaboration observation is complete, otherwise the named
+ * reason — a STALE or UNAVAILABLE projection (execution views may lag; the
+ * issue rows read here are authoritative either way) and/or a scoped
+ * collaboration gap. Projection health never stands in for authority.
  */
-function storeProjectionDiagnostic(projection: ReadProjection, counted: number, total: number): string | null {
+function storeProjectionDiagnostic(
+  projection: ReadProjection,
+  observation: { completeness: 'complete' | 'partial'; code?: string },
+): string | null {
   const parts: string[] = []
-  if (projection.freshness !== 'current') {
+  if (projection.observed && projection.freshness !== 'current') {
     const sources = projection.diagnostics.map((diagnostic) => diagnostic.sourceKey).join(', ')
     parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative`)
   }
-  if (counted < total) parts.push(`first ${counted} of ${total} open issues counted`)
+  if (observation.completeness === 'partial') {
+    parts.push(`collaboration partial (${observation.code ?? 'scoped gap'}) — this rollup covers its own scope only`)
+  }
   return parts.length === 0 ? null : parts.join('; ')
 }
 

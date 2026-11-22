@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { initializeStore, readExecutionState, registerCatalogEntity, createExecutionWorkflow, bindExecutionSession } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionState, registerCatalogEntity, createExecutionWorkflow, bindExecutionSession } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, WorkflowSnapshot } from "@mstar-harness/engine";
 import { afterEachCleanup, makeFixture, WORKFLOW_ID, PLAN_ID } from "../../engine/test/support/coordination-fixtures.js";
 import { executionBindingOf } from "../src/coordinator-identity";
@@ -19,6 +19,7 @@ async function activeFixture(type: "plan" | "iteration" = "plan") {
   mkdirSync(join(fixture.harness, "projects"), { recursive: true });
   const store = { harnessDir: fixture.harness };
   (await initializeStore(store)).close();
+  await ensureCollaborationAuthority(store);
   await registerCatalogEntity(store, { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` }, { operationId: "register-prerequisite-plan", actor: "prerequisite-handoff.test" });
   const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId: WORKFLOW_ID };
   const domain: ExecutionContext = { harnessDir: fixture.harness, caller };

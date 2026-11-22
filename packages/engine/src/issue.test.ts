@@ -1,15 +1,18 @@
 /**
  * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import * as nodeOs from "node:os";
+import { basename, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
 import { readExecutionState } from "./execution-store.js";
-import { MIGRATIONS, initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
-import { historicalStore } from "./store-migration-fixtures.js";
+import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
@@ -30,6 +33,7 @@ import {
   linkIssue,
   listIssues,
   linkIssueScoped,
+  moveIssue,
   triageIssue,
   type CaptureInput,
   type Disposition,
@@ -46,8 +50,19 @@ import {
 } from "./index.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-test-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * invariant: The collaboration store is user-level, so the resolver's home must be this
+ * fixture and never the operator's. One spy serves the whole file: nesting a
+ * second and restoring it would discard this one.
+ */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
 
 test("triage vocabulary rejects array values instead of coercing them to keys", () => {
   expect(() => assertIssueTriageVocabulary({ kind: ["bug"] } as never)).toThrow(
@@ -55,11 +70,81 @@ test("triage vocabulary rejects array values instead of coercing them to keys", 
   );
 });
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
+/**
+ * why: A synthetic checkout: the git origin names the repository the collaboration
+ * authority is keyed by, and `.mstarc` selects the local mode an operator's own
+ * clone would declare.
+ */
 function ctx(name: string) {
-  return { harnessDir: mkdtempSync(join(ROOT, name)) };
+  const checkoutRoot = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Issue Store Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "issue@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
+    cwd: checkoutRoot,
+  });
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = join(checkoutRoot, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  return { harnessDir, checkoutRoot };
+}
+
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
+function activate(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+  } finally {
+    db.close();
+  }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
+}
+
+/** note: Initialize this context's collaboration authority without activating it. */
+async function stagedIssueStore(context: StoreContext): Promise<void> {
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+}
+
+/** note: The collaboration authority the issue verbs read and write. */
+async function activeIssueStore(context: StoreContext): Promise<void> {
+  await stagedIssueStore(context);
+  activate(context);
+}
+
+/** note: One fixture effect on the collaboration authority. */
+function seedCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
+  return withCollaborationWrite(context, ({ db }) => fn(db));
+}
+
+/** note: One fixture read of the collaboration authority. */
+async function readCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    return fn(handle.db);
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The collaboration revision the receipts of this fixture's effects report. */
+function collaborationRevision(context: StoreContext): Promise<number> {
+  return readCollab(context, (db) => (db.prepare("select revision from collaboration_meta where id = 1").get() as {
+    revision: number;
+  }).revision);
 }
 
 function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
@@ -87,32 +172,110 @@ function mut(operationId: string, actor = "project-manager"): MutationContext {
   return { operationId, actor };
 }
 
-test("origin-dependent issue reads refuse schema 7 and work after safe upgrade", async () => {
-  const context = ctx("origin-schema-gate-");
-  const old = historicalStore(context.harnessDir, 7);
-  const issueId = "I-000001";
-  old.prepare(
-    "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','proj-a','Project','projects','proj-a/roadmap.md','now','now')",
-  ).run();
-  old.prepare(
-    "insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,'proj-a','Preexisting issue','bug','high','impact','acceptance','now','now','schema-origin')",
-  ).run(issueId);
-  old.prepare("insert into provenance(issue_id,kind,target,source_hash) values(?,'plan','plan-a','historical-source')").run(issueId);
-  old.close();
+describe("collaboration issues", () => {
+  test("capture, triage and close advance the collaboration revision once per accepted effect, and a replay does not", async () => {
+    const context = ctx("collaboration-issues-");
+    await activeIssueStore(context);
+    expect(await collaborationRevision(context)).toBe(0);
 
-  await expect(getIssue(context, issueId)).rejects.toMatchObject({
-    name: "IssueError",
-    code: "issue.schema-outdated",
-    message: expect.stringContaining("mstar store upgrade --operator <name>"),
+    const captured = await captureIssue(context, baseInput(), mut("collab-capture"));
+    expect(captured.created).toBe(true);
+    expect(captured.storeRevision).toBe(1);
+    expect(await collaborationRevision(context)).toBe(1);
+
+    const replay = await captureIssue(context, baseInput(), mut("collab-capture"));
+    expect(replay).toEqual(captured);
+    expect(await collaborationRevision(context)).toBe(1);
+
+    const triaged = await triageIssue(
+      context,
+      captured.issueId,
+      { severity: "medium", reason: "reclassified" },
+      { operationId: "collab-triage", actor: "project-manager", expectedRevision: captured.revision },
+    );
+    expect(triaged.storeRevision).toBe(2);
+    expect(await collaborationRevision(context)).toBe(2);
+
+    await closeIssue(
+      context,
+      captured.issueId,
+      "resolved",
+      { reason: "accepted", references: ["qa/run.md"], alignmentRef: "QA gate: Approve" },
+      { operationId: "collab-close", actor: "project-manager", expectedRevision: triaged.revision },
+    );
+    expect(await collaborationRevision(context)).toBe(3);
+    // note: The rows the verbs wrote are the collaboration lane's own.
+    expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
   });
 
-  expect(await upgradeStore(context)).toEqual({ schemaVersion: MIGRATIONS.length });
-  const detail = await getIssue(context, issueId);
-  expect(detail.disposition).toBe("open");
-  expect(detail.title).toBe("Preexisting issue");
-  expect(detail.provenance).toEqual(expect.arrayContaining([
-    expect.objectContaining({ kind: "plan", target: "plan-a", sourceHash: "historical-source" }),
-  ]));
+  test("an execution store revision is never accepted as the collaboration CAS", async () => {
+    const context = ctx("collaboration-cas-");
+    await activeIssueStore(context);
+    await initializeStore(context).then((handle) => handle.close());
+    const captured = await captureIssue(context, baseInput(), mut("cas-capture"));
+    await captureIssue(context, baseInput({ rootCauseKey: "second", occurrenceKey: "second" }), mut("cas-capture-2"));
+    expect(await collaborationRevision(context)).toBe(2);
+
+    // invariant: The EXECUTION lane keeps its own counter; a move carrying that number as
+    // its store CAS is refused by the collaboration lane, because the two lanes
+    // never share a revision.
+    const execution = await openStore(context, "read");
+    let executionRevision: number;
+    try {
+      executionRevision = (execution.db.prepare("select revision from store_meta where id = 1").get() as {
+        revision: number;
+      }).revision;
+    } finally {
+      execution.close();
+    }
+    expect(executionRevision).not.toBe(await collaborationRevision(context));
+    await expect(
+      moveIssue(
+        context,
+        captured.issueId,
+        { projectId: "proj-b", reason: "wrong lane" },
+        {
+          operationId: "cas-move",
+          actor: "project-manager",
+          expectedRevision: captured.revision,
+          expectedStoreRevision: executionRevision,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "milestone.revision-conflict" });
+    expect((await getIssue(context, captured.issueId)).projectId).toBe("proj-a");
+  });
+
+  test("an operation id another collaboration domain recorded refuses a reused payload", async () => {
+    const context = ctx("collaboration-operation-");
+    await activeIssueStore(context);
+    const at = "2026-11-21T00:00:00.000Z";
+    await seedCollab(context, (db) => {
+      db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, revision, provider, identity_key)" +
+          " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row')",
+      ).run(at, at);
+    });
+    // note: The sync ledger records its own standalone receipt under this id.
+    await seedCollab(context, (db) => {
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
+          " values ('standalone', 'shared-operation', 'ledger-hash', '{}', ?)",
+      ).run(at);
+    });
+    await expect(captureIssue(context, baseInput(), mut("shared-operation"))).rejects.toMatchObject({
+      code: "store.operation-conflict",
+    });
+    expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
+  });
+
+  test("a staged collaboration store is not issue read authority", async () => {
+    const context = ctx("collaboration-staged-");
+    await stagedIssueStore(context);
+    await expect(listIssues(context, {})).rejects.toMatchObject({ code: "collaboration.not-active" });
+    await expect(captureIssue(context, baseInput(), mut("staged-capture"))).rejects.toMatchObject({
+      code: "collaboration.not-active",
+    });
+  });
 });
 
 /** Observation half of `baseInput`; a recurrence differs only in these fields. */
@@ -134,7 +297,7 @@ function occInput(overrides: Partial<OccurrenceInput> = {}): OccurrenceInput {
 describe("capture identity", () => {
   test("captureIssue allocates I- plus six-digit id with counter, occurrence, provenance and receipt together", async () => {
     const context = ctx("capture-id-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const receipt = await captureIssue(context, baseInput(), mut("op-1"));
     expect(receipt.created).toBe(true);
     expect(receipt.issueId).toBe("I-000001");
@@ -152,7 +315,7 @@ describe("capture identity", () => {
 
   test("blank operation ids are rejected before issue capture writes", async () => {
     const context = ctx("capture-blank-operation-");
-    await initializeStore(context).then((handle) => handle.close());
+    await activeIssueStore(context);
     await expect(captureIssue(context, baseInput(), mut(""))).rejects.toMatchObject({
       name: "IssueError",
       code: "issue.invalid-operation-id",
@@ -164,7 +327,7 @@ describe("capture identity", () => {
 
   test("two concurrent processes capturing the same identity create exactly one issue", async () => {
     const context = ctx("capture-concurrent-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const worker = join(ROOT, "capture-worker.mjs");
     writeFileSync(
       worker,
@@ -196,7 +359,9 @@ process.stdout.write(JSON.stringify(receipt));
     );
     const run = (occurrenceKey: string, operationId: string) =>
       new Promise<{ status: number | null }>((resolve) => {
-        const child = spawn("bun", [worker, context.harnessDir, occurrenceKey, operationId]);
+        const child = spawn("bun", [worker, context.harnessDir, occurrenceKey, operationId], {
+          env: { ...process.env, HOME },
+        });
         child.on("close", (status) => resolve({ status }));
       });
     const [a, b] = await Promise.all([run("run-a", "op-a"), run("run-b", "op-b")]);
@@ -211,7 +376,7 @@ process.stdout.write(JSON.stringify(receipt));
 
   test("two overlapping child processes capturing the same identity still create one issue", async () => {
     const context = ctx("capture-overlap-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const worker = join(ROOT, "capture-overlap.mjs");
     writeFileSync(
       worker,
@@ -241,8 +406,9 @@ const receipt = await captureIssue(context, input, { operationId, actor: "projec
 process.stdout.write(JSON.stringify(receipt));
 `,
     );
-    const left = spawnSync("bun", [worker, context.harnessDir, "occ-1", "op-1"], { encoding: "utf8" });
-    const right = spawnSync("bun", [worker, context.harnessDir, "occ-2", "op-2"], { encoding: "utf8" });
+    const childEnv = { ...process.env, HOME };
+    const left = spawnSync("bun", [worker, context.harnessDir, "occ-1", "op-1"], { encoding: "utf8", env: childEnv });
+    const right = spawnSync("bun", [worker, context.harnessDir, "occ-2", "op-2"], { encoding: "utf8", env: childEnv });
     expect(left.status).toBe(0);
     expect(right.status).toBe(0);
     const page = await listIssues(context, {});
@@ -251,7 +417,7 @@ process.stdout.write(JSON.stringify(receipt));
 
   test("distinct root causes sharing a title remain distinct issues", async () => {
     const context = ctx("capture-title-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const a = await captureIssue(context, baseInput({ rootCauseKey: "cause-a", occurrenceKey: "o1" }), mut("t1"));
     const b = await captureIssue(context, baseInput({ rootCauseKey: "cause-b", occurrenceKey: "o2" }), mut("t2"));
     expect(a.issueId).not.toBe(b.issueId);
@@ -262,7 +428,7 @@ process.stdout.write(JSON.stringify(receipt));
 
   test("unknown semantic identity returns triage ambiguity rather than a guessed dedup", async () => {
     const context = ctx("capture-ambiguous-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     await expect(captureIssue(context, baseInput({ rootCauseKey: "unknown" }), mut("amb"))).rejects.toMatchObject({
       code: "issue.ambiguous-identity",
     });
@@ -356,10 +522,9 @@ process.stdout.write(JSON.stringify(receipt));
 
   test("reopening the DB retains captured data", async () => {
     const context = ctx("capture-reopen-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const receipt = await captureIssue(context, baseInput(), mut("reopen-1"));
-    const again = await openStore(context, "read");
-    again.close();
+    expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
     const detail = await getIssue(context, receipt.issueId);
     expect(detail.title).toBe("Shared title");
     expect(detail.occurrences[0]?.occurrenceKey).toBe("run-1");
@@ -369,11 +534,11 @@ process.stdout.write(JSON.stringify(receipt));
 describe("occurrence replay and recurrence", () => {
   test("distinct sightings append evidence without altering disposition", async () => {
     const context = ctx("occurrence-append-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const first = await captureIssue(context, baseInput(), mut("occ-1"));
-    const handle = await openStore(context, "write");
-    handle.db.prepare("update issues set disposition = 'resolved' where id = ?").run(first.issueId);
-    handle.close();
+    await seedCollab(context, (db) => {
+      db.prepare("update issues set disposition = 'resolved' where id = ?").run(first.issueId);
+    });
     const second = await captureIssue(
       context,
       baseInput({ occurrenceKey: "run-2", discoveredAt: "2026-09-18T11:00:00.000Z" }),
@@ -388,7 +553,7 @@ describe("occurrence replay and recurrence", () => {
 
   test("a recurrence for a different root cause refuses without appending", async () => {
     const context = ctx("occurrence-identity-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const created = await captureIssue(context, baseInput(), mut("cap-occ-id"));
     await expect(
       appendOccurrence(context, created.issueId, occInput({ rootCauseKey: "different-root-cause", occurrenceKey: "run-other" }), mut("occ-mismatch")),
@@ -404,27 +569,27 @@ describe("occurrence replay and recurrence", () => {
 
   test("an imported row refuses a by-id occurrence", async () => {
     const context = ctx("occurrence-mirrored-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const created = await captureIssue(context, baseInput(), mut("cap-mirrored"));
-    const seed = await openStore(context, "write");
-    seed.db.prepare("update issues set provider = 'linear' where id = ?").run(created.issueId);
-    seed.close();
+    await seedCollab(context, (db) => {
+      db.prepare("update issues set provider = 'linear' where id = ?").run(created.issueId);
+    });
     await expect(
       appendOccurrence(context, created.issueId, occInput({ occurrenceKey: "run-onto-mirror" }), mut("occ-onto-mirror")),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    const after = await openStore(context, "read");
-    const row = after.db.prepare("select revision, provider from issues where id = ?").get(created.issueId) as {
-      revision: number;
-      provider: string;
-    };
-    after.close();
+    const row = await readCollab(context, (db) =>
+      db.prepare("select revision, provider from issues where id = ?").get(created.issueId) as {
+        revision: number;
+        provider: string;
+      },
+    );
     expect(row.provider).toBe("linear");
     expect(row.revision).toBe(created.revision);
   });
 
   test("exact replay returns the existing occurrence and receipt", async () => {
     const context = ctx("occurrence-replay-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const first = await captureIssue(context, baseInput(), mut("replay-1"));
     const replay = await captureIssue(context, baseInput(), mut("replay-1"));
     expect(replay).toEqual(first);
@@ -452,7 +617,7 @@ describe("occurrence replay and recurrence", () => {
 
   test("reusing an occurrence_key under a different identity refuses without a second issue", async () => {
     const context = ctx("occurrence-key-collision-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const first = await captureIssue(context, baseInput(), mut("col-1"));
     await expect(
       captureIssue(context, baseInput({ rootCauseKey: "other-cause", occurrenceKey: "run-1" }), mut("col-2")),
@@ -467,7 +632,7 @@ describe("occurrence replay and recurrence", () => {
 
   test("appendOccurrence with the same key and a different payload refuses and keeps original bytes", async () => {
     const context = ctx("occurrence-payload-conflict-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const first = await captureIssue(context, baseInput(), mut("pay-1"));
     const before = await getIssue(context, first.issueId);
     const original = before.occurrences[0];
@@ -496,7 +661,7 @@ describe("occurrence replay and recurrence", () => {
 
   test("identical replay of capture and append still returns the original receipt", async () => {
     const context = ctx("occurrence-exact-replay-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     const first = await captureIssue(context, baseInput(), mut("exact-1"));
     const captureReplay = await captureIssue(context, baseInput(), mut("exact-2"));
     expect(captureReplay.issueId).toBe(first.issueId);
@@ -528,29 +693,30 @@ describe("occurrence replay and recurrence", () => {
 describe("query order and literal search", () => {
   test("listIssues query default order ranks severity then last real activity; null historical activity sorts last", async () => {
     const context = ctx("query-order-");
-    const handle = await initializeStore(context);
+    await activeIssueStore(context);
     const now = "2026-09-18T12:00:00.000Z";
-    handle.db
-      .prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null')",
-      )
-      .run("I-000010", now, now);
-    handle.db
-      .prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old')",
-      )
-      .run("I-000011", "2026-09-01T00:00:00.000Z", now, now);
-    handle.db
-      .prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med')",
-      )
-      .run("I-000012", "2026-09-18T00:00:00.000Z", now, now);
-    handle.db
-      .prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit')",
-      )
-      .run("I-000013", "2026-08-01T00:00:00.000Z", now, now);
-    handle.close();
+    await seedCollab(context, (db) => {
+      db
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null')",
+        )
+        .run("I-000010", now, now);
+      db
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old')",
+        )
+        .run("I-000011", "2026-09-01T00:00:00.000Z", now, now);
+      db
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med')",
+        )
+        .run("I-000012", "2026-09-18T00:00:00.000Z", now, now);
+      db
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit')",
+        )
+        .run("I-000013", "2026-08-01T00:00:00.000Z", now, now);
+    });
     const page = await listIssues(context, {});
     expect(page.items.map((item) => item.id)).toEqual(["I-000013", "I-000011", "I-000010", "I-000012"]);
     expect(page.items[2]?.lastActivity).toBeNull();
@@ -558,7 +724,7 @@ describe("query order and literal search", () => {
 
   test("query treats a literal wildcard as text, not SQL", async () => {
     const context = ctx("query-wildcard-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     await captureIssue(context, baseInput({ title: "plain finding", occurrenceKey: "w1" }), mut("q1"));
     await captureIssue(
       context,
@@ -583,7 +749,7 @@ describe("query order and literal search", () => {
 describe("failed capture leaves no partial finding", () => {
   test("capture refuses blank title without allocating an id", async () => {
     const context = ctx("capture-partial-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     await expect(captureIssue(context, baseInput({ title: "  " }), mut("bad"))).rejects.toBeInstanceOf(IssueError);
     const page = await listIssues(context, { disposition: "open" });
     expect(page.total).toBe(0);
@@ -626,6 +792,8 @@ async function liveAuthority(name: string): Promise<LiveAuthority> {
   const root = realpathSync(mkdtempSync(join(ROOT, name)));
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+  git(["remote", "add", "origin", `https://github.com/acme/${basename(root)}.git`], root);
+  writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   const workflowId = LIVE_WORKFLOW_ID;
   const planIds = [LIVE_PLAN_ID, LIVE_PEER_PLAN_ID];
@@ -660,6 +828,7 @@ async function liveAuthority(name: string): Promise<LiveAuthority> {
   });
 
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  await activeIssueStore({ harnessDir: harness });
   return { harness, planId: LIVE_PLAN_ID, peerPlanId: LIVE_PEER_PLAN_ID };
 }
 
@@ -671,7 +840,7 @@ function pmMut(_authority: LiveAuthority, operationId: string, extra: Partial<Mu
 describe("capture actor auditing", () => {
   test("leaf seats cannot capture or append, and the PM seat captures without a plan", async () => {
     const context = ctx("capture-seat-");
-    await initializeStore(context).then((h) => h.close());
+    await activeIssueStore(context);
     for (const actor of ["fullstack-dev", "frontend-dev", "qc-specialist-2", "ops-engineer"]) {
       await expect(captureIssue(context, baseInput(), mut("cap-leaf", actor))).rejects.toMatchObject({
         code: "issue.scope-refused",
@@ -766,6 +935,7 @@ describe("issue dispositions, revisions, and relations", () => {
   test("ACTIVE execution authority accepts actor-only issue writes without workflow or sessions", async () => {
     const context = ctx("actor-only-active-");
     await initializeStore(context).then((handle) => handle.close());
+    await activeIssueStore(context);
     const activated = await readExecutionState(context);
     expect(activated.data.workflows).toEqual([]);
     const store = await openStore(context, "read");
@@ -814,7 +984,7 @@ describe("issue dispositions, revisions, and relations", () => {
 
   test("non-PM actor still cannot write an issue", async () => {
     const context = ctx("actor-only-refusal-");
-    await initializeStore(context).then((handle) => handle.close());
+    await activeIssueStore(context);
     const created = await captureIssue(context, baseInput(), mut("actor-only-seed"));
     await expect(closeIssue(context, created.issueId, "resolved", {
       reason: "looks good", references: ["note"], alignmentRef: "qa gate",
@@ -872,7 +1042,7 @@ describe("issue dispositions, revisions, and relations", () => {
   });
   test("reopen restores open state, appends reason, preserves closure note and replays by operation id", async () => {
     const context = ctx("reopen-terminal-");
-    await initializeStore(context).then((handle) => handle.close());
+    await activeIssueStore(context);
     const created = await captureIssue(context, baseInput(), mut("reopen-seed"));
     const closureReason = "acceptance verified";
     const closed = await closeIssue(context, created.issueId, "resolved", {
@@ -915,7 +1085,12 @@ describe("issue dispositions, revisions, and relations", () => {
     await expect(reopenIssue(context, created.issueId, { reason }, {
       operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
     })).rejects.toMatchObject({ code: "issue.revision-conflict" });
-    expect(await getIssue(context, created.issueId)).toEqual(detail);
+    const again = await getIssue(context, created.issueId);
+    // invariant: A read's observation time is not state: the persisted detail must match.
+    expect({ ...again, collaboration: { ...again.collaboration, asOf: "same" } }).toEqual({
+      ...detail,
+      collaboration: { ...detail.collaboration, asOf: "same" },
+    });
   });
 
   test("duplicate and superseded require a canonical issue", async () => {
@@ -980,7 +1155,7 @@ describe("issue dispositions, revisions, and relations", () => {
 
   test("obsolete records a removed subject: evidence required, no canonical id, reopenable", async () => {
     const context = ctx("obsolete-disposition-");
-    await initializeStore(context).then((handle) => handle.close());
+    await activeIssueStore(context);
     const created = await captureIssue(context, baseInput(), mut("cap-obsolete"));
     const evidence = { reason: "subject removed", references: ["commit abc123 removes packages/engine/src/gone.ts"] };
 
@@ -1142,15 +1317,12 @@ describe("issue dispositions, revisions, and relations", () => {
       pmMut(authority, "unscoped-poison", { expectedRevision: linked.revision }),
     );
 
-    const handle = await openStore(context, "read");
-    try {
-      assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.planId);
-      expect(() => assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.peerPlanId)).toThrow(
+    await readCollab(context, (db) => {
+      assertIssueLinkedToPlanOn(db, created.issueId, authority.planId);
+      expect(() => assertIssueLinkedToPlanOn(db, created.issueId, authority.peerPlanId)).toThrow(
         expect.objectContaining({ code: "issue.scope-refused" }),
       );
-    } finally {
-      handle.close();
-    }
+    });
     await closeIssue(
       context,
       created.issueId,

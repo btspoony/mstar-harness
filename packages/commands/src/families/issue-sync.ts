@@ -40,11 +40,10 @@ import {
   identityConflict,
   ingestRecords,
   isOlderInstant,
-  openStore,
+  openCollaborationStore,
   PUSH_DIRECTION,
   planPushItem,
   readItem,
-  readProjectBinding,
   readRepoIdentity,
   readRepoLinearBinding,
   readRun,
@@ -55,6 +54,7 @@ import {
   resolveRepoRoot,
   selectPushCandidates,
   SyncError,
+  type CollaborationAuthority,
   type IngestEntry,
   type IngestReport,
   type LinearBinding,
@@ -63,8 +63,10 @@ import {
   type PushContext,
   type PushPlan,
   type StoreDb,
+  type ProjectBinding,
   type PushResult,
   type RunLease,
+  withSyncWrite,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -86,6 +88,7 @@ const applySchema = z.object({
   forceAdopt: z.array(z.string()).optional(),
   release: z.array(z.string()).optional(),
   takeRun: z.boolean().optional(),
+  run: z.string().optional(),
   harness: z.string().optional(),
 });
 const ingestSchema = z.object({
@@ -108,11 +111,12 @@ const flags: Record<keyof Input, string> = {
   forceAdopt: "--force-adopt <localId>",
   release: "--release <localId>",
   takeRun: "--take-run",
+  run: "--run <runId>",
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
   pending: ["project", "harness"],
-  apply: ["project", "results", "adopt", "forceAdopt", "release", "takeRun", "harness"],
+  apply: ["project", "results", "adopt", "forceAdopt", "release", "takeRun", "run", "harness"],
   ingest: ["project", "records", "harness"],
 };
 const required: Record<Verb, (keyof Input)[]> = {
@@ -187,6 +191,10 @@ const RECOVERY: Record<string, string> = {
     "This local id is not an issue in this store. Capture it first, then re-run `mstar issue-sync pending --project <project-id>`.",
   "linear.write-refused":
     "The remote refused this item; the cause is the tool's own words. Nothing was recorded as applied, so the item stays retryable: address the cause in Linear (a missing label, state or permission) and re-run `mstar issue-sync pending --project <project-id>`.",
+  "collaboration.mode-unavailable":
+    "This verb delivers to Linear, and the repository holds local authority only. Set mode=mirror in the repository's .mstarc [collaboration] block, initialize/activate that collaboration store through the reviewed cutover, then re-run. Nothing was written.",
+  "collaboration.stale-binding":
+    "The project binding or the repository's .mstarc changed after this command read it, or the run it names was opened under a different binding. Nothing was written. Re-run the same issue-sync verb: `pending` opens a run under the binding in force. A run a rebind superseded is retired with `mstar issue-sync apply --project <project-id> --results <file|-> --take-run` and an empty result list.",
   "store.not-active":
     "Activate the store first: `mstar store upgrade --operator <name>`, then re-run.",
   "store.not-initialized":
@@ -245,7 +253,12 @@ type Target = {
   projectId: string;
   bindingId: string;
   harnessDir: string;
-  binding: LinearBinding;
+  /** note: The `.mstarc` connection facts this command resolved. */
+  linear: LinearBinding;
+  /** note: The binding row the collaboration lane holds, revision included. */
+  project: ProjectBinding;
+  /** note: Where the `.mstarc` was read: the under-lock comparison re-reads it here. */
+  repoRoot: string;
   remoteProject: string;
   identity: { repo: string; author: string };
 };
@@ -274,12 +287,18 @@ async function resolveTarget(invocation: InvocationContext, input: Input): Promi
       "a [linear] block exists in " + repo.file + " but enabled is not true, so this repository mirrors nothing",
     );
   }
-  const binding = await readProjectBinding({ harnessDir }, projectId);
-  if (binding.kind === "absent") throw refused(binding.code, stripCode(binding.message));
-  if (binding.binding.provider !== "linear") {
+  const binding = await collaborationBinding(harnessDir, projectId);
+  if (binding === null) {
+    throw refused(
+      "linear.binding-absent",
+      "project " + projectId + " mirrors no external project in its collaboration store yet. Bind one with " +
+        "`mstar project bind --project " + projectId + " --provider linear --remote-project <name-or-id> --operation <id>`",
+    );
+  }
+  if (binding.provider !== "linear") {
     throw refused(
       "linear.provider-disabled",
-      "project " + projectId + " mirrors provider " + JSON.stringify(binding.binding.provider) + "; this command drives a linear binding only",
+      "project " + projectId + " mirrors provider " + JSON.stringify(binding.provider) + "; this command drives a linear binding only",
     );
   }
   const identity = readRepoIdentity(repoRoot, repo.binding.repo);
@@ -288,8 +307,10 @@ async function resolveTarget(invocation: InvocationContext, input: Input): Promi
     projectId,
     bindingId: "linear:" + projectId,
     harnessDir,
-    binding: repo.binding,
-    remoteProject: binding.binding.remoteProject,
+    linear: repo.binding,
+    project: binding,
+    repoRoot,
+    remoteProject: binding.remoteProject,
     identity: { repo: identity.repo, author: identity.author },
   };
 }
@@ -304,9 +325,158 @@ function pushContextFor(target: Target, runId: string | undefined): PushContext 
   return {
     bindingId: target.bindingId,
     identity: target.identity,
-    mapping: target.binding.mapping,
+    mapping: target.linear.mapping,
     ...(runId === undefined ? {} : { runId }),
   };
+}
+
+/** note: The binding row as the collaboration lane holds it; the mirror's only binding source. */
+const BINDING_SQL =
+  "select project_id, provider, workspace, team, remote_project, revision, updated_at from project_bindings where project_id = ?";
+
+function bindingOf(row: Record<string, unknown>): ProjectBinding {
+  return {
+    projectId: row.project_id as string,
+    provider: row.provider as string,
+    workspace: row.workspace as string,
+    team: row.team as string,
+    remoteProject: row.remote_project as string,
+    revision: row.revision as number,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+/**
+ * note: The project binding, read through the collaboration boundary: after the
+ * cutover the binding lives in the repository's collaboration store, so no
+ * execution table is consulted and a clone with no execution store can still
+ * plan and record. `db` may be a read handle or the transaction's own connection.
+ */
+function bindingOn(db: StoreDb, projectId: string): ProjectBinding | null {
+  const row = db.prepare(BINDING_SQL).get(projectId) as Record<string, unknown> | undefined;
+  return row === undefined ? null : bindingOf(row);
+}
+
+/** note: The resolved binding, read through the collaboration read handle. */
+async function collaborationBinding(harnessDir: string, projectId: string): Promise<ProjectBinding | null> {
+  const handle = await openCollaborationStore({ harnessDir }, "read");
+  try {
+    return bindingOn(handle.db, projectId);
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The binding row's facts, as one comparable line. */
+function projectStampOf(binding: ProjectBinding): string {
+  return JSON.stringify([binding.provider, binding.workspace, binding.team, binding.remoteProject, binding.revision]);
+}
+
+/** note: The `.mstarc` connection facts, including the facet mapping they resolve to. */
+function linearStampOf(linear: LinearBinding): string {
+  return JSON.stringify([linear.enabled, linear.mode, linear.workspace, linear.team, linear.repo, linear.mapping]);
+}
+
+/**
+ * invariant: The complete destination one run is opened under: the collaboration generation
+ * it belongs to, the marker identity its payloads carry, the repository's effective
+ * `[linear]` connection, and the project binding row. A run's proof is this whole
+ * line, so a changed workspace, a different mapping, a changed git author or
+ * repository, a rebind, or a restored image (new epoch) all refuse continuation
+ * instead of recording a cached result under a new destination.
+ */
+function runStampOf(target: Target, authority: CollaborationAuthority): string {
+  return (
+    "binding=" +
+    JSON.stringify({
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      // why: the marker's repo and author are stamped into every payload, so a new
+      // author or repository would confirm a write the planned marker never named.
+      marker: { repo: target.identity.repo, author: target.identity.author },
+      linear: linearStampOf(target.linear),
+      project: projectStampOf(target.project),
+    })
+  );
+}
+
+/**
+ * note: One sync effect on the collaboration authority. `withSyncWrite` takes
+ * `BEGIN IMMEDIATE`, re-verifies the repository binding and active state under
+ * the lock, commits, and owns the single collaboration revision advance of that
+ * commit; the ledger and ingest verbs below never open a transaction of their own.
+ *
+ * The project binding is re-read from the COLLABORATION store inside that
+ * transaction — the lane that owns it after the cutover — and re-proved against
+ * the facts this command resolved, so a rebind or a `.mstarc` edit between
+ * resolution and the write refuses instead of retargeting the ledger at another
+ * remote destination. No execution table is consulted on this path.
+ */
+async function syncWrite<T>(
+  target: Target,
+  apply: (db: StoreDb, authority: CollaborationAuthority) => T,
+): Promise<T> {
+  return withSyncWrite({ harnessDir: target.harnessDir }, (db, authority) => {
+    requireBindingUnderLock(db, target);
+    return apply(db, authority);
+  });
+}
+
+/** invariant: Refuse when the binding this command resolved is no longer the binding in force. */
+function requireBindingUnderLock(db: StoreDb, target: Target): void {
+  const current = bindingOn(db, target.projectId);
+  if (current === null) {
+    throw refused(
+      "linear.binding-absent",
+      "project " + target.projectId + " mirrors no external project in its collaboration store, so this ledger write has no " +
+        "destination. Bind one with `mstar project bind --project " + target.projectId + " --provider linear --remote-project <name-or-id> --operation <id>`",
+    );
+  }
+  // why: the `.mstarc` connection is the other half of the destination, and it is a
+  // file: re-reading it here catches an edit no transaction can lock.
+  const repo = readRepoLinearBinding(target.repoRoot);
+  const linear = repo.kind === "bound" ? linearStampOf(repo.binding) : null;
+  if (projectStampOf(current) !== projectStampOf(target.project) || linear !== linearStampOf(target.linear)) {
+    throw refused(
+      "collaboration.stale-binding",
+      "project " + target.projectId + "'s binding changed after this command read it, so this ledger write would target a " +
+        "different remote destination",
+    );
+  }
+}
+
+/**
+ * note: A run belongs to the exact destination and authority generation it was
+ * opened under, and says so in its own record (`sync_runs.reason`): the
+ * collaboration store id and epoch, the effective `[linear]` connection, and the
+ * project binding row. Continuation therefore refuses a rebind, a changed
+ * workspace or mapping, and a restored image whose new epoch retired the run.
+ */
+function requireRunBinding(run: RunLease, target: Target, authority: CollaborationAuthority): void {
+  const stamp = runStampOf(target, authority);
+  if (!run.reason.endsWith(stamp)) {
+    throw refused(
+      "collaboration.stale-binding",
+      "run " + run.runId + " was opened under a different destination or collaboration generation than the one in force for " +
+        "project " + target.projectId + ", so its results cannot be recorded here. Retire that run with `mstar issue-sync apply " +
+        "--project " + target.projectId + " --results <file|-> --take-run` and an empty result list, then run `mstar issue-sync " +
+        "pending --project " + target.projectId + "` to open a run under the current one",
+    );
+  }
+}
+
+/**
+ * note: Only a `mirror` repository delivers to Linear. `local` holds the same
+ * authority over the same rows and never pushes or ingests remote data, so the
+ * two modes stay distinguishable at the verb that would have sent something.
+ */
+function requireMirror(authority: CollaborationAuthority): void {
+  if (authority.mode !== "mirror") {
+    throw refused(
+      "collaboration.mode-unavailable",
+      "this repository's collaboration mode is " + JSON.stringify(authority.mode) + ", which holds local authority only: it never pushes to or ingests from Linear",
+    );
+  }
 }
 
 /**
@@ -354,25 +524,25 @@ type PendingReport = {
  */
 async function runPending(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  try {
-    const db = handle.db;
+  return syncWrite(target, (db, authority) => {
+    requireMirror(authority);
     // why: One run per binding, claimed before any candidate work. `pending` does not
     // release it: the lease covers the caller's tool calls as much as this
-    // process, and `apply` is what ends the run.
+    // process, and `apply` is what ends the run. The run records the binding
+    // generation it was opened under, which every continuation re-proves.
     const run = acquireRun(db, {
       bindingId: target.bindingId,
       direction: PUSH_DIRECTION,
       holderPid: process.pid,
       holderHost: hostname(),
-      reason: "issue-sync pending",
+      reason: "issue-sync pending " + runStampOf(target, authority),
     });
     const push = pushContextFor(target, run.runId);
     const report: PendingReport = {
       binding: {
         provider: "linear",
-        workspace: target.binding.workspace,
-        team: target.binding.team,
+        workspace: target.linear.workspace,
+        team: target.linear.team,
         remoteProject: target.remoteProject,
       },
       identity: target.identity,
@@ -388,9 +558,7 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
       else report.unresolved.push({ localId: outcome.localId, cause: outcome.cause });
     }
     return envelope(id, report);
-  } finally {
-    handle.close();
-  }
+  });
 }
 
 /**
@@ -567,9 +735,8 @@ function assertApplyOwnsHeldRun(
   takeRun: boolean,
   results: readonly PushResult[],
   adoptedIdentities: ReadonlyMap<string, string>,
-): boolean {
-  if (takeRun || held === null) return false;
-  let covered = false;
+): void {
+  if (takeRun || held === null) return;
   const unadopted = results.find((result) => {
     const row = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId: result.localId });
     const stale =
@@ -587,7 +754,6 @@ function assertApplyOwnsHeldRun(
     // different one is the identity conflict the recorder refuses per item, and
     // the batch cannot be made sane by proceeding.
     if (result.outcome === "confirmed" && named !== adopted) return true;
-    covered = true;
     return false;
   });
   if (unadopted !== undefined) {
@@ -605,7 +771,6 @@ function assertApplyOwnsHeldRun(
         "`--take-run` is not the repair here: it would bypass the ownership check that refused this batch",
     );
   }
-  return covered;
 }
 
 /**
@@ -627,14 +792,46 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const takeRun = input.takeRun === true;
   assertOperatorVerbsAgree(adoptions, released, forcedAdopt);
+  const namedRun = typeof input.run === "string" ? input.run.trim() : undefined;
+  if (namedRun !== undefined && takeRun) {
+    throw new UsageError(
+      "--run names the run these results continue; --take-run replaces the holder instead. Pass one of them",
+    );
+  }
 
   const target = await resolveTarget(invocation, input);
   const parsed = parseResults(await readJsonArgument(invocation, input.results, "--results"));
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  let run: RunLease | null = null;
-  let borrowedLease = false;
-  try {
-    const db = handle.db;
+  const recordsResults = parsed.results.length > 0;
+  // why: Raw results are only meaningful as the answer to a plan this repository
+  // recorded. A batch that names no run cannot be attributed to one, and a
+  // takeover never records results — it exists to release a dead holder.
+  if (recordsResults && takeRun) {
+    throw refused(
+      "sync.run-held",
+      "a takeover records no results: it only replaces a holder you confirmed dead. Take the run over with an empty " +
+        "result list (\`--results -\` carrying \`[]\`), then record these results under the run id the takeover returns",
+    );
+  }
+  // why: an ordinary cycle that planned nothing (empty project, every item skipped or
+  // unresolved) is completed by naming its own run with an empty list; that is a
+  // completion, not a borrow. Anything unnamed must name what it records instead.
+  if (!recordsResults && adoptions.length === 0 && released.size === 0 && !takeRun && namedRun === undefined) {
+    throw new UsageError(
+      "--results carries no entries and no operator verb was given, so there is nothing to record. Pass the results your " +
+        "Linear tools returned, `--adopt <localId>=<issueUrl|externalId>` / `--release <localId>`, or `--run <runId>` with " +
+        "an empty list to complete the run `pending` returned when it planned no work",
+    );
+  }
+  if (recordsResults && namedRun === undefined) {
+    throw refused(
+      "sync.run-held",
+      "these results are unattributed: pass \`--run <runId>\` with the id the \`pending\` report returned for them. A result " +
+        "from an earlier attempt is not attributable to any run — reconcile it with \`mstar issue-sync ingest --project " +
+        target.projectId + " --records <file|->\`, or name the remote issue it is about with \`--adopt <localId>=<issueUrl|externalId>\`",
+    );
+  }
+  return syncWrite(target, (db, authority) => {
+    requireMirror(authority);
     // why: the ownership preflight below must see the identities this invocation
     // already validates, so every operator verb is checked before it, not after.
     const adoptedIdentities = new Map<string, string>();
@@ -648,35 +845,84 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     assertReleaseTargets(db, target.bindingId, released);
 
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
-    // why: the preflight answers whether this batch was admitted ONLY through adoption
-    // coverage, i.e. it runs under a lease this invocation did not acquire; that lease
-    // belongs to its holder and must survive this call.
-    borrowedLease = assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
-    run =
-      takeRun || held === null
-        ? acquireRun(db, {
-            bindingId: target.bindingId,
-            direction: PUSH_DIRECTION,
-            holderPid: process.pid,
-            holderHost: hostname(),
-            reason: takeRun ? "operator took the run over with --take-run" : "issue-sync apply",
-            takeRun,
-          })
-        : held;
-    const push = pushContextFor(target, run.runId);
+    // why: a stale create cycle this run did not open may only be recorded through the
+    // adoption that names its identity; the preflight refuses the rest before a write.
+    if (recordsResults) {
+      assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
+    }
+    // why: raw results continue the run the caller NAMED and nothing else — not the
+    // currently held token, not a fresh one. An operator-only batch (adopt/release)
+    // is an explicitly confirmed action, so it may borrow the held lease or open one
+    // so every ledger write still carries a token.
+    let active: RunLease;
+    if (namedRun !== undefined) {
+      if (held === null) {
+        throw refused(
+          "sync.run-held",
+          "no run holds " + target.bindingId + " now, so --run " + JSON.stringify(namedRun) +
+            " continues nothing. Run `mstar issue-sync pending --project " + target.projectId + "` and pass the runId it returns",
+        );
+      }
+      if (held.runId !== namedRun) {
+        throw refused(
+          "sync.run-held",
+          "--run " + JSON.stringify(namedRun) + " does not name the run holding " + target.bindingId + " now (" +
+            JSON.stringify(held.runId) + ", started " + held.startedAt + "). These results belong to another run: apply the " +
+            "runId the current `pending` returned, or end that run with `--take-run` and an empty result list once you " +
+            "confirmed its holder is dead, then re-plan",
+        );
+      }
+      requireRunBinding(held, target, authority);
+      active = held;
+    } else if (takeRun) {
+      if (held === null) {
+        throw refused(
+          "sync.run-held",
+          "no run holds " + target.bindingId + ", so there is nothing to take over. Run `mstar issue-sync pending --project " +
+            target.projectId + "` to open one",
+        );
+      }
+      // why: a takeover clears a dead holder without recording anything, and it
+      // restamps the run under the binding in force, which is how a superseded run
+      // is retired after a rebind.
+      active = acquireRun(db, {
+        bindingId: target.bindingId,
+        direction: PUSH_DIRECTION,
+        holderPid: process.pid,
+        holderHost: hostname(),
+        reason: "operator took the run over with --take-run " + runStampOf(target, authority),
+        takeRun: true,
+      });
+    } else if (held === null) {
+      active = acquireRun(db, {
+        bindingId: target.bindingId,
+        direction: PUSH_DIRECTION,
+        holderPid: process.pid,
+        holderHost: hostname(),
+        reason: "issue-sync apply " + runStampOf(target, authority),
+      });
+    } else {
+      requireRunBinding(held, target, authority);
+      active = held;
+    }
+    // why: only a run this invocation acquired (a fresh one, a takeover, or the exact
+    // run it named) may be ended here. An operator-only batch that found a run held by
+    // someone else borrowed that lease and must leave it intact: its holder may still
+    // be inside a provider call, and its own exact-token results must remain valid.
+    const ownsRun = namedRun !== undefined || takeRun || held === null;
+    const push = pushContextFor(target, active.runId);
     const report: ApplyReport = {
       projectId: target.projectId,
       bindingId: target.bindingId,
-      runId: run.runId,
+      runId: active.runId,
       adopted: [],
       released: [],
       // why: an operator who adopted a residue needs to know the newer holder still
       // owns the direction, or the next `pending` refusal looks unexplained.
-      lease: borrowedLease ? "left-to-the-holder" : "released",
+      lease: ownsRun ? "released" : "left-to-the-holder",
       items: [...parsed.refused],
       counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
     };
-
 
     // why: Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
     // identity and forgets the previous one's proof, so the next `pending`
@@ -685,7 +931,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     for (const { localId, reference } of adoptions) {
       const adopted = adoptItem(db, target.bindingId, localId, reference, {
         force: forcedAdopt.has(localId),
-        runId: run.runId,
+        runId: active.runId,
       });
       report.adopted.push({ localId, externalId: adopted.externalId });
     }
@@ -712,23 +958,17 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       else if (outcome.outcome === "unconfirmed") report.counts.unconfirmed += 1;
       else report.counts.refused += 1;
     }
-    return envelope(id, report);
-  } finally {
-    // why: The run ends on EVERY exit, and only when this run still holds it: a run a
-    // takeover replaced names a token the successor does not carry, and a lease
-    // merely borrowed for adoption coverage belongs to its holder, so neither is
-    // deleted here.
-    if (run !== null && !borrowedLease) {
-      try {
-        releaseRun(handle.db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: run.runId });
-      } catch {
-        // why: A release that cannot land must not mask the outcome that produced it.
-      }
+    // invariant: The run ends in the commit that recorded its results, and only when this
+    // invocation owns it (exact named run, takeover, or a run it acquired): a lease
+    // merely borrowed by an operator-only batch belongs to its holder. A batch that
+    // refuses before this point rolls back whole, so the run a `pending` opened stays
+    // held and the same results can be re-sent under its id.
+    if (ownsRun) {
+      releaseRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: active.runId });
     }
-    handle.close();
-  }
+    return envelope(id, report);
+  });
 }
-
 /**
  * Validate a listing the caller fetched. Unlike `--results`, an ill-formed
  * listing is the caller's own defect and nothing has been written yet, so it is
@@ -801,11 +1041,15 @@ type IngestEnvelope = IngestReport & {
 async function runIngest(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
   const records = parseRecords(await readJsonArgument(invocation, input.records, "--records"));
-  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
-  try {
+  return syncWrite(target, (db, authority) => {
+    requireMirror(authority);
+    // why: An association recorded under a run opened for another binding would
+    // attribute these remote issues to a destination this command no longer mirrors.
+    const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
+    if (held !== null) requireRunBinding(held, target, authority);
     const report = ingestRecords(
-      handle.db,
-      { bindingId: target.bindingId, identity: target.identity, mapping: target.binding.mapping },
+      db,
+      { bindingId: target.bindingId, identity: target.identity, mapping: target.linear.mapping },
       records,
     );
     const data: IngestEnvelope = {
@@ -822,9 +1066,7 @@ async function runIngest(id: string, input: Input, invocation: InvocationContext
       },
     };
     return envelope(id, data);
-  } finally {
-    handle.close();
-  }
+  });
 }
 
 export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {

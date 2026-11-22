@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,10 +49,16 @@ afterAll(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: t
 async function harness(): Promise<string> {
   const root = mkdtempSync(join(tmpdir(), "workflow-family-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harnessDir = join(root, ".mstar");
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
   writeFileSync(join(harnessDir, "plans", "plan-anchor.md"), "# Anchor plan\n\n**plan_id:** plan-anchor\n");
   (await initializeStore({ harnessDir })).close();
+  await ensureCollaborationAuthority({ harnessDir });
   return harnessDir;
 }
 

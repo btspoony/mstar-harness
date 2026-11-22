@@ -5,11 +5,12 @@
  * field forwarding or source strings.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore } from "@mstar-harness/engine";
+import { writeFixtureRepoId } from "./harness";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -93,9 +94,12 @@ function capturePayload(overrides: Record<string, unknown> = {}): Record<string,
 async function makeHarness(): Promise<{ root: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), "mstar-issue-cli-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   await initializeStore({ harnessDir: harness }).then((h) => h.close());
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { root, harness };
 }
 

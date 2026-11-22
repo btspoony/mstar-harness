@@ -1,13 +1,17 @@
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import * as nodeFs from "node:fs";
-import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
-import { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
+import { upgradeStoreMinimal as importStoreMinimal, importExecutionMinimal as importLegacyExecution, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
+import { initializeCollaborationStore } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { writeCollaborationBinding } from "./collaboration-store.js";
 import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
@@ -21,6 +25,21 @@ import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.j
 import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
+/**
+ * note: The collaboration lane is user-level, so every case pins `homedir` to a
+ * temporary home (a real spy on the live module binding) and every upgraded
+ * workspace gets its own checkout identity.
+ */
+const HOME = join(ROOT, "home");
+let homeSpy: { mockRestore: () => void };
+const previousHome = process.env.HOME;
+beforeAll(() => {
+  mkdirSync(HOME, { recursive: true });
+  // invariant: `homedir` for this process, and HOME for the worker children this suite
+  // spawns: both must land in the temporary home, never the operator's.
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+  process.env.HOME = HOME;
+});
 /** Declared Node floor from the owning manifest (package.json is the sole
  * version authority); a node consumer below it would be refused. */
 function declaredNodeFloorFromManifest(file: string): string {
@@ -36,8 +55,66 @@ const declaredNodeFloor = declaredNodeFloorFromManifest(join(import.meta.dir, ".
 const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) + 1}.0.0`;
 afterAll(() => {
   setArtifactStore(undefined);
+  homeSpy.mockRestore();
+  process.env.HOME = previousHome;
   rmSync(ROOT, { recursive: true, force: true });
 });
+
+/**
+ * note: The checkout identity and ACTIVE collaboration lane one upgraded workspace
+ * belongs to. A legacy execution import confirms this lane before it can report
+ * success, so each fixture needs a real Git checkout with an explicit `repo_id`
+ * (the lane path stays deterministic and private) and the staged record flipped
+ * to active — this release ships no public activator yet. Idempotent per context.
+ */
+async function collaborationLane(context: StoreContext): Promise<void> {
+  const checkout = dirname(context.harnessDir);
+  mkdirSync(context.harnessDir, { recursive: true });
+  // invariant: Never follows or creates a nested repository: the fixture root is the
+  // checkout, exactly as a real workspace's harness sits inside its repository.
+  execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: "ignore" });
+  const repoId = basename(checkout).toLowerCase().replace(/[^a-z0-9._-]/g, "-").replace(/^[^a-z0-9]/, "x");
+  writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId}\n`);
+  const location = resolveCollaborationLocation(context);
+  if (!existsSync(location.dbPath)) await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1 and authority_state = 'staged'")
+      .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") {
+      authority = { storeId: row.store_id, epoch: row.authority_epoch };
+    }
+  } finally {
+    lane.close();
+  }
+  // invariant: A published authority is bound to its checkout by the activation it went
+  // through; the fixture records that binding, exactly as the supported verb does.
+  if (authority !== null) {
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      binding: "active",
+    });
+  }
+}
+
+/**
+ * why: `upgradeStoreMinimal` with this fixture's collaboration lane in place first,
+ * so every case exercises the real import against an authoritative lane instead
+ * of repeating the bootstrap in fifty fixtures.
+ */
+async function upgradeStoreMinimal(
+  input: Parameters<typeof importStoreMinimal>[0],
+): Promise<MinimalStoreUpgradeResult> {
+  await collaborationLane(input.context);
+  return importStoreMinimal(input);
+}
 
 /**
  * Test-only instrumentation of the platform `node:fs` calls the importer
@@ -1524,7 +1601,10 @@ test("no-store upgrade initializes execution schema and imports every populated 
   // records its result, so that table alone differs.
   const afterNative = await protectedStore(context);
   expect(afterNative.schema).toEqual(nativeBefore.schema);
-  for (const table of Object.keys(nativeBefore.tables).filter((table) => table !== "store_operations")) {
+  // invariant: The replay's own receipts are the ONE expected addition: an operation
+  // always records its result and its reservation, so those two ledgers alone
+  // differ and every business row stays byte-identical.
+  for (const table of Object.keys(nativeBefore.tables).filter((table) => table !== "store_operations" && table !== "execution_collaboration_intents")) {
     expect(afterNative.tables[table]).toEqual(nativeBefore.tables[table]);
   }
   expect((afterNative.tables.store_operations ?? []).length).toBeGreaterThan((nativeBefore.tables.store_operations ?? []).length);
@@ -2897,7 +2977,9 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   );
   expect(project.id).toBe("_default");
   const current = await readRoadmapAuthority(context, "_default");
-  expect(current).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  const { collaboration: currentEvidence, ...currentRead } = current;
+  expect(currentRead).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
+  expect(currentEvidence.completeness).toBe("complete");
   const roadmap = [
     "---",
     "project_id: _default",
@@ -3169,6 +3251,9 @@ test("a registered workflow with a MISSING snapshot stays an ordinary reported s
 
 test("concurrent importer processes serialize through SQLite, not a status directory", async () => {
   const { context } = legacyV1Workspace("v1-concurrent");
+  // invariant: The workers import through the public engine verb, so their lane must exist
+  // before they start racing for it.
+  await collaborationLane(context);
   const worker = join(ROOT, "upgrade-worker.mjs");
   writeFileSync(worker, `
 import { upgradeStoreMinimal } from ${JSON.stringify(join(import.meta.dir, "execution-minimal-import.ts"))};
@@ -3267,7 +3352,9 @@ for (const shape of ["symlink", "directory"] as const) {
     expect(accessed.filter((path) => path === target || path.startsWith(`${snapshot}/`))).toEqual([]);
     const after = await protectedStore(context);
     for (const [name, rows] of Object.entries(before.tables)) {
-      if (name.startsWith("execution_") && name !== "execution_operations") expect(after.tables[name]).toEqual(rows);
+      // invariant: The refused operation's own two ledgers (its reservation and its
+      // recorded decline) are the expected additions; no authority row moved.
+      if (name.startsWith("execution_") && name !== "execution_operations" && name !== "execution_collaboration_intents") expect(after.tables[name]).toEqual(rows);
     }
     expect(readFileSync(target).equals(legacyBytes)).toBe(true);
     expect(shape === "symlink" ? lstatSync(snapshot).isSymbolicLink() : lstatSync(snapshot).isDirectory()).toBe(true);
@@ -3354,8 +3441,9 @@ for (const swap of ["fifo", "symlink"] as const) {
     // The swap happens INSIDE the descriptor window, after the type probe, so the
     // new bounded read is what has to refuse it. A blocking open cannot be
     // interrupted in-process, so the probe runs in a child with a real timeout.
-    const probe = (harnessDir: string, operationId: string): { status: string; code?: string; message?: string; imported?: number } =>
-      JSON.parse(execFileSync(process.execPath, ["-e", `
+    const probe = async (harnessDir: string, operationId: string): Promise<{ status: string; code?: string; message?: string; imported?: number }> => {
+      await collaborationLane({ harnessDir });
+      return JSON.parse(execFileSync(process.execPath, ["-e", `
         const { createRequire } = await import("node:module");
         const fs = createRequire(import.meta.url)("node:fs");
         const realOpen = fs.openSync;
@@ -3382,7 +3470,8 @@ for (const swap of ["fifo", "symlink"] as const) {
           console.log(JSON.stringify({ status: "threw", code: error && error.code, message: String(error && error.message).slice(0, 1200) }));
         }
       `], { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }));
-    const refused = probe(context.harnessDir, `op-v1-compass-${swap}`);
+    };
+    const refused = await probe(context.harnessDir, `op-v1-compass-${swap}`);
     expect(refused.status).toBe("threw");
     expect(refused.code).toBe("execution.migration-conflict");
     expect(refused.message).toContain("delivery-compass.md");
@@ -3391,7 +3480,7 @@ for (const swap of ["fifo", "symlink"] as const) {
     expect(swap === "fifo" ? lstatSync(compass).isFIFO() : lstatSync(compass).isSymbolicLink()).toBe(true);
     // A decidable v1 root in the same run shape still imports its rows.
     const { context: healthy } = legacyV1Workspace(`v1-compass-${swap}-control`);
-    expect(probe(healthy.harnessDir, `op-v1-compass-${swap}-control`)).toMatchObject({ status: "ok", imported: 2 });
+    expect(await probe(healthy.harnessDir, `op-v1-compass-${swap}-control`)).toMatchObject({ status: "ok", imported: 2 });
   }, 30_000);
 }
 
@@ -3995,3 +4084,301 @@ test("the source digest is code-unit ordered, so the same bytes keep one identit
   expect(second).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: ["wf-digest-locale"] });
 });
 
+test("collaboration legacy import replay \u2014 the lane is confirmed before success, a retry resumes the FIRST admitted identity, and a committed effect replays after interruption", async () => {
+  const { context } = legacyWorkspace("legacy-import-replay");
+  const workflowId = "wf-legacy-import-replay";
+  // invariant: The lane (and the checkout identity it resolves from) must exist first.
+  await collaborationLane(context);
+  const lane = resolveCollaborationLocation(context);
+  const read = (sql: string, ...params: Array<string | number>) => {
+    const db = new DatabaseSync(lane.dbPath);
+    try { return db.prepare(sql).all(...params) as Array<Record<string, unknown>>; } finally { db.close(); }
+  };
+  const executionRows = async (sql: string, ...params: Array<string | number>) => {
+    const store = await openStore(context, "read");
+    try { return store.db.prepare(sql).all(...params) as Array<Record<string, unknown>>; } finally { store.close(); }
+  };
+
+  // invariant: (1) The witness preflight: a lane that is not active cannot be confirmed as
+  // this import's authority, so the import refuses by name before admitting
+  // anything — no reservation, no effect, no execution row.
+  const staged = new DatabaseSync(lane.dbPath);
+  try { staged.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run(); } finally { staged.close(); }
+  const refused = await importStoreMinimal({
+    context, operator: "operator", operationId: "op-legacy-import-staged",
+  }).catch((error: Error & { code?: string }) => error);
+  expect(refused).toMatchObject({ code: "collaboration.not-active" });
+  expect(await executionRows("select count(*) as n from execution_workflows")).toEqual([{ n: 0 }]);
+  expect(await executionRows("select count(*) as n from execution_collaboration_intents")).toEqual([{ n: 0 }]);
+  expect(read("select count(*) as n from collaboration_operations where key_space = 'composite'")).toEqual([{ n: 0 }]);
+
+  // note: (2) The operator reactivates the reviewed lane; the import confirms it,
+  // commits the execution rows and records its receipt under the admitted id.
+  const restored = new DatabaseSync(lane.dbPath);
+  try { restored.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run("2026-10-04T00:00:00.000Z"); } finally { restored.close(); }
+  const firstId = "op-legacy-import-first";
+  const imported = await importStoreMinimal({ context, operator: "operator", operationId: firstId });
+  expect(imported).toMatchObject({ verdict: "upgraded", imported: 1, importedIds: [workflowId] });
+  expect(await executionRows("select operation_id from store_operations where operation_id not like '%#dsh-host-state'")).toEqual([{ operation_id: firstId }]);
+  expect(read("select count(*) as n from collaboration_operations where key_space = 'composite'")).toEqual([{ n: 1 }]);
+
+  // why: (3) An interruption AFTER the collaboration effect committed and BEFORE the
+  // execution delta left: the effect receipt is the durable anchor, so a retry
+  // with the FRESH id a CLI mints finds the original admitted identity, replays
+  // the recorded confirmation instead of confirming a second time, and restores
+  // the retained execution receipt.
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from execution_sessions where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_inputs where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_plans where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_workflows where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run(firstId);
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run(firstId);
+  } finally { surgery.close(); }
+  expect(await executionRows("select count(*) as n from execution_workflows")).toEqual([{ n: 0 }]);
+  const resumed = await importStoreMinimal({ context, operator: "operator", operationId: "op-legacy-import-after-crash" });
+  expect(resumed).toEqual(imported);
+  expect(read("select count(*) as n from collaboration_operations where key_space = 'composite'")).toEqual([{ n: 1 }]);
+  expect(await executionRows("select workflow_id from execution_workflows")).toEqual([{ workflow_id: workflowId }]);
+  expect(await executionRows("select operation_id from store_operations where operation_id not like '%#dsh-host-state'")).toEqual([{ operation_id: firstId }]);
+  // why: The retained legacy receipt answers any later invocation of the same bytes:
+  // a NEW operation proves that replay instead of importing a second time.
+  expect(await importStoreMinimal({ context, operator: "operator", operationId: "op-legacy-import-later" })).toMatchObject({
+    verdict: "nothing-to-import",
+    imported: 0,
+    importedIds: [],
+  });
+});
+
+test("collaboration legacy import replay \u2014 a retry with a different workflow-skip set cannot adopt the pending import", async () => {
+  const { context } = legacyWorkspace("legacy-import-skip-identity");
+  const workflowId = "wf-legacy-import-skip-identity";
+  await collaborationLane(context);
+  const receipt = async (sql: string, ...params: Array<string | number>) => {
+    const store = await openStore(context, "read");
+    try { return store.db.prepare(sql).all(...params) as Array<Record<string, unknown>>; } finally { store.close(); }
+  };
+  const first = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-skips-a" });
+  expect(first).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  // invariant: A second admitted attempt that never finalized: its reservation is pending
+  // and its receipt is gone, so it is exactly what a retry would resume.
+  const admitted = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-skips-b" });
+  expect(admitted).toMatchObject({ verdict: "nothing-to-import" });
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-import-skips-b");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-import-skips-b");
+  } finally { surgery.close(); }
+
+  // invariant: The retry carries a DIFFERENT acknowledgement set — legitimate, because the
+  // id is now a collision this run may dispose of. A different reviewed payload
+  // must not adopt the pending operation: it runs under its own id and leaves
+  // the pending one untouched.
+  const acked = await importStoreMinimal({
+    context, operator: "operator", operationId: "op-import-skips-c", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(acked).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("unnecessary for that id and disposed of no import"));
+  expect(await receipt("select phase from execution_collaboration_intents where operation_id = ?", "op-import-skips-b")).toEqual([{ phase: "prepared" }]);
+  expect(await receipt("select operation_id from store_operations where operation_id like 'op-import-skips-%' and operation_id not like '%#dsh-host-state'")).toEqual([
+    { operation_id: "op-import-skips-a" },
+    { operation_id: "op-import-skips-c" },
+  ]);
+});
+
+test("collaboration legacy import replay \u2014 a refused lane never leaves an empty active execution authority", async () => {
+  const { context } = legacyWorkspace("legacy-import-lane-refusal");
+  await collaborationLane(context);
+  const seed = await initializeStore(context);
+  seed.close();
+  // invariant: A STAGED execution authority and a STAGED collaboration lane: the shape of a
+  // reviewed file-era import that has not been authorized yet. Nothing about the
+  // execution store may be promoted while the lane is refused.
+  const stagedStore = await openStore(context, "write");
+  try {
+    stagedStore.db.prepare("update execution_meta set authority_state = 'staged', activated_at = null where id = 1").run();
+  } finally { stagedStore.close(); }
+  const lane = resolveCollaborationLocation(context);
+  const stagedLane = new DatabaseSync(lane.dbPath);
+  try { stagedLane.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run(); } finally { stagedLane.close(); }
+
+  const refused = await importLegacyExecution({ context, operator: "operator", operationId: "op-lane-refusal" })
+    .catch((error: Error & { code?: string }) => error);
+  expect(refused).toMatchObject({ code: "collaboration.not-active" });
+  const store = await openStore(context, "read");
+  try {
+    // note: The staged store stayed staged and unadvanced, with no reservation and no
+    // imported row: the lane is validated before anything is promoted.
+    expect(store.db.prepare("select authority_state, revision, activated_at from execution_meta where id = 1").get())
+      .toEqual({ authority_state: "staged", revision: 1, activated_at: null });
+    expect(store.db.prepare("select count(*) as n from execution_collaboration_intents").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from store_operations").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+
+  // note: Reactivating the reviewed lane lets the SAME verb complete: the promotion
+  // and the single revision advance happen only on this accepted run.
+  const activeLane = new DatabaseSync(lane.dbPath);
+  try { activeLane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run("2026-10-04T00:00:00.000Z"); } finally { activeLane.close(); }
+  expect(await importLegacyExecution({ context, operator: "operator", operationId: "op-lane-refusal-2" }))
+    .toMatchObject({ verdict: "upgraded", imported: 1 });
+  const after = await openStore(context, "read");
+  try {
+    expect(after.db.prepare("select authority_state, revision from execution_meta where id = 1").get())
+      .toEqual({ authority_state: "active", revision: 2 });
+    expect(after.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+  } finally { after.close(); }
+});
+
+test("collaboration legacy import replay \u2014 an interrupted import never exposes an ACTIVE store without its imported workflows", async () => {
+  const { context } = legacyWorkspace("legacy-import-no-empty-active");
+  const workflowId = "wf-legacy-import-no-empty-active";
+  await collaborationLane(context);
+  const seed = await initializeStore(context);
+  seed.close();
+  // note: A reviewed-but-unpromoted execution store: staged, empty.
+  const staged = await openStore(context, "write");
+  try {
+    staged.db.prepare("update execution_meta set authority_state = 'staged', revision = 1, activated_at = null where id = 1").run();
+  } finally { staged.close(); }
+
+  const imported = await importLegacyExecution({ context, operator: "operator", operationId: "op-no-empty-active" });
+  expect(imported).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  const done = await readExecutionState(context);
+  expect(done.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
+  const doneStore = await openStore(context, "read");
+  try {
+    expect(doneStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally { doneStore.close(); }
+
+  // invariant: Recreate the interruption boundary "effect committed, finalization never
+  // ran": the promotion and the rows are gone together, the authority is staged
+  // again, and the reservation is pending. Nothing can observe ACTIVE here.
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from execution_sessions where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_inputs where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_plans where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_workflows where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-no-empty-active");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-no-empty-active");
+    surgery.db.prepare("update execution_meta set authority_state = 'staged', revision = 1, activated_at = null where id = 1").run();
+  } finally { surgery.close(); }
+
+  // invariant: The observable state of the interruption itself: staged and empty — never an
+  // ACTIVE workflow list without the imported row.
+  // The observable state of the interruption itself: the ordinary execution read
+  // refuses a staged store outright, so no caller can see an ACTIVE workflow list
+  // without the imported row.
+  await expect(readExecutionState(context)).rejects.toMatchObject({ code: "execution.not-active" });
+  const midStore = await openStore(context, "read");
+  try {
+    expect(midStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "staged" });
+    expect(midStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(midStore.db.prepare("select phase from execution_collaboration_intents where operation_id = ?").get("op-no-empty-active")).toEqual({ phase: "prepared" });
+  } finally { midStore.close(); }
+
+  // note: The resumed run promotes and imports in ONE step, and reproduces the
+  // uninterrupted token.
+  const resumed = await importLegacyExecution({ context, operator: "operator", operationId: "op-no-empty-active-retry" });
+  expect(resumed).toEqual(imported);
+  const after = await readExecutionState(context);
+  expect(after.token).toEqual(done.token);
+  expect(after.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
+  const afterStore = await openStore(context, "read");
+  try {
+    expect(afterStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally { afterStore.close(); }
+});
+
+test("collaboration legacy import replay \u2014 a staged-authority interruption spends the execution revision exactly once", async () => {
+  const { context } = legacyWorkspace("legacy-import-staged-interrupt");
+  const workflowId = "wf-legacy-import-staged-interrupt";
+  await collaborationLane(context);
+  const imported = await importStoreMinimal({ context, operator: "operator", operationId: "op-staged-interrupt" });
+  expect(imported).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  // note: The token an UNINTERRUPTED import of these bytes produces.
+  const uninterrupted = await readExecutionState(context);
+
+  // invariant: The interrupted shape: the staged authority was promoted, the effect
+  // committed, and the finalization never ran. The admission advanced nothing,
+  // so the interrupted store still sits at the revision the admission read.
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from execution_sessions where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_inputs where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_plans where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_workflows where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-staged-interrupt");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-staged-interrupt");
+    surgery.db.prepare("update execution_meta set revision = 1, authority_state = 'active' where id = 1").run();
+  } finally { surgery.close(); }
+
+  const resumed = await importStoreMinimal({ context, operator: "operator", operationId: "op-staged-interrupt-retry" });
+  expect(resumed).toEqual(imported);
+  const after = await readExecutionState(context);
+  // note: The same token as the uninterrupted run: the resumed finalization spent the
+  // SAME single advance, not a second one.
+  expect(after.token).toEqual(uninterrupted.token);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select revision from execution_meta where id = 1").get()).toEqual({ revision: 2 });
+  } finally { store.close(); }
+});
+
+test("a lost import acknowledgement is disclosed on the result and repaired by the same-operation replay", async () => {
+  const { context } = legacyWorkspace("import-ack-disclosure");
+  const first = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  expect(first.imported).toBeGreaterThan(0);
+  expect(first.warnings ?? []).toEqual([]);
+
+  const lanePath = resolveCollaborationLocation(context).dbPath;
+  const readAck = (): string | null => {
+    const db = new DatabaseSync(lanePath);
+    try {
+      const row = db.prepare("select result_json from collaboration_operations where key_space = 'composite' order by rowid desc limit 1").get() as
+        | { result_json?: string }
+        | undefined;
+      if (typeof row?.result_json !== "string") return null;
+      const parsed = JSON.parse(row.result_json) as { acknowledgedAt?: unknown };
+      return typeof parsed.acknowledgedAt === "string" ? parsed.acknowledgedAt : null;
+    } finally {
+      db.close();
+    }
+  };
+  expect(readAck()).not.toBeNull();
+  // note: The supported two-transaction window: the execution half committed and the
+  // acknowledgement write was lost.
+  const clear = new DatabaseSync(lanePath);
+  try {
+    const row = clear
+      .prepare("select operation_id, result_json from collaboration_operations where key_space = 'composite' order by rowid desc limit 1")
+      .get() as { operation_id: string; result_json: string };
+    const parsed = JSON.parse(row.result_json) as Record<string, unknown>;
+    clear
+      .prepare("update collaboration_operations set result_json = ? where operation_id = ?")
+      .run(JSON.stringify({ ...parsed, acknowledgedAt: null }), row.operation_id);
+  } finally {
+    clear.close();
+  }
+
+  // invariant: A repair that cannot write (the lane is not writable) is DISCLOSED, not hidden.
+  chmodSync(lanePath, 0o400);
+  let pending: MinimalStoreUpgradeResult;
+  try {
+    pending = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  } finally {
+    chmodSync(lanePath, 0o600);
+  }
+  expect(pending.warnings?.join(" ")).toContain("collaboration acknowledgement pending");
+
+  // note: The same-operation replay repairs ONLY the acknowledgement.
+  const repaired = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  expect(repaired.warnings ?? []).toEqual([]);
+  expect(readAck()).not.toBeNull();
+  expect(repaired.imported).toBe(first.imported);
+});

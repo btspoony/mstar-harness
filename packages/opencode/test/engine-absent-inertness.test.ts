@@ -41,6 +41,7 @@ export const caseFoldedRegisterRoot = unavailable;
 export const composeDispatchGate = unavailable;
 export const decodeExecutionSessionRef = unavailable;
 export const detectStoreRuntime = unavailable;
+export const probeCollaborationAuthority = unavailable;
 export const executionContextFor = unavailable;
 export const extractFrontmatterAndBody = unavailable;
 export const harnessDocKindOfTarget = unavailable;

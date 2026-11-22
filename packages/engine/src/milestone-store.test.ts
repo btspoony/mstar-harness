@@ -1,24 +1,68 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from "./milestone-store.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "milestone-store-"));
-const context: StoreContext = { harnessDir: root };
+const root = mkdtempSync(join(nodeOs.tmpdir(), "tmp-milestone-store-"));
+const HOME = join(root, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
 let db: StoreDb;
 const otherProjectId = "milestone-other-project";
 const projectId = "milestone-test-project";
+
+/** note: A synthetic checkout whose origin names the collaboration repository. */
+function checkout(name: string): StoreContext {
+  const repo = join(root, name);
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
+  return { harnessDir: join(repo, ".mstar") };
+}
+
+/** invariant: The private staged record flipped to active, plus the checkout binding the
+ * real activation writes: an ACTIVE authority is never usable unbound. */
+function activateLocation(context: StoreContext): string {
+  const location = resolveCollaborationLocation(context);
+  const handle = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
+  try {
+    handle.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = handle.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as { store_id?: unknown; authority_epoch?: unknown } | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") authority = { storeId: row.store_id, epoch: row.authority_epoch };
+  } finally {
+    handle.close();
+  }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, binding: "active" });
+  return location.dbPath;
+}
+
+const context = checkout("milestone-store");
 function issue(id: string, disposition: string, milestoneId: string | null): void {
   db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?,?)").run(id,projectId,id,milestoneId,disposition);
 }
 beforeAll(async () => {
-  const handle = await initializeStore(context); db = handle.db;
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+  mkdirSync(context.harnessDir!, { recursive: true });
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  db = new DatabaseSync(activateLocation(context));
   db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(projectId,"Test project",`${projectId}/roadmap.md`);
   db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(otherProjectId,"Other project",`${otherProjectId}/roadmap.md`);
 });
-afterAll(() => { db.close(); rmSync(root,{recursive:true,force:true}); });
+afterAll(() => { db.close(); homeSpy?.mockRestore(); rmSync(root,{recursive:true,force:true}); });
+
+function revision(): number {
+  const row = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
+  return row.revision;
+}
 
 describe("milestone store", () => {
   test("validates name, calendar date and ordinal, and requires a catalog project", async () => {
@@ -29,7 +73,7 @@ describe("milestone store", () => {
     await expect(addMilestone(context,{projectId,name:42 as unknown as string,target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({name:"MilestoneError",code:"milestone.invalid-input"});
   });
   test("adds and updates with replay, conflict, delivery guards and single revision advances", async () => {
-    const before=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
+    const before=revision();
     const operationId=crypto.randomUUID();
     const input={projectId,name:"Release",target:"2026-10-01",ordinal:2};
     const added=await addMilestone(context,input,{operationId,expectedStoreRevision:before});
@@ -39,14 +83,13 @@ describe("milestone store", () => {
     expect(noOp).toMatchObject({revision:1,storeRevision:added.storeRevision,changed:false});
     expect(await addMilestone(context,{...input,name:" Release "},{operationId,expectedStoreRevision:before})).toEqual(added);
     await expect(addMilestone(context,{...input,name:"Other"},{operationId,expectedStoreRevision:before})).rejects.toMatchObject({code:"store.operation-conflict"});
-    let revision=added.storeRevision;
-    const activated=await updateMilestone(context,projectId,added.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
-    expect(activated).toMatchObject({revision:2,storeRevision:revision+1,changed:true}); revision=activated.storeRevision;
-    await expect(updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:revision})).rejects.toMatchObject({code:"milestone.empty"});
+    let current=added.storeRevision;
+    const activated=await updateMilestone(context,projectId,added.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
+    expect(activated).toMatchObject({revision:2,storeRevision:current+1,changed:true}); current=activated.storeRevision;
     issue("I-MILESTONE-1","open",added.milestoneId);
-    revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
-    await expect(updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:revision})).rejects.toMatchObject({code:"milestone.open-issues"});
-    const stale=revision;
+    current=revision();
+    await expect(updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:current})).rejects.toMatchObject({code:"milestone.open-issues"});
+    const stale=current;
     const concurrent = await Promise.allSettled([
       updateMilestone(context,projectId,added.milestoneId,{ordinal:3},{operationId:crypto.randomUUID(),expectedStoreRevision:stale}),
       updateMilestone(context,projectId,added.milestoneId,{ordinal:4},{operationId:crypto.randomUUID(),expectedStoreRevision:stale}),
@@ -55,27 +98,28 @@ describe("milestone store", () => {
     expect(concurrent.filter(result => result.status === "rejected")).toMatchObject([{reason:{code:"milestone.revision-conflict"}}]);
     expect(concurrent.find(result => result.status === "fulfilled")).toMatchObject({status:"fulfilled",value:{changed:true}});
     db.prepare("update issues set disposition='resolved' where id='I-MILESTONE-1'").run();
-    revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
-    const delivered=await updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
-    expect(delivered).toMatchObject({revision:4,storeRevision:revision+1});
+    current=revision();
+    const delivered=await updateMilestone(context,projectId,added.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
+    expect(delivered).toMatchObject({revision:4,storeRevision:current+1});
     await expect(updateMilestone(context,projectId,added.milestoneId,{status:"planned"},{operationId:crypto.randomUUID(),expectedStoreRevision:delivered.storeRevision})).rejects.toMatchObject({code:"milestone.invalid-transition"});
     const reopened=await updateMilestone(context,projectId,added.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:delivered.storeRevision});
     expect(reopened.revision).toBe(5);
     expect(concurrent.filter(result => result.status === "fulfilled")).toHaveLength(1);
   });
   test("rollup retains empty milestones, separates retired counts and counts unassigned issues", async () => {
-    const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
-    const full=await addMilestone(context,{projectId,name:"Full",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
+    const current=revision();
+    const full=await addMilestone(context,{projectId,name:"Full",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     const empty=await addMilestone(context,{projectId,name:"Empty",target:null,ordinal:1},{operationId:crypto.randomUUID(),expectedStoreRevision:full.storeRevision});
     issue("I-MILESTONE-2","resolved",full.milestoneId); issue("I-MILESTONE-3","waived",full.milestoneId); issue("I-MILESTONE-4","duplicate",full.milestoneId); issue("I-MILESTONE-5","superseded",full.milestoneId); issue("I-MILESTONE-6","open",null);
     const result=readMilestonesOn(db,projectId);
-    expect(result.milestones.map(milestone => [milestone.milestoneId,milestone.totalIssues,milestone.openIssues,milestone.resolvedIssues,milestone.otherRetiredIssues])).toEqual([[full.milestoneId,4,0,1,3],[empty.milestoneId,0,0,0,0],[(db.prepare("select milestone_id from project_milestones where project_id=? and name='Release'").get(projectId) as {milestone_id:string}).milestone_id,1,0,1,0]]);
+    const releaseRow = db.prepare("select milestone_id from project_milestones where project_id=? and name='Release'").get(projectId) as {milestone_id:string};
+    expect(result.milestones.map(milestone => [milestone.milestoneId,milestone.totalIssues,milestone.openIssues,milestone.resolvedIssues,milestone.otherRetiredIssues])).toEqual([[full.milestoneId,4,0,1,3],[empty.milestoneId,0,0,0,0],[releaseRow.milestone_id,1,0,1,0]]);
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones).toHaveLength(1);
     await expect(updateMilestone(context,projectId,full.milestoneId,{name:"x"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toBeInstanceOf(MilestoneError);
   });
   test("retiring a subject as obsolete counts as other-retired, never as resolved", async () => {
-    const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
-    const retired=await addMilestone(context,{projectId,name:"Retirement",target:null,ordinal:2},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
+    const current=revision();
+    const retired=await addMilestone(context,{projectId,name:"Retirement",target:null,ordinal:2},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     issue("I-MILESTONE-7","resolved",retired.milestoneId);
     issue("I-MILESTONE-8","obsolete",retired.milestoneId);
     issue("I-MILESTONE-9","open",retired.milestoneId);
@@ -86,26 +130,60 @@ describe("milestone store", () => {
       ["I-MILESTONE-7","resolved"],["I-MILESTONE-8","obsolete"],["I-MILESTONE-9","open"],
     ]);
   });
-  test("a staged store refuses the milestone path with store.not-active", async () => {
-    const stagedRoot = mkdtempSync(join(tmpdir(), "milestone-store-staged-"));
-    const staged: StoreContext = { harnessDir: stagedRoot };
-    const handle = await initializeStore(staged);
-    const stagedDb = handle.db;
+  test("a staged collaboration store refuses the milestone path", async () => {
+    const staged = checkout("milestone-store-staged");
+    mkdirSync(staged.harnessDir!, { recursive: true });
+    await initializeCollaborationStore(resolveCollaborationLocation(staged));
+    const stagedDb = new DatabaseSync(resolveCollaborationLocation(staged).dbPath);
     try {
-      stagedDb.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-      await expect(addMilestone(staged,{projectId,name:"Staged",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"store.not-active"});
+      // invariant: The opener refuses a staged lane before the domain guard is reached.
+      await expect(addMilestone(staged,{projectId,name:"Staged",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-active"});
+      // invariant: A handle that reaches the domain guard still refuses the staged row.
       expect(() => readMilestonesOn(stagedDb,projectId)).toThrow(expect.objectContaining({code:"store.not-active"}));
     } finally {
       stagedDb.close();
-      rmSync(stagedRoot,{recursive:true,force:true});
     }
   });
   test("milestone status rejects missing and cross-project IDs", async () => {
-    const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
-    const own=await addMilestone(context,{projectId,name:"Own",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
+    const current=revision();
+    const own=await addMilestone(context,{projectId,name:"Own",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     const foreign=await addMilestone(context,{projectId:otherProjectId,name:"Foreign",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:own.storeRevision});
     expect(readMilestonesOn(db,projectId,own.milestoneId).milestones).toHaveLength(1);
     expect(() => readMilestonesOn(db,projectId,"missing-milestone")).toThrow(expect.objectContaining({code:"milestone.not-found"}));
     expect(() => readMilestonesOn(db,projectId,foreign.milestoneId)).toThrow(expect.objectContaining({code:"milestone.project-mismatch"}));
+  });
+  test("milestone store: delivery counts its open issues inside its own mutation, never from a prior read", async () => {
+    const current=revision();
+    const scheduled=await addMilestone(context,{projectId,name:"Delivery counts",target:null,ordinal:9},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
+    const activated=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:scheduled.storeRevision});
+    // note: A rollup read is not the delivery decision: it reports zero open issues...
+    expect(readMilestonesOn(db,projectId,scheduled.milestoneId).milestones[0]).toMatchObject({openIssues:0});
+    // note: ...and a row written after that read, without moving the store revision,
+    // is still counted by the delivery's own collaboration transaction.
+    issue("I-MILESTONE-DELIVERY","open",scheduled.milestoneId);
+    await expect(updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision})).rejects.toMatchObject({code:"milestone.open-issues"});
+    db.prepare("update issues set disposition='resolved' where id='I-MILESTONE-DELIVERY'").run();
+    const delivered=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
+    expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
+  });
+  test("milestone store: an empty milestone delivers on a complete observation, and an unavailable one refuses", async () => {
+    const before=revision();
+    const empty=await addMilestone(context,{projectId,name:"Empty delivery",target:null,ordinal:10},{operationId:crypto.randomUUID(),expectedStoreRevision:before});
+    const activated=await updateMilestone(context,projectId,empty.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:empty.storeRevision});
+    // why: A complete observation proves zero linked issues, so delivery passes; the
+    // rollup keeps reporting an empty milestone, not a missing one.
+    expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({totalIssues:0,openIssues:0});
+    const delivered=await updateMilestone(context,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
+    expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
+    expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({status:"delivered",totalIssues:0,openIssues:0,resolvedIssues:0,otherRetiredIssues:0});
+
+    // invariant: An unavailable observation is not an empty one: the same delivery refuses.
+    const staged=checkout("milestone-store-delivery-staged");
+    mkdirSync(staged.harnessDir!,{recursive:true});
+    await initializeCollaborationStore(resolveCollaborationLocation(staged));
+    await expect(updateMilestone(staged,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-active"});
+    const missing=checkout("milestone-store-delivery-missing");
+    mkdirSync(missing.harnessDir!,{recursive:true});
+    await expect(updateMilestone(missing,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-initialized"});
   });
 });

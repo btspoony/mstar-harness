@@ -1,16 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { withStoreRead, queryDashboard } from "./store-read.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, removeMilestone, readMilestonesOn as readMilestonesOnDb, updateMilestone } from "./milestone-store.js";
-import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "issue-milestone-"));
-const harness = join(root, ".mstar");
+const root = mkdtempSync(join(nodeOs.tmpdir(), "tmp-issue-milestone-"));
+const HOME = join(root, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
+const repo = join(root, "repo");
+mkdirSync(repo, { recursive: true });
+execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
+const harness = join(repo, ".mstar");
 const context: StoreContext = { harnessDir: harness };
 const projectId = "milestone-assignment-project";
 let db: StoreDb;
@@ -18,23 +27,43 @@ let issueNumber = 0;
 function makeIssue(id: string, project = projectId): void {
   db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?)").run(id, project, id);
 }
-function revision(): number { return (db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision; }
-function issueRevision(id: string): number { return (db.prepare("select revision from issues where id=?").get(id) as { revision: number }).revision; }
+function revision(): number {
+  const row = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
+  return row.revision;
+}
+function issueRevision(id: string): number {
+  const row = db.prepare("select revision from issues where id=?").get(id) as { revision: number };
+  return row.revision;
+}
 function mutation(id: string, expectedRevision: number, expectedStoreRevision = revision(), actor = "project-manager") {
   return { operationId: id, actor, expectedRevision, expectedStoreRevision };
 }
 let milestoneId = "";
 let otherMilestoneId = "";
 beforeAll(async () => {
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore(context); db = handle.db;
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  // invariant: The real activation also records this checkout's binding: an ACTIVE
+  // authority is never usable from an unbound checkout.
+  const seeded = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
+  try {
+    seeded.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = seeded.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as { store_id?: unknown; authority_epoch?: unknown } | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") authority = { storeId: row.store_id, epoch: row.authority_epoch };
+  } finally {
+    seeded.close();
+  }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, binding: "active" });
+  db = new DatabaseSync(location.dbPath);
   for (const id of [projectId, "other-project"]) db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(id, id, `${id}/roadmap.md`);
   makeIssue("milestone-assignment-issue");
   makeIssue("milestone-membership-issue");
 });
-afterAll(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
+afterAll(() => { db.close(); homeSpy?.mockRestore(); rmSync(root, { recursive: true, force: true }); });
 
 describe("issue milestone association", () => {
   test("summary and detail expose nullable milestone membership", async () => {
@@ -124,34 +153,6 @@ describe("issue milestone association", () => {
     expect(closed.revision).toBe(assigned.revision + 1);
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);
   });
-});
-
-test("schema-4 stores list issues while provenance detail requires explicit upgrade", async () => {
-  const oldHarness = join(mkdtempSync(join(tmpdir(), "issue-schema-4-")), ".mstar");
-  mkdirSync(oldHarness, { recursive: true });
-  const raw = new DatabaseSync(storeDbPath({ harnessDir: oldHarness }));
-  raw.exec(SCHEMA_VERSION_TABLE_SQL);
-  for (const migration of MIGRATIONS.filter(({ version }) => version <= 4)) {
-    raw.exec(migration.sql);
-    raw.prepare("insert into schema_version(version,name,checksum,applied_at) values(?,?,?,?)")
-      .run(migration.version, migration.name, migrationChecksum(migration), "2026-09-29T00:00:00Z");
-  }
-  raw.prepare("update store_meta set authority_state='active' where id=1").run();
-  raw.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('old-issue','old-project','Old issue','bug','high','impact','acceptance','now','now','old-issue')").run();
-  raw.close();
-  const oldContext: StoreContext = { harnessDir: oldHarness };
-  expect((await listIssues(oldContext, { projectId: "old-project" })).items[0]?.milestoneId).toBeNull();
-  await expect(getIssue(oldContext, "old-issue")).rejects.toMatchObject({ code: "issue.schema-outdated" });
-  expect(await withStoreRead(oldContext, queryDashboard("issues"))).toMatchObject({ data: { total: 1 } });
-  await expect(
-    withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
-  ).rejects.toMatchObject({ code: "issue.schema-outdated" });
-  await upgradeStore(oldContext);
-  expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
-  expect(
-    await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
-  ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });
-  rmSync(oldHarness, { recursive: true, force: true });
 });
 
 describe("removeMilestone", () => {

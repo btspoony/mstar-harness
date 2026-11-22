@@ -32,8 +32,24 @@ function runCli(args: string[], opts: { cwd?: string; env?: Record<string, strin
 function fixtureTree(): string {
   const root = mkdtempSync(join(tmpdir(), "migrate-cli-fixture-"));
   cpSync(V1_FIXTURE, root, { recursive: true });
+  identifyFixture(root);
   return root;
 }
+
+/**
+ * invariant: A legacy fixture root is a real checkout of a repository for the migration
+ * verbs: the file-era execution upgrade owns the repository's collaboration
+ * authority too, so the root needs an identity and its lane needs a private
+ * home (never the operator's real one).
+ */
+function identifyFixture(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${fixtureSequence++}\n`);
+}
+
+let fixtureSequence = 0;
+/** note: The isolated user home every spawned CLI call resolves the lane under. */
+const LANE_HOME = mkdtempSync(join(tmpdir(), "migrate-cli-home-"));
 
 function treeFiles(root: string): string[] {
   const out: string[] = [];
@@ -86,7 +102,7 @@ function recoveryRecipe(message: string): string {
 function runRecoveryRecipe(recipe: string): CliEnvelope {
   const result = execFileSync("/bin/sh", ["-c",
     `mstar() { ${shellQuote(process.execPath)} run ${shellQuote(CLI_ENTRY)} "$@"; }; ${recipe}`,
-  ], { cwd: CLI_ROOT, env: cliEnv(), encoding: "utf8" });
+  ], { cwd: CLI_ROOT, env: cliEnv({ HOME: LANE_HOME }), encoding: "utf8" });
   return JSON.parse(result) as CliEnvelope;
 }
 
@@ -173,6 +189,7 @@ describe("mstar migrate — retired verb", () => {
         } else {
           cpSync(V1_FIXTURE, root, { recursive: true });
         }
+        identifyFixture(root);
         const original = legacyStatusBytes(root);
         let recipe: string;
         if (recoveryCase === "retired-entry") {

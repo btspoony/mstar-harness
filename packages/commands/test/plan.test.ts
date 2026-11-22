@@ -1,13 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
+import * as nodeOs from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   createExecutionWorkflow,
   executionContextFor,
+  getIssue,
+  initializeCollaborationStore,
   initializeStore,
+  listIssues,
+  readCollaborationAuthority,
   readExecutionAuthority,
+  resolveCollaborationLocation,
+  writeCollaborationBinding,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { getPlanCommandDefinitions } from "../src/families/plan.js";
@@ -15,6 +23,20 @@ import { getPlanCommandDefinitions } from "../src/families/plan.js";
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+/**
+ * invariant: The collaboration lane is user-level, so every residual case must resolve its
+ * home to this fixture and never to the operator's real one.
+ */
+const HOME_ROOT = mkdtempSync(path.join(os.tmpdir(), "plan-command-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME_ROOT, { recursive: true, force: true });
 });
 
 function fixture() {
@@ -289,5 +311,163 @@ describe("plan command family", () => {
     expect(recovery).toContain("mstar plan bind --execution true --coordinator true --workflow <workflow-id>");
     expect(recovery).toContain("--coordinator");
     expect(recovery).toContain("--resume-ref");
+  });
+});
+
+/**
+ * note: One residual-bearing checkout: a synthetic origin (the collaboration identity),
+ * an active combined store and — unless `collaboration: "absent"` — an ACTIVE
+ * collaboration authority, plus a running workflow whose coordinator is bound.
+ */
+async function residualFixture(
+  name: string,
+  options: { collaboration?: "active" | "absent" } = {},
+): Promise<{ root: string; harness: string; workflow: string; plan: string; ctx: InvocationContext }> {
+  const root = mkdtempSync(path.join(os.tmpdir(), `plan-${name}-`));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: root });
+  writeFileSync(path.join(root, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harness = path.join(root, ".mstar");
+  mkdirSync(path.join(harness, "plans"), { recursive: true });
+  const workflow = "wf-plan";
+  const plan = "plan-a";
+  writeFileSync(path.join(harness, "plans", `${plan}.md`), `# Plan A\n\n**plan_id:** ${plan}\n`);
+  const storeContext = { harnessDir: harness };
+  (await initializeStore(storeContext)).close();
+  if ((options.collaboration ?? "active") === "active") {
+    const location = resolveCollaborationLocation(storeContext);
+    await initializeCollaborationStore(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    } finally {
+      db.close();
+    }
+    writeCollaborationBinding(storeContext, await readCollaborationAuthority(storeContext));
+  }
+  const initialized = await readExecutionAuthority(storeContext);
+  const identity = { source: "local" as const, sessionId: "runtime-coordinator", workflowId: workflow, role: "coordinator" as const };
+  const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+    entry: { id: workflow, type: "iteration", status: "running", started_at: "2026-09-26T00:00:00Z", dir: `workflows/${workflow}` } as never,
+    snapshot: {
+      schema_version: 1,
+      id: workflow,
+      type: "iteration",
+      status: "running",
+      started_at: "2026-09-26T00:00:00Z",
+      updated_at: "2026-09-26T00:00:00Z",
+      branch: { base: "main" },
+      plans: [{ id: plan, plan_id: plan, title: "Plan A", file: `plans/${plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${name}`,
+  });
+  const ctx = { ...context(root, "runtime-coordinator"), controlRoot: harness };
+  const bound = await definition("plan.bind").execute(
+    { execution: true, coordinator: true, workflow, harness, expect: workflowTokenOf(created), operation: `bind-${name}` } as never,
+    ctx,
+  );
+  if (bound.status !== "ok") throw new Error(`fixture: coordinator bind failed: ${JSON.stringify(bound)}`);
+  return { root, harness, workflow, plan, ctx };
+}
+
+/** note: The plan CAS token `plan.show` reports, or a fixture failure. */
+function planTokenOf(envelope: { status: string; data: unknown }): string {
+  if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("token" in envelope.data)) {
+    throw new Error(`plan.show returned no execution token: ${JSON.stringify(envelope)}`);
+  }
+  const token = envelope.data.token;
+  if (typeof token !== "string") throw new Error("plan.show returned a non-string execution token");
+  return token;
+}
+
+function residualEntry(occurrenceKey: string) {
+  return {
+    title: "residual finding",
+    kind: "bug",
+    severity: "high",
+    impact: "the residual is unfixed",
+    acceptance: "the residual is fixed",
+    sourceIdentity: "qc/review.md",
+    rootCauseKey: "missing-guard",
+    acceptanceKey: "guard-present",
+    occurrenceKey,
+    sourceKind: "qc",
+    location: "packages/commands/src/families/plan.ts:1",
+    observedBehavior: "the finding is visible",
+    evidence: ["stack: TypeError"],
+    discoveredAt: "2026-09-18T10:00:00.000Z",
+  };
+}
+
+describe("plan residual-add / residual-close composite commands", () => {
+  test("plan.issue-add and plan.issue-close carry the cross-store composite and replay exactly", async () => {
+    const data = await residualFixture("residual-add-close");
+    const shown = await definition("plan.show").execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, data.ctx);
+    const request = {
+      workflow: data.workflow,
+      plan: data.plan,
+      harness: data.harness,
+      expect: planTokenOf(shown),
+      operation: "residual-add-command-1",
+      entries: [residualEntry("command-event-1")],
+    };
+    const added = await definition("plan.issue-add").execute(request as never, data.ctx);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") throw new Error(`plan.issue-add failed: ${JSON.stringify(added)}`);
+    const receipt = added.data as { replayed: boolean; token: string };
+    expect(receipt.replayed).toBe(false);
+
+    // why: The same operation id and payload replay the recorded receipt instead of
+    // capturing a second issue.
+    const replayed = await definition("plan.issue-add").execute(request as never, data.ctx);
+    expect(replayed.status).toBe("ok");
+    if (replayed.status !== "ok") throw new Error(`plan.issue-add replay failed: ${JSON.stringify(replayed)}`);
+    expect((replayed.data as { replayed: boolean }).replayed).toBe(true);
+
+    const storeContext = { harnessDir: data.harness };
+    const issues = await listIssues(storeContext, {});
+    expect(issues.total).toBe(1);
+    const [finding] = issues.items;
+    if (finding === undefined) throw new Error("fixture: the residual was not captured");
+    const detail = await getIssue(storeContext, finding.id);
+
+    const closed = await definition("plan.issue-close").execute({
+      workflow: data.workflow,
+      plan: data.plan,
+      harness: data.harness,
+      expect: receipt.token,
+      operation: "residual-close-command-1",
+      issue: detail.id,
+      disposition: "resolved",
+      expectIssue: detail.revision,
+      evidence: { reason: "fixed", references: ["p-1"], alignmentRef: "qa-gate:accepted" },
+    } as never, data.ctx);
+    expect(closed.status).toBe("ok");
+    if (closed.status !== "ok") throw new Error(`plan.issue-close failed: ${JSON.stringify(closed)}`);
+    expect((await getIssue(storeContext, detail.id)).disposition).toBe("resolved");
+    expect((closed.data as { replayed: boolean }).replayed).toBe(false);
+  });
+
+  test("an unavailable collaboration authority refuses the residual without reporting success and names the same-id recovery", async () => {
+    const data = await residualFixture("residual-unavailable", { collaboration: "absent" });
+    const shown = await definition("plan.show").execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, data.ctx);
+    const refused = await definition("plan.issue-add").execute({
+      workflow: data.workflow,
+      plan: data.plan,
+      harness: data.harness,
+      expect: planTokenOf(shown),
+      operation: "residual-unavailable-1",
+      entries: [residualEntry("command-event-unavailable")],
+    } as never, data.ctx);
+    expect(refused.status).toBe("refused");
+    expect(refused.code).toBe("collaboration.not-initialized");
+    const details = refused.details;
+    if (details === null || typeof details !== "object" || !("recovery" in details)) {
+      throw new Error("plan.issue-add refusal carries no details.recovery");
+    }
+    expect(String(details.recovery)).toContain("same --operation id");
   });
 });

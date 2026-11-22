@@ -58,7 +58,16 @@ function fail(code: string, message: string): ApiFailure {
 function statusForCode(code: string): number {
   if (code === "usage") return 400;
   if (code === "issue.not-found" || code === "not-found") return 404;
-  if (code.startsWith("store.") || code.startsWith("projection.")) return 503;
+  // invariant: An unavailable required source is service-unavailable, never a 404 that
+  // claims the record does not exist.
+  if (
+    code.startsWith("store.") ||
+    code.startsWith("projection.") ||
+    code.startsWith("collaboration.") ||
+    code.startsWith("execution.")
+  ) {
+    return 503;
+  }
   return 500;
 }
 

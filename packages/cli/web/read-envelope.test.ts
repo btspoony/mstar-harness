@@ -74,4 +74,193 @@ describe("a list read is one snapshot", () => {
     if (result.status !== "error") throw new Error("expected an error");
     expect(result.message).toContain("not one snapshot");
   });
+
+  test("pages from a replaced authority are refused even when the counters match", async () => {
+    // note: Both pages report the same numeric revisions; only the collaboration
+    // authority identity changed, which the old counter comparison could not see.
+    let requests = 0;
+    const fetchImpl = (async (url: string) => {
+      requests += 1;
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        storeRevision: 1,
+        catalogRevision: 1,
+        projection: { observed: true, generation: 1, freshness: "current" },
+        collaboration: {
+          scope: { kind: "query", key: `issues:*:open:*:*:${PAGE}:${offset}` },
+          completeness: "complete",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: { repoKey: "github.com/acme/repo", mode: "local", storeId: requests === 1 ? "store-a" : "store-b", epoch: 1 },
+          revision: 1,
+          catalogRevision: 1,
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const result = await readAllListPages(fetchImpl, path);
+    // note: The pass that straddled two authorities was discarded and the list was
+    // read again: the rows are one delivery, not a splice.
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    expect(result.envelope.data.items).toHaveLength(COUNT);
+    expect(requests).toBe(5);
+  });
+
+  test("a normal multi-page list is joined without a restart", async () => {
+    // invariant: The engine's paged scope key names the page (`:limit:offset`); pages of
+    // one stable source must be treated as one list, not as a data change.
+    let requests = 0;
+    const fetchImpl = (async (url: string) => {
+      requests += 1;
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        storeRevision: 4,
+        catalogRevision: 2,
+        projection: { observed: false, generation: null, freshness: "unavailable" },
+        collaboration: {
+          scope: { kind: "query", key: `issues:*:open:*:*:${PAGE}:${offset}` },
+          completeness: "complete",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: { repoKey: "github.com/acme/repo", mode: "local", storeId: "store-a", epoch: 1 },
+          revision: 4,
+          catalogRevision: 2,
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    expect(result.envelope.data.items.map((row) => (row as { id: string }).id)).toEqual([
+      "I-0",
+      "I-1",
+      "I-2",
+      "I-3",
+      "I-4",
+    ]);
+    // note: One pass, three pages: no restart and no refusal.
+    expect(requests).toBe(3);
+    // note: The assembled list still records where it came from, bounds included.
+    expect(result.envelope.collaboration?.scope.key).toBe(`assembled:issues:*:open:*:*:${PAGE}:0`);
+  });
+
+  test("a partial snapshot page is refused instead of assembled", async () => {
+    const fetchImpl = (async (url: string) => {
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        storeRevision: 1,
+        catalogRevision: 1,
+        projection: { observed: false, generation: null, freshness: "unavailable" },
+        collaboration: {
+          scope: { kind: "query", key: "issues:*:open:*:*:2:0" },
+          completeness: "partial",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: { repoKey: "github.com/acme/repo", mode: "local", storeId: "store-a", epoch: 1 },
+          revision: 1,
+          catalogRevision: 1,
+          code: "catalog.discovery.missing-plan",
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const result = await readAllListPages(fetchImpl, path);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") throw new Error("expected an error");
+    expect(result.message).toContain("catalog.discovery.missing-plan");
+  });
+
+  test("an assembled list states its own scope instead of the first page's bounds", async () => {
+    const fetchImpl = (async (url: string) => {
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        storeRevision: 1,
+        catalogRevision: 1,
+        projection: { observed: false, generation: null, freshness: "unavailable" },
+        collaboration: {
+          scope: { kind: "query", key: `issues:*:open:*:*:${PAGE}:${offset}` },
+          completeness: "complete",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: { repoKey: "github.com/acme/repo", mode: "local", storeId: "store-a", epoch: 1 },
+          revision: 1,
+          catalogRevision: 1,
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    expect(result.envelope.collaboration?.scope).toEqual({
+      kind: "query",
+      key: "assembled:issues:*:open:*:*:2:0",
+    });
+    expect(result.envelope.data.items).toHaveLength(COUNT);
+  });
+});
+
+describe("pagination source stamp", () => {
+  /** note: A list server whose epoch, or projection health, moves once at the second request. */
+  function stamped(move: "epoch" | "freshness") {
+    let requests = 0;
+    const fetchImpl = (async (url: string) => {
+      requests += 1;
+      const moved = requests > 1;
+      const offset = Number(new URL(url, "http://dashboard.local").searchParams.get("offset"));
+      const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
+      const envelope = {
+        data: { items, total: COUNT },
+        // note: Identical numeric counters on both pages: only the source stamp moves.
+        storeRevision: 3,
+        catalogRevision: 2,
+        projection: {
+          observed: false,
+          generation: null,
+          freshness: move === "freshness" && moved ? "stale" : "current",
+        },
+        collaboration: {
+          scope: { kind: "query", key: `issues:*:open:*:*:${PAGE}:${offset}` },
+          completeness: "complete",
+          asOf: "2026-11-21T00:00:00.000Z",
+          authority: {
+            repoKey: "github.com/acme/repo",
+            mode: "local",
+            storeId: "store-a",
+            epoch: move === "epoch" && moved ? 2 : 1,
+          },
+          revision: 3,
+          catalogRevision: 2,
+        },
+        execution: null,
+      };
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, requests: () => requests };
+  }
+
+  test("equal counters in a different authority epoch are not one list", async () => {
+    const { fetchImpl, requests } = stamped("epoch");
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    // note: The straddling pass was discarded and the list reread from offset 0.
+    expect(result.envelope.data.items).toHaveLength(COUNT);
+    expect(requests()).toBe(5);
+  });
+
+  test("a projection that turns stale between pages is reread, never presented as current", async () => {
+    const { fetchImpl, requests } = stamped("freshness");
+    const result = await readAllListPages(fetchImpl, path);
+    if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
+    // note: The assembled list states the health it was finally read under.
+    expect(result.envelope.projection.freshness).toBe("stale");
+    expect(requests()).toBe(5);
+  });
 });

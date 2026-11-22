@@ -27,6 +27,7 @@ import {
 } from "./overview-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -110,6 +111,8 @@ const envelope = (data: OverviewDTO = healthy(), projectionBlock = projection): 
   storeRevision: 1224,
   catalogRevision: 9,
   projection: projectionBlock,
+  collaboration: null,
+  execution: null,
 });
 
 /**
@@ -211,6 +214,67 @@ describe("outcome 2 — one degraded member still renders the page", () => {
     expect(pageOutsideTrend(html)).not.toContain("there is nothing to show");
     // And the neighbours are untouched by it.
     expect(html).toContain("issue-project-move");
+  });
+});
+
+describe("dashboard collaboration disclosure", () => {
+  /** invariant: A healthy payload with a distinctive residual count the disclosure must suppress. */
+  const counts = healthy({
+    residuals: { state: "read", data: { open: 4242, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 4242 } } },
+  });
+
+  const observation = (
+    completeness: "complete" | "partial" | "unavailable",
+  ): ReadEnvelope<OverviewDTO>["collaboration"] => {
+    const scope = { kind: "query" as const, key: "overview:*" };
+    if (completeness === "unavailable") {
+      return { scope, completeness, asOf: null, authority: null, code: "collaboration.not-initialized" };
+    }
+    const base = {
+      scope,
+      completeness,
+      asOf: "2026-11-21T00:00:00.000Z",
+      authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+      revision: 3,
+      catalogRevision: 1,
+    };
+    return completeness === "partial" ? { ...base, code: "catalog.discovery.missing-plan" } : base;
+  };
+
+  test("a partial observation does not render its count or revision as healthy", () => {
+    // note: The envelope carries a real numeric storeRevision; the incomplete observation
+    // means neither that revision nor the residual count may be presented.
+    const partial = { ...envelope(counts), collaboration: observation("partial") };
+    const outcome = overviewOutcome({ status: "ready", envelope: partial });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.revision).toBeNull();
+    if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
+    expect(outcome.model.residuals.reason).toContain("catalog.discovery.missing-plan");
+    // note: Projection-backed execution data stays usable.
+    expect(outcome.model.workflows.kind).toBe("populated");
+    const html = render(overviewFromEnvelope(partial));
+    expect(html).not.toContain("4242");
+    expect(html).toContain('data-ms-absence="unavailable"');
+  });
+
+  test("an unavailable observation claims no revision", () => {
+    const unavailable = { ...envelope(counts), storeRevision: null, collaboration: observation("unavailable") };
+    const outcome = overviewOutcome({ status: "ready", envelope: unavailable });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.revision).toBeNull();
+    if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
+    expect(outcome.model.residuals.reason).toContain("collaboration.not-initialized");
+    expect(render(overviewFromEnvelope(unavailable))).not.toContain("4242");
+  });
+
+  test("a complete observation still renders its counts", () => {
+    const complete = { ...envelope(counts), collaboration: observation("complete") };
+    const model = overviewFromEnvelope(complete);
+    expect(model.residuals.kind).toBe("populated");
+    if (model.residuals.kind !== "populated") return;
+    expect(model.residuals.value.total).toBe(4242);
   });
 });
 

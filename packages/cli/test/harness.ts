@@ -7,7 +7,7 @@
  *
  * Test-only module: node/bun builtins only, no production imports.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -122,6 +122,18 @@ export function runCli(
 /** Temp root under the OS temp dir for `prefix` — the mkdtemp base path. */
 export function tmpRoot(prefix: string): string {
   return join(tmpdir(), prefix);
+}
+
+let fixtureRepoSequence = 0;
+
+/** Declare the fixture checkout's collaboration identity: a unique
+ * `[collaboration] repo_id` (fixture repos never carry a Git origin, so the
+ * engine's identity probe needs this to resolve the repository scope). The id
+ * derives from the unique mkdtemp path so a lane left active in the user-level
+ * store by an earlier run is never reused by a later one. */
+export function writeFixtureRepoId(root: string): void {
+  const repoId = `fixture-${fixtureRepoSequence++}-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}`;
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId}\n`);
 }
 
 /** Temp dir per test, cleaned up after. Sync callbacks clean up on return or

@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { historicalStore } from "./store-migration-fixtures.js";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { registerCatalogEntity } from "./catalog.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import {
   importRoadmapAuthority,
   initializeStore,
@@ -11,36 +15,83 @@ import {
   readRoadmapAuthority,
   replaceRoadmapAuthority,
   reviewRoadmapImport,
-  upgradeStore,
   type StoreContext,
 } from "./index.js";
 
+const ROOT = mkdtempSync(join(nodeOs.tmpdir(), "tmp-roadmap-authority-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
 const fixtures: string[] = [];
 const content = (projectId: string, description: string): string =>
   `---\nproject_id: ${projectId}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\ncustom_field: preserved\n---\n\n## Direction\n\n${description}\n\n## Goals\n\n- [ ] Parent goal\n  - [x] Nested goal\n\n`;
 
-async function freshProject(projectId: string, historicalVersion?: number): Promise<StoreContext> {
-  const harnessDir = mkdtempSync(join(tmpdir(), "roadmap-authority-"));
-  fixtures.push(harnessDir);
-  const initialized = historicalVersion === undefined ? await initializeStore({ harnessDir }) : undefined;
-  const db = initialized?.db ?? historicalStore(harnessDir, historicalVersion!);
-  db.prepare(
-    "insert into catalog_entities(kind,id,title,root_kind,relative_path,revision,registered_at,updated_at) values('project',?,'Synthetic project','projects',?,1,?,?)",
-  ).run(projectId, projectId, new Date().toISOString(), new Date().toISOString());
-  if (initialized === undefined) db.close();
-  else initialized.close();
+/** note: A synthetic checkout whose origin names the collaboration repository. */
+function checkout(name: string): StoreContext {
+  const parent = mkdtempSync(join(ROOT, name));
+  const repo = join(parent, "repo");
+  fixtures.push(parent);
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = join(repo, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
   return { harnessDir };
 }
 
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
+function activate(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+  } finally {
+    db.close();
+  }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
+}
+
+async function freshProject(projectId: string): Promise<StoreContext> {
+  const context = checkout(`roadmap-${projectId}`);
+  (await initializeStore(context)).close();
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  activate(context);
+  await registerCatalogEntity(
+    context,
+    { kind: "project", id: projectId, title: "Synthetic project", rootKind: "projects", relativePath: projectId },
+    { operationId: `register-${projectId}`, actor: "test" },
+  );
+  return context;
+}
+
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
 afterEach(() => {
   for (const path of fixtures.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
 });
 
 describe("roadmap-authority transactional domain", () => {
   test("distinguishes a known project without authority from valid zero-goal content", async () => {
     const context = await freshProject("project-empty");
     const before = await readRoadmapAuthority(context, "project-empty");
-    expect(before).toEqual({ projectId: "project-empty", projectRevision: 1, roadmap: null });
+    const { collaboration: beforeEvidence, ...beforeRead } = before;
+    expect(beforeRead).toEqual({ projectId: "project-empty", projectRevision: 1, roadmap: null });
+    expect(beforeEvidence.completeness).toBe("complete");
     const emptyGoals = `---\nproject_id: project-empty\ntitle: Empty goals\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nStill valid content.\n`;
     await replaceRoadmapAuthority(context, {
       projectId: "project-empty", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: emptyGoals,
@@ -61,74 +112,56 @@ describe("roadmap-authority transactional domain", () => {
     const editedContent = content("project-reviewed", "Edited after review.");
     writeFileSync(sourcePath, editedContent, "utf8");
     const beforeHandle = await openStore(context, "read");
-    const beforeState = beforeHandle.db.prepare("select revision, catalog_revision from store_meta where id=1").get();
-    const beforeCounts = beforeHandle.db.prepare("select (select count(*) from issues) as issues, (select count(*) from execution_workflows) as workflows").get();
+    const beforeWorkflows = beforeHandle.db.prepare("select count(*) as workflows from execution_workflows").get();
     beforeHandle.close();
+    const beforeCollab = await collaborationMeta(context);
 
     const receipt = await importRoadmapAuthority(context, review, { operationId: "op-import" });
     expect(receipt.revision).toBe(1);
     expect((await importRoadmapAuthority(context, review, { operationId: "op-import" }))).toEqual(receipt);
     const read = await readRoadmapAuthority(context, "project-reviewed");
     expect(read.roadmap?.contentMarkdown).toBe(editedContent);
+    // note: The receipt lives in the collaboration lane's standalone ledger.
     const receiptHandle = await openStore(context, "read");
-    const importOperation = receiptHandle.db.prepare("select result_json from store_operations where operation_id='op-import'").get() as { result_json: string };
+    const importOperation = receiptHandle.db.prepare("select 1 from store_operations where operation_id='op-import'").get();
     receiptHandle.close();
-    expect(JSON.parse(importOperation.result_json)).toMatchObject({
+    expect(importOperation).toBeUndefined();
+    const collabRows = await collaborationOperation(context, "op-import");
+    if (collabRows === undefined) throw new Error("the import receipt is missing from the collaboration ledger");
+    expect(JSON.parse(collabRows.result_json)).toMatchObject({
       outcome: "committed",
       provenance: { sourcePath: review.sourcePath },
     });
-    const derivedHandle = await openStore(context, "read");
-    const afterState = derivedHandle.db.prepare("select revision, catalog_revision from store_meta where id=1").get();
-    const afterCounts = derivedHandle.db.prepare("select (select count(*) from issues) as issues, (select count(*) from execution_workflows) as workflows").get();
-    derivedHandle.close();
-    expect((beforeState as { revision: number }).revision + 1).toBe((afterState as { revision: number }).revision);
-    expect((beforeState as { catalog_revision: number }).catalog_revision).toBe((afterState as { catalog_revision: number }).catalog_revision);
-    expect(afterCounts).toEqual(beforeCounts);
+    const afterCollab = await collaborationMeta(context);
+    const afterHandle = await openStore(context, "read");
+    const afterWorkflows = afterHandle.db.prepare("select count(*) as workflows from execution_workflows").get();
+    afterHandle.close();
+    expect(beforeCollab.revision + 1).toBe(afterCollab.revision);
+    expect(beforeCollab.catalogRevision).toBe(afterCollab.catalogRevision);
+    expect(afterWorkflows).toEqual(beforeWorkflows);
 
     const replaced = content("project-reviewed", "Replacement with nested task.");
     await replaceRoadmapAuthority(context, {
       projectId: "project-reviewed", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: replaced,
     }, { operationId: "op-replace" });
-    const beforeStale = await openStore(context, "read");
-    const staleRevision = beforeStale.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    beforeStale.close();
+    const staleRevision = await collaborationMeta(context);
     await expect(replaceRoadmapAuthority(context, {
       projectId: "project-reviewed", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: reviewedContent,
     }, { operationId: "op-stale" })).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
-    const afterStale = await openStore(context, "read");
-    const afterStaleRevision = afterStale.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    const staleReceipt = afterStale.db.prepare("select operation_id from store_operations where operation_id='op-stale'").get();
-    afterStale.close();
-    expect(afterStaleRevision.revision).toBe(staleRevision.revision);
-    expect(staleReceipt).toBeUndefined();
+    const afterStale = await collaborationMeta(context);
+    expect(afterStale.revision).toBe(staleRevision.revision);
+    expect(await collaborationOperation(context, "op-stale")).toBeUndefined();
     const stable = await readRoadmapAuthority(context, "project-reviewed");
     expect(stable.roadmap?.contentMarkdown).toBe(replaced);
-
   });
 
-  test("migration is explicit, removes only disposable roadmap projection, and missing stores refuse", async () => {
-    const context = await freshProject("project-migration", 5);
-    const handle = await openStore(context, "write");
-    handle.db.exec("begin immediate; create table prior_fixture(value text); insert into prior_fixture values('preserved'); commit;");
-    handle.close();
-    await expect(readRoadmapAuthority(context, "project-migration")).rejects.toMatchObject({ code: "roadmap.schema-outdated" });
-    await upgradeStore(context);
-    const upgraded = await openStore(context, "read");
-    expect(upgraded.db.prepare("select value from prior_fixture").get()).toEqual({ value: "preserved" });
-    expect(upgraded.db.prepare("select name from sqlite_master where type='table' and name='project_roadmaps'").get()).toBeDefined();
-    expect(upgraded.db.prepare("select name from sqlite_master where type='table' and name='projection_roadmaps'").get()).toBeUndefined();
-    upgraded.close();
-    const missing: StoreContext = { harnessDir: join(context.harnessDir, "missing") };
-    await expect(readRoadmapAuthority(missing, "project-migration")).rejects.toMatchObject({ code: "store.not-initialized" });
+  test("missing and staged collaboration authority are not presented as empty roadmaps", async () => {
+    const missing = checkout("roadmap-no-authority");
+    await expect(readRoadmapAuthority(missing, "project-missing")).rejects.toMatchObject({ code: "collaboration.not-initialized" });
+    await initializeCollaborationStore(resolveCollaborationLocation(missing));
+    // invariant: A staged lane is refused at admission, never served as a zero-goal map.
+    await expect(readRoadmapAuthority(missing, "project-missing")).rejects.toMatchObject({ code: "collaboration.not-active" });
   });
-  test("staged stores are not presented as empty roadmaps", async () => {
-    const context = await freshProject("project-staged");
-    const handle = await openStore(context, "write");
-    handle.db.prepare("update store_meta set authority_state='staged' where id=1").run();
-    handle.close();
-    await expect(readRoadmapAuthority(context, "project-staged")).rejects.toMatchObject({ code: "roadmap.store-not-active" });
-  });
-
 
   test("project mismatch and operation-id domain collision publish nothing", async () => {
     const context = await freshProject("project-mismatch");
@@ -139,12 +172,14 @@ describe("roadmap-authority transactional domain", () => {
     await replaceRoadmapAuthority(context, {
       projectId: "project-mismatch", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: accepted,
     }, { operationId: "op-domain" });
-    const handle = await openStore(context, "write");
-    handle.db.prepare("update store_operations set request_hash=? where operation_id=?").run("other-domain-request", "op-domain");
-    handle.close();
-    const updatedCatalog = await openStore(context, "write");
-    updatedCatalog.db.prepare("update catalog_entities set revision=2 where kind='project' and id='project-mismatch'").run();
-    updatedCatalog.close();
+    const dbPath = resolveCollaborationLocation(context).dbPath;
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw.prepare("update collaboration_operations set request_hash=? where key_space='standalone' and operation_id=?").run("other-domain-request", "op-domain");
+      raw.prepare("update catalog_entities set revision=2 where kind='project' and id='project-mismatch'").run();
+    } finally {
+      raw.close();
+    }
     await expect(replaceRoadmapAuthority(context, {
       projectId: "project-mismatch", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: accepted,
     }, { operationId: "op-stale-project" })).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
@@ -155,3 +190,29 @@ describe("roadmap-authority transactional domain", () => {
     expect(await listRoadmapAuthority(context)).toHaveLength(1);
   });
 });
+
+async function collaborationMeta(context: StoreContext): Promise<{ revision: number; catalogRevision: number }> {
+  const dbPath = resolveCollaborationLocation(context).dbPath;
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as {
+      revision: number;
+      catalog_revision: number;
+    };
+    return { revision: row.revision, catalogRevision: row.catalog_revision };
+  } finally {
+    db.close();
+  }
+}
+
+async function collaborationOperation(context: StoreContext, operationId: string): Promise<{ request_hash: string; result_json: string } | undefined> {
+  const dbPath = resolveCollaborationLocation(context).dbPath;
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db
+      .prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?")
+      .get(operationId) as { request_hash: string; result_json: string } | undefined;
+  } finally {
+    db.close();
+  }
+}

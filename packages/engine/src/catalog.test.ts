@@ -8,8 +8,10 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   catalogRootDir,
   getCatalog,
@@ -28,6 +30,9 @@ import {
   type StoreContext,
 } from "./store-db.js";
 import { getCatalog as getCatalogFromIndex } from "./index.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, openCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { DatabaseSync } from "node:sqlite";
 
 // The v1 `issues` table this fixture rebuilds, in migration 1's column shape.
 // Its severity CHECK deliberately carries the CURRENT vocabulary
@@ -58,8 +63,16 @@ create table issues(
 `;
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-test-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
+
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -70,10 +83,33 @@ afterAll(() => {
  */
 async function initialized(name: string): Promise<StoreContext> {
   const workspace = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(workspace, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=catalog-${workspace.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}\n`,
+  );
   mkdirSync(join(workspace, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(workspace, ".mstar") };
   const handle = await initializeStore(context);
   handle.close();
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
   return context;
 }
 
@@ -182,19 +218,16 @@ describe("catalog registration identity", () => {
     expect(page.items.map((item) => item.id)).toEqual(["doc-original"]);
   });
 
-  test("a staged store refuses catalog mutations while catalog reads still work", async () => {
+  test("the execution store's state never gates the collaboration catalog", async () => {
     const context = await initialized("staged-");
     await registerCatalogEntity(context, doc("doc-1"), op("staged-1"));
     const handle = await openStore(context, "write");
     handle.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
     handle.close();
-    await expect(registerCatalogEntity(context, doc("doc-2"), op("staged-2"))).rejects.toMatchObject({
-      code: "store.not-active",
-    });
-    await expect(
-      updateCatalogEntity(context, { kind: "document", id: "doc-1" }, { title: "x" }, 1, op("staged-3")),
-    ).rejects.toMatchObject({ code: "store.not-active" });
-    expect((await listCatalog(context, { kind: "document" })).total).toBe(1);
+    // note: The catalog lives in the collaboration lane; staging execution is separate.
+    const second = await registerCatalogEntity(context, doc("doc-2"), op("staged-2"));
+    expect(second.id).toBe("doc-2");
+    expect((await listCatalog(context, { kind: "document" })).total).toBe(2);
   });
 
   test("unknown vocabulary and invalid identity are refused without storing", async () => {
@@ -242,11 +275,11 @@ describe("catalog revision conflicts", () => {
     expect(after.links).toEqual(before.links);
     expect(after.storeRevision).toBe(before.storeRevision);
 
-    const reader = await openStore(context, "read");
+    const reader = await openCollaborationStore(context, "read");
     const journaled = reader.db
       .prepare("select count(*) as n from catalog_operations where operation_id in ('rev-2','rev-3','rev-4')")
       .get() as { n: number };
-    const meta = reader.db.prepare("select revision, catalog_revision from store_meta where id = 1").get() as {
+    const meta = reader.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as {
       revision: number;
       catalog_revision: number;
     };
@@ -264,8 +297,8 @@ describe("catalog revision conflicts", () => {
       updateCatalogEntity(context, { kind: "document", id: "doc-1" }, { title: "T3" }, 1, op("cr-4")),
     ).rejects.toMatchObject({ code: "catalog.revision-conflict" });
 
-    const reader = await openStore(context, "read");
-    const meta = reader.db.prepare("select revision, catalog_revision from store_meta where id = 1").get() as {
+    const reader = await openCollaborationStore(context, "read");
+    const meta = reader.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as {
       revision: number;
       catalog_revision: number;
     };
@@ -606,11 +639,13 @@ describe("migration 2", () => {
     // table set and version rows are derived from the compiled MIGRATIONS, so
     // this stays a v1 store when a migration is appended instead of needing a
     // new literal table name (and a new version row delete) each time.
-    const createdAfterV1 = MIGRATIONS.filter((migration) => migration.version > 1)
-      .flatMap((migration) =>
-        [...migration.sql.matchAll(/create table ([a-z_][a-z0-9_]*)\s*\(/g)].map((match) => match[1]),
-      )
-      .reverse(); // dependents before the tables they reference (foreign_keys=ON)
+    const createdAfterV1 = [
+      ...new Set(
+        MIGRATIONS.filter((migration) => migration.version > 1).flatMap((migration) =>
+          [...migration.sql.matchAll(/create table ([a-z_][a-z0-9_]*)\s*\(/g)].map((match) => match[1]),
+        ),
+      ),
+    ].reverse(); // note: dependents before the tables they reference (foreign_keys=ON)
     const existingTables = new Set(
       (handle.db.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map((row) => row.name),
     );
