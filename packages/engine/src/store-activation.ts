@@ -2425,7 +2425,30 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
   // collaboration cache was created and verified by the reviewed `remote bind`
   // under this exact selector generation, and initialization never creates a
   // local authority in its place.
-  if (location.mode === "remote") return readRemoteCacheAuthority(context);
+  if (location.mode === "remote") {
+    try {
+      return await readRemoteCacheAuthority(context);
+    } catch (error) {
+      // why: An absent or unpublished cache lane is rebuilt only by the reviewed bind.
+      // The lane-level refusal would otherwise name `store init` itself, which is the
+      // verb the operator just ran and which never creates a remote cache.
+      if (
+        error instanceof StoreError &&
+        (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active")
+      ) {
+        throw new StoreError(
+          "remote.unavailable",
+          `This control checkout resolves remote collaboration but its verified cache lane at ${location.dbPath} is ` +
+            `${error.code === "collaboration.not-initialized" ? "absent" : "not published"}. A remote checkout initializes ` +
+            `execution only, after the reviewed remote bind has created that lane for the checked selector generation: ` +
+            `run mstar store collaboration remote status --harness ${context.harnessDir}, have the Host Agent verify the ` +
+            `selected scope, then run mstar store collaboration remote bind --input <file|-> and retry this verb. ` +
+            `Nothing was created.`,
+        );
+      }
+      throw error;
+    }
+  }
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {
     // invariant: The standard: an ACTIVE authority is NEVER adopted by `store init` — not on

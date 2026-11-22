@@ -115,10 +115,15 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
+      // invariant: Execution initialization is the one store verb a remote checkout
+      // runs AFTER its cache exists, so its recovery names the bootstrap order and
+      // never the binding-free `store init` route the generic branches assume.
       // Literal branches only: the repository's refusal-quality lint proves the
       // text statically, so every code the engine can emit carries the family's
       // own words for the exact route instead of a composed variable.
-      recovery: (code === "store.attestation-invalid"
+      recovery: (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable" || code === "collaboration.stale-binding")
+        ? "Store init never binds an authority: inspect the checkout with mstar path resolve and correct its origin or .mstarc mode. A remote checkout restores access to the canonical origin and protected selector ref, then runs mstar store collaboration remote status --harness <abs> and the Host Agent's remote bind --input <file|-> before retrying mstar store init --harness <abs>; a local or mirror checkout starts a new checkout for the other repository."
+        : code === "store.attestation-invalid"
         // The generated-attestation refusal: Bun is never an admissible attested
         // consumer, and the supported route is the installed Node CLI (or an
         // explicit document that overrides the generated one).
@@ -717,7 +722,9 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
       ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose converted plan rows cannot be imported, or a recognized legacy id the native authority already holds with NO retained import receipt for this run's exact source bytes. A collision this store's own retained import receipt already records as imported from these exact bytes is a proven replay: it needs no acknowledgement and reports verdict \"nothing-to-import\" with the id named in dispositions. Because source bytes cannot prove which --delivery/--ack-skip-compass input an earlier import consumed, a run that carries neither relies on those bytes alone (so an older receipt still proves the replay), while a run that carries either needs the receipt to record the same input or its colliding id stays unproven. A duplicated v1 plan id is that id's own refused, skippable source: the first row in stable order (plan id, owning lifecycle id, row ordinal) survives and --ack-skip-workflow <plan id> acknowledges losing exactly the later duplicate rows. The separate --ack-skip-compass <iteration-id>... answers a non-regular v1 iteration compass: the compass is not read, that iteration produces no lifecycle, and the plans it registered convert as standalone plan rows. Every skip is reported with its loss."
-      : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
+      : verb === "init"
+        ? "Initialize this checkout's execution store create-only with fresh identifiers. A remote checkout initializes execution ONLY, after the reviewed remote bind created and verified its cache under the checked selector generation; it never restores, copies or republishes a prior execution lane."
+        : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }
