@@ -69,7 +69,7 @@ const listEnvelope = (
   generation: number | null = 7,
 ) => ({ data: { items, total } as ProjectListDTO, projection: { ...projection, generation } });
 
-/** An explicit partial observation, as a source that could not prove its scope reports. */
+/** note: An explicit partial observation, as a source that could not prove its scope reports. */
 const partialObservation = {
   scope: { kind: "query" as const, key: "projects" },
   completeness: "partial" as const,

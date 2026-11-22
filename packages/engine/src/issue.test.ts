@@ -55,7 +55,7 @@ mkdirSync(HOME);
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 /**
- * The collaboration store is user-level, so the resolver's home must be this
+ * invariant: The collaboration store is user-level, so the resolver's home must be this
  * fixture and never the operator's. One spy serves the whole file: nesting a
  * second and restoring it would discard this one.
  */
@@ -75,7 +75,7 @@ afterAll(() => {
 });
 
 /**
- * A synthetic checkout: the git origin names the repository the collaboration
+ * why: A synthetic checkout: the git origin names the repository the collaboration
  * authority is keyed by, and `.mstarc` selects the local mode an operator's own
  * clone would declare.
  */
@@ -93,7 +93,7 @@ function ctx(name: string) {
   return { harnessDir, checkoutRoot };
 }
 
-/** Publish the staged lane and this checkout's binding, as real activation does. */
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -114,23 +114,23 @@ function activate(context: StoreContext): void {
   writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
-/** Initialize this context's collaboration authority without activating it. */
+/** note: Initialize this context's collaboration authority without activating it. */
 async function stagedIssueStore(context: StoreContext): Promise<void> {
   await initializeCollaborationStore(resolveCollaborationLocation(context));
 }
 
-/** The collaboration authority the issue verbs read and write. */
+/** note: The collaboration authority the issue verbs read and write. */
 async function activeIssueStore(context: StoreContext): Promise<void> {
   await stagedIssueStore(context);
   activate(context);
 }
 
-/** One fixture effect on the collaboration authority. */
+/** note: One fixture effect on the collaboration authority. */
 function seedCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   return withCollaborationWrite(context, ({ db }) => fn(db));
 }
 
-/** One fixture read of the collaboration authority. */
+/** note: One fixture read of the collaboration authority. */
 async function readCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -140,7 +140,7 @@ async function readCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Pro
   }
 }
 
-/** The collaboration revision the receipts of this fixture's effects report. */
+/** note: The collaboration revision the receipts of this fixture's effects report. */
 function collaborationRevision(context: StoreContext): Promise<number> {
   return readCollab(context, (db) => (db.prepare("select revision from collaboration_meta where id = 1").get() as {
     revision: number;
@@ -204,7 +204,7 @@ describe("collaboration issues", () => {
       { operationId: "collab-close", actor: "project-manager", expectedRevision: triaged.revision },
     );
     expect(await collaborationRevision(context)).toBe(3);
-    // The rows the verbs wrote are the collaboration lane's own.
+    // note: The rows the verbs wrote are the collaboration lane's own.
     expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
   });
 
@@ -216,7 +216,7 @@ describe("collaboration issues", () => {
     await captureIssue(context, baseInput({ rootCauseKey: "second", occurrenceKey: "second" }), mut("cas-capture-2"));
     expect(await collaborationRevision(context)).toBe(2);
 
-    // The EXECUTION lane keeps its own counter; a move carrying that number as
+    // invariant: The EXECUTION lane keeps its own counter; a move carrying that number as
     // its store CAS is refused by the collaboration lane, because the two lanes
     // never share a revision.
     const execution = await openStore(context, "read");
@@ -255,7 +255,7 @@ describe("collaboration issues", () => {
           " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row')",
       ).run(at, at);
     });
-    // The sync ledger records its own standalone receipt under this id.
+    // note: The sync ledger records its own standalone receipt under this id.
     await seedCollab(context, (db) => {
       db.prepare(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
@@ -1086,7 +1086,7 @@ describe("issue dispositions, revisions, and relations", () => {
       operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
     })).rejects.toMatchObject({ code: "issue.revision-conflict" });
     const again = await getIssue(context, created.issueId);
-    // A read's observation time is not state: the persisted detail must match.
+    // invariant: A read's observation time is not state: the persisted detail must match.
     expect({ ...again, collaboration: { ...again.collaboration, asOf: "same" } }).toEqual({
       ...detail,
       collaboration: { ...detail.collaboration, asOf: "same" },

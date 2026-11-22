@@ -273,7 +273,7 @@ describe("mstar path resolve — collaboration diagnostic", () => {
         expect(data(fromLinked).collaboration).toEqual(expected);
         expect(existsSync(join(home, ".mstar"))).toBe(false);
 
-        // No mode: the same envelope carries the engine's named diagnostic.
+        // note: No mode: the same envelope carries the engine's named diagnostic.
         writeFileSync(join(root, ".mstarc"), "[config]\nreview_dir=process/reviews\n");
         const withoutMode = runResolve([root], { HOME: home });
         expect(withoutMode.exitCode).toBe(0);

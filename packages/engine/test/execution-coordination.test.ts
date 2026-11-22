@@ -101,7 +101,7 @@ function rows(context: StoreContext, sql: string): Array<Record<string, unknown>
   return withRaw(context, (db) => db.prepare(sql).all() as Array<Record<string, unknown>>);
 }
 
-/** Raw collaboration-lane connection for issue/provenance fixture edits. */
+/** note: Raw collaboration-lane connection for issue/provenance fixture edits. */
 function withRawCollaboration<T>(context: StoreContext, body: (db: StoreDb) => T): T {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {

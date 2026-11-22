@@ -253,7 +253,7 @@ async function adoptFor(harnessDir: string, cwd: string, sessionId: string): Pro
  */
 async function seedUnboundWorkflow(harnessDir: string, coordinatorSessionId: string): Promise<void> {
   await mkdir(harnessDir, { recursive: true })
-  // Identity is declared INSIDE the harness root: adopted roots are bare temp
+  // why: Identity is declared INSIDE the harness root: adopted roots are bare temp
   // dirs, and without a local `.mstarc` the repository probe walks up into
   // `$TMPDIR` itself (which would git-init and label the shared root).
   await execFileSync('git', ['init', '-q', '-b', 'main', harnessDir], { stdio: 'ignore' })

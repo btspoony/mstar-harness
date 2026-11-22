@@ -11,7 +11,7 @@ import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../s
 
 const roots: string[] = [];
 /**
- * The collaboration lane is user-level, so every fixture's `homedir` is a
+ * note: The collaboration lane is user-level, so every fixture's `homedir` is a
  * private temp tree: no case reads or writes the real user home.
  */
 const HOME = mkdtempSync(join(tmpdir(), "mstar-command-home-"));
@@ -40,7 +40,7 @@ afterEach(() => {
 let fixtureSequence = 0;
 
 /**
- * A synthetic checkout: a real Git main worktree and an explicit origin-less
+ * why: A synthetic checkout: a real Git main worktree and an explicit origin-less
  * collaboration identity, because every repository-scoped store verb now owns a
  * repository-level collaboration authority beside this checkout's execution.
  */
@@ -116,7 +116,7 @@ describe("store and execution command surface", () => {
     expect(missing).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     const relative = await invoke(definition("store.collaboration.plan"), { harness: ".mstar" }, root);
     expect(relative).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
-    // The restore verb names its pair explicitly and never discovers one.
+    // invariant: The restore verb names its pair explicitly and never discovers one.
     const noBackup = await invoke(definition("store.collaboration.restore"), { harness: join(root, ".mstar"), operator: "ops" }, root);
     expect(noBackup).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     expect(noBackup.status === "usage" ? noBackup.message : "").toContain("--backup");
@@ -245,7 +245,7 @@ describe("store and execution command surface", () => {
       execution: { backupPath: string };
       collaboration: { path: string; counts: Record<string, number> };
     };
-    // One published pair: the manifest names BOTH verified images.
+    // note: One published pair: the manifest names BOTH verified images.
     expect(pair.version).toBe(1);
     expect(existsSync(manifest)).toBe(true);
     expect(existsSync(join(dirname(manifest), pair.execution.backupPath))).toBe(true);
@@ -281,7 +281,7 @@ describe("store and execution command surface", () => {
     if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
     expect(await storeSnapshot(harness)).toEqual(before);
 
-    // The receipt keeps the finding: the collaboration half of the pair holds it.
+    // why: The receipt keeps the finding: the collaboration half of the pair holds it.
     const pair = dataOf(backup) as {
       manifestPath: string;
       execution: { backupPath: string; counts: { issues: number } };
@@ -346,7 +346,7 @@ describe("store and execution command surface", () => {
     const backupPath = join(harness, "point.db");
     const backup = await invoke(definition("store.backup"), { harness, out: backupPath }, root);
     if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
-    // The execution restore route addresses the pair's EXECUTION image; the
+    // note: The execution restore route addresses the pair's EXECUTION image; the
     // collaboration half is restored only by `store collaboration restore`.
     const executionReceipt = dataOf(backup).execution;
     if (
@@ -357,7 +357,7 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    // The pair publishes sibling basenames; the execution verb takes an absolute path.
+    // note: The pair publishes sibling basenames; the execution verb takes an absolute path.
     const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     await captureIssue({ harnessDir: harness }, {
       projectId: "_default",
@@ -429,7 +429,7 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    // The pair publishes sibling basenames; the execution verb takes an absolute path.
+    // note: The pair publishes sibling basenames; the execution verb takes an absolute path.
     const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     const firstPreview = join(root, "first-preview.json");
     const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: executionImage, out: firstPreview }, root);

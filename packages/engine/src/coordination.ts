@@ -750,7 +750,7 @@ export type CatalogPinFacts = CatalogFacts & {
   /** The workflow's registration binding (contract §3), when one is committed. */
   binding: { catalogId: string; relativePath: string | null } | null;
   /**
-   * The execution store that owns the sealed input this pin was read for, or
+   * note: The execution store that owns the sealed input this pin was read for, or
    * `null` when no execution store exists. A historical pin's lineage is
    * proven only against THIS identity.
    */
@@ -775,7 +775,7 @@ async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflow
     throw error;
   }
   try {
-    // The registry visibility and the pending legacy journal are the execution
+    // invariant: The registry visibility and the pending legacy journal are the execution
     // store's own rows: judge them on the handle this reader already holds
     // instead of opening a second connection (the catalog itself is read from
     // its own source, never through this handle).
@@ -813,7 +813,7 @@ export async function readCatalogFacts(harnessRoot: string, planId: string): Pro
     if (error instanceof StoreError && error.code === "collaboration.not-active") {
       return { store: "inactive", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
-    // A workspace with no resolvable repository identity has no collaboration
+    // note: A workspace with no resolvable repository identity has no collaboration
     // scope at all — the same harmless absence `path.ts` tolerates. A mode or
     // config refusal is a real misconfiguration and still propagates.
     if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") {
@@ -930,7 +930,7 @@ export function bindingFactsOn(
 }
 
 /**
- * The registration binding of one workflow/plan, read from the execution lane.
+ * invariant: The registration binding of one workflow/plan, read from the execution lane.
  * A missing or non-active execution store carries no committed binding; the
  * catalog side is read separately, never joined in one transaction. The
  * execution store identity itself is returned so a pin can prove its lineage
@@ -961,7 +961,7 @@ async function readBindingFacts(
   }
 }
 
-/** Both sides of a pin read, each from its own source and never joined. */
+/** invariant: Both sides of a pin read, each from its own source and never joined. */
 async function readCatalogPinFacts(
   harnessRoot: string,
   workflowId: string,
@@ -1008,7 +1008,7 @@ export async function readExecutionCatalogPin(input: {
     state.source = "row";
     state.pin = recorded;
     if (facts.store !== "active" || facts.storeId === null) return state;
-    // Reading a pin is also a verification: an identity that names neither the
+    // invariant: Reading a pin is also a verification: an identity that names neither the
     // active catalog nor a VERIFIED migration source of this execution store is
     // a conflict, never silently served as this catalog's selection.
     if (!pinIdentityIsProven(recorded, facts, facts.executionStoreId)) {

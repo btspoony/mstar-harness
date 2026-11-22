@@ -48,7 +48,7 @@ const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
 /**
- * The collaboration store is user-level: `homedir` must resolve into this
+ * invariant: The collaboration store is user-level: `homedir` must resolve into this
  * fixture and never to the operator's real home.
  */
 let homeSpy: { mockRestore(): void } | undefined;
@@ -61,7 +61,7 @@ afterAll(() => {
 });
 
 /**
- * A fresh synthetic checkout: its origin names the collaboration repository the
+ * note: A fresh synthetic checkout: its origin names the collaboration repository the
  * lane is keyed by, and `.mstarc` selects the local mode an operator's clone
  * declares.
  */
@@ -83,7 +83,7 @@ function ctx(name: string): StoreContext {
   return { harnessDir, checkoutRoot: root };
 }
 
-/** The fixture's lane path, refused loudly if it escaped the temporary home. */
+/** invariant: The fixture's lane path, refused loudly if it escaped the temporary home. */
 function laneLocation(context: StoreContext) {
   const location = resolveCollaborationLocation(context);
   if (!location.dbPath.startsWith(`${ROOT}${sep}`)) {
@@ -93,7 +93,7 @@ function laneLocation(context: StoreContext) {
 }
 
 /**
- * Flip a staged lane record to active: this plan ships no public activator. The
+ * invariant: Flip a staged lane record to active: this plan ships no public activator. The
  * fixture also records the checkout binding the real activation writes — an
  * ACTIVE authority is never usable from an unbound checkout.
  */
@@ -124,7 +124,7 @@ function activate(context: StoreContext): void {
   });
 }
 
-/** The fixture's collaboration lane, created and activated. */
+/** note: The fixture's collaboration lane, created and activated. */
 async function activeLane(context: StoreContext): Promise<void> {
   await initializeCollaborationStore(laneLocation(context));
   activate(context);
@@ -244,13 +244,13 @@ describe("retired register persist \u2014 the raw store cannot recreate a projec
   });
 });
 
-/* ------------------------------------------------------------------------ *
+/* invariant: ------------------------------------------------------------------------ *
  * § Findings gate — the collaboration lane is the authority; a broken lane
  *   fails closed
  * ------------------------------------------------------------------------ */
 
 /**
- * Seed a historical scoped plan row by omitting `origin`, as pre-cutover stores
+ * note: Seed a historical scoped plan row by omitting `origin`, as pre-cutover stores
  * did before the column existed. The scoped write path is exercised by the
  * domain verbs (`linkIssueScoped`) below.
  */
@@ -262,7 +262,7 @@ async function linkPlanRow(context: StoreContext, issueId: string, planId: strin
   });
 }
 
-/** Flip one issue's disposition outside the verbs and advance the lane once. */
+/** note: Flip one issue's disposition outside the verbs and advance the lane once. */
 async function setDisposition(context: StoreContext, issueId: string, disposition: string): Promise<void> {
   await withCollaborationWrite(context, (handle) => {
     handle.db.prepare("update issues set disposition = ? where id = ?").run(disposition, issueId);
@@ -270,7 +270,7 @@ async function setDisposition(context: StoreContext, issueId: string, dispositio
   });
 }
 
-/** Insert one external mirrored issue linked to a plan: a foreign row, not a finding. */
+/** note: Insert one external mirrored issue linked to a plan: a foreign row, not a finding. */
 async function insertForeignIssue(context: StoreContext, issueId: string, planId: string): Promise<void> {
   await withCollaborationWrite(context, (handle) => {
     handle.db
@@ -315,7 +315,7 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
       "findings.zero-residual-open-issue",
     ]);
 
-    // A plan is gated only by its OWN links: `plan-z` holds the third issue and
+    // note: A plan is gated only by its OWN links: `plan-z` holds the third issue and
     // flags it, while `plan-b`, which links nothing, stays clean even though
     // open issues exist in the lane.
     const peer = await findingsCleanupGate(context, "plan-z", { mode: "zero-residual" });
@@ -365,7 +365,7 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
     await linkPlanRow(context, captured.issueId, "plan-a");
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(false);
 
-    // The read gate's input is the issue row's disposition.
+    // note: The read gate's input is the issue row's disposition.
     await setDisposition(context, captured.issueId, "resolved");
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(true);
   });
@@ -374,7 +374,7 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
     const missing = ctx("gate-missing");
     await expect(findingsCleanupGate(missing, "plan-a")).rejects.toThrow(/collaboration\.not-initialized/);
 
-    // A present but broken lane is never "no findings".
+    // invariant: A present but broken lane is never "no findings".
     const corrupt = ctx("gate-corrupt");
     await activeLane(corrupt);
     writeFileSync(laneLocation(corrupt).dbPath, "not a sqlite database\n", "utf8");
@@ -388,7 +388,7 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
   });
 });
 
-/* ------------------------------------------------------------------------ *
+/* note: ------------------------------------------------------------------------ *
  * § Collaboration findings observation — complete scoped evidence
  * ------------------------------------------------------------------------ */
 
@@ -411,7 +411,7 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(foreign.open).toEqual([]);
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(true);
 
-    // Historical scoped provenance (no explicit origin) keeps counting.
+    // why: Historical scoped provenance (no explicit origin) keeps counting.
     const local = await captureIssue(context, finding("legacy-provenance", { severity: "critical" }), {
       operationId: "cap-legacy-provenance",
       actor: "project-manager",
@@ -452,7 +452,7 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(Number.isInteger(first.revision)).toBe(true);
     expect(Number.isInteger(first.catalogRevision)).toBe(true);
 
-    // A new linked issue advances the lane revision; the next observation is a
+    // invariant: A new linked issue advances the lane revision; the next observation is a
     // NEW snapshot, never a reuse of the first one's stamped rows.
     const issue = await captureIssue(context, finding("observe-later"), {
       operationId: "cap-observe-later",
@@ -468,7 +468,7 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
   });
 });
 
-/* ------------------------------------------------------------------------ *
+/* note: ------------------------------------------------------------------------ *
  * § Collaboration gate evidence — one complete observation, re-checked
  * ------------------------------------------------------------------------ */
 
@@ -498,7 +498,7 @@ describe("collaboration gate evidence", () => {
     expect(allow.collaboration.authority.storeId).toBe((await readCollaborationAuthority(context)).storeId);
     expect(allow.violations.map((violation) => violation.code)).toEqual(["findings.allow-residual-critical"]);
 
-    // No new threshold: zero-residual blocks every open row of THIS scope, and a
+    // note: No new threshold: zero-residual blocks every open row of THIS scope, and a
     // peer plan that links nothing is still a complete clean decision.
     const zero = await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" });
     expect(zero.violations.map((violation) => violation.code).sort()).toEqual([
@@ -509,7 +509,7 @@ describe("collaboration gate evidence", () => {
     expect(peer.ok).toBe(true);
     expect(peer.collaboration.open).toEqual([]);
 
-    // The accepted observation is still applicable: no drift, no refusal.
+    // note: The accepted observation is still applicable: no drift, no refusal.
     await assertPlanFindingsCurrent(context, allow.collaboration);
   });
 
@@ -518,11 +518,11 @@ describe("collaboration gate evidence", () => {
     await activeLane(context);
     const observed = await observePlanFindings(context, "plan-a");
 
-    // Evidence whose scope cannot be re-observed is not a clean gate.
+    // invariant: Evidence whose scope cannot be re-observed is not a clean gate.
     await expect(assertPlanFindingsCurrent(context, { ...observed, scope: { kind: "project", key: "plan-a" } }))
       .rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
 
-    // A collaboration write in the preflight gap moves the lane revision.
+    // note: A collaboration write in the preflight gap moves the lane revision.
     const issue = await captureIssue(context, finding("gate-evidence-drift"), {
       operationId: "cap-gate-evidence-drift",
       actor: "project-manager",
@@ -534,12 +534,12 @@ describe("collaboration gate evidence", () => {
       code: "collaboration.observation-stale",
       details: { plan_id: "plan-a", observed: { revision: observed.revision } },
     });
-    // The stale refusal judges the evidence without rewriting it.
+    // note: The stale refusal judges the evidence without rewriting it.
     expect(observed.open).toEqual([]);
   });
 });
 
-/* ------------------------------------------------------------------------ *
+/* note: ------------------------------------------------------------------------ *
  * § Domain read verbs vs a staged lane (plan QC fix wave FW-6)
  * ------------------------------------------------------------------------ */
 
@@ -547,7 +547,7 @@ describe("listIssues / getIssue \u2014 a staged lane is not queryable as read au
   test("both read verbs refuse collaboration.not-active even when staged rows exist", async () => {
     const context = ctx("read-staged");
     await activeLane(context);
-    // Seed a real row through the domain verb while the lane is active, THEN
+    // invariant: Seed a real row through the domain verb while the lane is active, THEN
     // demote: the refusal must hold with data present, not only on an empty
     // staged lane (the staged-import inspection case from QC seat 1 F-003).
     const captured = await captureIssue(context, finding("occ-staged-read"), {

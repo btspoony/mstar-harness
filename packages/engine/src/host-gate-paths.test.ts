@@ -118,7 +118,7 @@ describe("host-gate-paths collaboration authority target", () => {
     for (const name of ["collaboration.db", "collaboration.db-wal", "collaboration.db-shm", "collaboration.db-journal"]) {
       expect(isStoreAuthorityTarget(reserved(name))).toBe(true);
     }
-    // The name is the authority, not the location: a checkout root, a tree
+    // note: The name is the authority, not the location: a checkout root, a tree
     // outside any namespace, or the harness itself all deny it.
     expect(isStoreAuthorityTarget(join(root, "collaboration.db"))).toBe(true);
     expect(isStoreAuthorityTarget(join(harness, "collaboration.db"))).toBe(true);
@@ -137,7 +137,7 @@ describe("host-gate-paths collaboration authority target", () => {
     const chain = join(root, "collaboration-chain");
     symlinkSync("collaboration-alias", chain);
     expect(isStoreAuthorityTarget(landedPathOf(chain))).toBe(true);
-    // A differently named alias is refused by what it lands on, not its own name.
+    // invariant: A differently named alias is refused by what it lands on, not its own name.
     expect(isStoreAuthorityTarget(link)).toBe(false);
   });
 

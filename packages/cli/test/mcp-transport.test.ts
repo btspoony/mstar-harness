@@ -17,7 +17,7 @@ async function withClient(
   run: (client: Client, cwd: string) => Promise<void>,
   options: { controlRoot?: string; cwd?: string } = {},
 ) {
-  // A caller-provided cwd is the caller's fixture (e.g. its Git checkout): the
+  // invariant: A caller-provided cwd is the caller's fixture (e.g. its Git checkout): the
   // server only points the invocation context at it and never cleans it up.
   const owned = options.cwd === undefined;
   const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
@@ -421,7 +421,7 @@ generated_at: 2026-01-02
   });
 
   /**
-   * The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
+   * invariant: The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
    * README index read. The dsh-native tool that used to carry it is gone, so
    * these are the product regressions on the SURVIVING route: the folded MCP
    * action. A missing authority refuses with the lane's own code, a complete
@@ -441,11 +441,11 @@ generated_at: 2026-01-02
       arguments: { action: "validate", docPath: join(knowledgeDir, "good.md"), knowledgeDir },
     }));
     try {
-      // The invocation cwd IS the fixture's Git checkout: the completeness
+      // note: The invocation cwd IS the fixture's Git checkout: the completeness
       // verdict is the checkout's configured knowledge root, while the store
       // root stays pinned to its `.mstar`.
       await withClient([definition("compound.validate")], async (client) => {
-        // No authority yet: the completeness gate refuses with the missing
+        // invariant: No authority yet: the completeness gate refuses with the missing
         // lane's own code — never a directory mismatch or a content gap
         // standing in for the absent authority.
         const missing = await validate(client);
@@ -459,7 +459,7 @@ generated_at: 2026-01-02
         expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
       }, { controlRoot: harness, cwd: root });
 
-      // Both authorities, exactly as `store init` leaves them, then the one
+      // invariant: Both authorities, exactly as `store init` leaves them, then the one
       // body the knowledge root carries is registered.
       const context = { harnessDir: harness };
       (await initializeStore(context)).close();

@@ -49,7 +49,7 @@ test("a below-floor Node runtime refuses store and status commands with their ow
       mkdirSync(repo, { recursive: true });
       spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
       spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
-      // `store init` pairs the repository's collaboration lane: identity must
+      // invariant: `store init` pairs the repository's collaboration lane: identity must
       // resolve for the seeding spawns below to succeed.
       writeFileSync(join(repo, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-runtime-${repo.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
       return repo;

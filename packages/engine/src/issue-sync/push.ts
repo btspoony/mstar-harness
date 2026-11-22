@@ -566,7 +566,7 @@ function failed(
       else recordRefusal(db, { ...input, error: message });
     }
   } catch (error) {
-    // A lease refusal is not this item's cause: the run no longer owns the
+    // invariant: A lease refusal is not this item's cause: the run no longer owns the
     // direction, so the whole run must stop instead of being reported per item.
     // A non-ledger failure may have committed this row before the receipt failed,
     // so it aborts the batch rather than becoming this item's refusal.

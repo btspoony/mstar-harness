@@ -130,7 +130,7 @@ export async function readRoadmap(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<RoadmapDTO>(body);
     if (envelope === null) return { status: "error", message: "The roadmap read answered with something that is not a read envelope." };
-    // A gap is not an absent roadmap: the authority could not establish that the
+    // why: A gap is not an absent roadmap: the authority could not establish that the
     // project has none, so the read fails rather than claiming a missing record.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };

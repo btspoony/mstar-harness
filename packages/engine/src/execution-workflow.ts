@@ -1431,7 +1431,7 @@ function applyWorkflowOperation(input: {
       { workflow_id: workflowId, status: current.status },
     );
   }
-  // §3.1 a pending composite was admitted against this lifecycle's RUNNING
+  // why: §3.1 a pending composite was admitted against this lifecycle's RUNNING
   // witness; a terminal close would invalidate it after its collaboration effect
   // may already be committed. The close is withheld until that operation is
   // resumed/finalized or its deterministic decline is recorded.

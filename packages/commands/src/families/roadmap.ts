@@ -225,7 +225,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId }));
       const roadmap = envelope.data;
       if (roadmap === null) {
-        // The observation this read established still describes the scope it
+        // why: The observation this read established still describes the scope it
         // could not answer: a refusal reports it instead of a fabricated record.
         throw Object.assign(
           new RoadmapError("roadmap.project-not-found", `Catalog project ${projectId} does not exist.`),

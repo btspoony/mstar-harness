@@ -1,5 +1,5 @@
 /**
- * project-bindings.test.ts — the project↔provider correspondence over the
+ * note: project-bindings.test.ts — the project↔provider correspondence over the
  * collaboration lane's `project_bindings` (binding-config plan Task 5).
  */
 import { execFileSync } from "node:child_process";
@@ -32,7 +32,7 @@ afterAll(() => {
 
 const TARGET = { provider: "linear", workspace: "acme", team: "eng", remoteProject: "Team Roadmap" };
 
-/** A synthetic checkout whose origin names the collaboration repository. */
+/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string): { root: string; context: StoreContext } {
   const root = mkdtempSync(join(ROOT, name));
   execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
@@ -46,7 +46,7 @@ function checkout(name: string): { root: string; context: StoreContext } {
   return { root, context: { harnessDir } };
 }
 
-/** Publish the staged lane and this checkout's binding, as real activation does. */
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -170,7 +170,7 @@ describe("collaboration governance", () => {
     const receipt = await bindProject(context, "proj-a", TARGET, { operationId: nextOperation() });
     const catalogBefore = await readCatalogRevisions(context);
 
-    // A catalog metadata edit moves the catalog revision; the correspondence
+    // why: A catalog metadata edit moves the catalog revision; the correspondence
     // keeps its own id and revision, and the receipt names the lane counter.
     await updateCatalogEntity(context, { kind: "project", id: "proj-a" }, { description: "moved" }, 1, {
       operationId: nextOperation(),
@@ -193,7 +193,7 @@ describe("collaboration governance", () => {
     expect(await readProjectBinding(context, "ghost")).toMatchObject({ kind: "absent", code: "linear.binding-absent" });
 
     await bindProject(context, "proj-a", TARGET, { operationId: nextOperation() });
-    // Binding one project neither adopts `_default` nor mints a row for a
+    // note: Binding one project neither adopts `_default` nor mints a row for a
     // project the catalog does not hold.
     expect(await readProjectBinding(context, "_default")).toMatchObject({ kind: "absent" });
     await expect(bindProject(context, "ghost", TARGET, { operationId: nextOperation() })).rejects.toMatchObject({
@@ -217,7 +217,7 @@ describe("collaboration governance", () => {
     const first = await bindProject(context, "proj-a", TARGET, { operationId: nextOperation() });
     expect(first.storeRevision).not.toBe(executionRevision);
 
-    // The execution counter is not a collaboration CAS: carrying it is stale.
+    // note: The execution counter is not a collaboration CAS: carrying it is stale.
     await expect(
       bindProject(context, "proj-b", { ...TARGET, remoteProject: "Second Roadmap" }, { operationId: nextOperation(), expectedStoreRevision: executionRevision }),
     ).rejects.toMatchObject({ code: "linear.revision-conflict" });
@@ -227,7 +227,7 @@ describe("collaboration governance", () => {
       expectedStoreRevision: first.storeRevision,
     });
     expect(accepted.storeRevision).toBe(first.storeRevision + 1);
-    // The revision the accepted write consumed is stale for the next request.
+    // note: The revision the accepted write consumed is stale for the next request.
     await expect(
       bindProject(context, "proj-b", { ...TARGET, remoteProject: "Second Roadmap" }, {
         operationId: nextOperation(),
@@ -269,7 +269,7 @@ describe("collaboration governance", () => {
     );
     expect(milestone.storeRevision).toBe(captured.storeRevision + 1);
 
-    // A milestone never adopts a project the catalog does not hold.
+    // invariant: A milestone never adopts a project the catalog does not hold.
     await expect(
       addMilestone(context, { projectId: "missing", name: "Orphan", target: null, ordinal: 0 }, {
         operationId: nextOperation(),
@@ -280,7 +280,7 @@ describe("collaboration governance", () => {
   });
 });
 
-/** The collaboration-revision pair a catalog edit reports. */
+/** note: The collaboration-revision pair a catalog edit reports. */
 async function readCatalogRevisions(context: StoreContext): Promise<{ storeRevision: number; catalogRevision: number }> {
   return withCollaborationWrite(context, (handle) => {
     const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as {
@@ -291,7 +291,7 @@ async function readCatalogRevisions(context: StoreContext): Promise<{ storeRevis
   });
 }
 
-/** Row counts for every issue-bearing collaboration table, through a fresh handle. */
+/** note: Row counts for every issue-bearing collaboration table, through a fresh handle. */
 async function snapshotIssueTables(context: StoreContext): Promise<Record<string, number>> {
   const handle = await openCollaborationStore(context, "read");
   try {

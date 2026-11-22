@@ -21,7 +21,7 @@ import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/d
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-server-"));
-/** The user-level collaboration root this suite owns: the real `$HOME` is never read or written. */
+/** invariant: The user-level collaboration root this suite owns: the real `$HOME` is never read or written. */
 const TEST_HOME = join(ROOT, "home");
 mkdirSync(TEST_HOME, { recursive: true });
 let homeSpy: { mockRestore(): void } | undefined;
@@ -44,7 +44,7 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   // cwd, so the fixture is a genuine checkout rather than a bare directory.
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
-  // The origin and `.mstarc` select the collaboration lane; a fresh checkout with
+  // invariant: The origin and `.mstarc` select the collaboration lane; a fresh checkout with
   // neither cannot resolve a repository authority.
   spawnSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], { cwd: dir });
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
@@ -54,7 +54,7 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   handle.close();
   await initializeCollaborationStore(resolveCollaborationLocation(context));
   activateCollaboration(context);
-  // Normalize the WAL side files: a read-only open right after the initializing
+  // invariant: Normalize the WAL side files: a read-only open right after the initializing
   // writer closed can refuse while the -wal/-shm pair is still on disk, and every
   // server read opens the store read-only.
   const probe = await openStore(context, "read");
@@ -63,7 +63,7 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
 }
 
 /**
- * Publish the staged collaboration lane AND this checkout's binding -- the two
+ * invariant: Publish the staged collaboration lane AND this checkout's binding -- the two
  * records the real activation writes. An ACTIVE authority is never usable from
  * an unbound checkout, so a fixture that flips only the lane is refused.
  */
@@ -310,7 +310,7 @@ describe("API over a real store", () => {
     expect(envelope.data.items.map((row) => row.id)).toEqual(before.items.map((row) => row.id));
     expect(envelope.storeRevision).toBe(before.storeRevision);
 
-    // Read-only: the authoritative rows and revisions are unchanged after the
+    // invariant: Read-only: the authoritative rows and revisions are unchanged after the
     // GET. `asOf` is each read's own observation instant, so it is the one
     // field a before/after comparison must normalize away.
     const after = await listIssues(context, {});
@@ -422,7 +422,7 @@ describe("API over a real store", () => {
   });
 
   test("a refusal never echoes an authorization credential from the request path", async () => {
-    // The detail id reaches a lower-level issue refusal, which the HTTP error body
+    // invariant: The detail id reaches a lower-level issue refusal, which the HTTP error body
     // publishes. A conventional authorization value must be redacted with its scheme.
     for (const [scheme, secret] of [
       ["Bearer", "sk-live-bearer"],
@@ -440,7 +440,7 @@ describe("API over a real store", () => {
       expect(body.error.message).not.toContain(secret);
       expect(body.error.message).toContain("{REDACTED}");
     }
-    // An UNLABELLED, mixed-case scheme carries a credential too.
+    // note: An UNLABELLED, mixed-case scheme carries a credential too.
     for (const [scheme, secret] of [
       ["bearer", "sk-live-bare"],
       ["toKeN", "tok-live-bare"],
@@ -470,7 +470,7 @@ describe("API over a real store", () => {
     await declareWorkflow(context, "wf-stale-projection");
     const staleServer = await start(dir);
     try {
-      // Publish a generation first, then block the optional catalog input: the
+      // invariant: Publish a generation first, then block the optional catalog input: the
       // last good generation is retained and must be disclosed as stale, with
       // its rows, on the execution-backed read.
       const published = await raw(new URL("/api/workflows", staleServer.url).href);
@@ -501,7 +501,7 @@ describe("dashboard collaboration disclosure", () => {
       expect(res.status).toBe(503);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
       expect(body.error.code).toBe("collaboration.not-initialized");
-      // The refusal keeps its recovery and publishes neither HOME nor the store file.
+      // why: The refusal keeps its recovery and publishes neither HOME nor the store file.
       expect(body.error.message).toContain("mstar store init");
       expect(body.error.message).not.toContain(dir);
       expect(body.error.message).not.toContain(TEST_HOME);
@@ -524,7 +524,7 @@ describe("dashboard collaboration disclosure", () => {
         collaboration: { completeness: string; code: string } | null;
         execution: unknown;
       };
-      // Execution data is preserved; the unavailable catalog association is
+      // note: Execution data is preserved; the unavailable catalog association is
       // disclosed and no collaboration counter is claimed.
       expect(Array.isArray(envelope.data.items)).toBe(true);
       expect(envelope.data.total).toBe(envelope.data.items.length);
@@ -624,7 +624,7 @@ describe("boundary and lifecycle", () => {
       expect(res.status).toBe(503);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
       expect(body.error.code).toBe("collaboration.not-active");
-      // No local filesystem path or store file leaks in the refusal.
+      // note: No local filesystem path or store file leaks in the refusal.
       expect(body.error.message).not.toContain(dir);
       expect(body.error.message).not.toContain(TEST_HOME);
       expect(body.error.message).not.toMatch(/\.db\b/);
@@ -740,7 +740,7 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
 
       const child = spawn("bun", [packaged, "dashboard", "--port", "0"], {
         cwd: dir,
-        // The child resolves the collaboration lane from HOME; this suite owns a
+        // invariant: The child resolves the collaboration lane from HOME; this suite owns a
         // temporary one, so it must not read the developer's real store.
         env: { ...process.env, HOME: TEST_HOME },
         stdio: ["ignore", "pipe", "pipe"],

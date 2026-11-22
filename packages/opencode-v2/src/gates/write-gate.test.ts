@@ -51,7 +51,7 @@ async function expectAuthorityRefusal(promise: Promise<unknown>, code: string) {
   expect((error as Tool.Error).message).toContain("mstar store upgrade/migrate");
   expect((error as Tool.Error).message).toContain("project maintainer");
 }
-/** A fake engine whose collaboration probe answers the named verdict. */
+/** note: A fake engine whose collaboration probe answers the named verdict. */
 function collaborationApi(
   probe: { kind: "active" } | { kind: "staged" | "absent" | "unavailable"; code: string; message: string },
 ): WriteGateEngineApi {
@@ -239,7 +239,7 @@ describe("OpenCode V2 structured-write gate", () => {
       rmSync(statusPath);
       symlinkSync(register, statusPath);
 
-      // A missing collaboration lane refuses by its own cause: the requested
+      // invariant: A missing collaboration lane refuses by its own cause: the requested
       // `status.json` shape must not hide the register the bytes land on.
       const unavailable = makeBody(() => writeFileSync(register, "unauthorized"));
       await expectAuthorityRefusal(
@@ -278,7 +278,7 @@ describe("OpenCode V2 structured-write gate", () => {
     expect(blocked.calls()).toBe(0);
     expectPreservedStatus(statusPath);
 
-    // Negative control: an alias landing on a non-document passes.
+    // note: Negative control: an alias landing on a non-document passes.
     const notes = join(root, "notes.md");
     writeFileSync(notes, "# notes\n");
     const notesAlias = join(root, "notes-alias.md");

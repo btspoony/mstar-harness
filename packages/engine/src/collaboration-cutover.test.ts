@@ -1,5 +1,5 @@
 /**
- * collaboration cutover -- reviewed manifest, verified staged copy, activation
+ * why: collaboration cutover -- reviewed manifest, verified staged copy, activation
  * claim, durable source fence, guarded publication and replay.
  *
  * Run with `bun test packages/engine/src/collaboration-cutover.test.ts`.
@@ -71,7 +71,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** A synthetic checkout selecting the collaboration mode; `origin` is the repository identity. */
+/** note: A synthetic checkout selecting the collaboration mode; `origin` is the repository identity. */
 function makeRepo(origin: string, mode = "local"): string {
   const dir = join(ROOT, `repo-${sequence++}`);
   mkdirSync(dir, { recursive: true });
@@ -99,7 +99,7 @@ function locationAt(root: string): CollaborationLocation {
 type StoppedHandle = { kind: "process" | "session" | "host" | "consumer"; id: string };
 
 /**
- * A cutover-scope attestation. The block names the exact control root, source
+ * note: A cutover-scope attestation. The block names the exact control root, source
  * generation and stopped handles; a case overrides only the field it attacks.
  */
 function cutoverOptions(
@@ -143,7 +143,7 @@ function cutoverOptions(
     stoppedSessions: stopped.map((sessionId) => ({ sessionId, host: "omp", state: "stopped" as const })),
   };
   if (variant.omitCutover !== true) {
-    // A raw document so a negative case can carry `false` for the validator.
+    // why: A raw document so a negative case can carry `false` for the validator.
     const block: Record<string, unknown> = {
       repoKey: variant.repoKey ?? location.repoKey,
       mode: variant.mode ?? location.mode,
@@ -159,13 +159,13 @@ function cutoverOptions(
   return { operator: "ops-engineer", attestation };
 }
 
-/** A valid project roadmap body (frontmatter + sections), as the producer requires. */
+/** note: A valid project roadmap body (frontmatter + sections), as the producer requires. */
 const ROADMAP_CONTENT =
   "---\nproject_id: p-one\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n" +
   "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
 
 /**
- * A real SCHEMA-20 combined source (the pre-cutover schema): collaboration rows,
+ * invariant: A real SCHEMA-20 combined source (the pre-cutover schema): collaboration rows,
  * a catalog pin with its cross-domain foreign key, a recorded session and an
  * execution row. The fence must advance it to the current schema inside its own
  * transaction.
@@ -239,7 +239,7 @@ update store_meta set revision = 7, catalog_revision = 3 where id = 1;
 }
 
 /**
- * One populated combined source: a project, a plan, a document and their link,
+ * why: One populated combined source: a project, a plan, a document and their link,
  * a milestone, a roadmap, two issues (one open with history, one resolved), a
  * mirror binding and a committed catalog journal entry. The shared counters are
  * advanced to 7/3 so the copied revisions are distinguishable from 0.
@@ -323,7 +323,7 @@ update issue_counter set next_value = 3 where id = 1;
   } finally {
     handle.close();
   }
-  // The source is a combined store built below the cutover; its roadmap row is
+  // invariant: The source is a combined store built below the cutover; its roadmap row is
   // part of the seeded SQL, never a collaboration-lane write.
   const counters = await openStore(context, "write");
   try {
@@ -340,7 +340,7 @@ type StagedRows = Readonly<{
   foreignKeyViolations: unknown[];
 }>;
 
-/** The staged target's rows, read under the same admission checks the cutover uses. */
+/** note: The staged target's rows, read under the same admission checks the cutover uses. */
 async function stagedRows(location: CollaborationLocation): Promise<StagedRows> {
   return readCollaborationStage(location, ({ db, authority }) => {
     const rows: Record<string, Array<Record<string, unknown>>> = {};
@@ -364,7 +364,7 @@ async function stagedRows(location: CollaborationLocation): Promise<StagedRows> 
 }
 
 /**
- * Durable cutover state on the canonical target: publication phases, the claim
+ * note: Durable cutover state on the canonical target: publication phases, the claim
  * slot, and the preserved legacy receipts. Durability evidence has to be read
  * from the committed rows, not from an in-process return value.
  */
@@ -400,7 +400,7 @@ function lockPathOf(context: StoreContext): string {
   return join(context.harnessDir, LOCK_BASENAME);
 }
 
-/** Run an operation that must refuse; return its stable code and message. */
+/** invariant: Run an operation that must refuse; return its stable code and message. */
 async function refusalOf(work: () => Promise<unknown>): Promise<{ code?: string; message: string }> {
   try {
     await work();
@@ -443,7 +443,7 @@ describe("collaboration cutover", () => {
     expect(staged.rows.project_bindings![0]?.remote_project).toBe("acme/eng");
     expect(staged.foreignKeyViolations).toEqual([]);
 
-    // Staged is not live: the runtime reader refuses, and the source still owns the records.
+    // invariant: Staged is not live: the runtime reader refuses, and the source still owns the records.
     await expect(readCollaborationAuthority(source.context)).rejects.toMatchObject({ code: "collaboration.not-active" });
     const sourceHandle = await openStore(source.context, "read");
     try {
@@ -502,7 +502,7 @@ values ('op-pending', 'op-hash', 'prepared', '{}', '{}', '{}', '2026-11-21T00:00
 
     const drifted = await openStore(source.context, "write");
     try {
-      // A legacy writer that inserted a row without advancing the shared counter.
+      // note: A legacy writer that inserted a row without advancing the shared counter.
       drifted.db.exec(`
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
 values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-three');
@@ -523,7 +523,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    // An unusable recovery-point destination fails the activation after the
+    // invariant: An unusable recovery-point destination fails the activation after the
     // durable claim and before any fence, exactly like a process loss there.
     const blocker = join(source.context.harnessDir, "archived");
     writeFileSync(blocker, "not a directory");
@@ -535,7 +535,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       rmSync(blocker, { force: true });
     }
 
-    // The source is still unfenced with unchanged evidence, the claim is held
+    // note: The source is still unfenced with unchanged evidence, the claim is held
     // (no second claim was taken), and the target is still staged.
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
     expect((await stagedRows(locationAt(repo))).authority.state).toBe("staged");
@@ -556,7 +556,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     expect(fenced.fencedAt).toBeDefined();
     expect(fenced.activatedAt).toBeUndefined();
 
-    // The fence is durable evidence, not absence: the source refuses to be
+    // invariant: The fence is durable evidence, not absence: the source refuses to be
     // planned again, refuses collaboration rows, and keeps its recorded fence.
     await expect(planCollaborationCutover(source.context)).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
@@ -570,7 +570,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       expect(() => sourceHandle.db.prepare("select count(*) as n from issues").get()).toThrow();
       const schema = sourceHandle.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
       expect(schema.v).toBe(MIGRATIONS.length);
-      // A binary built before the fence validates only its own prefix, so it
+      // invariant: A binary built before the fence validates only its own prefix, so it
       // refuses this file instead of reopening the dropped tables.
       expect(() =>
         validateAppliedMigrations(readAppliedMigrations(sourceHandle.db, false), MIGRATIONS.slice(0, -1)),
@@ -650,7 +650,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     await expect(applyCollaborationCutover(sourceB.context, manifestB)).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
     });
-    // Neither source was fenced: both still plan their own unchanged evidence.
+    // note: Neither source was fenced: both still plan their own unchanged evidence.
     expect(await planCollaborationCutover(sourceA.context)).toEqual(manifestA);
     expect(await planCollaborationCutover(sourceB.context)).toEqual(manifestB);
 
@@ -665,7 +665,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    // Replace the canonical target with another repository's store: the
+    // note: Replace the canonical target with another repository's store: the
     // trustworthy selection no longer matches, and nothing may be fenced.
     await initializeStore(contextAt(foreign));
     const foreignManifest = await planCollaborationCutover(contextAt(foreign));
@@ -726,7 +726,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    // Claim, then fail before any fence (the recovery-point destination is
+    // invariant: Claim, then fail before any fence (the recovery-point destination is
     // unusable), exactly like a process loss at that durable boundary.
     const blocker = join(source.context.harnessDir, "archived");
     writeFileSync(blocker, "not a directory");
@@ -738,7 +738,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       rmSync(blocker, { force: true });
     }
 
-    // A legacy write drifts the source without advancing the shared counter.
+    // note: A legacy write drifts the source without advancing the shared counter.
     const drifted = await openStore(source.context, "write");
     try {
       drifted.db.exec(`
@@ -749,7 +749,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       drifted.close();
     }
 
-    // The exact retry releases its own claim (committed) and refuses; the
+    // invariant: The exact retry releases its own claim (committed) and refuses; the
     // source stays unfenced and the staged target is untouched.
     await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
@@ -758,7 +758,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     expect((await stagedRows(location)).authority.state).toBe("staged");
     expect(await planCollaborationCutover(source.context)).not.toEqual(manifest);
 
-    // Released claim -> the drifted source is reviewable and stageable again.
+    // note: Released claim -> the drifted source is reviewable and stageable again.
     const replanned = await planCollaborationCutover(source.context);
     await expect(applyCollaborationCutover(source.context, manifest)).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
@@ -805,12 +805,12 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       });
     }
 
-    // Nothing was fenced, claimed or published.
+    // note: Nothing was fenced, claimed or published.
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
     expect((await stagedRows(location)).authority.state).toBe("staged");
     expect((await cutoverState(location)).claims).toEqual([]);
 
-    // A source that records NO sessions is still bound by the operator's own
+    // note: A source that records NO sessions is still bound by the operator's own
     // stopped-handle assertion: an empty session table alone is not proof.
     const quiet = makeRepo("https://github.com/acme/cutover-attestation-quiet.git");
     const quietSource = await seedSource(quiet);
@@ -839,7 +839,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     );
     expect(quietReceipt.phase).toBe("active");
 
-    // The source-scoped attestation still activates the first source.
+    // note: The source-scoped attestation still activates the first source.
     expect(
       (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
     ).toBe("active");
@@ -859,7 +859,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       `collaboration-cutover-${manifest.manifestId}.db`,
     );
 
-    // The reviewer's shape: an unannounced legacy write lands, the recovery
+    // why: The reviewer's shape: an unannounced legacy write lands, the recovery
     // point is taken of THAT state, and the write is removed again so the
     // counters and rows match the reviewed manifest once more.
     const drifted = await openStore(source.context, "write");
@@ -883,7 +883,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.backup-incomplete",
     });
-    // The source is still unfenced and the target still staged.
+    // note: The source is still unfenced and the target still staged.
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
     expect((await stagedRows(location)).authority.state).toBe("staged");
   });
@@ -900,7 +900,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     fenced.close();
     expect(fence).not.toBeNull();
 
-    // Restore the retained pre-fence image over the live combined store: the
+    // why: Restore the retained pre-fence image over the live combined store: the
     // reviewed generation and rows return, but the fence and the schema advance
     // are gone. The target is active, so replaying would claim one authority
     // while the source can admit writes again.
@@ -915,7 +915,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
     });
-    // The stage route must not report the active cutover either: apply never
+    // invariant: The stage route must not report the active cutover either: apply never
     // replays beside an unfenced source.
     await expect(applyCollaborationCutover(source.context, manifest)).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
@@ -932,7 +932,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
       "source-fenced",
     );
 
-    // Out of band the staged target is replaced by an internally consistent
+    // note: Out of band the staged target is replaced by an internally consistent
     // store that is NOT the target named by the persisted source fence.
     const target = new DatabaseSync(location.dbPath);
     try {
@@ -955,7 +955,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const source = await seedSource(repo);
     const manifest = await planCollaborationCutover(source.context);
 
-    // A source write transaction is exactly what a fence holds. A competing stage
+    // invariant: A source write transaction is exactly what a fence holds. A competing stage
     // must not slip past it: staging takes the same source writer slot, so the
     // evidence it read can never be older than the fence that follows.
     const holder = new DatabaseSync(join(source.context.harnessDir, "store.db"));
@@ -976,7 +976,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    // Claim, fail before the fence, then drift: the stale activation must release
+    // invariant: Claim, fail before the fence, then drift: the stale activation must release
     // its claim while a competing restage and activation race it.
     const blocker = join(source.context.harnessDir, "archived");
     writeFileSync(blocker, "not a directory");
@@ -1025,7 +1025,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     const source = await seedSource(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    // Payload classification, not id shape: a normal roadmap write, an issue
+    // note: Payload classification, not id shape: a normal roadmap write, an issue
     // operation that happens to be called `restore-attempt:...`, and the
     // collaboration receipts all move; the execution lane's own records
     // (recovery and current/historical imports) stay with the execution store.
@@ -1054,7 +1054,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     const state = await cutoverState(location);
     expect(state.receipts.map((row) => row.operation_id).sort()).toEqual(expectedIds);
 
-    // The roadmap receipt's exact bytes survive, including the producer's
+    // note: The roadmap receipt's exact bytes survive, including the producer's
     // outcome/provenance, and its request hash is the producer's own replay key.
     const roadmap = state.receipts.find((row) => row.operation_id === "roadmap-op")!;
     expect(roadmap.request_hash).toBe(roadmapSource?.request_hash);
@@ -1073,7 +1073,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       )
       .digest("hex");
     expect(roadmap.request_hash).toBe(replayKey);
-    // A different request for the same id computes another hash, which is the
+    // invariant: A different request for the same id computes another hash, which is the
     // conflict the preserved row must still be able to report.
     const differentKey = createHash("sha256")
       .update(
@@ -1089,13 +1089,13 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       .digest("hex");
     expect(differentKey === roadmap.request_hash).toBe(false);
 
-    // Execution-lane records are not promoted, including the supported
+    // note: Execution-lane records are not promoted, including the supported
     // historical import receipt that predates `inputDigest`.
     for (const operationId of ["restore-attempt:abc", "upgrade-op", "upgrade-op-old"]) {
       expect(state.receipts.some((row) => row.operation_id === operationId)).toBe(false);
     }
 
-    // An exact re-stage keeps the population, and activation preserves it.
+    // why: An exact re-stage keeps the population, and activation preserves it.
     expect((await applyCollaborationCutover(source.context, manifest)).replayed).toBe(true);
     expect((await cutoverState(location)).receipts.map((row) => row.operation_id).sort()).toEqual(expectedIds);
     await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
@@ -1145,7 +1145,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     ]);
     expect(results.some((result) => result.status === "fulfilled")).toBe(true);
     for (const result of results) {
-      // A loser refuses either on the local cutover lock or on the source writer slot.
+      // invariant: A loser refuses either on the local cutover lock or on the source writer slot.
       if (result.status === "rejected") {
         expect(["collaboration.cutover-conflict", "store.busy"]).toContain(result.reason?.code);
       }
@@ -1164,7 +1164,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     await applyCollaborationCutover(source.context, manifest);
     expect(existsSync(lockPath)).toBe(false);
 
-    // A live lock (this host, a running process) refuses every entry before it
+    // invariant: A live lock (this host, a running process) refuses every entry before it
     // inspects, claims, fences or publishes anything.
     writeFileSync(
       lockPath,
@@ -1184,7 +1184,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       rmSync(lockPath, { force: true });
     }
 
-    // Released: the same manifest activates and its fence replays, with no lock
+    // note: Released: the same manifest activates and its fence replays, with no lock
     // file left behind.
     expect((await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase).toBe("active");
     expect(existsSync(lockPath)).toBe(false);
@@ -1207,7 +1207,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     );
     const manifest = await planCollaborationCutover(source.context);
     expect(manifest.counts.issues).toBe(2);
-    // The recovered stale lock is retired, and this attempt's own lock is released.
+    // note: The recovered stale lock is retired, and this attempt's own lock is released.
     expect(existsSync(lockPath)).toBe(false);
   });
 
@@ -1221,7 +1221,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       `${JSON.stringify({ pid: 999999, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "dead" })}\n`,
     );
 
-    // A live recovery slot blocks every other recoverer: the recovery step is a
+    // invariant: A live recovery slot blocks every other recoverer: the recovery step is a
     // real critical section, so two processes can never both act on the stale
     // lock (and therefore can never both acquire).
     writeFileSync(
@@ -1232,13 +1232,13 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       const busy = await refusalOf(() => planCollaborationCutover(source.context));
       expect(busy.code).toBe("collaboration.cutover-conflict");
       expect(busy.message).toContain("recovering the stale collaboration cutover lock");
-      // The stale file was not touched by the refused recoverer.
+      // invariant: The stale file was not touched by the refused recoverer.
       expect(readFileSync(lockPath, "utf8")).toContain('"token":"dead"');
     } finally {
       rmSync(recoveryPath, { force: true });
     }
 
-    // With the slot free the same stale lock is recovered and released.
+    // note: With the slot free the same stale lock is recovered and released.
     expect((await planCollaborationCutover(source.context)).counts.issues).toBe(2);
     expect(existsSync(lockPath)).toBe(false);
     expect(existsSync(recoveryPath)).toBe(false);
@@ -1268,7 +1268,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       ].join("\n"),
     );
 
-    // One real dead owner's lock; every child must recover it atomically.
+    // invariant: One real dead owner's lock; every child must recover it atomically.
     const dead = spawn(process.execPath, ["-e", "process.exit(0)"]);
     const deadPid = dead.pid!;
     await new Promise<void>((settle) => dead.on("exit", () => settle()));
@@ -1305,7 +1305,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
       for (let second = first + 1; second < intervals.length; second++) {
         const a = intervals[first]!;
         const b = intervals[second]!;
-        // Two owners would mean overlapping critical sections.
+        // why: Two owners would mean overlapping critical sections.
         expect(a[1] < b[0] || b[1] < a[0]).toBe(true);
       }
     }
@@ -1404,7 +1404,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       code: "collaboration.cutover-conflict",
     });
 
-    // The supported recovery: resolve or remove the unproven receipts, then
+    // note: The supported recovery: resolve or remove the unproven receipts, then
     // re-plan. The reviewed collaboration receipts are still all that moves.
     const cleaned = await openStore(source.context, "write");
     try {
@@ -1446,7 +1446,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(receipt.phase).toBe("active");
     expect(receipt.source.schemaVersion).toBe(20);
 
-    // The source advanced through migration 20 inside the fence transaction.
+    // note: The source advanced through migration 20 inside the fence transaction.
     const after = await openStore(source.context, "read");
     try {
       const schema = after.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
@@ -1457,20 +1457,20 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
         sourceRevision: 7,
         sourceCatalogRevision: 3,
       });
-      // The pin is untouched; only its cross-domain foreign key is gone.
+      // note: The pin is untouched; only its cross-domain foreign key is gone.
       expect(after.db.prepare(pinQuery).all()).toEqual(pinsBefore);
       expect(after.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toEqual([]);
       expect(after.db.prepare("pragma foreign_key_check").all()).toEqual([]);
-      // Execution rows, tokens and epoch are not rewritten by extraction.
+      // note: Execution rows, tokens and epoch are not rewritten by extraction.
       expect(readStoreAuthority(after.db)).toEqual(authorityBefore);
       expect(after.execution).toEqual(executionBefore);
-      // The moved collaboration tables are gone from the source.
+      // note: The moved collaboration tables are gone from the source.
       expect(() => after.db.prepare("select count(*) as n from issues").get()).toThrow();
     } finally {
       after.close();
     }
 
-    // The target holds exactly the reviewed history and the preserved receipts.
+    // invariant: The target holds exactly the reviewed history and the preserved receipts.
     const staged = await stagedRows(location);
     expect(staged.authority).toMatchObject({ state: "active", revision: 7, catalogRevision: 3 });
     expect(staged.rows.issues!.map((row) => ({ id: row.id, disposition: row.disposition, revision: row.revision }))).toEqual(
@@ -1488,7 +1488,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    // A DEFERRED foreign-key child passes the `drop table issues` statement and
+    // why: A DEFERRED foreign-key child passes the `drop table issues` statement and
     // fails at COMMIT, so the fence reaches its commit path before it fails.
     const blocker = new DatabaseSync(join(source.context.harnessDir, "store.db"));
     try {
@@ -1507,12 +1507,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(failure.message).toContain("UNCONFIRMED");
     expect(failure.message).toContain("do not treat the combined source as unchanged");
     expect(failure.message).toContain("Inspect the persisted fence record");
-    // The original driver cause survives the classification.
+    // note: The original driver cause survives the classification.
     expect(failure.message).toContain("FOREIGN KEY constraint failed");
-    // It is NOT the confirmed-rollback message.
+    // note: It is NOT the confirmed-rollback message.
     expect(failure.message).not.toContain("is still at its pre-cutover schema with no fence record");
     expect(failure.message).not.toContain("nothing was fenced and no target publication was made");
-    // Nothing was published.
+    // note: Nothing was published.
     expect((await cutoverState(location)).authority.state).toBe("staged");
   });
 
@@ -1532,7 +1532,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     }>;
     before.close();
 
-    // A child table the fence does not move keeps a foreign key into `issues`,
+    // why: A child table the fence does not move keeps a foreign key into `issues`,
     // so the final `drop table issues` inside the fence transaction violates it
     // AFTER the schema advance, the fence row and the earlier drops.
     const blocker = new DatabaseSync(join(source.context.harnessDir, "store.db"));
@@ -1549,7 +1549,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
     ).rejects.toMatchObject({ code: "store.corrupt" });
 
-    // The source is readable, still at schema 19, with every row and the pin's
+    // note: The source is readable, still at schema 19, with every row and the pin's
     // foreign key intact and no fence evidence.
     const restored = await openStore(source.context, "read");
     try {
@@ -1562,12 +1562,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     } finally {
       restored.close();
     }
-    // No partial target publication: the target is still the verified stage.
+    // note: No partial target publication: the target is still the verified stage.
     const staged = await cutoverState(location);
     expect(staged.authority.state).toBe("staged");
     expect(staged.publications).toEqual([{ manifest_id: manifest.manifestId, phase: "verified" }]);
 
-    // Removing the blocking fact lets the same activation resume and fence.
+    // note: Removing the blocking fact lets the same activation resume and fence.
     const unblocked = new DatabaseSync(join(source.context.harnessDir, "store.db"));
     try {
       unblocked.exec("drop table issue_notes");

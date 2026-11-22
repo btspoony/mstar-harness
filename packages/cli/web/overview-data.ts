@@ -74,7 +74,7 @@ export function overviewCopy(copy: Copy): OverviewCopy {
  */
 export function overviewFromEnvelope(envelope: ReadEnvelope<OverviewDTO>): OverviewModel {
   const gap = collaborationGap(envelope);
-  // A page may only present collaboration facts at all when the observation is
+  // note: A page may only present collaboration facts at all when the observation is
   // complete. `null` is a legacy envelope that discloses no observation (kept
   // compatible); an explicit partial/unavailable one downgrades every member it
   // answered, while projection-backed execution data stays usable.
@@ -88,7 +88,7 @@ export function overviewFromEnvelope(envelope: ReadEnvelope<OverviewDTO>): Overv
   return overviewModel(data, { projection: envelope.projection satisfies ReadProjection });
 }
 
-/** Keep only what the observation did not vouch for: `read` members become unavailable. */
+/** why: Keep only what the observation did not vouch for: `read` members become unavailable. */
 function undisclosedCollaborationMembers(data: OverviewDTO, reason: string): OverviewDTO {
   const undisclosed = <T>(member: OverviewMember<T>): OverviewMember<T> =>
     member.state === "read" ? { state: "unavailable", reason } : member;
@@ -115,7 +115,7 @@ export function overviewOutcome(
       return {
         kind: "ready",
         model: overviewFromEnvelope(result.envelope),
-        // The footer states the STORE revision. `projection.generation` is a different
+        // invariant: The footer states the STORE revision. `projection.generation` is a different
         // field in the same envelope and drifts from it, so the footer disagreed with
         // every other screen's revision. A revision is a collaboration fact: an
         // incomplete observation cannot vouch for it, so it is suppressed, not relabelled.

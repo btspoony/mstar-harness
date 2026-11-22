@@ -122,7 +122,7 @@ function controlRoot(label: string): StoreContext {
   return { harnessDir };
 }
 
-/** Publish the collaboration lane and this checkout's binding. */
+/** note: Publish the collaboration lane and this checkout's binding. */
 async function seedCollaboration(context: StoreContext): Promise<void> {
   const location = resolveCollaborationLocation(context);
   await initializeCollaborationStore(location);

@@ -483,10 +483,10 @@ function parseJsonArray<T>(value: unknown): T[] {
 }
 
 // ---------------------------------------------------------------------------
-// Source evidence
+// note: Source evidence
 // ---------------------------------------------------------------------------
 
-/** A refusal's stable code, disclosed as the gap of an optional source. */
+/** note: A refusal's stable code, disclosed as the gap of an optional source. */
 function errorCode(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error) {
     const { code } = error;
@@ -496,7 +496,7 @@ function errorCode(error: unknown): string {
 }
 
 /**
- * The projection block of a request that never opened the execution store. Its
+ * invariant: The projection block of a request that never opened the execution store. Its
  * `checkedAt` is its OWN instant: projection health is a separate observation and
  * never borrows an authority snapshot's timestamp.
  */
@@ -512,12 +512,12 @@ function unobservedProjection(): ReadProjection {
 }
 
 /**
- * The execution domain's own evidence: its identity, epoch and revision. The
+ * note: The execution domain's own evidence: its identity, epoch and revision. The
  * execution authority is asserted here, inside the read transaction -- a
  * non-active execution store is not read authority for its own domain.
  */
 function readExecutionObservation(handle: StoreHandle): ExecutionObservation {
-  // Same rule as the collaboration source: the execution observation is stamped
+  // note: Same rule as the collaboration source: the execution observation is stamped
   // when its own transaction establishes the snapshot.
   const asOf = new Date().toISOString();
   const authority = handle.db.prepare("select authority_state from execution_meta where id = 1").get() as
@@ -611,7 +611,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
 
   let collaborationHandle: CollaborationStoreHandle | null = null;
   let executionHandle: StoreHandle | null = null;
-  // Both opens sit INSIDE the cleanup scope: a required execution open that
+  // invariant: Both opens sit INSIDE the cleanup scope: a required execution open that
   // throws must not strand the collaboration handle it already acquired.
   try {
     let collaborationCode: string | null = null;
@@ -675,7 +675,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
         try {
           db.exec("rollback");
         } catch {
-          // connection-level failure during rollback -- nothing was committed
+          // note: connection-level failure during rollback -- nothing was committed
         }
       }
       throw error;
@@ -687,7 +687,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
 }
 
 /**
- * The projection health this execution read discloses. A store that predates
+ * invariant: The projection health this execution read discloses. A store that predates
  * migration 3 is refused with the actionable upgrade path: every
  * execution-reading view states projection health, so a missing table is a
  * schema fact, never an empty view.
@@ -781,10 +781,10 @@ export async function readExecutionSource(
   return { route: "execution", read: await readExecutionAuthority(context, addressed) };
 }
 
-/** A view's declared sources: what it opens, and what it requires. */
+/** note: A view's declared sources: what it opens, and what it requires. */
 type ViewSources = Pick<StoreReadQuery<unknown>, "collaboration" | "execution">;
 
-/** The canonical key of one issue page: the normalized filter set plus bounds. */
+/** note: The canonical key of one issue page: the normalized filter set plus bounds. */
 function issuePageKey(filter: IssueFilter): string {
   const { limit, offset } = paging(filter.limit, filter.offset);
   return [
@@ -800,7 +800,7 @@ function issuePageKey(filter: IssueFilter): string {
 }
 
 /**
- * Which sources each view reads and whether it requires them (contract
+ * why: Which sources each view reads and whether it requires them (contract
  * §Read/Completeness): issue/catalog/milestone/roadmap views are pure
  * collaboration; workflow/iteration views require execution and disclose an
  * optional catalog association; the overview needs both of its combined counts.
@@ -830,12 +830,12 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: `workflow:${requireId(filters, "workflow-detail")}` }, required: false }, execution: "required" };
     case "iterations": {
       const { limit, offset } = page();
-      // Membership, attribution and the unpaged total are catalog facts: an
+      // invariant: Membership, attribution and the unpaged total are catalog facts: an
       // unavailable catalog cannot be answered as an empty list.
       return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: true }, execution: "required" };
     }
     case "iteration-detail":
-      // The subject itself is a catalog row: without the catalog no id can be
+      // note: The subject itself is a catalog row: without the catalog no id can be
       // called absent.
       return { collaboration: { scope: { kind: "query", key: `iteration:${requireId(filters, "iteration-detail")}` }, required: true }, execution: "required" };
     case "overview":
@@ -878,7 +878,7 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
   };
 }
 
-/** The panel's bounded preview size; a rollup never counts by paging. */
+/** invariant: The panel's bounded preview size; a rollup never counts by paging. */
 const OPEN_ISSUE_PREVIEW_LIMIT = 10;
 
 /**
@@ -897,7 +897,7 @@ export type OpenIssueRollup = {
 function readOpenIssueRollup(db: StoreDb, projectId?: string): OpenIssueRollup {
   const where = `where issues.disposition = 'open'${projectId === undefined ? "" : " and issues.project_id = ?"}`;
   const params = projectId === undefined ? [] : [projectId];
-  // The whole severity vocabulary is reported (zeros included), so a consumer
+  // invariant: The whole severity vocabulary is reported (zeros included), so a consumer
   // never distinguishes "absent" from "zero" by a missing key.
   const bySeverity: Record<string, number> = {};
   for (const severity of ISSUE_SEVERITIES) bySeverity[severity] = 0;
@@ -930,13 +930,13 @@ function readOpenIssueRollup(db: StoreDb, projectId?: string): OpenIssueRollup {
  * across generations.
  */
 export function queryOpenIssueRollup(projectId?: string): StoreReadQuery<OpenIssueRollup> {
-  // A blank id is a request shape the contract does not define: it must not
+  // invariant: A blank id is a request shape the contract does not define: it must not
   // answer a zero rollup for a project that was never named.
   if (projectId !== undefined && (typeof projectId !== "string" || projectId.trim() === "")) {
     usage("projectId must be a non-empty id");
   }
   const scoped = projectId === undefined ? undefined : projectId.trim();
-  // The proof names the selection it actually covers: a repository-wide rollup
+  // invariant: The proof names the selection it actually covers: a repository-wide rollup
   // and any project filter are different scopes with different keys, so one
   // summary proof can never stand for both.
   const scope: CollaborationScope =
@@ -950,7 +950,7 @@ export function queryOpenIssueRollup(projectId?: string): StoreReadQuery<OpenIss
   };
 }
 
-/** The collaboration connection a required-source view reads from. */
+/** note: The collaboration connection a required-source view reads from. */
 function collaborationSource(sources: StoreReadSources): StoreDb {
   if (sources.collaboration === null) {
     throw new StoreError(
@@ -961,7 +961,7 @@ function collaborationSource(sources: StoreReadSources): StoreDb {
   return sources.collaboration.db;
 }
 
-/** The execution connection an execution-source view reads from. */
+/** note: The execution connection an execution-source view reads from. */
 function executionSource(sources: StoreReadSources): StoreDb {
   if (sources.execution === null) {
     throw new StoreError("store.not-initialized", "This view requires the execution authority, which was not opened for this read.");
@@ -1117,7 +1117,7 @@ function parseEvidenceText(json: string): string[] {
 }
 
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
-  // The collaboration lane is created complete: the same authority gate its own
+  // note: The collaboration lane is created complete: the same authority gate its own
   // reader applies, with no legacy per-table schema probe.
   assertIssueStoreActive(db);
   const milestoneColumn = ", milestone_id";
@@ -1457,7 +1457,7 @@ function identityToken(kind: string, id: string): string {
   return `${kind}\u0000${id}`;
 }
 
-/** Catalog identities for a bounded key set, keyed by `kind\0id`. An unopened
+/** invariant: Catalog identities for a bounded key set, keyed by `kind\0id`. An unopened
  * optional catalog source contributes nothing -- the envelope says it was
  * unavailable, so a view never turns that into a "missing link" claim. */
 function catalogIdentities(db: StoreDb | null, keys: readonly CatalogKey[]): Map<string, CatalogIdentityDTO> {
@@ -1636,7 +1636,7 @@ function workflowCatalogKey(workflow: { id: string; type: string }): CatalogKey 
 }
 
 /**
- * Badges that depend on catalog identity are only claimed when the catalog was
+ * note: Badges that depend on catalog identity are only claimed when the catalog was
  * OBSERVED: with an unavailable optional source an absent row is unknown, not
  * missing, and the envelope's collaboration disclosure names the gap.
  */
@@ -2075,7 +2075,7 @@ function readIterationDetail(sources: StoreReadSources, filters: DashboardFilter
 // ---------------------------------------------------------------------------
 
 /**
- * The aggregated "what is the state right now" read: every member is produced
+ * why: The aggregated "what is the state right now" read: every member is produced
  * inside its own `try`, so one failed reader degrades that member only, and
  * the two project-scoped members answer `not-applicable` when no project
  * resolves. Both required sources were opened by the boundary, each inside its

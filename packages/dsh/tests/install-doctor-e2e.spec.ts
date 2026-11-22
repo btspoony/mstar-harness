@@ -124,7 +124,7 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
   return stdout
 }
 
-/** Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess.
+/** note: Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess.
  * `--no-global-cli` is the CLI's no-network opt-out: without it the version
  * decision follows the published latest, so every add targets a release this
  * checkout's engine may not carry. */
@@ -192,7 +192,7 @@ function sameSubagentCorridor(mstarPkgDir: string): boolean {
   return peers(mstarPkgDir)?.['@deepseek-ai/dsh-subagent'] === peers(packageRoot)?.['@deepseek-ai/dsh-subagent']
 }
 
-/** Single-instance host copy of the INSTALLED mstar artifact (Task 1
+/** why: Single-instance host copy of the INSTALLED mstar artifact (Task 1
  * pattern): a real-directory copy under `<repo>/node_modules/.mstar-e2e/` so
  * the dist's bare imports walk up to the repo `node_modules` — the same
  * physical instances the test process loaded. The cordis cross-check pins
@@ -257,7 +257,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // --- Setup: temp DSH_HOME; CELL-1 install form: `--no-fallbacks`
     // (the mstar row only — the fallbacks row is uninstalled). ---
     dshHome = await mkdtemp(join(tmpdir(), 'dsh-doctor-home-'))
-    // Local artifact pin (Task 1 deviation, reused): the dsh-side boots below
+    // why: Local artifact pin (Task 1 deviation, reused): the dsh-side boots below
     // resolve THIS worktree's engine dist (single-instance cordis), so the
     // profile installs the checkout's own package instead of the registry
     // release the CLI would resolve. Pre-seeding it also keeps every init's
@@ -265,7 +265,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // present at it, so the inits below only add the fallbacks row.
     {
       runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', join(REPO_ROOT, 'packages/dsh')], 300_000)
-      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the local
+      // invariant: Post-pin dump probe (fix wave S-002 belt-and-suspenders): the local
       // add must not duplicate the mstar loader row (the --no-fallbacks shape
       // keeps exactly one row).
       const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)

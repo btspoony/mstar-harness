@@ -1,5 +1,5 @@
 /**
- * collaboration-operations.ts -- the internal composite frame of the four
+ * invariant: collaboration-operations.ts -- the internal composite frame of the four
  * admitted cross-domain operations (residual add, residual close, execution
  * registration, minimal import).
  *
@@ -77,7 +77,7 @@ export type CollaborationEffectReceipt = Readonly<{
   facts: string;
 }>;
 
-/** The recorded reservation, as the addressed plan row's exclusion and replay anchor. */
+/** note: The recorded reservation, as the addressed plan row's exclusion and replay anchor. */
 type StoredIntent = Readonly<{
   key: CompositeKey;
   kind: CompositeKind;
@@ -94,10 +94,10 @@ type StoredIntent = Readonly<{
   cause: DeclineCause | null;
 }>;
 
-/** The deterministic cause a declined composite carries into every replay. */
+/** note: The deterministic cause a declined composite carries into every replay. */
 type DeclineCause = Readonly<{ code: string; message: string; details: Record<string, unknown> | null }>;
 
-/** The durable collaboration half: one committed effect receipt or one recorded decline. */
+/** note: The durable collaboration half: one committed effect receipt or one recorded decline. */
 type EffectOutcome =
   | { kind: "committed"; receipt: CollaborationEffectReceipt }
   | { kind: "declined"; cause: DeclineCause };
@@ -105,12 +105,12 @@ type EffectOutcome =
 export type CompositeReservation = Readonly<{
   outcome: "reserved" | "resume";
   reservedRevision: number;
-  /** The ADMITTED request fingerprint: the effect key and the frozen identity. */
+  /** note: The ADMITTED request fingerprint: the effect key and the frozen identity. */
   requestHash: string;
 }>;
 
 /**
- * Refusal codes that describe an unavailable or uncertain ENVIRONMENT rather
+ * note: Refusal codes that describe an unavailable or uncertain ENVIRONMENT rather
  * than a decision about this request. Everything else carrying a stable code is
  * a domain refusal and is declined durably.
  */
@@ -138,7 +138,7 @@ function codeOf(error: unknown): string | null {
   return typeof error.code === "string" && error.code !== "" ? error.code : null;
 }
 
-/** A coded domain refusal is deterministic; silence, a crash or an environment code is not. */
+/** note: A coded domain refusal is deterministic; silence, a crash or an environment code is not. */
 function isDeterministicRefusal(error: unknown): boolean {
   const code = codeOf(error);
   return code !== null && RECOVERABLE_CODES[code] !== true;
@@ -166,7 +166,7 @@ function parseJson(value: string, what: string): unknown {
 }
 
 /**
- * The typed refusal recorded for an operation id reused with a different
+ * note: The typed refusal recorded for an operation id reused with a different
  * semantic request. It is the one refusal that survives both stores: the
  * fingerprint is the idempotency key, not a re-usable slot.
  */
@@ -188,7 +188,7 @@ function intentConflict(intent: CompositeIntent, recordedHash: string | null): E
 }
 
 /**
- * §3.1 the refusal of an operation on a plan row another composite currently
+ * invariant: §3.1 the refusal of an operation on a plan row another composite currently
  * reserves. It names the pending operation and its supported completion, so the
  * caller never invents a second authority for the same row.
  */
@@ -216,14 +216,14 @@ function pendingReservationRefusal(input: {
   );
 }
 
-/** A recorded deterministic decline, re-raised with its original code and cause. */
+/** note: A recorded deterministic decline, re-raised with its original code and cause. */
 function recordedRefusal(operationId: string, cause: DeclineCause | null): Error {
   const code = cause?.code ?? "collaboration.operation-partial";
   const message = cause?.message ?? `composite operation ${operationId} was declined before any effect`;
   const error = new Error(message) as Error & { code: string; details?: Record<string, unknown> };
   error.name = "RecordedCompositeRefusal";
   error.code = code;
-  // The original refusal's machine facts survive the decline, so a replayed
+  // why: The original refusal's machine facts survive the decline, so a replayed
   // refusal still names the entry/path/field the first attempt reported.
   error.details = {
     ...(cause?.details ?? {}),
@@ -235,7 +235,7 @@ function recordedRefusal(operationId: string, cause: DeclineCause | null): Error
   return error;
 }
 
-/** §3.1 the frozen address of this intent must be the generation the transaction opened. */
+/** invariant: §3.1 the frozen address of this intent must be the generation the transaction opened. */
 function assertIntentGeneration(tx: ExecutionTransaction, intent: CompositeIntent): void {
   if (intent.key.executionStoreId === tx.storeId && intent.key.executionEpoch === tx.epoch) return;
   throw new StoreError(
@@ -253,7 +253,7 @@ function assertIntentGeneration(tx: ExecutionTransaction, intent: CompositeInten
 }
 
 /**
- * A resumed intent must be the one this call froze. Both transport facts are
+ * invariant: A resumed intent must be the one this call froze. Both transport facts are
  * deliberately excluded: the CAS token the caller re-read (an admitted
  * reservation whose row later moved is refreshed by re-admission) and the
  * caller fingerprint (the coordinator identity may have been recovered, and the
@@ -409,7 +409,7 @@ export function reserveCompositeIntent(
   const row = readIntent(tx.db, intent.key);
   const now = nowRfc3339();
   if (row === null) {
-    // §3.1 the operation-id namespace is ONE namespace across the execution
+    // invariant: §3.1 the operation-id namespace is ONE namespace across the execution
     // ledgers: an id another operation already committed here is never adopted
     // by a composite (its receipt would otherwise collide after the effect ran).
     const committed = tx.db
@@ -459,7 +459,7 @@ export function reserveCompositeIntent(
       );
     return { outcome: "reserved", reservedRevision: reservation.revision, requestHash: intent.requestHash };
   }
-  // The reservation's PK is the operation-id namespace: another plan's attempt to
+  // invariant: The reservation's PK is the operation-id namespace: another plan's attempt to
   // reuse this id finds THIS row and is refused by the frozen-identity check.
   assertSameIntent(row, intent);
   if (row.phase === "declined") throw recordedRefusal(intent.key.operationId, row.cause);
@@ -538,7 +538,7 @@ export function advanceCollaborationRevision(handle: CollaborationStoreHandle): 
   return row.revision;
 }
 
-/** One durable collaboration row: a committed effect receipt or a recorded decline. */
+/** note: One durable collaboration row: a committed effect receipt or a recorded decline. */
 function readEffect(db: StoreDb, key: CompositeKey): { requestHash: string; outcome: EffectOutcome } | null {
   const row = db
     .prepare(
@@ -571,7 +571,7 @@ function readEffect(db: StoreDb, key: CompositeKey): { requestHash: string; outc
 }
 
 /**
- * Phase 2: apply the whole collaboration effect and commit its receipt in one
+ * invariant: Phase 2: apply the whole collaboration effect and commit its receipt in one
  * transaction. The frozen target stamp is re-verified under the writer lock, so
  * a different repository/mode/store generation refuses `collaboration.stale-binding`
  * before any effect runs. A row already recorded under this local key is
@@ -587,7 +587,9 @@ async function applyCollaborationEffect(
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash); // hash-gate: authorized — Replay a committed composite effect recorded under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
+        // invariant: a replay is served only for the same operation id and request hash; any other hash is a conflicting intent.
+        // hash-gate: authorized — Replay a committed composite effect recorded under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
+        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
         return existing.outcome;
       }
       const facts = apply(handle);
@@ -627,7 +629,7 @@ async function applyCollaborationEffect(
 }
 
 /**
- * Record a deterministic refusal under this effect key, in its own collaboration
+ * why: Record a deterministic refusal under this effect key, in its own collaboration
  * transaction and WITHOUT business effects or a revision advance. The write is
  * coordinated with a concurrent same-id attempt: if that attempt committed the
  * effect first, its receipt is returned (this attempt then finalizes it); if a
@@ -647,7 +649,9 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash); // hash-gate: authorized — Replay a recorded composite decline under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
+        // invariant: a replay is served only for the same operation id and request hash; any other hash is a conflicting intent.
+        // hash-gate: authorized — Replay a recorded composite decline under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
+        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
         return existing.outcome;
       }
       const meta = handle.db
@@ -678,7 +682,7 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
 }
 
 /**
- * Mark the execution reservation declined AFTER its collaboration decline is
+ * invariant: Mark the execution reservation declined AFTER its collaboration decline is
  * durable. Returns the settlement failure instead of swallowing it: the decline
  * is committed, but a reservation that stayed `prepared` blocks the next plan or
  * workflow mutation and every verified backup, so the caller must report a
@@ -717,7 +721,7 @@ async function markDeclined(
 }
 
 /**
- * The partial receipt of a durable decline whose execution settlement did not
+ * why: The partial receipt of a durable decline whose execution settlement did not
  * confirm: the business cause and the settlement failure are both preserved, and
  * the same-identity replay is named. The reservation may still be live, so the
  * terminal refusal would be a false success report.
@@ -743,7 +747,7 @@ function unsettledDeclineRefusal(intent: CompositeIntent, cause: DeclineCause, s
   );
 }
 
-/** Repair a missing acknowledgement on an already committed effect row. Metadata only. */
+/** note: Repair a missing acknowledgement on an already committed effect row. Metadata only. */
 async function acknowledgeEffect(context: StoreContext, intent: CompositeIntent, receipt: CollaborationEffectReceipt): Promise<boolean> {
   try {
     await withCollaborationWrite(
@@ -799,7 +803,7 @@ export async function repairCompositeAcknowledgement(
             "and execution_store_id = ? and execution_epoch = ? and operation_id = ?",
         )
         .get(key.executionStoreId, key.executionEpoch, key.operationId) as { result_json?: unknown } | undefined;
-      // An execution receipt proves the effect committed, so an absent or
+      // invariant: An execution receipt proves the effect committed, so an absent or
       // unreadable collaboration row means the acknowledgement state cannot be
       // VERIFIED. That is disclosed on the result, never reported as success.
       if (row === undefined) {
@@ -835,14 +839,14 @@ export async function repairCompositeAcknowledgement(
       return null;
     });
   } catch (error) {
-    // The receipt could not be READ either, so whether a replay can repair the
+    // note: The receipt could not be READ either, so whether a replay can repair the
     // acknowledgement is unknown; the named cause is the authority's own refusal.
     return { message: messageOf(error), repairableByReplay: true };
   }
 }
 
 /**
- * Carry an outstanding acknowledgement as a warning instead of a false partial
+ * why: Carry an outstanding acknowledgement as a warning instead of a false partial
  * business outcome. Two carriers exist: the refusal envelope's `recovery.warnings`
  * (ordinary domain verbs) and a plain `warnings` string list on a SUCCESS result
  * such as the execution import, which has no refusal envelope of its own. A result
@@ -880,16 +884,16 @@ export function noteOutstandingAcknowledgement<T>(result: T, fact: OutstandingAc
   return fact === null ? result : withAcknowledgementFact(result, fact);
 }
 
-/** A recorded result replays with its own envelope, marked as a replay. */
+/** note: A recorded result replays with its own envelope, marked as a replay. */
 function markReplayed<T>(value: T): T {
   if (value === null || typeof value !== "object" || !("replayed" in value)) return value;
-  // The stored value IS the result this frame committed; only the replay flag
+  // note: The stored value IS the result this frame committed; only the replay flag
   // differs from what the first call returned.
   return { ...value, replayed: true } as T;
 }
 
 /**
- * The composite outcome refusal: an accepted operation whose work is outstanding.
+ * invariant: The composite outcome refusal: an accepted operation whose work is outstanding.
  * It is never success, and it always names the durable phase, the confirmed
  * components and the same-id completion path.
  */
@@ -925,14 +929,14 @@ function partialRefusal(input: {
 }
 
 export type CollaborationCompositeEffects<T> = Readonly<{
-  /** The whole collaboration effect; runs inside one write transaction. */
+  /** note: The whole collaboration effect; runs inside one write transaction. */
   apply(handle: CollaborationStoreHandle): string;
-  /** The execution delta; runs inside one execution transaction AFTER the effect committed. */
+  /** note: The execution delta; runs inside one execution transaction AFTER the effect committed. */
   finalize(tx: ExecutionTransaction, receipt: CollaborationEffectReceipt): T;
 }>;
 
 /**
- * Phase 3: commit the execution delta and its receipt, then mark the reservation
+ * why: Phase 3: commit the execution delta and its receipt, then mark the reservation
  * confirmed, in ONE execution transaction. A concurrent attempt that finalized
  * first serves its recorded result instead of committing the delta twice.
  */
@@ -943,7 +947,7 @@ async function finalizeComposite<T>(
   finalize: CollaborationCompositeEffects<T>["finalize"],
 ): Promise<T> {
   return withExecutionTransaction(context, (tx) => {
-    // The minimal import is the ONE composite whose execution half PROMOTES a
+    // why: The minimal import is the ONE composite whose execution half PROMOTES a
     // staged authority together with the imported rows, so no interruption can
     // expose an ACTIVE store that holds no imported workflow. It re-asserts the
     // promotion itself inside its finalization transaction; every other kind
@@ -972,7 +976,7 @@ async function finalizeComposite<T>(
       }
       return markReplayed(parseJson(row.receiptJson, "execution_collaboration_intents.receipt_json") as T);
     }
-    // The frozen identity (payload/actor/scope/target) is the admission; the
+    // why: The frozen identity (payload/actor/scope/target) is the admission; the
     // caller fingerprint is deliberately not compared, so a recovered coordinator
     // identity continues the intent instead of taking it over.
     assertSameIntent(row, intent);
@@ -1033,7 +1037,7 @@ export async function runCollaborationComposite<T>(
       });
     }
     if (declined.kind === "committed") {
-      // A concurrent same-id attempt committed the effect first: finalize THAT
+      // why: A concurrent same-id attempt committed the effect first: finalize THAT
       // effect instead of declining it.
       effect = declined;
     } else {

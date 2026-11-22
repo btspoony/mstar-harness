@@ -52,7 +52,7 @@ export type MinimalImportResult = {
    */
   inputDigest: string;
   /**
-   * Warnings about a committed result that is not fully settled. The import
+   * why: Warnings about a committed result that is not fully settled. The import
    * commits a composite effect whose acknowledgement is a SECOND write: a lost
    * acknowledgement is disclosed here instead of being reported as a clean
    * success, and a same-operation replay repairs it.
@@ -513,7 +513,7 @@ function discoverV1(
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...(refusal === undefined ? {} : { refusal }) };
 }
 
-/** One legacy workspace this run read: its root document, convertible workflows and refusal facts. */
+/** note: One legacy workspace this run read: its root document, convertible workflows and refusal facts. */
 type DiscoveredSource = Readonly<{
   root: string;
   rootDoc: StatusV2Doc;
@@ -842,7 +842,7 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
 
 
 /**
- * The deterministic half of one legacy import, evaluated inside the execution
+ * invariant: The deterministic half of one legacy import, evaluated inside the execution
  * transaction that admits it: which sources collide, which collisions the
  * operator acknowledged or this store's own receipts prove, and every caller
  * refusal. Nothing is written and no collaboration lane is touched, so it runs
@@ -856,7 +856,7 @@ function admitExecutionImport(
   workflowSkips: ReadonlySet<string>,
 ): Readonly<{ importable: Source[]; result: MinimalImportResult }> {
   const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
-  // A recognized legacy source whose id the native authority already holds is
+  // invariant: A recognized legacy source whose id the native authority already holds is
   // a COLLISION: this run never overwrites, deletes or silently omits the
   // existing native workflow, and it never guesses a prior import from a
   // matching id/type/date/header either. The operator's explicit
@@ -865,7 +865,7 @@ function admitExecutionImport(
   // same-operation replay already returned its retained receipt, so a
   // receipt — not a heuristic — is the only thing that skips this decision.
   const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
-  // The ONE additional thing that may skip this decision beside the caller's
+  // invariant: The ONE additional thing that may skip this decision beside the caller's
   // own operation receipt: the store's retained import receipts for the
   // EXACT source bytes this run is reading. A colliding id those receipts
   // already list as imported is a PROVEN replay — the native authority holds
@@ -873,7 +873,7 @@ function admitExecutionImport(
   // workflow happens to share the id. Anything else still refuses.
   const replayProof = provenReplayIds(tx.db, source.sourceDigest, conversionInput.digest, conversionInput.carriesInput);
   const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
-  // Same bytes, but a receipt that never recorded THIS run's declaration set:
+  // invariant: Same bytes, but a receipt that never recorded THIS run's declaration set:
   // the refusal names that gap instead of implying the source bytes went
   // missing.
   const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
@@ -881,7 +881,7 @@ function admitExecutionImport(
   const acknowledgedCollisions = source.rows
     .filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id))
     .map((row) => ({ id: row.id, path: relative(source.root, row.dir).split(/[\\/]+/).join("/") }));
-  // The acknowledgement vocabulary is exactly the sources THIS run refuses:
+  // invariant: The acknowledgement vocabulary is exactly the sources THIS run refuses:
   // the registered sources the preflight classified by lstat before any target
   // access (a linked source, or a non-directory path), plus the recognized ids
   // colliding in this transaction. An acknowledgement naming anything else
@@ -900,7 +900,7 @@ function admitExecutionImport(
   if (source.refusal !== undefined) conflict(source.refusal);
   const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
   if (refusedCollisions.length > 0) {
-    // A run that carries --delivery/--ack-skip-compass can collide with a
+    // invariant: A run that carries --delivery/--ack-skip-compass can collide with a
     // receipt for these exact bytes that proves only the BYTES were read. Such
     // a receipt cannot prove the declaration set it committed rows from, so
     // treating the id as a replay would discard the declaration the caller is
@@ -934,21 +934,21 @@ function admitExecutionImport(
     });
     dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited \u2014 this is import disposal, not deletion, and no prior import or resumption is inferred.`);
   }
-  // A proven replay is NOT an acknowledged loss: the store's own retained
+  // invariant: A proven replay is NOT an acknowledged loss: the store's own retained
   // import receipt for THESE exact source bytes AND this run's input already
   // lists the id, so the native authority holds it because this input was
   // imported before. It is reported as the ordinary already-current outcome,
   // never as a skipped or lost import, and it needs no acknowledgement.
   for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
     const path = relative(source.root, row.dir).split(/[\\/]+/).join("/");
-    // An acknowledgement on a PROVEN collision is honoured (it names a real
+    // why: An acknowledgement on a PROVEN collision is honoured (it names a real
     // collision) but it disposed of nothing: no loss is fabricated for an
     // import that demonstrably already happened, and the receipt says so
     // instead of leaving the operator's own input unreported.
     const acknowledged = workflowSkips.has(row.id)
       ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import."
       : "";
-    // The input digest is named only when this run carried input, so a
+    // why: The input digest is named only when this run carried input, so a
     // declaration-free repeat over an older receipt keeps its established
     // wording (that receipt proves the bytes, which is all that run needs).
     const shaped = conversionInput.carriesInput
@@ -960,7 +960,7 @@ function admitExecutionImport(
   for (const entry of source.skippedWorkflowAcknowledgements) {
     dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
   }
-  // The report shape mirrors the DSH importer's existing vocabulary: a run
+  // why: The report shape mirrors the DSH importer's existing vocabulary: a run
   // that commits rows is an `upgraded` import; a run that commits none but
   // proves at least one replay reports the already-current state as
   // `nothing-to-import` instead of claiming an upgrade that did not happen.
@@ -979,7 +979,7 @@ function admitExecutionImport(
 }
 
 /**
- * Disclose and repair the composite acknowledgement of an import that already
+ * invariant: Disclose and repair the composite acknowledgement of an import that already
  * committed. The effect row is metadata: a replay repairs ONLY the acknowledgement
  * and never re-applies a business effect, so a lost acknowledgement can never
  * leave a pair permanently unsettled while every retry reports clean success.
@@ -991,13 +991,13 @@ async function repairImportAcknowledgement<T extends MinimalImportResult>(
 ): Promise<T> {
   const fact = await repairCompositeAcknowledgement(context, key);
   if (fact === null) return result;
-  // A stored receipt predates this field, so the carrier is created here: the
+  // invariant: A stored receipt predates this field, so the carrier is created here: the
   // disclosure must not depend on how the earlier run happened to serialize.
   return noteOutstandingAcknowledgement({ ...result, warnings: [...(result.warnings ?? [])] }, fact);
 }
 
 /**
- * The execution half of one admitted import, in ONE execution transaction:
+ * invariant: The execution half of one admitted import, in ONE execution transaction:
  * write the imported workflows, activate the execution authority for the
  * reviewed legacy bytes and record the operation receipt. The collaboration
  * lane is confirmed before this runs, never activated here.
@@ -1019,7 +1019,7 @@ function commitExecutionImport(
   }
   for (const row of admission.importable) writeImportedExecutionWorkflow(tx, row);
   const now = new Date().toISOString();
-  // Promotion and the imported rows are ONE transaction: an ACTIVE authority is
+  // invariant: Promotion and the imported rows are ONE transaction: an ACTIVE authority is
   // therefore never observable without them. Exactly one execution-revision
   // advance happens either way — the promotion's own, or the rows' — so an
   // interrupted retry produces the same token an uninterrupted run would.
@@ -1048,7 +1048,7 @@ function commitExecutionImport(
   return admission.result;
 }
 
-/** The receipt one committed import recorded for this exact request, or null. */
+/** note: The receipt one committed import recorded for this exact request, or null. */
 function readImportReceipt(
   tx: ExecutionTransaction,
   operationId: string,
@@ -1075,7 +1075,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   // conversion-shaping input is hashed separately, so a stored receipt can prove
   // which declaration set produced the rows it committed.
   const conversionInput = conversionInputDigest(input.deliveryDeclarations ?? [], compassSkips);
-  // The reviewed operands of this import. The request fingerprint binds them to
+  // invariant: The reviewed operands of this import. The request fingerprint binds them to
   // the caller's operation id; the FROZEN identity (the reservation's payload)
   // is the same set WITHOUT the id, so an operator retry whose CLI minted a
   // fresh id still finds the operation its first attempt admitted. Every operand
@@ -1100,7 +1100,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     operationId,
     ...intentOperands,
   })).digest("hex");
-  // The reviewed identity a retry finds, independent of the fresh operation id
+  // note: The reviewed identity a retry finds, independent of the fresh operation id
   // an operator's CLI mints per invocation: a canonical rendering of the same
   // operands (fixed key order, sorted set members).
   const frozenPayload = JSON.stringify({
@@ -1111,7 +1111,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     acknowledgedCompassSkips: intentOperands.acknowledgedCompassSkips,
     sourceDigest: intentOperands.sourceDigest,
   });
-  // Receipt-first replay: a lost response answers from the ledger WITHOUT
+  // note: Receipt-first replay: a lost response answers from the ledger WITHOUT
   // touching the collaboration lane.
   const preflight = await withExecutionTransaction(context, (tx) => {
     const replayed = readImportReceipt(tx, operationId, requestHash);
@@ -1123,12 +1123,12 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (source.refusal !== undefined) conflict(source.refusal);
     return repairImportAcknowledgement(context, preflight.key, preflight.result);
   }
-  // Every deterministic admission refusal runs BEFORE the authority is promoted,
+  // invariant: Every deterministic admission refusal runs BEFORE the authority is promoted,
   // so a refused import never leaves an activated store behind.
   await withExecutionTransaction(context, (tx) => {
     admitExecutionImport(tx, source, conversionInput, workflowSkips);
   });
-  // The collaboration lane is validated BEFORE anything is promoted or reserved:
+  // invariant: The collaboration lane is validated BEFORE anything is promoted or reserved:
   // a missing or staged lane refuses here, leaving the execution authority in the
   // state it was (a staged store stays staged — never an empty ACTIVE authority).
   const target = await collaborationTargetOf(context);
@@ -1140,7 +1140,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (replayed !== null) {
       return { kind: "replay" as const, result: replayed, key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId } };
     }
-    // A retry after an interruption resumes the operation its FIRST attempt
+    // note: A retry after an interruption resumes the operation its FIRST attempt
     // admitted: the pending reservation is found by the reviewed identity, and
     // the recorded operation id (not this invocation's fresh one) addresses the
     // effect and its receipt.
@@ -1156,7 +1156,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       kind: "execution-import",
       requestHash: typeof pending?.request_hash === "string" ? pending.request_hash : requestHash,
       target,
-      // The import addresses no plan row: its execution facts are the store's
+      // note: The import addresses no plan row: its execution facts are the store's
       // own authority rows, serialized by the execution transaction itself.
       scope: { workflowId: null, planId: null },
       actor: operator,
@@ -1170,12 +1170,12 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (source.refusal !== undefined) conflict(source.refusal);
     return repairImportAcknowledgement(context, prepared.key, prepared.result);
   }
-  // The staged authority is promoted INSIDE the finalization transaction, with
+  // invariant: The staged authority is promoted INSIDE the finalization transaction, with
   // the imported rows and the operation receipt (see `commitExecutionImport`), so
   // a caller can never observe an ACTIVE store that holds no imported workflow.
   return runCollaborationComposite<MinimalImportResult>(context, prepared.intent, {
     apply(handle) {
-      // The legacy execution import carries NO catalog delta: its collaboration
+      // invariant: The legacy execution import carries NO catalog delta: its collaboration
       // half is the CONFIRMATION that this repository's lane is the addressed,
       // already-active issue/catalog authority. A missing or staged lane is
       // refused by the writer's own admission, so this never activates one.
@@ -1201,9 +1201,9 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   });
 }
 
-/** The frozen collaboration target stamp of this repository's ACTIVE lane. */
+/** note: The frozen collaboration target stamp of this repository's ACTIVE lane. */
 async function collaborationTargetOf(context: StoreContext): Promise<CollaborationStamp> {
-  // WRITE admission: the binding must hold before this verb reserves an intent,
+  // invariant: WRITE admission: the binding must hold before this verb reserves an intent,
   // so an unbound checkout refuses here instead of after the reservation.
   const handle = await openCollaborationStore(context, "write");
   try {

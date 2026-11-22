@@ -484,7 +484,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         },
       },
     );
-    // Two dated buckets, so the trend has a line: the issues were captured in the same
+    // why: Two dated buckets, so the trend has a line: the issues were captured in the same
     // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
     // The dashboard reads issues from the collaboration lane after the store split, so
     // the fixture write goes through the lane write, not the execution store.
@@ -724,7 +724,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(Math.abs(width - (band.contentWidth as number))).toBeLessThanOrEqual(1);
         }
 
-        // A list screen with no rows is a DATA regression, not an absence arm: the
+        // invariant: A list screen with no rows is a DATA regression, not an absence arm: the
         // fixture seeds one row per list, so emptiness here must fail rather than
         // skip the whole table contract. Overview has no table at all; the Projects
         // screen's contract is its picker row for the fixture's project.
@@ -774,7 +774,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(band.metaEllipsis).toBe(true);
         }
 
-        // The summary line still reads (the Issues screen is the one that has one).
+        // invariant: The summary line still reads (the Issues screen is the one that has one).
         // The head is a wrapping flex row: where the title and the summary fit on
         // one line they share a baseline (the 420px issues head), and where they
         // do not, the summary folds under the title — both are the prototype's own
@@ -822,7 +822,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       const measured = await visit("issues", "issues", true, "issues-400-zh");
       const band = measured.band as Record<string, number | boolean | string | null>;
       expect(String(band.titleText)).toMatch(/[\u4e00-\u9fff]/);
-      // The reported defect stacked the two glyphs one per line; the fixed shape keeps
+      // why: The reported defect stacked the two glyphs one per line; the fixed shape keeps
       // one line box. The head is a wrapping flex row now (the summary folds under the
       // title in the collapsed band), so the h1 shrink-wraps its content instead of
       // filling the row — the box width is no longer the row's width, and the guards
@@ -901,7 +901,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   }, 60_000);
 
   test("every list keeps the prototype's columns inside its card at 720px", async () => {
-    // The pane the owner approves is 720px wide (`design-v1.html` sidebar stages).
+    // why: The pane the owner approves is 720px wide (`design-v1.html` sidebar stages).
     // The product's documented policy (DESIGN.md's band table) is "scroll instead of
     // squeeze": the declared prototype column set plus the flexible column's floor is
     // wider than a 720px card for every list, so each table scrolls inside its own
@@ -917,19 +917,19 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     for (const [route, screen, columns, scrolls] of lists) {
       const measured = await visit(route, screen, true, `pane-720-${route}`);
       const band = measured.band as Record<string, number | boolean | null>;
-      // Every column the prototype shows is rendered: the eighth (milestone) is a
+      // invariant: Every column the prototype shows is rendered: the eighth (milestone) is a
       // wide-only column and must be the only thing missing — no clip either way.
       expect(band.visibleCells).toBe(columns);
-      // The floor the table publishes decides when the scroll begins; it must exist
+      // invariant: The floor the table publishes decides when the scroll begins; it must exist
       // (the squeeze fallback returns when it is dropped) and sit above the card.
       expect(band.tableFloorPx as number).toBeGreaterThan(band.contentWidth as number);
-      // Both halves of "scroll instead of squeeze": the pinned scroll state, and the
+      // why: Both halves of "scroll instead of squeeze": the pinned scroll state, and the
       // box that can actually scroll (a `scrollWidth` check alone passes with
       // `overflow-x` deleted).
       expect(band.tableScrollsSideways).toBe(scrolls);
       expect(band.scrollerOverflowX).toBe("auto");
       const contentWidth = band.contentWidth as number;
-      // The card frame holds: the card itself never exceeds the content width, and
+      // invariant: The card frame holds: the card itself never exceeds the content width, and
       // the page never scrolls sideways (asserted by the band tests).
       for (const width of band.cardWidths as number[]) expect(width).toBeLessThanOrEqual(contentWidth + 0.5);
     }
@@ -1033,7 +1033,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(axis.length).toBeGreaterThanOrEqual(2);
     expect(new Set(axis).size).toBe(axis.length);
     for (const label of axis) expect(label).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    // The dated-history table alternative lives on the ISSUES screen's trend
+    // why: The dated-history table alternative lives on the ISSUES screen's trend
     // disclosure (the overview card is figure-only since the dashboard alignment
     // change): one row per dated bucket, so the series has a length a reader can
     // count without the figure.
@@ -1044,14 +1044,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   }, 90_000);
 
   test("an unavailable flow member renders the unavailable arm, never an empty chart", async () => {
-    // The lane's own failure path, not a flag: lane admission validates the schema,
+    // invariant: The lane's own failure path, not a flag: lane admission validates the schema,
     // so a lane missing `issue_transitions.to_disposition` is refused as
     // `collaboration.unreadable` before any query runs. The point of the anchor is
     // that the dashboard fails closed through the shared arm with the named reason —
     // a fake zero-line would look like a healthy trend that reports nothing, and an
     // unmarked half-empty screen would look like a healthy store with nothing in it.
     const dir = mkdtempSync(join(tmpdir(), "mstar-render-gate-flow-"));
-    // The lane write below requires the same identity and binding the main fixture
+    // note: The lane write below requires the same identity and binding the main fixture
     // declares: a unique repo_id and a paired lane before any ACTIVE-lane write.
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
     writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-render-gate-flow-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-108)}\n`);
@@ -1080,7 +1080,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       },
       { actor: "project-manager", operationId: "render-gate-flow-capture" },
     );
-    // `readIssueFlow` reads the collaboration lane after the store split, so the
+    // invariant: `readIssueFlow` reads the collaboration lane after the store split, so the
     // closure read that must fail — it filters `issue_transitions.to_disposition` —
     // is broken on the LANE's schema, not the execution store's. Without the column
     // that statement fails, which is the store's own failure path — not a synthetic
@@ -1093,7 +1093,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     await withCollaborationWrite(context, (handle) => {
       handle.db.prepare("alter table issue_transitions drop column to_disposition").run();
     });
-    // No lane drain here: lane admission validates the schema, so after the drop the
+    // why: No lane drain here: lane admission validates the schema, so after the drop the
     // lane is deliberately unreadable — the dashboard's own read is the refusal under
     // test. Only the execution store's WAL needs draining for the server's open.
     (await openStore(context, "read")).close();
@@ -1102,7 +1102,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     try {
       await browser(["set", "viewport", "1900", "900"]);
       await browser(["open", `${broken.url}#overview`]);
-      // Since the cutover an unreadable required source fails closed for the whole
+      // invariant: Since the cutover an unreadable required source fails closed for the whole
       // screen: the landing paints the shared unavailable arm with the named refusal
       // instead of a half-empty dashboard, so the screen anchor itself never mounts.
       await browser(["wait", "#main [data-ms-absence]"]);
@@ -1114,7 +1114,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         isoInDocument: /\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}/.test(document.body.textContent ?? ''),
       })`);
       expect(refusal.arm).toBe("unavailable");
-      // The named cause reaches the reader, and the refusal carries no private
+      // note: The named cause reaches the reader, and the refusal carries no private
       // path in any absolute spelling — POSIX home prefixes, macOS/Linux temp
       // roots (`/var/folders`, `/private/var`, `/tmp`, the fixture's own root
       // spellings), or a Windows drive path — and no ISO timestamp (the
@@ -1125,7 +1125,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       expect(reason).not.toMatch(/\/(private\/var|var\/folders|tmp)\//);
       expect(reason).not.toMatch(/[A-Za-z]:[\\/](Users|Windows|Temp|tmp|var)/i);
       expect(refusal.isoInDocument).toBe(false);
-      // Never an empty chart: no trend line is drawn at all on the refusal arm.
+      // invariant: Never an empty chart: no trend line is drawn at all on the refusal arm.
       expect(Number(refusal.charts)).toBe(0);
     } finally {
       broken.close();

@@ -1,5 +1,5 @@
 /**
- * store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
+ * invariant: store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
  * boundary: what the store cutover refuses once it is the authority, and
  * what it leaves untouched.
  *
@@ -59,14 +59,14 @@ afterEach(() => {
 
 const projects: string[] = [];
 
-/** Isolated user home for the collaboration lane; restored when the file ends. */
+/** note: Isolated user home for the collaboration lane; restored when the file ends. */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "opencode-g4b-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
 });
 afterAll(() => {
-  // A leaked spy would redirect every later test file at this deleted
+  // why: A leaked spy would redirect every later test file at this deleted
   // directory and make the suite order-dependent.
   homeSpy?.mockRestore();
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
@@ -91,7 +91,7 @@ function makeHarnessProject(enforcement?: "hard" | "soft"): { project: string; h
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   const statusPath = join(harness, "status.json");
   writeFileSync(statusPath, JSON.stringify(validStatus, null, 2));
-  // A collaboration identity: the register route reads that lane, and the
+  // why: A collaboration identity: the register route reads that lane, and the
   // fixture home keeps its store out of the real home.
   const repoId = `opencode-${project.split(/[\\/]/).pop()!.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}`;
   writeFileSync(
@@ -107,19 +107,19 @@ function makeHarnessProject(enforcement?: "hard" | "soft"): { project: string; h
   };
 }
 
-/** REAL ACTIVE authorities (the `store init` pair). */
+/** note: REAL ACTIVE authorities (the `store init` pair). */
 async function seedActiveStore(harness: string): Promise<void> {
   await ensureCollaborationAuthority({ harnessDir: harness });
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
 }
 
-/** REAL staged-only collaboration lane (built, never activated). */
+/** invariant: REAL staged-only collaboration lane (built, never activated). */
 async function seedStagedStore(harness: string): Promise<void> {
   await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
 }
 
-/** Unreadable COLLABORATION authority through the REAL engine channel. */
+/** note: Unreadable COLLABORATION authority through the REAL engine channel. */
 function corruptCollaboration(harness: string): void {
   const dbPath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
   rmSync(dbPath, { force: true });
@@ -169,7 +169,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
 
         const result = await validateStatusWrite(fixture.registerPath, { doc: invalidRegister, log });
         expect(result?.ok).toBe(false);
-        expect(result?.hardBlocked).toBe(true); // authority invariant, not the enforcement axis
+        expect(result?.hardBlocked).toBe(true); // note: authority invariant, not the enforcement axis
         expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
         expect(result?.violations[0]!.message).toContain(
           state === "staged" ? "collaboration.not-active" : "collaboration.not-initialized",
@@ -237,7 +237,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
       const { entries, log } = capture();
       const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
 
-      // The folded shape walk classifies the case-variant basename as a
+      // invariant: The folded shape walk classifies the case-variant basename as a
       // register document (dsh/omp/ZCode parity): the collaboration authority
       // decides, and a missing/staged lane is a refusal — never the document
       // validator and never silence.
@@ -256,7 +256,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
     writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
 
-    // No execution store = the pre-activation state: absence is not an
+    // why: No execution store = the pre-activation state: absence is not an
     // execution verdict, so the valid status document passes.
     const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
     expect(status?.ok).toBe(true);
@@ -269,7 +269,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(snapshot?.ok).toBe(false);
     expect(snapshot?.violations[0]?.code).toBe("workflow.snapshot.missing-status");
 
-    // The register is the one document whose route reads the collaboration
+    // invariant: The register is the one document whose route reads the collaboration
     // lane: with no ACTIVE lane it refuses by authority, never by shape.
     const register = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(register?.hardBlocked).toBe(true);

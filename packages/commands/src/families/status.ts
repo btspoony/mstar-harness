@@ -380,7 +380,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 "Resolve each reported findings-cleanup violation, then rerun mstar status findings-cleanup <plan-id>.",
               );
         } catch (error) {
-          // The engine's own code, structured details and recovery are the
+          // note: The engine's own code, structured details and recovery are the
           // refusal contract: forward them, defaulting only when it supplied none.
           const facts = engineErrorFacts(error);
           return refused(
@@ -402,7 +402,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         if (!parsed.success) return invalid("status.tech-debt", parsed.error);
         try {
           const harnessDir = executionHarness(context, parsed.data.harness) ?? context.cwd;
-          // One scoped collaboration snapshot answers the totals, both groupings
+          // invariant: One scoped collaboration snapshot answers the totals, both groupings
           // and the evidence this command reports; paging a changing table never
           // produced a total. `collaboration` is that read's own observation.
           const envelope = await withStoreRead({ harnessDir }, queryOpenIssueRollup());

@@ -608,7 +608,7 @@ function withExecutionPlanOperation<T>(
     );
     assertRunningWorkflow(witness);
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
-    // §3.1 a composite operation may have RESERVED this row for the facts it will
+    // invariant: §3.1 a composite operation may have RESERVED this row for the facts it will
     // finalize in another store. While that reservation is pending, no other
     // writer may advance the row: it would invalidate the facts the admitted
     // composite froze and leave a committed collaboration effect unfinalizable.
@@ -800,7 +800,7 @@ export async function prepareExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  // §4.1/§4.2 RECEIPT-FIRST: an exact retry of a committed prepare is served
+  // why: §4.1/§4.2 RECEIPT-FIRST: an exact retry of a committed prepare is served
   // from the execution ledger before any collaboration read, so a retry still
   // replays when the collaboration store became unavailable or unreadable after
   // the first attempt. Only a first attempt reads catalog facts.
@@ -809,7 +809,7 @@ export async function prepareExecutionPlan(
     requestHash,
   });
   if (replayed !== null) return replayed;
-  // The catalog facts come from their own (collaboration) source, before the
+  // invariant: The catalog facts come from their own (collaboration) source, before the
   // execution transaction: freezing the observed revision is an observed
   // selection, never a cross-file atomic claim. A missing/staged catalog keeps
   // the row's prior pin untouched below.
@@ -856,7 +856,7 @@ function alreadyPrepared(
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
-  // The already-satisfied shortcut still owns a pin decision: an unchanged
+  // invariant: The already-satisfied shortcut still owns a pin decision: an unchanged
   // prepare may not keep an identity that cannot be proven against the active
   // catalog. Validation happens BEFORE the equality comparison.
   assertPinIdentityProven(
@@ -901,7 +901,7 @@ function effectiveScope(
 }
 
 /**
- * A recorded pin must name the active catalog store or a VERIFIED migration
+ * invariant: A recorded pin must name the active catalog store or a VERIFIED migration
  * source of this exact execution store. Nothing is written when the identity is
  * unproven: the discrepancy names both sides and leaves them untouched.
  */
@@ -946,18 +946,18 @@ function writePreparedConfig(
     (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
   assertCatalogExecutionCommittedOn(tx.db, workflowId);
   const sealed = readExecutionSealedInput(tx, workflowId, planId);
-  // The catalog side is the collaboration lane's; the binding is the execution
+  // note: The catalog side is the collaboration lane's; the binding is the execution
   // lane's own row. Neither is read through the other's connection.
   const catalogActive = catalogFacts.store === "active" && catalogFacts.storeId !== null;
-  // Every pin path — unchanged, reselect or clear — validates the recorded
+  // note: Every pin path — unchanged, reselect or clear — validates the recorded
   // identity and its verified migration lineage first.
   assertPinIdentityProven(planId, workflowId, sealed.pin, catalogFacts, tx.storeId);
   const selected = catalogActive
     ? selectCatalogPinOn(catalogFacts, sealed.inputHash)
-    // No readable catalog: prepare preserves the recorded pin instead of
+    // invariant: No readable catalog: prepare preserves the recorded pin instead of
     // clearing lineage it cannot verify.
     : sealed.pin;
-  // An active catalog that no longer holds the plan must disclose the missing
+  // invariant: An active catalog that no longer holds the plan must disclose the missing
   // identity as a conflict, never silently delete the sealed selection.
   if (catalogActive && selected === null && sealed.pin !== null) {
     throw new ExecutionPinConflictError(
@@ -1198,7 +1198,7 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
 }
 
 /**
- * The collaboration authority a residual composite addresses, read through the
+ * invariant: The collaboration authority a residual composite addresses, read through the
  * same admission every collaboration write uses. A missing, staged, unreadable
  * or differently-bound lane refuses HERE, before any execution reservation
  * exists, so the refusal never leaves a pending intent behind. The WRITE mode
@@ -1218,18 +1218,18 @@ async function collaborationTarget(context: ExecutionContext): Promise<Collabora
   }
 }
 
-/** One residual composite the residual verbs drive: its frozen payload and its collaboration effect. */
+/** note: One residual composite the residual verbs drive: its frozen payload and its collaboration effect. */
 type ResidualComposite = {
   kind: "residual-add" | "residual-close";
   actor: string;
-  /** Freeze the admitted payload from the addressed row; runs inside the reservation transaction. */
+  /** note: Freeze the admitted payload from the addressed row; runs inside the reservation transaction. */
   freeze(witness: ExecutionPlanWitness): string;
-  /** Apply the whole collaboration effect; runs inside the effect transaction. */
+  /** note: Apply the whole collaboration effect; runs inside the effect transaction. */
   apply(handle: CollaborationStoreHandle): string;
 };
 
 /**
- * §3.1 the refusal of a composite whose collaboration effect is committed while
+ * invariant: §3.1 the refusal of a composite whose collaboration effect is committed while
  * its execution finalization can no longer apply the admitted reservation. The
  * effect is NEVER undone or re-applied; the same verb and operation id re-admit
  * against the current row (the reservation refreshes) and replay the effect.
@@ -1268,7 +1268,7 @@ function residualPartialRefusal(input: {
 }
 
 /**
- * §3.1 the admitted half of one residual composite: authenticate, fence the
+ * invariant: §3.1 the admitted half of one residual composite: authenticate, fence the
  * caller's token, freeze the payload and record the reservation in the SAME
  * execution transaction. A committed receipt is served BEFORE the CAS and BEFORE
  * any collaboration access (an identical retry never re-evaluates a token the
@@ -1289,14 +1289,14 @@ async function runResidualComposite(
     operationId,
   });
   const replayWithRepair = async (receipt: ExecutionReceipt<ExecutionPlanView>): Promise<ExecutionReceipt<ExecutionPlanView>> => {
-    // A failed acknowledgement is metadata: repair it on replay, never by
+    // invariant: A failed acknowledgement is metadata: repair it on replay, never by
     // repeating either business effect, and disclose it when the repair itself
     // cannot be confirmed.
     const outstanding = await repairCompositeAcknowledgement(context, keyOf(receipt.storeId, receipt.epoch));
     return noteOutstandingAcknowledgement(receipt, outstanding);
   };
 
-  // Receipt-first replay outside every write transaction: a lost response is
+  // note: Receipt-first replay outside every write transaction: a lost response is
   // answered from the ledger even if the collaboration lane is unavailable.
   const preflight = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, resolved.read, {
     operationId,
@@ -1330,7 +1330,7 @@ async function runResidualComposite(
       { target: { workflowId: witness.workflowId, planId: witness.planId } },
     );
     const key = keyOf(tx.storeId, tx.epoch);
-    // A resume is the completion of an operation ADMITTED while the lifecycle was
+    // invariant: A resume is the completion of an operation ADMITTED while the lifecycle was
     // running: the running gate applies to a new admission only, so a lifecycle
     // that ended after admission can never strand a committed effect.
     const resuming = hasPreparedCompositeIntent(tx, key);
@@ -1346,11 +1346,11 @@ async function runResidualComposite(
       expectedExecution: resolved.call.expected ?? witness.token,
       frozenPayload: composite.freeze(witness),
     };
-    // The reservation does NOT advance the row: it excludes every conflicting
+    // why: The reservation does NOT advance the row: it excludes every conflicting
     // writer (`assertNoPendingCompositeReservation`), so the admitted snapshot
     // stays current and the finalization spends the same token once.
     const reservation = reserveCompositeIntent(tx, intent, { revision: witness.revision });
-    // The ADMITTED fingerprint keys the collaboration effect; a recovered caller
+    // note: The ADMITTED fingerprint keys the collaboration effect; a recovered caller
     // resumes that frozen effect rather than minting a second one.
     return {
       kind: "reserved" as const,
@@ -1367,7 +1367,7 @@ async function runResidualComposite(
 }
 
 /**
- * §3.1 the finalization of one residual composite: require the admitted
+ * invariant: §3.1 the finalization of one residual composite: require the admitted
  * reservation (the row's reserved revision, addressed scope and actor evidence
  * are the SAME facts the prepare froze), advance the row exactly once, and
  * record the domain receipt in the same transaction. A moved reservation refuses
@@ -1410,7 +1410,7 @@ function finalizeResidualComposite(
   };
   writePlanOperationReceipt(tx, {
     operationId: intent.key.operationId,
-    // The receipt records THIS caller's accepted request, so its own replay
+    // why: The receipt records THIS caller's accepted request, so its own replay
     // matches; the collaboration effect keeps the admitted fingerprint.
     requestHash,
     workflowId: witness.workflowId,
@@ -1447,7 +1447,7 @@ export async function residualAddExecutionPlan(
   }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  // Frozen at admission: the plan bucket and the derived entries are fixed by the
+  // invariant: Frozen at admission: the plan bucket and the derived entries are fixed by the
   // reservation, so a later edit of the request cannot reinterpret a pending
   // intent (the frozen payload is compared on resume).
   let address: { sessionId: string; planId: string } = { sessionId: "", planId: "" };
@@ -1456,7 +1456,7 @@ export async function residualAddExecutionPlan(
     kind: "residual-add",
     actor,
     freeze(witness) {
-      // §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
+      // invariant: §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
       // (validated as a safe path component), falling back to `_default`, never the
       // workflow header's: a residual captured on this row must keep its own
       // project provenance even when the workflow declares another one.
@@ -1468,7 +1468,7 @@ export async function residualAddExecutionPlan(
     apply(handle) {
       assertIssueStoreActive(handle.db);
       const { planId, sessionId } = address;
-      // §3.1 ONE collaboration revision advance for the whole effect transaction:
+      // why: §3.1 ONE collaboration revision advance for the whole effect transaction:
       // every composed issue helper joins it instead of advancing the counter.
       const composed: ComposedTransactionRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
       const captured: Array<{ issueId: string; occurrenceId?: number; revision: number; created: boolean }> = [];
@@ -1488,7 +1488,7 @@ export async function residualAddExecutionPlan(
             revision: capture.revision,
             created: capture.created,
           });
-          // Always link, never only on `created`: the plan link is the gate a later
+          // invariant: Always link, never only on `created`: the plan link is the gate a later
           // residual-close is checked against, and both verbs are idempotent, so a
           // retry converges instead of leaving an unlinked issue the plan can never
           // close.
@@ -1578,7 +1578,7 @@ export async function residualCloseExecutionPlan(
     apply(handle) {
       assertIssueStoreActive(handle.db);
       assertIssueLinkedToPlanOn(handle.db, operation.issueId, planId);
-      // The single closure body owns this transaction's one revision advance.
+      // note: The single closure body owns this transaction's one revision advance.
       const closed = closeIssueOn(handle.db, operation.issueId, operation.disposition, operation.evidence, {
         operationId: residualCloseOperationId(sessionId, planId, operation.issueId),
         actor,
@@ -1720,7 +1720,7 @@ function applyCompletion(input: {
   record: CompletionRecord;
   scope: PlanScope | null;
   at: string;
-  /** The accepted complete findings observation (no issue payload bodies). */
+  /** note: The accepted complete findings observation (no issue payload bodies). */
   findings: FindingsObservation & { mode: FindingsCleanupMode };
   what: string;
 }): void {
@@ -1732,7 +1732,7 @@ function applyCompletion(input: {
     metadata.worktree_path = input.scope.worktreePath;
     metadata.working_branch = input.scope.workingBranch;
   }
-  // Completion evidence: the exact scope, authority stamp, revisions, snapshot
+  // invariant: Completion evidence: the exact scope, authority stamp, revisions, snapshot
   // time and completeness the findings decision was accepted against. The open
   // findings keep only id+severity — never an issue body.
   metadata.completion_findings = input.findings;
@@ -1899,7 +1899,7 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
 }
 
 /**
- * §Read/Completeness and Gates the completion findings proof: the complete
+ * invariant: §Read/Completeness and Gates the completion findings proof: the complete
  * scoped observation and the plan's effective cleanup mode. The observation is
  * taken before the execution transaction and recorded on the completion row;
  * the transaction never reads collaboration SQL and never claims the predicate
@@ -1910,7 +1910,7 @@ type CompletionFindingsProof = {
   mode: FindingsCleanupMode;
 };
 
-/** The completion refusal when the observation's own decision blocks it. */
+/** note: The completion refusal when the observation's own decision blocks it. */
 function findingsOpenRefusal(planId: string, proof: CompletionFindingsProof): CoordinationError {
   const blocking = proof.observation.open.filter(
     (row) => row.severity === "critical" || proof.mode === "zero-residual",
@@ -1992,19 +1992,19 @@ export async function completeExecutionPlan(
     requestHash,
   });
   if (replayed !== null) return replayed;
-  // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot,
+  // note: §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot,
   // capture the Git witnesses and the complete findings observation before
   // SQLite ownership. `completeWitnessGap` observes the gap between this
   // captured proof and the commit, where the frame re-validates every witness
   // and re-derives the route/policy pair from its own snapshot.
   const witnesses = await captureCompletionWitnesses(context, resolved.read, operation);
-  // §4.1/§Read-Completeness the completion race seam fires HERE — after the
+  // why: §4.1/§Read-Completeness the completion race seam fires HERE — after the
   // external witnesses are captured and BEFORE the committing `BEGIN IMMEDIATE`
   // opens — so a regression can land an independent workflow-header, Git or
   // collaboration mutation in the real gap the write frame then re-reads and
   // re-validates.
   completeWitnessGapForTest?.();
-  // §Read/Completeness the pre-commit applicability re-sample: the complete
+  // invariant: §Read/Completeness the pre-commit applicability re-sample: the complete
   // observation that authorized completion must still name the same authority,
   // scope and revision, so a known drift refuses as stale before this frame
   // owns SQLite. The transaction itself never reads collaboration.
@@ -2058,7 +2058,7 @@ async function captureCompletionWitnesses(
   const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
-  // §Read/Completeness and Gates: ONE complete plan-local observation decides
+  // invariant: §Read/Completeness and Gates: ONE complete plan-local observation decides
   // the findings gate before SQLite ownership; an open critical (or any open
   // issue under zero-residual) refuses here, and an unavailable lane refuses
   // through the observation's own named code instead of reading as "no findings".
@@ -2188,7 +2188,7 @@ function completeInTransaction(
     // never inferred or discarded by completion.
     requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
   }
-  // The observation was decided before the execution transaction; only the
+  // invariant: The observation was decided before the execution transaction; only the
   // plan's effective mode is re-read here. A mode changed in the proof gap means
   // the recorded decision was taken under a different policy — refuse as stale
   // rather than commit it.

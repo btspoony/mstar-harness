@@ -56,7 +56,7 @@ export function workflowDetailCopy(copy: Copy): WorkflowDetailCopy {
   return copy.workflowDetail;
 }
 
-/** The optional catalog association's named gap, from the collaboration observation. */
+/** note: The optional catalog association's named gap, from the collaboration observation. */
 type CatalogGap = { completeness: "partial" | "unavailable"; code: string };
 
 /** What the list is handed. */
@@ -66,7 +66,7 @@ export type WorkflowsOutcome =
       kind: "ready";
       model: WorkflowListModel;
       /**
-       * The optional catalog association's named gap. The rows are execution data
+       * invariant: The optional catalog association's named gap. The rows are execution data
        * and stay; the page must state this gap rather than draw a healthy join cell.
        */
       catalogNotice: CatalogGap | null;
@@ -145,7 +145,7 @@ export function workflowsOutcome(
           projection: result.envelope.projection,
           filters,
         }),
-        // The catalog association is optional: an explicit gap keeps this read
+        // why: The catalog association is optional: an explicit gap keeps this read
         // usable, and the page states the gap instead of claiming a healthy join.
         catalogNotice: collaborationGap(result.envelope),
       };
@@ -207,7 +207,7 @@ export function workflowDetailOutcome(
           data: result.envelope.data,
           projection: result.envelope.projection,
         }),
-        // The catalog association is optional: a gap keeps the execution record
+        // why: The catalog association is optional: a gap keeps the execution record
         // visible and is stated by the host instead of being silently dropped.
         catalogNotice: collaborationGap(result.envelope),
       };

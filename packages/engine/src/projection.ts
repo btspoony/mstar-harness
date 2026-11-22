@@ -278,7 +278,7 @@ function asCatalogLifecycle(value: unknown): CatalogLifecycle {
 
 type CatalogInputs = {
   catalogRevision: number | null;
-  /** The execution revision the bindings were read at (same transaction). */
+  /** note: The execution revision the bindings were read at (same transaction). */
   executionRevision: number | null;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
   compassDocs: Array<{
@@ -289,13 +289,13 @@ type CatalogInputs = {
     rootKind: CatalogRootKind;
     relativePath: string;
   }>;
-  /** Set when the collaboration catalog could not be read at all. */
+  /** note: Set when the collaboration catalog could not be read at all. */
   unavailable: { code: string; message: string } | null;
 };
 
 type CatalogDocumentRow = { id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string; lifecycle: string; revision: number };
 
-/** A refusal's stable code (the capture reports it, never a guess). */
+/** invariant: A refusal's stable code (the capture reports it, never a guess). */
 function catalogRefusalCode(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error) {
     const { code } = error;
@@ -305,7 +305,7 @@ function catalogRefusalCode(error: unknown): string {
 }
 
 /**
- * The catalog side of a capture, composed from its two owning sources: the
+ * invariant: The catalog side of a capture, composed from its two owning sources: the
  * portable catalog rows/revision live in the collaboration store, while the
  * checkout-specific execution bindings stay in the execution store. Each is
  * read once, on its own connection; no cross-file SQL and no transaction spans
@@ -320,7 +320,7 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
     const handle = await openCollaborationStore(context, "read");
     try {
       const db = handle.db;
-      // One source-local snapshot: the revision and every catalog row this
+      // invariant: One source-local snapshot: the revision and every catalog row this
       // capture renders come from the same instant, so a competing catalog
       // write cannot pair old rows with a newer revision.
       db.exec("begin deferred");
@@ -417,7 +417,7 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
 }
 
 /**
- * The checkout-specific bindings AND the execution revision stay in the
+ * invariant: The checkout-specific bindings AND the execution revision stay in the
  * execution store, read in ONE source-local transaction: the revision a capture
  * reports is the revision the bindings were read at, so a binding that moves
  * cannot be published under a newer stamp.
@@ -452,7 +452,7 @@ async function readExecutionBindings(
       try {
         handle.db.exec("rollback");
       } catch {
-        // connection-level failure during rollback -- nothing was committed
+        // note: connection-level failure during rollback -- nothing was committed
       }
       throw error;
     }
@@ -584,7 +584,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   const inputs = await readCatalogInputs(context);
   const capturedExecutionRevision = inputs.executionRevision;
   if (inputs.unavailable !== null) {
-    // The collaboration catalog is a declared input: an unreadable one blocks
+    // invariant: The collaboration catalog is a declared input: an unreadable one blocks
     // publication with its own code instead of publishing rows whose compass
     // membership and pins were never observed.
     const sources: ProjectionSourceDigest[] = [];
@@ -1476,7 +1476,7 @@ function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, id
 }
 
 /**
- * The collaboration catalog revision this instant, or null when the optional
+ * invariant: The collaboration catalog revision this instant, or null when the optional
  * catalog source is unreadable. Publication compares capture.publish-order
  * evidence separately from the execution transaction, never inside it.
  */
@@ -1514,7 +1514,7 @@ async function attemptPublication(context: StoreContext, capture: ProjectionCapt
   try {
     assertProjectionTables(handle);
     db.exec("begin immediate");
-    // Arm/authority agreement, decided INSIDE the publication transaction: a
+    // invariant: Arm/authority agreement, decided INSIDE the publication transaction: a
     // capture must not publish after the execution authority left active.
     // A store below migration 4 has no execution_meta and cannot activate.
     const executionMetaTable = db

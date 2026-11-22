@@ -108,7 +108,7 @@ async function seedProject(harnessDir: string): Promise<void> {
  * holds a non-empty milestone without depending on the assign CHANNEL.
  */
 async function assignDirectly(harnessDir: string, milestoneId: string | null, issueId: string): Promise<void> {
-  // Issues are collaboration facts after the cutover: assign on that lane (the
+  // note: Issues are collaboration facts after the cutover: assign on that lane (the
   // execution store holds no issue rows).
   await withCollaborationWrite({ harnessDir }, ({ db }) => {
     db.prepare('update issues set milestone_id=? where id=?').run(milestoneId, issueId)

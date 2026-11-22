@@ -124,7 +124,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
   // table at all, and counting them would make the floor force a scrollbar at a
   // width where the pane's own seven columns fit.
   const declared = props.columns.reduce(
-    // A proportional width (`35%`) has no pixel value to add; the floor is the sum
+    // note: A proportional width (`35%`) has no pixel value to add; the floor is the sum
     // of the declared pixels, and a percentage column simply does not contribute.
     // Screens declare pixel widths as px strings (`"86px"`), so parse those; a bare
     // number is the same declaration and counts the same.

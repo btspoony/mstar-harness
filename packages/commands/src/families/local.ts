@@ -351,7 +351,7 @@ function controlFacts(startDir: string): ControlFacts {
 }
 
 /**
- * The collaboration selection this control harness resolves to, or the engine's
+ * why: The collaboration selection this control harness resolves to, or the engine's
  * named code and reason. The resolution reads `.mstarc` and Git only: it opens,
  * probes and creates no database, so an uninitialized store is still disclosed.
  */

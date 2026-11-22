@@ -794,7 +794,7 @@ describe("dshAdapter.runInstallDoctor", () => {
 // enough to the CI runner's cost that a single slow start fails the suite.
 // The budget is set per test: bun's `describe` takes no options object.
 describe("CLI init --target dsh (fake dsh on PATH)", () => {
-  /** `--no-global-cli` is the CLI's no-network opt-out: without it the version
+  /** why: `--no-global-cli` is the CLI's no-network opt-out: without it the version
    * decision follows the published latest instead of this checkout's manifest. */
   const INIT_ARGS = ["init", "--target", "dsh", "--no-global-cli"];
   const fakePathEnv = (fake: FakeDsh): Record<string, string> => ({

@@ -52,7 +52,7 @@ const roadmap = Object.fromEntries(getRoadmapCommandDefinitions().map((definitio
 const project = Object.fromEntries(getProjectCommandDefinitions().map((definition) => [definition.id, definition]));
 const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${JSON.stringify(title)}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
 
-/** A synthetic checkout whose origin names the collaboration repository. */
+/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string, originSlug = name): { cwd: string; harness: string } {
   const cwd = join(root, name);
   mkdirSync(cwd, { recursive: true });
@@ -64,12 +64,12 @@ function checkout(name: string, originSlug = name): { cwd: string; harness: stri
   return { cwd, harness };
 }
 
-/** The private staged record flipped to active: this plan ships no public activator. */
+/** note: The private staged record flipped to active: this plan ships no public activator. */
 async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
   const { cwd, harness } = checkout(name);
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  // The supported bootstrap records this checkout's binding as well as publishing
+  // note: The supported bootstrap records this checkout's binding as well as publishing
   // the lane; a bare state flip leaves every write refusing `stale-binding`.
   await ensureCollaborationAuthority({ harnessDir: harness });
   await registerCatalogEntity({ harnessDir: harness }, {
@@ -111,7 +111,7 @@ describe("catalog and roadmap command families", () => {
   });
   test("inactive catalog mutation exposes the collaboration activation recovery", async () => {
     const { cwd, harness } = checkout("inactive-mutation");
-    // The lane exists but is staged: ordinary catalog traffic is refused at
+    // invariant: The lane exists but is staged: ordinary catalog traffic is refused at
     // admission and the recovery is the reviewed activation sequence.
     await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
     const result = await catalog["catalog.register"]!.execute({
@@ -169,11 +169,11 @@ describe("catalog and roadmap command families", () => {
     if (shown.status === "ok") expect(JSON.stringify(shown.data)).toContain("Project");
     if (exported.status === "ok") expect(JSON.stringify(exported.data)).toContain("proj");
 
-    // A replacement clone with the same repository identity but no local
+    // note: A replacement clone with the same repository identity but no local
     // catalog content and no execution store reads the same logical rows: the
     // project location resolves against THIS checkout and is disclosed absent.
     const clone = checkout("catalog-read-data-clone", "catalog-read-data");
-    // Reading a live authority requires this checkout's own recorded binding; a
+    // invariant: Reading a live authority requires this checkout's own recorded binding; a
     // bare clone is a foreign checkout, never an implicit reader.
     writeCollaborationBinding({ harnessDir: clone.harness }, await readCollaborationAuthority({ harnessDir: harness }));
     const cloneList = await catalog["catalog.list"]!.execute({ harness: clone.harness, kind: "project" }, invocation(clone.cwd));
@@ -183,7 +183,7 @@ describe("catalog and roadmap command families", () => {
     if (cloneShow.status === "ok") {
       expect(cloneShow.data).toMatchObject({ entity: { relativePath: "proj", present: false } });
     }
-    // A sparse plan registration whose document is missing here is a named
+    // invariant: A sparse plan registration whose document is missing here is a named
     // refusal; it never mints or rebinds the registered execution location.
     const missingPlan = await catalog["catalog.register"]!.execute({
       harness: clone.harness, kind: "plan", file: join(clone.harness, "plans", "plan-missing.md"), operationId: "clone-plan", actor: "test",
@@ -513,7 +513,7 @@ describe("catalog and roadmap command families", () => {
   test("collaboration command evidence: catalog, roadmap export and project show share their read's observation", async () => {
     const { cwd, harness } = await activeFixture("command-evidence");
     type Evidence = { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
-    // The command envelope's `data`/`details` are open records; narrow once here
+    // why: The command envelope's `data`/`details` are open records; narrow once here
     // instead of asserting a fabricated shape at each read site.
     const observation = (container: unknown): Evidence => {
       if (container === null || typeof container !== "object" || !("collaboration" in container)) {
@@ -555,7 +555,7 @@ describe("catalog and roadmap command families", () => {
     expect(shownRoadmap.status).toBe("ok");
     if (shownRoadmap.status === "ok") {
       expect(observation(shownRoadmap.data).scope).toEqual({ kind: "project", key: "proj" });
-      // Existing show fields are preserved alongside the evidence.
+      // note: Existing show fields are preserved alongside the evidence.
       expect(shownRoadmap.data).toMatchObject({ projectId: "proj", projectRevision: 1, roadmap: null, content: null });
     }
 
@@ -563,7 +563,7 @@ describe("catalog and roadmap command families", () => {
     expect(exported.status).toBe("ok");
     if (exported.status === "ok") {
       const evidence = observation(exported.data);
-      // The export's counters and its evidence come from the same read; the
+      // note: The export's counters and its evidence come from the same read; the
       // roadmap view is project-scoped.
       if (exported.data === null || typeof exported.data !== "object" || !("storeRevision" in exported.data) || typeof exported.data.storeRevision !== "number") {
         throw new Error("roadmap export carries no storeRevision");
@@ -576,14 +576,14 @@ describe("catalog and roadmap command families", () => {
     expect(binding.status).toBe("ok");
     if (binding.status === "ok") {
       expect(observation(binding.data).scope).toEqual({ kind: "project", key: "proj" });
-      // A named absence keeps its own keys AND the observation of the read.
+      // why: A named absence keeps its own keys AND the observation of the read.
       expect(binding.data).toMatchObject({ kind: "absent", code: "linear.binding-absent" });
     }
 
     const missing = await roadmap["roadmap.export"]!.execute({ project: "not-registered", format: "json", harness }, invocation(cwd));
     expect(missing).toMatchObject({ status: "refused", code: "roadmap.project-not-found" });
     if (missing.status !== "ok") {
-      // No fabricated record: the refusal names its own code and carries the
+      // note: No fabricated record: the refusal names its own code and carries the
       // complete observation the read established.
       expect(observation(missing.details).scope).toEqual({ kind: "project", key: "not-registered" });
     }
@@ -596,7 +596,7 @@ describe("catalog and roadmap command families", () => {
     }, { operationId: "late-doc", actor: "test" });
     const lanePath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
 
-    // Deterministic interleave: the newer link commits at the instant the page's
+    // invariant: Deterministic interleave: the newer link commits at the instant the page's
     // rows read finishes and its transaction commits. A page that reads its
     // links after that commit answers the newer revision; one that reads them
     // inside its own snapshot cannot.
@@ -633,7 +633,7 @@ describe("catalog and roadmap command families", () => {
       if (listed.status !== "ok") return;
       expect(injected).toBe(true);
       const page = listed.data as { links: unknown[]; storeRevision: number; collaboration: { revision: number } };
-      // The page answered before the link committed: no late link, and the
+      // note: The page answered before the link committed: no late link, and the
       // evidence names the revision its rows were actually read at.
       expect(page.links).toEqual([]);
       expect(page.collaboration.revision).toBe(page.storeRevision);

@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 /**
- * A fresh workspace with a real `.mstar` harness marker inside a synthetic
+ * note: A fresh workspace with a real `.mstar` harness marker inside a synthetic
  * checkout whose origin names the collaboration repository. The store context
  * selects that harness directly, including when it owns a plans/ child.
  */
@@ -77,7 +77,7 @@ function workspace(name: string, originSlug = name): { root: string; harness: st
   return { root, harness, context: { harnessDir: harness } };
 }
 
-/** Publish the staged lane and this checkout's binding, as real activation does. */
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -96,7 +96,7 @@ function activate(context: StoreContext): void {
   writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
-/** One initialized (active) store on both lanes with the harness artifact store pinned. */
+/** note: One initialized (active) store on both lanes with the harness artifact store pinned. */
 async function withStore(name: string, originSlug = name): Promise<{ root: string; harness: string; context: StoreContext }> {
   const fixture = workspace(name, originSlug);
   const handle = await initializeStore(fixture.context);
@@ -106,7 +106,7 @@ async function withStore(name: string, originSlug = name): Promise<{ root: strin
   return fixture;
 }
 
-/** The execution-owned registration pin a clone must never rebind. */
+/** invariant: The execution-owned registration pin a clone must never rebind. */
 async function cloneBinding(context: StoreContext): Promise<Record<string, unknown> | undefined> {
   const handle = await openStore(context, "read");
   try {
@@ -146,7 +146,7 @@ function planRow(overrides: Record<string, unknown> = {}, metadata: Record<strin
 /** The pin the authorized `prepare` records for a row: the current catalog identity. */
 async function pinFor(context: StoreContext, row: unknown, planId = PLAN_ID): Promise<CatalogExecutionPin> {
   const detail = await getCatalog(context, { kind: "plan", id: planId });
-  // The catalog identity is owned by the collaboration lane after the cutover;
+  // note: The catalog identity is owned by the collaboration lane after the cutover;
   // the pin names that store, not the execution one.
   const authority = await readCollaborationAuthority(context);
   return {
@@ -304,7 +304,7 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
   });
 
   test("catalog pin: a workspace with no collaboration identity keeps the recorded pin and discloses store-absent", async () => {
-    // No Git repository and no repository_id: there is no collaboration scope to
+    // invariant: No Git repository and no repository_id: there is no collaboration scope to
     // read. Pin consumption must not refuse or clear the recorded lineage.
     const harness = mkdtempSync(join(ROOT, "pin-no-identity-"));
     const pin = {
@@ -430,7 +430,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     const { root, harness } = workspace("scaffold-scope-staged-");
     await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
     await expect(scaffoldHarness(root)).resolves.toBe(harness);
-    // The optional registration is still owed to activation; it was not faked.
+    // note: The optional registration is still owed to activation; it was not faked.
     await expect(getCatalog({ harnessDir: harness }, { kind: "project", id: "_default" })).rejects.toMatchObject({
       code: "collaboration.not-active",
     });
@@ -443,7 +443,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   });
 
   test("catalog discovery: a replacement clone reads the logical plan location without inventing or rebinding it", async () => {
-    // Source clone: a collaboration catalog row plus the execution-owned pin
+    // note: Source clone: a collaboration catalog row plus the execution-owned pin
     // that freezes the same logical locator.
     const source = await withStore("clone-source", "shared-plan-repo");
     mkdirSync(join(source.harness, "plans"), { recursive: true });
@@ -472,25 +472,25 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     }
     const pinBefore = await cloneBinding(source.context);
 
-    // Replacement checkout: same repository identity, no local plan file and
+    // note: Replacement checkout: same repository identity, no local plan file and
     // no execution store of its own.
     const replacement = workspace("clone-replacement", "shared-plan-repo");
     expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
     expect(existsSync(join(replacement.harness, "plans", "plan-clone.md"))).toBe(false);
-    // A replacement clone READS unbound: the reads are admitted and record nothing.
+    // note: A replacement clone READS unbound: the reads are admitted and record nothing.
     const read = await getCatalog(replacement.context, { kind: "plan", id: "plan-clone" });
     expect(read.entity).toMatchObject({ rootKind: "plans", relativePath: "plan-clone.md", present: false });
-    // The logical reference resolves against THIS checkout; the registered
+    // invariant: The logical reference resolves against THIS checkout; the registered
     // path is never rewritten to the source checkout or an absolute locator.
     expect(read.entity.absolutePath).toBe(join(replacement.harness, "plans", "plan-clone.md"));
 
-    // Discovery checks this checkout's files only: a missing local artifact is
+    // invariant: Discovery checks this checkout's files only: a missing local artifact is
     // disclosed as absent, never invented as a registered location or a gap.
     const report = await readCatalogCompleteness(replacement.context, ["plans"]);
     expect(report).toMatchObject({ ok: true, gaps: [] });
     expect(report.registered).toBe(1);
 
-    // Reading did not bind the clone; its first write still needs the binding.
+    // note: Reading did not bind the clone; its first write still needs the binding.
     expect(existsSync(join(replacement.harness, "collaboration-binding.json"))).toBe(false);
     await expect(
       registerCatalogEntity(
@@ -499,7 +499,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
         op("clone-unbound-write"),
       ),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    // This lane records no publication lineage, so the supported adoption verb
+    // invariant: This lane records no publication lineage, so the supported adoption verb
     // cannot bind it; the fixture records the same binding that activation writes.
     const replacementAuthority = await readCollaborationAuthority(replacement.context);
     writeCollaborationBinding(replacement.context, {
@@ -510,7 +510,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
       binding: "active",
     });
 
-    // Registration keeps the identity: identical replay is a no-op, a new path
+    // why: Registration keeps the identity: identical replay is a no-op, a new path
     // for the same id is a duplicate refusal, and a different id at that
     // location attaches to the existing row instead of minting another one.
     const replayed = await registerCatalogEntity(
@@ -543,7 +543,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
       present: false,
     });
 
-    // Catalog traffic created no execution store here, and the source
+    // note: Catalog traffic created no execution store here, and the source
     // execution pin is byte-identical.
     expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
     expect(await cloneBinding(source.context)).toEqual(pinBefore);

@@ -129,7 +129,7 @@ export type ExecutionErrorCode =
   // caller branches on the exact refusal instead of parsing the message.
   | "workflow.reopen-completed"
   | "workflow.reopen-not-terminal"
-  // A composite cross-store operation whose collaboration effect is committed
+  // note: A composite cross-store operation whose collaboration effect is committed
   // while its execution finalization is still outstanding (`collaboration-operations.ts`).
   | "collaboration.operation-partial"
   | "store.not-active"
@@ -2510,7 +2510,7 @@ export async function createExecutionWorkflow(
   const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
-  // A committed operation replays FIRST, under the current execution identity:
+  // invariant: A committed operation replays FIRST, under the current execution identity:
   // a lost response must still answer from its receipt even when the
   // collaboration lane has since become unavailable, and a different payload on
   // the same id is a conflict rather than a second creation.
@@ -2537,7 +2537,7 @@ export async function createExecutionWorkflow(
     };
   });
   if (replay !== null) return replay;
-  // A pin names a collaboration catalog row, so the evidence is read on that
+  // invariant: A pin names a collaboration catalog row, so the evidence is read on that
   // lane BEFORE the execution write transaction opens: no cross-file read ever
   // runs inside it, and an unreadable catalog refuses the pinned creation.
   const pinnedPlanIds = [...new Set(creation.plans.filter((plan) => plan.pin !== null).map((plan) => plan.planId))];
@@ -3365,7 +3365,7 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
 }
 
 /**
- * The composite reservation ledger this receipt writer must consult, classified
+ * invariant: The composite reservation ledger this receipt writer must consult, classified
  * by the store's OWN recorded migration history:
  *
  * - `present`: the ledger exists and the reservation probe runs.
@@ -3411,13 +3411,13 @@ export function writeOperationReceipt(
     now: string;
     slim?: true;
     /**
-     * The admitted composite's own finalization: its reservation is the row this
+     * why: The admitted composite's own finalization: its reservation is the row this
      * write completes, so it is the one writer allowed while that id is pending.
      */
     allowReservedIntent?: true;
   },
 ): void {
-  // §3.1 the operation-id namespace is ONE namespace across both execution
+  // invariant: §3.1 the operation-id namespace is ONE namespace across both execution
   // ledgers. A different writer may not commit an id a pending composite reserved
   // (or already declined): the effect's receipt would otherwise be unreachable
   // and a same-id retry would read this unrelated receipt instead.

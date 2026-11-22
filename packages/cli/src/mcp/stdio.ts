@@ -92,7 +92,7 @@ const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "store.execution.export",
   "store.execution.restore-preview",
   "store.execution.restore",
-  // The collaboration lifecycle verbs likewise name their operation TARGET
+  // note: The collaboration lifecycle verbs likewise name their operation TARGET
   // (an absolute harness) and an absolute manifest or pair path: with no
   // connection root they still have every fact their contract needs.
   "store.collaboration.plan",

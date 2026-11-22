@@ -86,7 +86,7 @@ export type StoreErrorCode =
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
   | "store.upgrade-dsh-failed"
-  // The collaboration lane's own database boundary (collaboration-store.ts):
+  // note: The collaboration lane's own database boundary (collaboration-store.ts):
   // missing routed database, inert staged database, invalid/corrupt/inaccessible
   // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
@@ -94,19 +94,19 @@ export type StoreErrorCode =
   | "collaboration.operation-partial"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
-  // The one-way authority cutover (collaboration-cutover.ts): a combined or
+  // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
   // partially cut store is not runtime authority, a competing source/mode/
   // manifest cannot win by force, pending catalog or mirror work must be
   // settled first, and a fence without a verified recovery point never runs.
   | "collaboration.cutover-required"
   | "collaboration.cutover-conflict"
   | "collaboration.cutover-not-quiescent"
-  // The fence's own durable boundary failed: a failed commit or an incomplete
+  // invariant: The fence's own durable boundary failed: a failed commit or an incomplete
   // rollback leaves the persisted state UNCONFIRMED, so the operator must
   // inspect it instead of retrying as if nothing happened.
   | "collaboration.cutover-unconfirmed"
   | "collaboration.backup-incomplete"
-  // The cutover activation input: an activation needs a named operator whose
+  // note: The cutover activation input: an activation needs a named operator whose
   // own attestation document is the one supplied.
   | "store.attestation-invalid";
 
@@ -359,9 +359,9 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
  * exact pragma order and side effects they had before.
  */
 export type StoreConnectOptions = Readonly<{
-  /** Open a writer only when the database exists (`mode=rw`); never create it. */
+  /** invariant: Open a writer only when the database exists (`mode=rw`); never create it. */
   noCreate?: boolean;
-  /** Keep the database's current journal mode instead of switching a writer to WAL. */
+  /** why: Keep the database's current journal mode instead of switching a writer to WAL. */
   keepJournalMode?: boolean;
 }>;
 
@@ -380,14 +380,14 @@ export async function connect(
   return openConnection(dbPath, mode, DatabaseSync, timeout, options);
 }
 
-/** `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
+/** note: `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
  * and `#` in a store path are addressed literally. */
 function sqliteUriPath(dbPath: string): string {
   return resolve(dbPath).split(sep).map(encodeURIComponent).join("/");
 }
 
 /**
- * A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
+ * invariant: A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
  * missing one refuses instead of being created.
  */
 function existingOnlyUri(dbPath: string): string {
@@ -512,7 +512,7 @@ export function walShapedStoreFile(dbPath: string): boolean {
       closeSync(source);
     }
   } catch {
-    // Not a readable store file: the open reports its own failure.
+    // note: Not a readable store file: the open reports its own failure.
     return false;
   }
 }
@@ -2321,7 +2321,7 @@ export type CollaborationFence = Readonly<{
 }>;
 
 /**
- * The store's collaboration-owned tables. A store that still holds rows in any
+ * invariant: The store's collaboration-owned tables. A store that still holds rows in any
  * of them owns its issue/catalog authority the pre-cutover way, and a file-era
  * import or fresh bootstrap would mint a SECOND authority beside it. The fence
  * drops exactly these tables, so a fenced store has nothing to refuse by row
@@ -2353,7 +2353,7 @@ const COLLABORATION_HELD_TABLES: readonly string[] = [
 ];
 
 /**
- * The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
+ * invariant: The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
  * except the catalog registration journal. A journal row is pending execution
  * state a supported verb reconciles; by itself it never makes a checkout the
  * issue/catalog authority, so a runtime lane read must not be refused for it.

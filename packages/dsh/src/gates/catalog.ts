@@ -1015,7 +1015,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
   const roadmap = await readProjectRoadmapFacts(context)
   try {
-    // ONE scoped collaboration snapshot: totals, grouping and the bounded
+    // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
     // preview come from the same read, so no offset page from a different
     // generation can be added to this one.
     const envelope = await withStoreRead(context, queryOpenIssueRollup())
@@ -1084,7 +1084,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
 }
 
 /**
- * The disclosure text of ONE store-backed read: `null` while the projection is
+ * invariant: The disclosure text of ONE store-backed read: `null` while the projection is
  * current and the collaboration observation is complete, otherwise the named
  * reason — a STALE or UNAVAILABLE projection (execution views may lag; the
  * issue rows read here are authoritative either way) and/or a scoped

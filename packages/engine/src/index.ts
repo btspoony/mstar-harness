@@ -89,7 +89,7 @@ export {
 } from "./mstarc.js";
 export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
 export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
-// The collaboration lane's own store: independent staged schema, create-only
+// note: The collaboration lane's own store: independent staged schema, create-only
 // publication and active-only handles. No execution table or method.
 export type {
   CollaborationAdoption,
@@ -109,7 +109,7 @@ export {
   withCollaborationWrite,
   writeCollaborationBinding,
 } from "./collaboration-store.js";
-// The one-way authority cutover: reviewed manifest, verified staged copy,
+// note: The one-way authority cutover: reviewed manifest, verified staged copy,
 // activation claim, durable source fence, guarded publication and replay.
 export type {
   CutoverActivationOptions,
@@ -722,7 +722,7 @@ export {
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
-// The cross-domain composite contract: the admitted intent, its local effect key
+// note: The cross-domain composite contract: the admitted intent, its local effect key
 // and the collaboration receipt. The frame itself stays internal to the engine;
 // only the admitted owning verb may run one.
 export type {
@@ -795,7 +795,7 @@ export {
 // transport and no credential, so no provider interface, page envelope or
 // failure list lives here — a listing is the caller's own array.
 export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
-// Sync ledger: the per-item state machine and its read path on the collaboration
+// invariant: Sync ledger: the per-item state machine and its read path on the collaboration
 // authority. The transport owns the collaboration write transaction
 // (`withCollaborationWrite`); the verbs compose inside it and never begin one.
 export type {

@@ -257,7 +257,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
-    // One deferred read snapshot: the revision stamped on the observation and
+    // note: One deferred read snapshot: the revision stamped on the observation and
     // the rows it was evaluated against come from the same instant.
     db.exec("begin");
     try {
@@ -564,7 +564,7 @@ export async function readProjectBinding(
     try {
       handle.db.exec("rollback");
     } catch {
-      // connection-level failure during rollback -- nothing was committed
+      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {

@@ -24,7 +24,7 @@ import {
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-read-cli-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 
-/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = join(ROOT, "lane-home");
 mkdirSync(LANE_HOME, { recursive: true });
 let laneHomeSpy: { mockRestore(): void } | undefined;
@@ -39,7 +39,7 @@ afterAll(() => {
 let repoSequence = 0;
 
 /**
- * A real checkout: issue and catalog authority is the collaboration lane, so a
+ * why: A real checkout: issue and catalog authority is the collaboration lane, so a
  * fixture without a repository identity has no issue store at all.
  */
 async function workspace(name: string, initialize = true, lane = true): Promise<{ dir: string; harness: string; context: StoreContext }> {
@@ -57,7 +57,7 @@ async function workspace(name: string, initialize = true, lane = true): Promise<
   return { dir, harness, context };
 }
 
-/** The lane's own revision: the issue/catalog authority the reads report. */
+/** note: The lane's own revision: the issue/catalog authority the reads report. */
 async function laneRevision(context: StoreContext): Promise<number> {
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -71,7 +71,7 @@ async function laneRevision(context: StoreContext): Promise<number> {
   }
 }
 
-/** A conforming installed-consumer attestation: one upgraded CLI on node. */
+/** note: A conforming installed-consumer attestation: one upgraded CLI on node. */
 function activationAttestation(): ActivationAttestation {
   return {
     version: ACTIVATION_PROTOCOL_VERSION,
@@ -204,7 +204,7 @@ describe("dashboard views over a real store", () => {
 
     const envelope = await readDashboardView({ context, view: "issues" });
     const page = envelope.data as IssuePage;
-    // The direct domain read carries its own observation; the page itself keeps
+    // why: The direct domain read carries its own observation; the page itself keeps
     // the existing DTO keys the dashboard answers with (asserted against the
     // lane counters below).
     const direct = await listIssues(context, {});
@@ -212,7 +212,7 @@ describe("dashboard views over a real store", () => {
     expect(page).toEqual(directPage);
     expect(pageEvidence).toMatchObject({ completeness: "complete", revision: direct.storeRevision });
     expect(page.items.map((item) => item.id)).toEqual(["I-000001", "I-000002"]);
-    // The reported revision is the LANE's: issue/catalog authority lives there.
+    // note: The reported revision is the LANE's: issue/catalog authority lives there.
     expect(envelope.storeRevision).toBe(await laneRevision(context));
     expect(envelope.catalogRevision).toBe(0);
     expect(envelope.projection.freshness).toBe("unavailable");
@@ -244,7 +244,7 @@ describe("dashboard views over a real store", () => {
   });
 
   test("issue-flow returns the dated buckets, the unknown-date counts and the current open total", async () => {
-    // Missing capture dates are genuine legacy history, imported by the public
+    // note: Missing capture dates are genuine legacy history, imported by the public
     // migration boundary rather than forged into an active issue store: a
     // file-era checkout has no lane, the reviewed apply stages one, and the
     // activation publishes it.
@@ -339,18 +339,18 @@ describe("dashboard views over a real store", () => {
 
     const roadmap = await readDashboardView({ context, view: "roadmap", params: { project: "proj-absent" } });
     expect(roadmap.data as RoadmapDTO | null).toBeNull();
-    // Roadmap authority is the lane's, so this view has no execution projection.
+    // note: Roadmap authority is the lane's, so this view has no execution projection.
     expect(roadmap.projection.freshness).toBe("unavailable");
   });
 
   test("a missing or staged authority fails with a structured code, never an empty page", async () => {
-    // No repository identity at all: the scope itself cannot be resolved.
+    // invariant: No repository identity at all: the scope itself cannot be resolved.
     const identified = await workspace("no-lane-", true);
     await rmSync(resolveCollaborationLocation(identified.context).dbPath, { force: true });
     const uninitialized = await readDashboardView({ context: identified.context, view: "issues" }).catch((error: unknown) => error);
     expect(dashboardFailure(uninitialized)).toMatchObject({ code: "collaboration.not-initialized" });
 
-    // A lane that exists but was never published serves no issue page either.
+    // invariant: A lane that exists but was never published serves no issue page either.
     const stagedFixture = await workspace("staged-", true, false);
     await initializeCollaborationStore(resolveCollaborationLocation(stagedFixture.context));
     const staged = await readDashboardView({ context: stagedFixture.context, view: "issue-flow" }).catch((error: unknown) => error);
@@ -415,7 +415,7 @@ describe("dashboard views over a real store", () => {
     await seedIssue(context, "as-of row", "low");
     const realOpen = storeDb.openStore;
     const spy = spyOn(storeDb, "openStore").mockImplementation(async (ctx, mode) => {
-      // The execution open is slow: the collaboration observation must NOT be
+      // invariant: The execution open is slow: the collaboration observation must NOT be
       // backdated to a shared pre-open instant.
       if (mode === "read") await new Promise((resolve) => setTimeout(resolve, 40));
       return realOpen(ctx, mode);
@@ -429,7 +429,7 @@ describe("dashboard views over a real store", () => {
     }
     const collaborationAsOf = Date.parse(envelope.collaboration!.asOf!);
     const executionAsOf = Date.parse(envelope.execution!.asOf as string);
-    // The shared pre-open instant the old read recorded would sit at request time;
+    // why: The shared pre-open instant the old read recorded would sit at request time;
     // each source's own in-transaction stamp lands after its own open, so the
     // collaboration observation carries the slow execution open's delay.
     expect(collaborationAsOf - startedAt).toBeGreaterThanOrEqual(30);

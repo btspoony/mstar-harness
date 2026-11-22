@@ -163,7 +163,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                     : id === "plan.progress"
                       ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
                       : (id === "plan.issue-add" || id === "plan.issue-close") && code.startsWith("collaboration.")
-                        // A residual is one cross-store composite: the collaboration
+                        // invariant: A residual is one cross-store composite: the collaboration
                         // effect commits first and the plan row is finalized after it.
                         // The refusal names which half is missing or moved, so the
                         // operator reissues the SAME operation id (never a new one,

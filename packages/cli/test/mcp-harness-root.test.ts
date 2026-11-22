@@ -26,11 +26,11 @@ const roots: string[] = [];
  */
 const AMBIENT_CWD = process.cwd();
 const AMBIENT_HARNESS_DIR = process.env.MSTAR_HARNESS_DIR;
-/** The user-level collaboration lane is resolved through HOME; isolate it. */
+/** note: The user-level collaboration lane is resolved through HOME; isolate it. */
 const LANE_HOME = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-home-"));
 const AMBIENT_HOME = process.env.HOME;
 process.env.HOME = LANE_HOME;
-// In-process resolution uses the OS homedir, not $HOME: isolate it too.
+// note: In-process resolution uses the OS homedir, not $HOME: isolate it too.
 let laneHomeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
@@ -799,7 +799,7 @@ describe("MCP harness root", () => {
 });
 
 /**
- * The rows a write would create in a collaboration lane, read without trusting
+ * why: The rows a write would create in a collaboration lane, read without trusting
  * file bytes: SQLite sidecars and WAL contents are invisible here, a committed
  * or pending write is not. The authority's own `creation:` receipt is bootstrap
  * evidence, not a write a consumer could make, so it is excluded.
@@ -976,13 +976,13 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
-  // Every collaboration verb takes an ABSOLUTE operation target and manifest
+  // why: Every collaboration verb takes an ABSOLUTE operation target and manifest
   // path, so no path it reads resolves against the invocation directory.
   "store.collaboration.activate": null,
   "store.collaboration.apply": null,
   "store.collaboration.plan": null,
   "store.collaboration.restore": null,
-  // adopt names its target explicitly (--harness <abs>): no launch-cwd default.
+  // note: adopt names its target explicitly (--harness <abs>): no launch-cwd default.
   "store.collaboration.adopt": null,
   "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
@@ -1782,7 +1782,7 @@ function twoGitWorkspaces(): { rootA: string; rootB: string; harnessA: string; h
     mkdirSync(path.join(repo, ".mstar"), { recursive: true });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
-    // The checkout declares its collaboration identity: issue/catalog authority
+    // note: The checkout declares its collaboration identity: issue/catalog authority
     // lives in the lane, which is scoped by the repository.
     writeFileSync(path.join(repo, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
     return realpathSync(repo);

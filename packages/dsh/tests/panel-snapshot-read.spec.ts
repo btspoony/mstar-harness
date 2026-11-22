@@ -36,7 +36,7 @@ async function activeHarness(): Promise<string> {
   await mkdir(harnessDir, { recursive: true })
   const handle = await initializeStore({ harnessDir })
   handle.close()
-  // The panel read resolves the repository lane: the fixture repo must carry
+  // invariant: The panel read resolves the repository lane: the fixture repo must carry
   // a declared identity (bare temp dirs have no origin and no parent .mstarc),
   // and the lane itself must exist and be ACTIVE before any snapshot read.
   await execFileSync('git', ['init', '-q', '-b', 'main', root], { stdio: 'ignore' })

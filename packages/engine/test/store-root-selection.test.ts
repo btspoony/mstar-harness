@@ -82,7 +82,7 @@ describe("explicit store-root selection", () => {
     expect(existsSync(selected.harnessDir)).toBe(shape === "empty");
     if (shape === "empty") expect(readdirSync(selected.harnessDir)).toEqual([]);
 
-    // The selected checkout shares the repository's collaboration lane but has
+    // note: The selected checkout shares the repository's collaboration lane but has
     // no binding of its own yet; adopt it before the execution-only recovery.
     writeCollaborationBinding(selected, await readCollaborationAuthority(selected));
     // The supported empty-workspace upgrade creates even a missing selected
@@ -107,7 +107,7 @@ describe("explicit store-root selection", () => {
     } finally {
       own.close();
     }
-    // The repository's lane is already ACTIVE through the alternative root and
+    // note: The repository's lane is already ACTIVE through the alternative root and
     // this checkout holds no binding of its own yet; adopt what it resolved.
     writeCollaborationBinding(selected, await readCollaborationAuthority(selected));
     writeFileSync(join(selected.harnessDir, "plans", "selected.md"), "# Selected plan\n\n**plan_id:** selected\n");
@@ -118,13 +118,13 @@ describe("explicit store-root selection", () => {
     );
     const catalog = await readCatalogCompleteness(selected, ["plans"]);
     expect(catalog.ok).toBe(true);
-    // Discovery stays bounded to the selected root's own plans directory, while
+    // note: Discovery stays bounded to the selected root's own plans directory, while
     // the catalog rows are the repository's SHARED lane, which already holds the
     // alternative root's plan.
     expect(catalog.discovered).toBe(1);
     expect(catalog.registered).toBe(2);
     expect((await listCatalog(selected)).items.map((item) => item.id).sort()).toEqual(["alternative", "selected"]);
-    // The alternative keeps its own execution authority; only the shared
+    // why: The alternative keeps its own execution authority; only the shared
     // collaboration lane moved.
     const after = await authorityFacts(alternative);
     expect({ storeId: after.storeId, epoch: after.epoch }).toEqual({ storeId: before.storeId, epoch: before.epoch });

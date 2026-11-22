@@ -68,7 +68,7 @@ import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type Reg
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
 /**
- * Every case ran against one combined store before the cutover; a registration
+ * why: Every case ran against one combined store before the cutover; a registration
  * now publishes into the repository's user-level collaboration lane, so the
  * suite pins `homedir` to a temporary home (a real spy on the live module
  * binding) and gives each fixture workspace its own checkout identity.
@@ -85,14 +85,14 @@ afterAll(() => {
 });
 
 /**
- * The checkout identity and ACTIVE collaboration lane one fixture workspace
+ * why: The checkout identity and ACTIVE collaboration lane one fixture workspace
  * owns: a real Git checkout with an explicit `repo_id`, so the lane path is
  * deterministic and private, and the staged record flipped to active (this
  * release ships no public activator).
  */
 async function collaborationLane(workspace: string): Promise<void> {
   execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: "ignore" });
-  // One lane per fixture workspace: the repo id is the workspace basename, a
+  // why: One lane per fixture workspace: the repo id is the workspace basename, a
   // safe identifier because every fixture name is a lower-case slug.
   const repoId = workspace.split("/").pop()!.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
   writeFileSync(join(workspace, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId.replace(/^[^a-z0-9]/, "x")}\n`);
@@ -330,7 +330,7 @@ async function fixtureWrite(context: StoreContext, sql: string, ...params: Array
   }
 }
 
-/** Read rows from this fixture's own collaboration lane (the catalog's source). */
+/** note: Read rows from this fixture's own collaboration lane (the catalog's source). */
 function collaborationRows<T>(context: StoreContext, sql: string, ...params: Array<string | number>): T[] {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -340,7 +340,7 @@ function collaborationRows<T>(context: StoreContext, sql: string, ...params: Arr
   }
 }
 
-/** The catalog revision a reviewed registration CASes against: the lane's own. */
+/** note: The catalog revision a reviewed registration CASes against: the lane's own. */
 function catalogRevisionOf(context: StoreContext): number {
   const [row] = collaborationRows<{ catalog_revision: number }>(
     context,
@@ -368,7 +368,7 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
         "(select count(*) from catalog_execution_bindings) as bindings, " +
         "(select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending",
     )) ?? {};
-  // The catalog and the collaboration revision live in the repository's own
+  // why: The catalog and the collaboration revision live in the repository's own
   // lane; the execution store keeps only the binding and the legacy journal.
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -501,7 +501,7 @@ describe("execution-registration", () => {
       catalog_revision: 1,
     });
 
-    // (c) exactly the rows one registration creates, and exactly the revision
+    // invariant: (c) exactly the rows one registration creates, and exactly the revision
     // advances it owes: one root revision for the membership change, ONE
     // collaboration revision for the whole catalog-effect transaction (§3.1),
     // one catalog revision for the published entity, and one effect receipt —
@@ -1255,7 +1255,7 @@ describe("execution-registration", () => {
     expect(refusal.code).toBe("catalog.duplicate");
     expect(refusal.message).toContain("elsewhere.md");
 
-    // The workflow rows and the first published entity were rolled back with
+    // invariant: The workflow rows and the first published entity were rolled back with
     // the refused publish: neither half is visible, and no collaboration or
     // catalog revision advanced. The deterministic refusal itself is recorded
     // as the operation's durable decline — that receipt IS the replay answer.
@@ -1336,7 +1336,7 @@ describe("execution-registration", () => {
       ),
     );
     expect(refusal.code).toBe("catalog.revision-conflict");
-    // The reviewed expectation did not match the lane, so nothing published and
+    // note: The reviewed expectation did not match the lane, so nothing published and
     // no revision moved; the deterministic refusal is the durable decline.
     expect(await footprint(fixture.context)).toEqual({ ...accepted, effects: (accepted.effects as number) + 1 });
   });
@@ -1597,7 +1597,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     const reviewed = planRequest({ context: fixture.context, operationId: "op-interrupted" });
     const before = await footprint(fixture.context);
 
-    // A refused attempt stops at the collaboration boundary and publishes
+    // invariant: A refused attempt stops at the collaboration boundary and publishes
     // nothing: no execution row, no catalog byte, no collaboration revision
     // advance. The deterministic refusal is recorded as this operation's
     // durable decline — the receipt a same-id retry reads.
@@ -1611,7 +1611,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     expect(await footprint(fixture.context)).toEqual({ ...before, effects: (before.effects as number) + 1 });
     const declined = await footprint(fixture.context);
 
-    // The same id re-raises the recorded decline instead of re-evaluating (or
+    // why: The same id re-raises the recorded decline instead of re-evaluating (or
     // re-publishing) anything.
     expect(
       await refusalOf(() =>
@@ -1623,7 +1623,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     ).toMatchObject({ code: "catalog.revision-conflict" });
     expect(await footprint(fixture.context)).toEqual(declined);
 
-    // The SAME normal intent under its own operation id completes exactly one
+    // invariant: The SAME normal intent under its own operation id completes exactly one
     // registration, and the creation facts are the reviewed call's own — the
     // original timestamp, the document-derived row — not a second attempt's.
     const accepted = await commitExecutionRegistration(
@@ -1655,7 +1655,7 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     expect(state.data.workflows.map((workflow) => workflow.state.id)).toEqual([WORKFLOW_ID]);
     expect(state.data.workflows[0]!.plans.map((view) => view.plan.id)).toEqual([PLAN_ID]);
 
-    // A retry after the commit replays the one recorded receipt and adds
+    // note: A retry after the commit replays the one recorded receipt and adds
     // nothing, whatever tokens it re-read.
     const current = await readExecutionState(fixture.context);
     expect(
@@ -1737,12 +1737,12 @@ describe("execution-registration \u2014 recovery-first registration", () => {
   });
 });
 
-/* ------------------------------------------------------------------------ *
+/* note: ------------------------------------------------------------------------ *
  * The collaboration composite: witness, conflict and interruption
  * ------------------------------------------------------------------------ */
 
 /**
- * Leave exactly what an interrupted finalization leaves behind: the
+ * invariant: Leave exactly what an interrupted finalization leaves behind: the
  * collaboration effect committed under its operation id, and none of the
  * execution delta that finalization would have written. This is fixture surgery
  * on a real store, not a mocked frame — the retry then exercises the real
@@ -1772,7 +1772,7 @@ describe("collaboration registration replay", () => {
     const fixture = await activeFixture("replay-witness");
     const location = resolveCollaborationLocation(fixture.context);
     const before = await footprint(fixture.context);
-    // A staged lane is not an authority a registration may publish into.
+    // note: A staged lane is not an authority a registration may publish into.
     const db = new DatabaseSync(location.dbPath);
     try {
       db.prepare("update collaboration_meta set authority_state = 'staged', activated_at = null where id = 1").run();
@@ -1790,7 +1790,7 @@ describe("collaboration registration replay", () => {
         restore.close();
       }
     }
-    // Nothing was admitted: no reservation, no effect, no catalog byte.
+    // note: Nothing was admitted: no reservation, no effect, no catalog byte.
     expect(await one<{ n: number }>(fixture.context, "select count(*) as n from execution_collaboration_intents")).toEqual({ n: 0 });
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
@@ -1808,7 +1808,7 @@ describe("collaboration registration replay", () => {
     await simulateInterruptedFinalization(fixture.context, "op-replay-interrupted", WORKFLOW_ID);
     expect(await footprint(fixture.context)).toMatchObject({ workflows: 0, entities: 1, catalog_revision: 1, effects: 1 });
 
-    // A DIFFERENT reviewed call under the same operation id is a conflict: the
+    // note: A DIFFERENT reviewed call under the same operation id is a conflict: the
     // reservation froze the first payload, and nothing touches the lane.
     const interrupted = await readExecutionState(fixture.context);
     const changed = await refusalOf(() =>
@@ -1820,7 +1820,7 @@ describe("collaboration registration replay", () => {
     expect(changed.code).toBe("execution.operation-conflict");
     expect(await footprint(fixture.context)).toMatchObject({ workflows: 0, entities: 1, catalog_revision: 1, effects: 1 });
 
-    // The ORIGINAL intent resumes. The caller supplies a catalog expectation
+    // why: The ORIGINAL intent resumes. The caller supplies a catalog expectation
     // that is WRONG for the moved catalog: the frozen one wins, so the recorded
     // effect replays and no second delta publishes.
     const current = await readExecutionState(fixture.context);
@@ -1843,11 +1843,11 @@ describe("collaboration registration replay", () => {
       effects: 1,
       pending: 0,
     });
-    // The binding pins the EXACT catalog revision the effect receipt recorded,
+    // note: The binding pins the EXACT catalog revision the effect receipt recorded,
     // not whatever the caller re-presented or the catalog holds now.
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toMatchObject({ catalog_revision: 1, catalog_id: PLAN_ID });
 
-    // And the finalized replay is itself stable.
+    // note: And the finalized replay is itself stable.
     const after = await readExecutionState(fixture.context);
     expect(
       await commitExecutionRegistration(
@@ -1862,7 +1862,7 @@ describe("collaboration registration replay", () => {
     const fixture = await activeFixture("replay-shipped-pending");
     const reviewed = planRequest({ context: fixture.context, operationId: "unused-shipped-pending" });
     const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
-    // The reviewed constraint the caller held before the lost response.
+    // note: The reviewed constraint the caller held before the lost response.
     const accepted = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: reviewed.workflow,
@@ -1870,7 +1870,7 @@ describe("collaboration registration replay", () => {
       expectedCatalogRevision: 0,
     });
     await simulateInterruptedFinalization(fixture.context, accepted.operationId, WORKFLOW_ID);
-    // The catalog moved to 1 with no execution receipt, yet the retry with its
+    // invariant: The catalog moved to 1 with no execution receipt, yet the retry with its
     // ORIGINAL reviewed expectation must reach the frozen pending expectation
     // and replay the committed effect instead of refusing a new-attempt CAS.
     const pending = await readExecutionState(fixture.context);
@@ -1893,7 +1893,7 @@ describe("collaboration registration replay", () => {
       effects: 1,
       pending: 0,
     });
-    // A genuinely NEW attempt still enforces its own reviewed expectation.
+    // note: A genuinely NEW attempt still enforces its own reviewed expectation.
     const fresh = await readExecutionState(fixture.context);
     await expect(
       registerShippedCatalogExecution(context, {

@@ -107,7 +107,7 @@ export async function readAllListPages<T extends ListPayload>(
 }
 
 /**
- * The engine's paged collaboration key ends with `:<limit>:<offset>` (contract
+ * note: The engine's paged collaboration key ends with `:<limit>:<offset>` (contract
  * §Read/Completeness: the snapshot scope names the page). The LOGICAL scope is
  * that key without its page bounds — the filter set two pages of one list
  * share. A key that does not carry the page we asked for is left untouched.
@@ -122,7 +122,7 @@ function logicalScope(scope: CollaborationScope, offset: number): CollaborationS
 }
 
 /**
- * Every source fact that must agree for two pages to be one list: the
+ * invariant: Every source fact that must agree for two pages to be one list: the
  * collaboration observation (authority identity/epoch, completeness, LOGICAL
  * scope, revision, catalog revision and gap code) and the execution observation
  * (identity/epoch/revision), beside the projection generation and its health.
@@ -133,7 +133,7 @@ function logicalScope(scope: CollaborationScope, offset: number): CollaborationS
 function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
   const { collaboration, execution, projection, storeRevision, catalogRevision } = envelope;
   return JSON.stringify({
-    // The top-level counters stay part of the comparison: they are the
+    // note: The top-level counters stay part of the comparison: they are the
     // collaboration revisions the transport states, and a server that predates
     // the source observations still moves them.
     storeRevision,
@@ -157,20 +157,20 @@ function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
         : execution.asOf === null
           ? { asOf: null, code: execution.code }
           : { storeId: execution.storeId, epoch: execution.epoch, revision: execution.revision },
-    // Health is part of the disclosure, not decoration: a page read while the
+    // invariant: Health is part of the disclosure, not decoration: a page read while the
     // projection was still current must not be joined with one read after it
     // went stale, or the assembled list would state the first page's freshness.
     projection: { observed: projection.observed, generation: projection.generation, freshness: projection.freshness },
   });
 }
 
-/** The version members that make two pages the same source observations. */
+/** note: The version members that make two pages the same source observations. */
 function sameStoreState(a: ReadEnvelope<unknown>, b: ReadEnvelope<unknown>, aOffset: number, bOffset: number): boolean {
   return sourceStamp(a, aOffset) === sourceStamp(b, bOffset);
 }
 
 /**
- * The assembled list's own collaboration scope: the pages share one source
+ * why: The assembled list's own collaboration scope: the pages share one source
  * snapshot, but their row set is no longer any single page's filter set, so the
  * scope says so instead of claiming the first page's bounds.
  */
@@ -186,7 +186,7 @@ function assembledEnvelope<T extends ListPayload>(pages: ReadEnvelope<ListPayloa
   };
 }
 
-/** A page read against a partial snapshot cannot be assembled as one list. */
+/** invariant: A page read against a partial snapshot cannot be assembled as one list. */
 function partialRefusal(envelope: ReadEnvelope<unknown>): string | null {
   const collaboration = envelope.collaboration;
   return collaboration !== null && collaboration.completeness === "partial"

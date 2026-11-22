@@ -38,7 +38,7 @@ const ROOT = mkdtempSync(join(tmpdir(), "mstar-push-test-"));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
-/** The collaboration store is user-level, so the resolver's home is the fixture's. */
+/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -53,7 +53,7 @@ const PROJECT = "p-push";
 const BINDING = "linear:" + PROJECT;
 
 /**
- * The push ledger fixture: one ACTIVE collaboration authority, and ONE
+ * invariant: The push ledger fixture: one ACTIVE collaboration authority, and ONE
  * caller-owned transaction for the whole case — the same ownership the command's
  * `withSyncWrite` holds around an `apply`. A row and its receipt therefore commit
  * together at `close()`, exactly as in production; the per-batch advance and the

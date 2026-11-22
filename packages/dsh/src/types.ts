@@ -206,9 +206,9 @@ export interface StoreFactsView {
   readonly kind: 'store' | 'unavailable'
   readonly projection: 'current' | 'stale' | 'unavailable' | null
   readonly storeRevision: number | null
-  /** Completeness of the scoped collaboration observation that produced the rollup. */
+  /** note: Completeness of the scoped collaboration observation that produced the rollup. */
   readonly completeness: 'complete' | 'partial' | 'unavailable' | null
-  /** Observation time of that scoped snapshot (`null` when nothing was observed). */
+  /** note: Observation time of that scoped snapshot (`null` when nothing was observed). */
   readonly asOf: string | null
   readonly diagnostic: string | null
 }

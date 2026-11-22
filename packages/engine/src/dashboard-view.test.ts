@@ -72,7 +72,7 @@ async function workspace(name: string): Promise<StoreContext> {
 }
 
 /**
- * Publish the staged collaboration lane AND this checkout's binding -- the two
+ * invariant: Publish the staged collaboration lane AND this checkout's binding -- the two
  * records the real activation writes. An ACTIVE authority is never usable from
  * an unbound checkout, so a fixture that flips only the lane is refused.
  */
@@ -211,7 +211,7 @@ describe("readDashboardView over a real store", () => {
       id: "I-000001",
     });
     const detail: IssueDetail = envelope.data as IssueDetail;
-    // The domain reader also stamps its own observation; the dashboard DTO keeps
+    // why: The domain reader also stamps its own observation; the dashboard DTO keeps
     // the detail shape and the envelope carries that observation.
     const direct = await getIssue(context, "I-000001");
     const { collaboration: detailEvidence, ...directDetail } = direct;
@@ -237,7 +237,7 @@ describe("readDashboardView over a real store", () => {
 });
 
 describe("dashboard collaboration disclosure", () => {
-  /** Remove the workspace's collaboration authority: an unavailable source, not an empty one. */
+  /** note: Remove the workspace's collaboration authority: an unavailable source, not an empty one. */
   function removeCollaboration(context: StoreContext): void {
     unlinkSync(resolveCollaborationLocation(context).dbPath);
   }
@@ -247,9 +247,9 @@ describe("dashboard collaboration disclosure", () => {
     removeCollaboration(context);
     const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
     const typed = dashboardFailure(failure);
-    // A typed non-success, never a 404-shaped or zero-row answer.
+    // invariant: A typed non-success, never a 404-shaped or zero-row answer.
     expect(typed.code).toBe("collaboration.not-initialized");
-    // The refusal keeps the recovery path and drops the user's home and store file.
+    // why: The refusal keeps the recovery path and drops the user's home and store file.
     expect(typed.message).toContain("mstar store init");
     expect(typed.message).not.toContain(TEST_HOME);
     expect(typed.message).not.toMatch(/\.db\b/);
@@ -265,7 +265,7 @@ describe("dashboard collaboration disclosure", () => {
       expect(typed.message).not.toContain(secret);
       expect(typed.message).toContain("{REDACTED}");
     }
-    // A scheme-led credential without the header label is redacted too — in any
+    // invariant: A scheme-led credential without the header label is redacted too — in any
     // scheme capitalization (a bare lower-case `bearer` must not escape).
     for (const [scheme, secret] of [
       ["bearer", "sk-live-456"],
@@ -277,7 +277,7 @@ describe("dashboard collaboration disclosure", () => {
       expect(bare.message).not.toContain(secret);
       expect(bare.message).toContain("{REDACTED}");
     }
-    // A Digest value is a parameter list: every parameter is redacted with it.
+    // note: A Digest value is a parameter list: every parameter is redacted with it.
     const digest = dashboardFailure(
       new Error('Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"'),
     );
@@ -290,14 +290,14 @@ describe("dashboard collaboration disclosure", () => {
   test("an execution-only list keeps its rows and discloses the optional gap", async () => {
     const context = await workspace("disclosure-optional-");
     await createPlanWorkflow(context, "p-disclosure", "Todo");
-    // A generation is published first, as it would be on a healthy checkout; the
+    // invariant: A generation is published first, as it would be on a healthy checkout; the
     // later unavailable catalog must not turn those rows into an empty success.
     const published = await readDashboardView({ context, view: "workflows" });
     expect((published.data as WorkflowListDTO).items.map((item) => item.id)).toContain("p-disclosure");
     removeCollaboration(context);
     const envelope = await readDashboardView({ context, view: "workflows" });
     const list = envelope.data as WorkflowListDTO;
-    // Previously usable execution data stays; only the unavailable optional
+    // note: Previously usable execution data stays; only the unavailable optional
     // catalog association is disclosed, and no collaboration counter is claimed.
     expect(list.items.map((item) => item.id)).toContain("p-disclosure");
     expect(envelope.collaboration).toMatchObject({
@@ -455,7 +455,7 @@ function readMember<T>(member: OverviewMember<T>): T {
   return member.data;
 }
 
-/** The CAS revision the milestone verbs guard on: the collaboration counter. */
+/** note: The CAS revision the milestone verbs guard on: the collaboration counter. */
 async function storeRevision(context: StoreContext): Promise<number> {
   return (await readCollaborationAuthority(context)).revision;
 }
@@ -935,7 +935,7 @@ describe("overview read model", () => {
       { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
       operation("register-proj-a"),
     );
-    // Remove the one table the milestone member reads; every other reader is
+    // why: Remove the one table the milestone member reads; every other reader is
     // untouched, so only `milestones` may answer `unavailable`. The project is
     // removed from the catalog, which the milestone grouping resolves against;
     // the other members keep reading their own rows.

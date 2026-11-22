@@ -272,7 +272,7 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     const peersDir = join(profileDir(dshHome), 'node_modules/@deepseek-ai')
     console.log(`install-e2e: peers materialized under DSH_HOME profile: ${existsSync(peersDir)} (host provides seams)`)
 
-    // 4. Version/surface probe of the DEFAULT install. The dsh CLI pins
+    // invariant: 4. Version/surface probe of the DEFAULT install. The dsh CLI pins
     //    `^2.2.0` in the profile manifest; pnpm's minimumReleaseAge gate
     //    excludes fresh publishes (< ~1 day) from RANGE resolution, so the
     //    default add can land on a version without the seeds surface. When

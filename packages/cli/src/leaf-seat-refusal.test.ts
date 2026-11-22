@@ -55,7 +55,7 @@ async function fixture(): Promise<{ base: string; root: string }> {
   // The registered document is the registration authority: its H1 title and the
   // `plan_id` header must be the ids the argv declares.
   writeFileSync(join(root, "plans", `${PLAN_ID}.md`), `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
-  // The negative control registers against the collaboration authority, which
+  // note: The negative control registers against the collaboration authority, which
   // resolves the owning checkout's repo identity and needs its lane active.
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: base });
   writeFixtureRepoId(base);

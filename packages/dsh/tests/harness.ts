@@ -96,12 +96,12 @@ export interface FakeJobSnapshot extends JobDoneSnapshot {
 }
 
 /**
- * Isolated user home for the collaboration lane: its store lives at
+ * why: Isolated user home for the collaboration lane: its store lives at
  * `<home>/.mstar/repos/<repo>/collaboration.db`, so no dsh fixture may read or
  * write the real home. One home per test process, removed on exit.
  */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), 'dsh-mstar-home-'))
-// Bun shares this helper module across test FILES: a per-file beforeAll/afterAll
+// why: Bun shares this helper module across test FILES: a per-file beforeAll/afterAll
 // would restore the spy (or delete its target) while another file still runs,
 // handing it the real home. The home therefore lives for the whole process and
 // is restored/removed only on exit.
@@ -110,7 +110,7 @@ if (nodeOs.homedir() !== FIXTURE_HOME) {
 }
 process.on('exit', () => rmSync(FIXTURE_HOME, { recursive: true, force: true }))
 
-/** One repository identity per fixture root (its temp basename is unique). */
+/** note: One repository identity per fixture root (its temp basename is unique). */
 function fixtureRepoId(root: string): string {
   const slug = basename(root)
     .toLowerCase()
@@ -1078,14 +1078,14 @@ export async function seedActiveWorkflow(
       const store = await initializeStore({ harnessDir })
       store.close()
     }
-    // Every fixture harness gets its repository's collaboration lane, the way
+    // note: Every fixture harness gets its repository's collaboration lane, the way
     // `store init` pairs the authorities (the plan rows and the panel facts
     // below are collaboration reads).
     ensureFixtureRepo(harnessDir)
     try {
       await ensureCollaborationAuthority({ harnessDir })
     } catch (error) {
-      // A second harness over the SAME repository (e.g. `<root>/completed`)
+      // why: A second harness over the SAME repository (e.g. `<root>/completed`)
       // meets a lane this run already published: it is not stale — bind this
       // checkout to the live ACTIVE store instead of bootstrapping a new one.
       const probe = await probeCollaborationAuthority({ harnessDir })
@@ -1202,12 +1202,12 @@ export function gitInit(root: string): void {
  * so a spec proves host behaviour against the authority instead of a mock.
  * ========================================================================== */
 
-/** Make the harness's owner a git checkout with a collaboration identity, so
+/** note: Make the harness's owner a git checkout with a collaboration identity, so
  * fixtures can resolve the user-level lane (resolution names the main
  * checkout and reads its `.mstarc`). Idempotent. */
 function ensureFixtureRepo(harnessDir: string): void {
   const resolved = realpathSync(harnessDir)
-  // The repository owner is the directory ABOVE a `.mstar` harness dir; a bare
+  // why: The repository owner is the directory ABOVE a `.mstar` harness dir; a bare
   // path passed as its own harness root owns ITSELF. Refusing the shared temp
   // root keeps one bare-path caller from git-initializing `$TMPDIR` and
   // poisoning every upward identity probe in the process.
@@ -1224,7 +1224,7 @@ function ensureFixtureRepo(harnessDir: string): void {
     .replace(/^[^a-z0-9]+/, '')
   const repoId = `dsh-${slug}`.slice(0, 128)
   writeFileSync(mstarc, `[collaboration]\nmode=local\nrepo_id=${repoId}\n`)
-  // The declared identity is committable fixture state, not process state: a
+  // note: The declared identity is committable fixture state, not process state: a
   // clean control root (worktree.main.tracked-changes) requires it committed.
   execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
   execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
@@ -1341,20 +1341,20 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
-  // Callers may name a not-yet-created root (the boot creates it), so the
+  // why: Callers may name a not-yet-created root (the boot creates it), so the
   // shared-temp-root refusal compares the resolved spelling, not a realpath.
   if (resolve(root) === resolve(tmpdir()) || (existsSync(root) && realpathSync(root) === realpathSync(tmpdir()))) {
     throw new Error(`bootApp root resolves to the shared temp root ${root}; pass a repo-scoped root, not a bare temp dir`)
   }
   const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
-  // A real repository identity: collaboration resolution needs an origin or an
+  // invariant: A real repository identity: collaboration resolution needs an origin or an
   // explicit repo_id, and the fixture must never derive the ambient home's
   // .mstarc. A test that writes its own `.mstarc` later overwrites this.
   const mstarc = join(root, '.mstarc')
   if (!existsSync(mstarc)) {
     writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
-    // Identity is committable fixture state: a clean control root
+    // note: Identity is committable fixture state: a clean control root
     // (worktree.main.tracked-changes) requires it committed after gitInit.
     gitInit(root)
     execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })

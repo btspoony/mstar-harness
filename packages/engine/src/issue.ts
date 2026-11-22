@@ -1,5 +1,5 @@
 /**
- * issue.ts — capture, occurrences, reads, and authorized disposition (plan C2/C3).
+ * invariant: issue.ts — capture, occurrences, reads, and authorized disposition (plan C2/C3).
  *
  * In-process domain verbs on the collaboration authority. Every read and write
  * names the repository's collaboration store, never the execution store: the
@@ -580,7 +580,7 @@ function requestHash(kind: string, payload: unknown): string {
   return sha256(`${kind}\n${JSON.stringify(payload)}`);
 }
 /**
- * The collaboration record this module's verbs run on. The execution store's
+ * invariant: The collaboration record this module's verbs run on. The execution store's
  * `store_meta` is a different lane: its revision is never a collaboration CAS,
  * so a handle from that lane is a refusal here rather than a silent read.
  */
@@ -649,7 +649,7 @@ function lookupOperation(db: StoreDb, operationId: string): { request_hash: stri
   if (typeof operationId !== "string" || operationId.trim() === "") {
     throw new IssueError("issue.invalid-operation-id", "operationId must be a non-empty string");
   }
-  // The standalone namespace is shared by every collaboration domain that does
+  // invariant: The standalone namespace is shared by every collaboration domain that does
   // not compose across stores, so a receipt this verb did not write still
   // refuses an id reused for a different payload.
   return db
@@ -831,7 +831,7 @@ export type ComposedTransactionRevision = {
 export type AuthorizedIssueMutation = MutationContext;
 
 /**
- * The transaction of ONE public issue mutation: the collaboration writer admits
+ * invariant: The transaction of ONE public issue mutation: the collaboration writer admits
  * the store, opens `BEGIN IMMEDIATE`, re-verifies the binding and active state
  * under the writer lock, and commits — so neither a payload nor an earlier
  * handle authorizes a write. The body then receives the same handle-taking shape
@@ -1120,7 +1120,7 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
-/** The canonical scope key of one issue page: the filters with the applied bounds. */
+/** note: The canonical scope key of one issue page: the filters with the applied bounds. */
 function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
   return {
     kind: "query",
@@ -1185,12 +1185,12 @@ export async function listIssues(
   try {
     const db = handle.db;
     db.exec("begin");
-    // The collaboration lane owns issue read authority: a staged or foreign
+    // invariant: The collaboration lane owns issue read authority: a staged or foreign
     // store never reaches this point, and no legacy schema gate applies — the
     // lane is created complete.
     assertIssueStoreActive(db);
     const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
-    // The page revision is the observation's own counter: no second query of
+    // note: The page revision is the observation's own counter: no second query of
     // the same row can disagree with the proof it publishes.
     const storeRevision = collaboration.revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
@@ -1244,7 +1244,7 @@ export async function listIssues(
     try {
       handle.db.exec("rollback");
     } catch {
-      // connection-level failure during rollback -- nothing was committed
+      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {
@@ -1260,7 +1260,7 @@ export async function getIssue(
   try {
     const db = handle.db;
     db.exec("begin");
-    // Same authority and same gate as listIssues: the collaboration lane keeps
+    // why: Same authority and same gate as listIssues: the collaboration lane keeps
     // its complete shape, so no legacy per-table schema probe applies.
     assertIssueStoreActive(db);
     const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
@@ -1454,7 +1454,7 @@ export async function getIssue(
     try {
       handle.db.exec("rollback");
     } catch {
-      // connection-level failure during rollback -- nothing was committed
+      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {

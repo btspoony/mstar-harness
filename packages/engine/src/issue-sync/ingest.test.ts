@@ -23,7 +23,7 @@ const ROOT = mkdtempSync(join(tmpdir(), "mstar-ingest-test-"));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
-/** The collaboration store is user-level, so the resolver's home is the fixture's. */
+/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -41,7 +41,7 @@ const AUTHOR = "Ada Lovelace <ada@example.com>";
 const UPDATED = "2026-11-19T12:00:00.000Z";
 
 /**
- * The ingest fixture: one ACTIVE collaboration authority, and ONE caller-owned
+ * note: The ingest fixture: one ACTIVE collaboration authority, and ONE caller-owned
  * transaction for the whole case — the ownership the command's `withSyncWrite`
  * holds around an `ingest`. Rows and their receipts commit together at `close()`.
  */

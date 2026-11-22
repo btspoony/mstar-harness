@@ -52,7 +52,7 @@ import {
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(nodeOs.tmpdir(), "mstar-store-read-"));
-/** The user-level collaboration root this suite owns: the real `$HOME` is
+/** invariant: The user-level collaboration root this suite owns: the real `$HOME` is
  * never read or written, and every rerun starts on an empty lane. */
 const HOME = join(ROOT, "home");
 mkdirSync(HOME, { recursive: true });
@@ -72,7 +72,7 @@ afterAll(() => {
 type Fixture = { dir: string; harness: string; context: StoreContext };
 
 /**
- * The private staged collaboration record flipped to active, plus the checkout
+ * invariant: The private staged collaboration record flipped to active, plus the checkout
  * binding the real activation writes: an ACTIVE authority is never usable from
  * an unbound checkout, and this plan ships no public activator.
  */
@@ -127,7 +127,7 @@ async function workspace(name: string): Promise<Fixture> {
   return { dir, harness, context };
 }
 
-/** One direct collaboration write (the lane's own database, no second owner). */
+/** note: One direct collaboration write (the lane's own database, no second owner). */
 async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Promise<void> {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -137,7 +137,7 @@ async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Prom
   }
 }
 
-/** One direct execution write (projection/execution fixtures only). */
+/** note: One direct execution write (projection/execution fixtures only). */
 async function withExecutionWrite(context: StoreContext, fn: (db: StoreDb) => void): Promise<void> {
   const handle = await openStore(context, "write");
   try {
@@ -148,7 +148,7 @@ async function withExecutionWrite(context: StoreContext, fn: (db: StoreDb) => vo
 }
 
 /**
- * A second writer connection for the concurrency probes: it WAITS on the
+ * why: A second writer connection for the concurrency probes: it WAITS on the
  * bounded budget instead of surfacing a transient lock, so the probe measures
  * snapshot isolation rather than SQLite contention.
  */
@@ -377,7 +377,7 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
       plans: [{
         id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress",
         metadata: {
-          // The complete frozen selection a `prepare` records: creation verifies
+          // note: The complete frozen selection a `prepare` records: creation verifies
           // it against the COLLABORATION catalog before its write transaction.
           catalog_pin: {
             store_id: catalogAuthority.storeId,
@@ -551,7 +551,7 @@ describe("milestone views", () => {
       seedIssue(db, { id: "I-1", title: "unassigned yet" });
     });
     const before = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    // A pure collaboration view never opens the execution database, so it
+    // invariant: A pure collaboration view never opens the execution database, so it
     // discloses NO projection observation instead of a health verdict.
     expect(before.projection.observed).toBe(false);
     expect(before.projection.generation).toBeNull();
@@ -625,7 +625,7 @@ describe("milestone views", () => {
     expect(envelope.data.first.issues.map((issue) => issue.id)).toEqual(["I-1"]);
     expect(envelope.data.first).toEqual(envelope.data.second);
 
-    // A later commit on its own connection is visible only to later reads, and
+    // note: A later commit on its own connection is visible only to later reads, and
     // the revision moves independently of the answered snapshot.
     const writer: StoreDb = concurrentWriter(dbPath);
     try {
@@ -661,13 +661,13 @@ describe("milestone views", () => {
     ]);
     expect(present.data?.milestones.unassignedIssues).toBe(1);
 
-    // The stored source text is gone, yet the milestone grouping is still
+    // invariant: The stored source text is gone, yet the milestone grouping is still
     // answered: it is collaboration data, not Markdown-derived, and the view
     // never reads the disposable execution projection at all.
     rmSync(join(harness, "projects/proj-a/roadmap.md"), { force: true });
     const absent = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
     expect(absent.data).toEqual(present.data);
-    // `checkedAt` is when THIS read observed, so it is the only member that
+    // why: `checkedAt` is when THIS read observed, so it is the only member that
     // moves; nothing else about the unobserved projection may change.
     const { checkedAt: _checkedAt, ...absentProjection } = absent.projection;
     const { checkedAt: _presentCheckedAt, ...presentProjection } = present.projection;
@@ -752,7 +752,7 @@ describe("read envelope and transaction", () => {
     const beforeRevision = (await withStoreRead(context, queryDashboard("issues"))).storeRevision;
     if (beforeRevision === null) throw new Error("fixture: a complete collaboration read reports its revision");
 
-    // Two questions inside one request answer from the same snapshot.
+    // note: Two questions inside one request answer from the same snapshot.
     const envelope = await withStoreRead(context, {
       view: "concurrency-probe",
       needsProjection: false,
@@ -769,7 +769,7 @@ describe("read envelope and transaction", () => {
     expect(envelope.data.second).toBe(1);
     expect(envelope.storeRevision).toBe(beforeRevision);
 
-    // A writer on its own connection moves the lane for LATER reads only.
+    // note: A writer on its own connection moves the lane for LATER reads only.
     const writer: StoreDb = concurrentWriter(dbPath);
     try {
       seedIssue(writer, { id: "I-000002", title: "after", registeredAt: "2026-09-02" });
@@ -793,7 +793,7 @@ describe("read envelope and transaction", () => {
     writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
     mkdirSync(join(dir, ".mstar"), { recursive: true });
     const context: StoreContext = { harnessDir: join(dir, ".mstar") };
-    // The issue/catalog views need collaboration; the projection views need
+    // why: The issue/catalog views need collaboration; the projection views need
     // execution. Each names its own missing lane instead of an empty result.
     await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({ code: "collaboration.not-initialized" });
     await expect(withStoreRead(context, queryIssueFlow())).rejects.toMatchObject({ code: "collaboration.not-initialized" });
@@ -806,7 +806,7 @@ describe("read envelope and transaction", () => {
       seedIssue(db, { id: "I-000001", title: "staged finding", registeredAt: "2026-09-01" });
       db.exec("update collaboration_meta set authority_state = 'staged' where id = 1");
     });
-    // A staged collaboration lane is never read authority: the refusal names
+    // invariant: A staged collaboration lane is never read authority: the refusal names
     // the lane, not the execution store it does not own.
     await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({ code: "collaboration.not-active" });
   });
@@ -825,12 +825,12 @@ describe("read envelope and transaction", () => {
         db.exec(`drop table ${table}`);
       }
     });
-    // Only the execution-reading view discloses projection health, so only it
+    // invariant: Only the execution-reading view discloses projection health, so only it
     // refuses on the missing schema.
     const failure = await withStoreRead(context, queryDashboard("workflows")).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: "projection.schema-outdated" });
     expect((failure as Error).message).toContain("mstar store upgrade --operator <name>");
-    // A pure collaboration view is answered from its own lane.
+    // note: A pure collaboration view is answered from its own lane.
     expect(await withStoreRead(context, queryDashboard("issues"))).toMatchObject({ data: { total: 0 } });
   });
 
@@ -838,7 +838,7 @@ describe("read envelope and transaction", () => {
     const { context } = await workspace("usage-");
     expect(() => queryDashboard("nope" as never)).toThrow(/unknown dashboard view/);
     await expect(withStoreRead(context, { view: "issues" } as never)).rejects.toMatchObject({ exitCode: 2 });
-    // A missing required filter is refused while the request is built, before
+    // invariant: A missing required filter is refused while the request is built, before
     // any database is opened.
     expect(() => queryDashboard("issue-detail")).toThrow();
     expect(() => queryDashboard("workflow-detail")).toThrow();
@@ -872,7 +872,7 @@ describe("issue views", () => {
 
     const full = await withStoreRead(context, queryDashboard("issues"));
     const domain = await listIssues(context, {});
-    // The domain reader attaches the observation of its own read; the dashboard
+    // why: The domain reader attaches the observation of its own read; the dashboard
     // DTO keeps the page shape and the envelope carries that observation.
     const { collaboration: domainEvidence, ...domainPage } = domain;
     expect(full.data).toEqual(domainPage);
@@ -928,7 +928,7 @@ describe("issue views", () => {
 
 describe("collaboration rollup snapshot", () => {
   /**
-   * Twelve open issues across two projects, one retired row and a lane move: the
+   * invariant: Twelve open issues across two projects, one retired row and a lane move: the
    * counts, the grouping and the preview must all name one snapshot.
    */
   async function seededRollup(name: string): Promise<StoreContext> {
@@ -958,19 +958,19 @@ describe("collaboration rollup snapshot", () => {
     expect(before.data.totalOpen).toBe(12);
     expect(before.data.bySeverity).toEqual({ critical: 3, high: 0, medium: 0, low: 3, nit: 6 });
     expect(before.data.byProject).toEqual({ "proj-a": 8, "proj-b": 4 });
-    // The preview is the panel's bounded page in the authority's own order, and
+    // invariant: The preview is the panel's bounded page in the authority's own order, and
     // it is never the count source: 12 open rows still preview 10.
     expect(before.data.recent.map((issue) => issue.id)).toEqual([
       "I-12", "I-08", "I-04", "I-10", "I-06", "I-02", "I-11", "I-09", "I-07", "I-05",
     ]);
     expect(before.data.recent.every((issue) => issue.disposition === "open")).toBe(true);
-    // One snapshot: every aggregate over the same rows agrees with the total and
+    // note: One snapshot: every aggregate over the same rows agrees with the total and
     // with the revision the envelope reports.
     expect(Object.values(before.data.bySeverity).reduce((sum, count) => sum + count, 0)).toBe(before.data.totalOpen);
     expect(Object.values(before.data.byProject).reduce((sum, count) => sum + count, 0)).toBe(before.data.totalOpen);
     expect(before.storeRevision).toBeGreaterThan(7);
 
-    // A later commit is visible only to later reads, and the lane revision moves
+    // why: A later commit is visible only to later reads, and the lane revision moves
     // together with every aggregate instead of a page joined across generations.
     const writer = concurrentWriter(resolveCollaborationLocation(context).dbPath);
     try {
@@ -997,7 +997,7 @@ describe("collaboration rollup snapshot", () => {
     expect(scoped.data.byProject).toEqual({ "proj-b": 4 });
     expect(scoped.data.recent.map((issue) => issue.projectId)).toEqual(["proj-b", "proj-b", "proj-b", "proj-b"]);
     expect(scoped.storeRevision).toBe(whole.storeRevision);
-    // The proof names the actual selection: one summary proof can never stand
+    // invariant: The proof names the actual selection: one summary proof can never stand
     // for both the repository rollup and a project filter.
     expect(whole.collaboration?.scope).toEqual({ kind: "repository", key: "open-issues:repository" });
     expect(scoped.collaboration?.scope).toEqual({ kind: "project", key: "proj-b" });
@@ -1011,7 +1011,7 @@ describe("collaboration rollup snapshot", () => {
       byProject: {},
       recent: [],
     });
-    // A blank project id is a request shape the contract does not define.
+    // note: A blank project id is a request shape the contract does not define.
     expect(() => queryOpenIssueRollup(" ")).toThrow();
   });
 
@@ -1161,7 +1161,7 @@ describe("projection views", () => {
 
     await withWrite(context, (db) => seedIssue(db, { id: "I-000001", title: "edited later", registeredAt: "2026-09-18" }));
 
-    // An issue-only read never refreshes and never opens the execution lane,
+    // invariant: An issue-only read never refreshes and never opens the execution lane,
     // so it discloses no projection observation at all.
     const issues = await withStoreRead(context, queryDashboard("issues"));
     expect(issues.data.total).toBe(1);
@@ -1574,7 +1574,7 @@ describe("collaboration creation catalog authority", () => {
   test("iteration views refuse when the collaboration catalog is unavailable", async () => {
     const { context } = await projectedWorkspace("iteration-refusal-");
     rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
-    // Membership, attribution and the subject itself are catalog facts: the
+    // invariant: Membership, attribution and the subject itself are catalog facts: the
     // read refuses instead of answering an empty page or an absent record.
     await expect(withStoreRead(context, queryDashboard("iterations"))).rejects.toMatchObject({
       code: "collaboration.not-initialized",
@@ -1628,7 +1628,7 @@ describe("collaboration creation catalog authority", () => {
     };
     const first = await createExecutionWorkflow({ harnessDir: harness, caller }, input);
     rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
-    // The lost-response retry answers from its committed execution receipt; it
+    // note: The lost-response retry answers from its committed execution receipt; it
     // no longer depends on a fresh collaboration preflight.
     const replay = await createExecutionWorkflow({ harnessDir: harness, caller }, input);
     expect(replay.replayed).toBe(true);
@@ -1638,7 +1638,7 @@ describe("collaboration creation catalog authority", () => {
 
   test("a failed required execution open leaves the collaboration lane usable", async () => {
     const { context } = await workspace("mixed-open-failure-");
-    // A damaged execution metadata record: the execution lane refuses with its own
+    // invariant: A damaged execution metadata record: the execution lane refuses with its own
     // code while the collaboration lane's state stays intact and inspectable.
     const damaged = new DatabaseSync(storeDbPath(context));
     try {
@@ -1653,7 +1653,7 @@ describe("collaboration creation catalog authority", () => {
       execution: "required" as const,
       run: () => ({ data: 0 }),
     };
-    // The collaboration handle opens first; the required execution open then
+    // invariant: The collaboration handle opens first; the required execution open then
     // fails. Repeating the failed read must not accumulate handles, so the lane
     // stays readable afterwards.
     for (const attempt of [1, 2, 3]) {
@@ -1671,7 +1671,7 @@ describe("collaboration read boundary", () => {
   test("a pure collaboration view never opens the execution lane", async () => {
     const { context } = await workspace("boundary-pure-");
     await withWrite(context, (db) => seedIssue(db, { id: "I-1", title: "only collaboration", registeredAt: "2026-09-01" }));
-    // Remove the execution lane entirely: a collaboration-only view must still
+    // invariant: Remove the execution lane entirely: a collaboration-only view must still
     // answer, while an execution view names the lane it could not open.
     rmSync(storeDbPath(context), { force: true });
     const issues = await withStoreRead(context, queryDashboard("issues"));
@@ -1687,7 +1687,7 @@ describe("collaboration read boundary", () => {
     const { context } = await projectedWorkspace("boundary-optional-");
     rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
     const envelope = await withStoreRead(context, queryDashboard("workflows"));
-    // The execution rows still answer, the catalog association is disclosed as
+    // note: The execution rows still answer, the catalog association is disclosed as
     // unavailable, and no collaboration counter is claimed as zero.
     expect(envelope.data.items.map((item) => item.id)).toEqual(["wf-read"]);
     expect(envelope.data.items[0]?.catalog).toBeNull();
@@ -1712,7 +1712,7 @@ describe("collaboration read boundary", () => {
       code: "catalog.discovery.missing-plan",
       scope: { kind: "project", key: "proj-a" },
     });
-    // A partial snapshot still reports the revision it read at.
+    // note: A partial snapshot still reports the revision it read at.
     expect(envelope.storeRevision).not.toBeNull();
   });
 });
@@ -1725,7 +1725,7 @@ describe("collaboration projection sources", () => {
     expect(capture.catalogRevision).toBeGreaterThan(0);
     expect(capture.executionRevision).toBeGreaterThan(0);
 
-    // Move the catalog: only the collaboration revision may follow it.
+    // note: Move the catalog: only the collaboration revision may follow it.
     await updateCatalogEntity(context, { kind: "plan", id: "wf-read" }, { title: "Renamed" }, planRevision, op("rename-source"));
     const moved = await captureProjectionSources(context);
     expect(moved.catalogRevision).toBe((capture.catalogRevision ?? 0) + 1);

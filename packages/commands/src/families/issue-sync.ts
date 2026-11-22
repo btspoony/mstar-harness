@@ -253,11 +253,11 @@ type Target = {
   projectId: string;
   bindingId: string;
   harnessDir: string;
-  /** The `.mstarc` connection facts this command resolved. */
+  /** note: The `.mstarc` connection facts this command resolved. */
   linear: LinearBinding;
-  /** The binding row the collaboration lane holds, revision included. */
+  /** note: The binding row the collaboration lane holds, revision included. */
   project: ProjectBinding;
-  /** Where the `.mstarc` was read: the under-lock comparison re-reads it here. */
+  /** note: Where the `.mstarc` was read: the under-lock comparison re-reads it here. */
   repoRoot: string;
   remoteProject: string;
   identity: { repo: string; author: string };
@@ -330,7 +330,7 @@ function pushContextFor(target: Target, runId: string | undefined): PushContext 
   };
 }
 
-/** The binding row as the collaboration lane holds it; the mirror's only binding source. */
+/** note: The binding row as the collaboration lane holds it; the mirror's only binding source. */
 const BINDING_SQL =
   "select project_id, provider, workspace, team, remote_project, revision, updated_at from project_bindings where project_id = ?";
 
@@ -357,7 +357,7 @@ function bindingOn(db: StoreDb, projectId: string): ProjectBinding | null {
   return row === undefined ? null : bindingOf(row);
 }
 
-/** The resolved binding, read through the collaboration read handle. */
+/** note: The resolved binding, read through the collaboration read handle. */
 async function collaborationBinding(harnessDir: string, projectId: string): Promise<ProjectBinding | null> {
   const handle = await openCollaborationStore({ harnessDir }, "read");
   try {
@@ -367,18 +367,18 @@ async function collaborationBinding(harnessDir: string, projectId: string): Prom
   }
 }
 
-/** The binding row's facts, as one comparable line. */
+/** note: The binding row's facts, as one comparable line. */
 function projectStampOf(binding: ProjectBinding): string {
   return JSON.stringify([binding.provider, binding.workspace, binding.team, binding.remoteProject, binding.revision]);
 }
 
-/** The `.mstarc` connection facts, including the facet mapping they resolve to. */
+/** note: The `.mstarc` connection facts, including the facet mapping they resolve to. */
 function linearStampOf(linear: LinearBinding): string {
   return JSON.stringify([linear.enabled, linear.mode, linear.workspace, linear.team, linear.repo, linear.mapping]);
 }
 
 /**
- * The complete destination one run is opened under: the collaboration generation
+ * invariant: The complete destination one run is opened under: the collaboration generation
  * it belongs to, the marker identity its payloads carry, the repository's effective
  * `[linear]` connection, and the project binding row. A run's proof is this whole
  * line, so a changed workspace, a different mapping, a changed git author or
@@ -422,7 +422,7 @@ async function syncWrite<T>(
   });
 }
 
-/** Refuse when the binding this command resolved is no longer the binding in force. */
+/** invariant: Refuse when the binding this command resolved is no longer the binding in force. */
 function requireBindingUnderLock(db: StoreDb, target: Target): void {
   const current = bindingOn(db, target.projectId);
   if (current === null) {
@@ -958,7 +958,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       else if (outcome.outcome === "unconfirmed") report.counts.unconfirmed += 1;
       else report.counts.refused += 1;
     }
-    // The run ends in the commit that recorded its results, and only when this
+    // invariant: The run ends in the commit that recorded its results, and only when this
     // invocation owns it (exact named run, takeover, or a run it acquired): a lease
     // merely borrowed by an operator-only batch belongs to its holder. A batch that
     // refuses before this point rolls back whole, so the run a `pending` opened stays

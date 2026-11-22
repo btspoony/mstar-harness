@@ -244,7 +244,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/** What the collaboration authority says about a register target: `retired` =
+/** invariant: What the collaboration authority says about a register target: `retired` =
  * ACTIVE lane (the register is migration history), `unavailable` = the lane is
  * missing, staged or unreadable and the write fails closed. A missing or staged
  * lane is never a pre-activation permission. */
@@ -252,7 +252,7 @@ type AuthorityRoute =
   | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
-/** The authority answers from the ACTIVE collaboration lane: the runtime floor is
+/** invariant: The authority answers from the ACTIVE collaboration lane: the runtime floor is
  * asserted on the ACTUAL runtime (`detectStoreRuntime` — the Bun global first,
  * never Bun's emulated `process.versions.node`), then the lane's own probe
  * decides. No execution-store read takes part in this verdict. */
@@ -279,7 +279,7 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** The harness root of the register a write LANDS on (stricter-wins veto): the
+/** note: The harness root of the register a write LANDS on (stricter-wins veto): the
  * landed destination is the authority the bytes belong to, even when the
  * caller's own path already classified as a register elsewhere. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {

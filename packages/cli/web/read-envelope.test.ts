@@ -76,7 +76,7 @@ describe("a list read is one snapshot", () => {
   });
 
   test("pages from a replaced authority are refused even when the counters match", async () => {
-    // Both pages report the same numeric revisions; only the collaboration
+    // note: Both pages report the same numeric revisions; only the collaboration
     // authority identity changed, which the old counter comparison could not see.
     let requests = 0;
     const fetchImpl = (async (url: string) => {
@@ -101,7 +101,7 @@ describe("a list read is one snapshot", () => {
       return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
     const result = await readAllListPages(fetchImpl, path);
-    // The pass that straddled two authorities was discarded and the list was
+    // note: The pass that straddled two authorities was discarded and the list was
     // read again: the rows are one delivery, not a splice.
     if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
     expect(result.envelope.data.items).toHaveLength(COUNT);
@@ -109,7 +109,7 @@ describe("a list read is one snapshot", () => {
   });
 
   test("a normal multi-page list is joined without a restart", async () => {
-    // The engine's paged scope key names the page (`:limit:offset`); pages of
+    // invariant: The engine's paged scope key names the page (`:limit:offset`); pages of
     // one stable source must be treated as one list, not as a data change.
     let requests = 0;
     const fetchImpl = (async (url: string) => {
@@ -142,9 +142,9 @@ describe("a list read is one snapshot", () => {
       "I-3",
       "I-4",
     ]);
-    // One pass, three pages: no restart and no refusal.
+    // note: One pass, three pages: no restart and no refusal.
     expect(requests).toBe(3);
-    // The assembled list still records where it came from, bounds included.
+    // note: The assembled list still records where it came from, bounds included.
     expect(result.envelope.collaboration?.scope.key).toBe(`assembled:issues:*:open:*:*:${PAGE}:0`);
   });
 
@@ -208,7 +208,7 @@ describe("a list read is one snapshot", () => {
 });
 
 describe("pagination source stamp", () => {
-  /** A list server whose epoch, or projection health, moves once at the second request. */
+  /** note: A list server whose epoch, or projection health, moves once at the second request. */
   function stamped(move: "epoch" | "freshness") {
     let requests = 0;
     const fetchImpl = (async (url: string) => {
@@ -218,7 +218,7 @@ describe("pagination source stamp", () => {
       const items = Array.from({ length: COUNT }, (_, index) => ({ id: `I-${index}` })).slice(offset, offset + PAGE);
       const envelope = {
         data: { items, total: COUNT },
-        // Identical numeric counters on both pages: only the source stamp moves.
+        // note: Identical numeric counters on both pages: only the source stamp moves.
         storeRevision: 3,
         catalogRevision: 2,
         projection: {
@@ -250,7 +250,7 @@ describe("pagination source stamp", () => {
     const { fetchImpl, requests } = stamped("epoch");
     const result = await readAllListPages(fetchImpl, path);
     if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
-    // The straddling pass was discarded and the list reread from offset 0.
+    // note: The straddling pass was discarded and the list reread from offset 0.
     expect(result.envelope.data.items).toHaveLength(COUNT);
     expect(requests()).toBe(5);
   });
@@ -259,7 +259,7 @@ describe("pagination source stamp", () => {
     const { fetchImpl, requests } = stamped("freshness");
     const result = await readAllListPages(fetchImpl, path);
     if (result.status !== "ready") throw new Error(`expected ready, got ${result.message}`);
-    // The assembled list states the health it was finally read under.
+    // note: The assembled list states the health it was finally read under.
     expect(result.envelope.projection.freshness).toBe("stale");
     expect(requests()).toBe(5);
   });

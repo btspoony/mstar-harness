@@ -40,7 +40,7 @@ const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
 /**
- * The collaboration store is user-level, so the resolver's home must be this
+ * invariant: The collaboration store is user-level, so the resolver's home must be this
  * fixture and never the operator's.
  */
 let homeSpy: { mockRestore(): void } | undefined;
@@ -53,7 +53,7 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** A synthetic checkout whose git origin names the collaboration authority. */
+/** note: A synthetic checkout whose git origin names the collaboration authority. */
 function context(name: string): StoreContext {
   const checkoutRoot = mkdtempSync(join(ROOT, name));
   execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
@@ -68,7 +68,7 @@ function context(name: string): StoreContext {
   return { harnessDir, checkoutRoot };
 }
 
-/** Publish the staged lane and this checkout's binding, as real activation does. */
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -90,7 +90,7 @@ function activate(context: StoreContext): void {
 }
 
 /**
- * The ledger fixture: one active collaboration authority holding the project row
+ * why: The ledger fixture: one active collaboration authority holding the project row
  * and the three local issues a binding can address. `db` is the case's own
  * writable connection for seeding and assertions; the TRANSPORT owns the ledger
  * transaction, so a case that needs one opens it with `withSyncWrite`.
@@ -100,7 +100,7 @@ async function openedStore(name: string): Promise<{ context: StoreContext; db: S
   const location = resolveCollaborationLocation(storeContext);
   await initializeCollaborationStore(location);
   activate(storeContext);
-  // A fixture connection, not a lane writer: it keeps the lane's rollback journal
+  // why: A fixture connection, not a lane writer: it keeps the lane's rollback journal
   // so the store stays admissible to `withSyncWrite`.
   const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
   db.prepare(
@@ -298,7 +298,7 @@ describe("transaction ownership (the collaboration writer owns the transaction)"
     await expect(
       withSyncWrite(store, (guarded) => guarded.prepare("commit").run()),
     ).rejects.toMatchObject({ code: "store.corrupt" });
-    // Neither refusal wrote anything.
+    // note: Neither refusal wrote anything.
     expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
     expect(receiptCount(db)).toBe(0);
     close();
@@ -340,7 +340,7 @@ describe("collaboration mirror binding", () => {
       (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
     expect(revisionOf()).toBe(0);
 
-    // Three plans in ONE transaction: the batch is one committed effect, so the
+    // why: Three plans in ONE transaction: the batch is one committed effect, so the
     // counter advances once — not once per verb.
     const planned = await withSyncWrite(store, (guarded) => [
       planItem(guarded, PLAN),
@@ -350,7 +350,7 @@ describe("collaboration mirror binding", () => {
     expect(revisionOf()).toBe(1);
     expect(planned.map((item) => item.itemState)).toEqual(["pending", "pending", "pending"]);
 
-    // A batch that only replays those receipts changed nothing.
+    // note: A batch that only replays those receipts changed nothing.
     const replayed = await withSyncWrite(store, (guarded) => [
       planItem(guarded, PLAN),
       planItem(guarded, { ...PLAN, localId: "I-000302", externalId: "EXT-2", operationId: "op-binding-plan-2" }),
@@ -397,7 +397,7 @@ describe("collaboration mirror binding", () => {
     ]);
     expect(receiptCount(db)).toBe(3);
 
-    // The second item's row updates and then its receipt insert fails. A per-item
+    // invariant: The second item's row updates and then its receipt insert fails. A per-item
     // catch would report that as a refusal and commit the row without its receipt;
     // the batch must abort and roll back instead.
     const context = { ...push, runId };
@@ -414,7 +414,7 @@ describe("collaboration mirror binding", () => {
       { local_id: "I-000302", item_state: "pending" },
       { local_id: "I-000303", item_state: "pending" },
     ]);
-    // No receipt beyond the three claims, and no revision advance for the rolled-back batch.
+    // note: No receipt beyond the three claims, and no revision advance for the rolled-back batch.
     expect(receiptCount(db)).toBe(3);
     expect(
       (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision,

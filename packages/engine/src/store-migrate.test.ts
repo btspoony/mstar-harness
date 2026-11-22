@@ -26,7 +26,7 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = join(ROOT, "lane-home");
 mkdirSync(LANE_HOME, { recursive: true });
 let laneHomeSpy: { mockRestore(): void } | undefined;
@@ -42,7 +42,7 @@ type Fixture = { context: StoreContext; harness: string; checkout: string };
 let repoSequence = 0;
 
 /**
- * A temp workspace with a real `.mstar` harness root and NO database: a Git
+ * why: A temp workspace with a real `.mstar` harness root and NO database: a Git
  * main worktree with an explicit origin-less repository identity and the
  * selected collaboration mode, so the lane resolves like a real operator's.
  */
@@ -55,7 +55,7 @@ function freshWorkspace(name: string): Fixture {
   return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, checkout };
 }
 
-/** The lane this fixture's reviewed import stages into. */
+/** note: The lane this fixture's reviewed import stages into. */
 function laneLocation(context: StoreContext) {
   return resolveCollaborationLocation(context);
 }
@@ -338,7 +338,7 @@ import { initializeStore, openStore } from "./store-db.js";
 import { captureIssue } from "./issue.js";
 
 /**
- * One read-only query against the collaboration lane the reviewed import
+ * invariant: One read-only query against the collaboration lane the reviewed import
  * stages into. The lane is the issue/catalog authority, so every applied-row
  * assertion reads it, never the checkout's execution store.
  */
@@ -350,7 +350,7 @@ async function laneRow(context: StoreContext, sql: string, ...params: Array<stri
   return readCollaborationStage(laneLocation(context), ({ db }) => db.prepare(sql).get(...params) as Record<string, unknown> | undefined);
 }
 
-/** The lane's own `collaboration_meta` projection. */
+/** note: The lane's own `collaboration_meta` projection. */
 async function laneMeta(context: StoreContext): Promise<{ authority_state: string; revision: number; catalog_revision: number }> {
   const row = await laneRow(context, "select authority_state, revision, catalog_revision from collaboration_meta where id = 1");
   if (
@@ -414,10 +414,10 @@ describe("store-migrate apply", () => {
     expect(receipt.counts.open).toBe(2);
     expect(receipt.counts.closed).toBe(1);
 
-    // The receipt's persistent ID mapping matches the applied lane rows exactly.
+    // invariant: The receipt's persistent ID mapping matches the applied lane rows exactly.
     const issues = await laneRows(context, "select id, project_id, disposition, severity from issues order by id");
     expect(issues.map((row) => row.id)).toEqual(receipt.issueIds.map((entry) => entry.issueId).sort());
-    // One capture occurrence per row; the closed row also carries its single
+    // note: One capture occurrence per row; the closed row also carries its single
     // imported terminal transition.
     expect(await laneRows(context, "select id from occurrences where imported = 1")).toHaveLength(3);
     expect(await laneRows(context, "select distinct origin from provenance where kind='migration'")).toEqual([{ origin: "unscoped" }]);
@@ -425,19 +425,19 @@ describe("store-migrate apply", () => {
     expect(transitions).toHaveLength(1);
     expect(transitions[0]!.to_disposition).toBe("resolved");
     expect(transitions[0]!.occurred_at).toBe("2026-09-02");
-    // The lane stays staged and the catalog half imported.
+    // note: The lane stays staged and the catalog half imported.
     const meta = await laneMeta(context);
     expect(meta.authority_state).toBe("staged");
     expect(receipt.counts.catalogEntities).toBe(manifest.catalog.entities.length);
     expect(manifest.catalog.entities.length).toBeGreaterThan(0);
     expect(meta.catalog_revision).toBeGreaterThan(0);
-    // The counter sits past the deterministic first allocation (§3).
+    // note: The counter sits past the deterministic first allocation (§3).
     const counter = (await laneRows(context, "select next_value from issue_counter"))[0] as { next_value: number };
     expect(counter.next_value).toBeGreaterThan(3);
-    // One phase row records the applied manifest + mapping.
+    // note: One phase row records the applied manifest + mapping.
     const phases = await laneRows(context, "select operation_id from collaboration_operations where operation_id like 'migration:applied:%'");
     expect(phases).toHaveLength(1);
-    // The checkout's execution store was never created or written.
+    // invariant: The checkout's execution store was never created or written.
     expect(existsSync(join(harness, "store.db"))).toBe(false);
 
     // Exact rerun of the identical manifest: replay returns the same IDs and
@@ -524,7 +524,7 @@ describe("store-migrate apply", () => {
     expect(dbFilesUnder(blocked.harness)).toEqual([]);
     expect(existsSync(laneLocation(blocked.context).dbPath)).toBe(false);
 
-    // A store that still owns collaboration rows IS the authority for them:
+    // invariant: A store that still owns collaboration rows IS the authority for them:
     // reimporting registers would mint a second one, so the transport refuses
     // with the cutover route and writes nothing (not even a lane).
     const { context, manifest } = await createStagedApplyFixture("active-guard-");
@@ -546,7 +546,7 @@ describe("store-migrate apply", () => {
   });
 
   test("apply stages the lane beside a pristine execution store and never writes that store", async () => {
-    // A checkout that ran `store init` first holds a fresh, empty execution
+    // note: A checkout that ran `store init` first holds a fresh, empty execution
     // store. It is not a staging area: the reviewed import stages the LANE and
     // leaves those bytes alone.
     const fixture = freshWorkspace("pristine-store-");
@@ -564,7 +564,7 @@ describe("store-migrate apply", () => {
     expect(readFileSync(join(fixture.harness, "store.db"))).toEqual(storeBytes);
     expect(await laneRows(fixture.context, "select id from issues")).toHaveLength(1);
 
-    // A published lane is never reopened for a reimport: that would be a second
+    // invariant: A published lane is never reopened for a reimport: that would be a second
     // activation of the same authority.
     const promoted = await readCollaborationStage(laneLocation(fixture.context), ({ authority }) => authority);
     expect(promoted.state).toBe("staged");
@@ -572,7 +572,7 @@ describe("store-migrate apply", () => {
   });
 
   test("apply refuses an already published lane and a lane staged by the reviewed cutover", async () => {
-    // P1: the authority is already published. A file-era reimport is never a
+    // invariant: P1: the authority is already published. A file-era reimport is never a
     // second activation, so the transport refuses by name and writes nothing.
     const published = await createStagedApplyFixture("lane-published-");
     const first = await applyStoreMigration(published.context, published.manifest);
@@ -591,7 +591,7 @@ describe("store-migrate apply", () => {
     expect(after.phases).toHaveLength(1);
     void first;
 
-    // P2: the lane is staged by the reviewed CUTOVER, whose target belongs to
+    // invariant: P2: the lane is staged by the reviewed CUTOVER, whose target belongs to
     // that manifest — never to a file-era register import.
     const cutover = await createStagedApplyFixture("lane-cutover-staged-");
     const location = laneLocation(cutover.context);
@@ -612,11 +612,11 @@ describe("store-migrate apply", () => {
 
   test("apply never writes a fenced combined source", async () => {
     const { context, manifest } = await createStagedApplyFixture("fenced-source-");
-    // The pre-cutover combined store this fence belongs to.
+    // note: The pre-cutover combined store this fence belongs to.
     (await initializeStore(context)).close();
     const handle = await openStore(context, "write");
     try {
-      // The fence record migration 20 created, written on a store whose combined
+      // note: The fence record migration 20 created, written on a store whose combined
       // collaboration tables are its pre-cutover image.
       handle.db
         .prepare(
@@ -630,7 +630,7 @@ describe("store-migrate apply", () => {
     }
 
     await expect(applyStoreMigration(context, manifest)).rejects.toMatchObject({ code: "collaboration.cutover-conflict" });
-    // The fence record and its pre-fence image reference are untouched, and no
+    // note: The fence record and its pre-fence image reference are untouched, and no
     // lane was created beside the fenced source.
     expect(existsSync(laneLocation(context).dbPath)).toBe(false);
     const reader = await openStore(context, "read");
@@ -707,7 +707,7 @@ describe("store-migrate apply", () => {
       expect((error as Error).message).toContain("induced migration failure");
     }
 
-    // No partial state survived: no issues, no phase row, counter and revision
+    // note: No partial state survived: no issues, no phase row, counter and revision
     // untouched — the lane transaction rolled back as one unit.
     expect(await laneRows(context, "select id from issues")).toEqual([]);
     expect(await laneRows(context, "select operation_id from collaboration_operations where operation_id like 'migration:%'")).toEqual([]);
@@ -754,7 +754,7 @@ describe("store-migrate apply", () => {
       expect((error as { code?: string }).code).toBe("collaboration.not-active");
     }
 
-    // The migration wrote nothing back into the live registers: the reviewed
+    // invariant: The migration wrote nothing back into the live registers: the reviewed
     // register still holds exactly the findings it held before the apply, so
     // the staged lane has not become the issue authority.
     const live = JSON.parse(readFileSync(join(harness, "projects", "_default", "residuals.json"), "utf8")) as {
@@ -916,7 +916,7 @@ describe("store-migrate apply", () => {
     );
     expect(row?.title).toBe("Renamed after review");
     expect(row?.severity).toBe("low");
-    // The persistent ID and the revision survive: only the migration-owned
+    // note: The persistent ID and the revision survive: only the migration-owned
     // columns reconciled.
     expect(row?.id).toBe(originalId);
     expect(row?.revision).toBe(1);

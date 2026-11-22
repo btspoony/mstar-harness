@@ -107,7 +107,7 @@ export type CatalogExecutionReceipt = {
   /** Retained on historical journal receipts; ACTIVE registration returns false. */
   recovered: boolean;
   /**
-   * Scoped warnings of a REPLAY, when the committed collaboration effect's
+   * invariant: Scoped warnings of a REPLAY, when the committed collaboration effect's
    * acknowledgement could not be confirmed. Both business effects are committed
    * either way; the warning names what a replay can (or cannot) repair.
    */
@@ -1003,11 +1003,11 @@ export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: strin
 }
 
 /**
- * Async handle-taking gate. Its remaining caller is OUTSIDE this change's Files
+ * why: Async handle-taking gate. Its remaining caller is OUTSIDE this change's Files
  * list — `packages/dsh/src/gates/workflow-selection.ts` — so the wrapper stays
  * for that boundary rather than being cut here.
  */
-// T21: dsh workflow-selection gate still calls this wrapper.
+// note: T21: dsh workflow-selection gate still calls this wrapper.
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {

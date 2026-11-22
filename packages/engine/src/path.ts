@@ -986,7 +986,7 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
 }
 
 /**
- * Catalog writes live on the per-repository collaboration authority, so a
+ * invariant: Catalog writes live on the per-repository collaboration authority, so a
  * checkout whose scope has no resolvable origin or no active store yet has
  * nothing to register into: scaffold creates the harness and leaves the
  * catalog row to the store lifecycle. Only those harmless absence states defer

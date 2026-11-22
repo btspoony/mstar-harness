@@ -1,5 +1,5 @@
 /**
- * Store-authority route (issue-governance cutover G4b; plan QC fix wave FW-1)
+ * invariant: Store-authority route (issue-governance cutover G4b; plan QC fix wave FW-1)
  * — the dsh copy of the authority classification the omp `tool_call` gate
  * (`packages/omp/src/hooks/pre/mstar-gates.ts` Gate 1b) and the ZCode
  * PreToolUse write gate (`hooks/src/mstar-write-gate.ts`) implement. Residual
@@ -97,7 +97,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === '' ? 'store.authority-unreadable' : code, message }
 }
 
-/** A staged, absent or unreadable collaboration lane never authorizes a
+/** invariant: A staged, absent or unreadable collaboration lane never authorizes a
  * register write: `legacy` is no longer a verdict (the collaboration authority
  * is the only findings authority since cutover). */
 type AuthorityRoute =
@@ -137,7 +137,7 @@ async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWri
   }
 }
 
-/** The harness root of the register a write LANDS on through a symlink alias
+/** note: The harness root of the register a write LANDS on through a symlink alias
  * (stricter-wins veto): the landed destination is the authority the bytes
  * belong to even when the caller's own path already classified as a register
  * elsewhere — classified by the exact-case marker probe first, then the FW-3

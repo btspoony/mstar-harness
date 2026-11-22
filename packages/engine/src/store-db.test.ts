@@ -58,7 +58,7 @@ const BUNDLE = join(ROOT, "dist", "store-test-runtime.mjs");
 const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
 let bundleError = "";
 
-/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = join(ROOT, "lane-home");
 mkdirSync(LANE_HOME, { recursive: true });
 let retiredClaimSequence = 0;
@@ -1525,7 +1525,7 @@ describe("store-db publication makes the canonical directory entry durable", () 
   }, 60_000);
 
   test("a public upgrade never publishes a staged file-era import, and completes once it is activated", async () => {
-    // A file-era checkout: legacy registers are the issue authority, the
+    // invariant: A file-era checkout: legacy registers are the issue authority, the
     // reviewed apply stages the LANE, and nothing has published it yet. The
     // execution upgrade must neither write that lane nor claim its activation.
     const dir = mkdtempSync(join(ROOT, "barrier-staged-legacy-"));
@@ -1567,10 +1567,10 @@ describe("store-db publication makes the canonical directory entry durable", () 
     const sourceBytes = readFileSync(join(projectsDir, "residuals.json"));
     const stagedIssues = (await laneState()).issues;
     expect(stagedIssues).toContainEqual(expect.objectContaining({ title: "Staged legacy residual" }));
-    // No execution store was created by the import.
+    // note: No execution store was created by the import.
     expect(existsSync(join(harnessDir, "store.db"))).toBe(false);
 
-    // The execution upgrade refuses the unpublished lane by name and writes
+    // invariant: The execution upgrade refuses the unpublished lane by name and writes
     // nothing at all.
     const refusal = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-authority-upgrade" }).then(
       () => null,
@@ -1580,7 +1580,7 @@ describe("store-db publication makes the canonical directory entry durable", () 
     expect((await laneState()).state).toBe("staged");
     expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
 
-    // Once the reviewed activation publishes it, the SAME public entry really
+    // invariant: Once the reviewed activation publishes it, the SAME public entry really
     // finishes — and the staged rows it now owns are exactly as imported.
     await activateStore(context, applied, {
       version: ACTIVATION_PROTOCOL_VERSION,
@@ -1670,7 +1670,7 @@ function retiredClaimStore(
   claims: ReadonlyArray<{ workflowId: string; holder: string; claimedAt?: string }>,
 ): { context: StoreContext; workflowIds: string[] } {
   const dir = mkdtempSync(join(ROOT, `retired-claims-${name}-`));
-  // The settlement runs through `store.upgrade`, which owns the checkout's
+  // note: The settlement runs through `store.upgrade`, which owns the checkout's
   // collaboration authority too: the fixture is a real origin-less checkout.
   execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${retiredClaimSequence++}\n`);
@@ -1992,7 +1992,7 @@ describe("migration 18 - the run lease", () => {
 describe("migration 20 - the cutover fence preserves catalog pins", () => {
   test("a schema-19 store with existing pins upgrades without losing them and refuses an old reader", async () => {
     const dir = mkdtempSync(join(ROOT, "cutover-pins-upgrade-"));
-    // A store written by the pre-cutover schema, its catalog pins populated
+    // note: A store written by the pre-cutover schema, its catalog pins populated
     // BEFORE the upgrade.
     const before = historicalStore(dir, 19);
     before.prepare(
@@ -2034,7 +2034,7 @@ describe("migration 20 - the cutover fence preserves catalog pins", () => {
       .prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`)
       .all();
     expect(pinsBefore).toHaveLength(2);
-    // The pre-cutover pin still carries its cross-domain catalog foreign key
+    // note: The pre-cutover pin still carries its cross-domain catalog foreign key
     // (one composite key, reported as one row per column).
     expect(
       (before.prepare("pragma foreign_key_list(catalog_execution_bindings)").all() as Array<{
@@ -2054,7 +2054,7 @@ describe("migration 20 - the cutover fence preserves catalog pins", () => {
     try {
       const { db } = upgraded;
       expect(upgraded.schemaVersion).toBe(MIGRATIONS.length);
-      // Same columns, same rows, same values: the pin is untouched.
+      // note: Same columns, same rows, same values: the pin is untouched.
       expect(
         (db.prepare("pragma table_info(catalog_execution_bindings)").all() as Array<{ name?: unknown }>).map(
           (column) => column.name,
@@ -2063,20 +2063,20 @@ describe("migration 20 - the cutover fence preserves catalog pins", () => {
       expect(
         db.prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`).all(),
       ).toEqual(pinsBefore);
-      // The portable catalog identity (now living in the collaboration lane) is
+      // note: The portable catalog identity (now living in the collaboration lane) is
       // untouched by the migration that detaches the pin's foreign key.
       expect(db.prepare("select kind, id, revision from catalog_entities order by kind").all()).toEqual([
         { kind: "iteration", id: "iteration-pin", revision: 2 },
         { kind: "plan", id: "plan-pin", revision: 4 },
       ]);
-      // The cross-domain constraint is gone and no row violates anything else.
+      // note: The cross-domain constraint is gone and no row violates anything else.
       expect(db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toEqual([]);
       expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
-      // The fence ledger arrives empty: a store that never ran the cutover
+      // invariant: The fence ledger arrives empty: a store that never ran the cutover
       // reports no fence at all.
       expect(db.prepare("select count(*) as n from collaboration_cutover").get()).toEqual({ n: 0 });
 
-      // An OLD reader - the pre-cutover migration prefix - refuses this file
+      // invariant: An OLD reader - the pre-cutover migration prefix - refuses this file
       // instead of reopening it with the pin's foreign key assumed.
       let oldReader: { code?: string; details?: Record<string, unknown> } = {};
       try {
@@ -2095,7 +2095,7 @@ describe("migration 20 - the cutover fence preserves catalog pins", () => {
       upgraded.close();
     }
 
-    // The ordinary open path still refuses a damaged applied set as designed.
+    // invariant: The ordinary open path still refuses a damaged applied set as designed.
     const tampered = new DatabaseSync(join(dir, "store.db"));
     try {
       tampered.exec("delete from schema_version where version = 10");

@@ -50,7 +50,7 @@ function context(harnessDir: string, effects: CommandEffects): InvocationContext
 }
 
 /**
- * A harness on BOTH lanes: the execution authority plus the active
+ * why: A harness on BOTH lanes: the execution authority plus the active
  * collaboration authority of a synthetic checkout, so the seeded catalog and
  * workflow rows are served from their own sources.
  */

@@ -497,7 +497,7 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const handle = await initializeStore(context);
     handle.close();
     await initializeCollaborationStore(resolveCollaborationLocation(context));
-    // The issue authority is the repository lane: a torn copy of ITS database
+    // invariant: The issue authority is the repository lane: a torn copy of ITS database
     // is the failure the rollup must surface, never a zeroed success.
     writeText(resolveCollaborationLocation(context).dbPath, "this is not a SQLite database");
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
@@ -516,7 +516,7 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const context = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
-    // A created-but-never-published lane is staged: no ACTIVE record, so no
+    // invariant: A created-but-never-published lane is staged: no ACTIVE record, so no
     // issue read may pass through it.
     await initializeCollaborationStore(resolveCollaborationLocation(context));
 

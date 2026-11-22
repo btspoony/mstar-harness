@@ -2568,7 +2568,7 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       expect(envelope(dry).status).toBe("ok");
       expect(decisionRows(dry)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
 
-      // A recovery point of that valid legacy store, then only review_base broken.
+      // note: A recovery point of that valid legacy store, then only review_base broken.
       // `store backup` publishes a VERIFIED PAIR (manifest + per-domain images
       // beside it): the restore consumer takes the execution image, not the
       // manifest path.
@@ -2576,7 +2576,7 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       const backup = runCli(["store", "backup", "--harness", fx.root, "--out", point], fx.root);
       expect(backup.exitCode, backup.stdout).toBe(0);
       const backupReceipt = (JSON.parse(backup.stdout) as { data?: { manifestPath?: string; execution?: { backupPath?: string } } }).data;
-      // The pair publishes the execution image as a SAFE SIBLING of the manifest.
+      // note: The pair publishes the execution image as a SAFE SIBLING of the manifest.
       const executionImage = backupReceipt?.manifestPath && backupReceipt.execution?.backupPath
         ? join(dirname(backupReceipt.manifestPath), backupReceipt.execution.backupPath)
         : undefined;

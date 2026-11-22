@@ -1,5 +1,5 @@
 /**
- * collaboration identity -- canonical Git origin to repository key, explicit
+ * note: collaboration identity -- canonical Git origin to repository key, explicit
  * collaboration mode and user-level database path.
  *
  * Every case builds a synthetic checkout under the temp root; no case reads the
@@ -23,7 +23,7 @@ mkdirSync(HOME);
 let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(() => {
-  // The store entry points keep their locked signatures (no userHome option),
+  // why: The store entry points keep their locked signatures (no userHome option),
   // so the isolated home is installed at the runtime boundary they call.
   homeSpy = spyOn(nodeOs, "homedir").mockReturnValue(HOME);
 });
@@ -60,7 +60,7 @@ function resolveAt(root: string) {
   return resolveCollaborationLocation(contextAt(root), { userHome: HOME });
 }
 
-/** Flip a staged record to active: this plan ships no public activator. */
+/** note: Flip a staged record to active: this plan ships no public activator. */
 function activateStaged(dbPath: string): void {
   const db = new DatabaseSync(dbPath);
   try {
@@ -136,7 +136,7 @@ describe("collaboration identity", () => {
   });
 
   test("a linked worktree reads the main checkout config and origin", () => {
-    // `.mstarc` stays untracked so the linked worktree has none of its own.
+    // why: `.mstarc` stays untracked so the linked worktree has none of its own.
     const main = makeRepo("git@github.com:acme/widgets.git", "[collaboration]\nmode=mirror\n");
     git(main, "commit", "-qm", "empty", "--allow-empty");
     const worktree = join(ROOT, `worktree-${sequence++}`);
@@ -178,7 +178,7 @@ describe("collaboration identity", () => {
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
 
-    // A present but invalid origin never masquerades as an origin-less checkout.
+    // invariant: A present but invalid origin never masquerades as an origin-less checkout.
     const withId = refusal(() => resolveAt(makeRepo("/local/path/to/repo", "[collaboration]\nmode=local\nrepo_id=team-repo\n")));
     expect(withId.code).toBe("collaboration.repo-identity-unresolved");
 
@@ -240,10 +240,10 @@ describe("collaboration identity", () => {
       const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
-    // DNS terminal-dot spelling is the same host, not a second namespace.
+    // note: DNS terminal-dot spelling is the same host, not a second namespace.
     const dotted = resolveAt(makeRepo("git@Git.Example.com.:team/repo.git", "[collaboration]\nmode=local\n"));
     expect(dotted.repoKey).toBe("git.example.com/team/repo");
-    // Only a URL port may qualify a host.
+    // note: Only a URL port may qualify a host.
     const ported = resolveAt(makeRepo("ssh://git@git.example.com:2222/team/repo.git", "[collaboration]\nmode=local\n"));
     expect(ported.repoKey).toBe("git.example.com~2222/team/repo");
   });
@@ -254,7 +254,7 @@ describe("collaboration identity", () => {
       "https://git.example.com/a/%2e%2e/team/repo.git",
       "https://git.example.com/%2E/team/repo.git",
       "git@git.example.com:a/../team/repo.git",
-      // A backslash is a URL path separator, so it must not hide `..` from the
+      // invariant: A backslash is a URL path separator, so it must not hide `..` from the
       // raw check; this one used to resolve to git.example.com/team/repo.
       "https://git.example.com/a\\..\\team/repo.git",
       "https://git.example.com\\..\\team/repo.git",
@@ -262,7 +262,7 @@ describe("collaboration identity", () => {
       const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
-    // A dot inside a name is not a dot segment.
+    // note: A dot inside a name is not a dot segment.
     const dotted = resolveAt(makeRepo("https://git.example.com/team/my.repo.git", "[collaboration]\nmode=local\n"));
     expect(dotted.repoKey).toBe("git.example.com/team/my.repo");
   });
@@ -305,21 +305,21 @@ describe("collaboration identity", () => {
     expect(result.message).toContain(join(repo, ".mstarc"));
     expect(result.message).toContain("remove");
 
-    // A dangling symlink is a present but unreadable entry, never "absent".
+    // invariant: A dangling symlink is a present but unreadable entry, never "absent".
     const dangling = makeRepo("https://github.com/acme/widgets.git");
     symlinkSync(join(dangling, "missing-config"), join(dangling, ".mstarc"));
     const danglingResult = refusal(() => resolveAt(dangling));
     expect(danglingResult.code).toBe("collaboration.config-unreadable");
     expect(danglingResult.message).toContain("symbolic link");
 
-    // A symlink is refused even when its target is readable: the file that
+    // invariant: A symlink is refused even when its target is readable: the file that
     // supplies trusted selection must be the tracked file itself.
     const linked = makeRepo("https://github.com/acme/widgets.git");
     writeFileSync(join(linked, "real-config"), "[collaboration]\nmode=local\n");
     symlinkSync(join(linked, "real-config"), join(linked, ".mstarc"));
     expect(refusal(() => resolveAt(linked)).code).toBe("collaboration.config-unreadable");
 
-    // A genuinely absent file keeps its own missing-mode refusal.
+    // why: A genuinely absent file keeps its own missing-mode refusal.
     const absent = makeRepo("https://github.com/acme/widgets.git");
     expect(refusal(() => resolveAt(absent)).code).toBe("collaboration.mode-required");
   });
@@ -335,10 +335,10 @@ describe("collaboration identity", () => {
     const nestedFirstRepo = makeRepo(nestedFirst, mstarc);
     const parentSecondRepo = makeRepo(parentSecond, mstarc);
 
-    // Database file first, then the repository whose directory used to spell it.
+    // note: Database file first, then the repository whose directory used to spell it.
     await initializeCollaborationStore(resolveAt(parentRepo));
     await initializeCollaborationStore(resolveAt(nestedRepo));
-    // Reverse creation order.
+    // note: Reverse creation order.
     await initializeCollaborationStore(resolveAt(nestedFirstRepo));
     await initializeCollaborationStore(resolveAt(parentSecondRepo));
 
@@ -395,7 +395,7 @@ describe("collaboration identity", () => {
     expect(config.collaboration).toEqual({ mode: "mirror", repoId: "team-repo" });
     expect(config.enforcement).toBe("hard");
     expect(parseMstarc("[collaboration]\nmode=local\n").collaboration).toEqual({ mode: "local" });
-    // The last occurrence wins, an explicit empty later value included.
+    // note: The last occurrence wins, an explicit empty later value included.
     expect(parseMstarc("[collaboration]\nmode=local\nmode=\n").collaboration).toEqual({ mode: "" });
     expect(parseMstarc("[collaboration]\nmode=local\nmode=mirror\n").collaboration).toEqual({ mode: "mirror" });
     expect(parseMstarc("[collaboration]\nrepo_id=first\nrepo_id=second\n").collaboration).toEqual({ repoId: "second" });

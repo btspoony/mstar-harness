@@ -1178,7 +1178,7 @@ function bindCatalogFilter(filter: CatalogFilter | undefined): { where: string; 
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-/** The canonical scope key of one catalog page: the filters with the applied bounds. */
+/** note: The canonical scope key of one catalog page: the filters with the applied bounds. */
 function catalogPageScope(filter: CatalogFilter, limit: number, offset: number): CollaborationScope {
   return {
     kind: "query",
@@ -1223,7 +1223,7 @@ export async function listCatalog(
           `order by catalog_entities.kind asc, catalog_entities.title asc, catalog_entities.id asc limit ? offset ?`,
       )
       .all(...params, limit, offset) as EntityRow[];
-    // The page's incident links belong to the same snapshot as its rows, total
+    // note: The page's incident links belong to the same snapshot as its rows, total
     // and revision: read them inside this transaction, before it commits.
     const links = incidentLinks(
       db,
@@ -1241,7 +1241,7 @@ export async function listCatalog(
     try {
       handle.db.exec("rollback");
     } catch {
-      // connection-level failure during rollback -- nothing was committed
+      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {
@@ -1278,7 +1278,7 @@ export async function getCatalog(
     try {
       handle.db.exec("rollback");
     } catch {
-      // connection-level failure during rollback -- nothing was committed
+      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {

@@ -10,7 +10,7 @@ import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
 
 /**
- * Every collaboration lane this file creates belongs under a private home: a
+ * invariant: Every collaboration lane this file creates belongs under a private home: a
  * test never writes into the operator's `~/.mstar/repos`.
  */
 const HOME_ROOT = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-home-"));
@@ -447,7 +447,7 @@ describe("issue command family", () => {
       storeRevision: number;
       collaboration: { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
     };
-    // The observation is the same read's evidence: its revision IS the page's
+    // note: The observation is the same read's evidence: its revision IS the page's
     // reported revision, and it names the normalized filter set it answered.
     expect(page.collaboration.completeness).toBe("complete");
     expect(page.collaboration.revision).toBe(page.storeRevision);
@@ -755,7 +755,7 @@ describe("issue command family", () => {
     const seed = added.data as { issueId: string; revision: number };
     const harnessDir = context.controlRoot;
     if (harnessDir === null) throw new Error("test context must provide an isolated harness");
-    // The move's target project is a catalog row, and catalog authority is the
+    // invariant: The move's target project is a catalog row, and catalog authority is the
     // collaboration lane — never the execution store's legacy tables.
     await registerCatalogEntity({ harnessDir }, {
       kind: "project", id: "proj-b", title: "Project B", rootKind: "projects", relativePath: "proj-b",

@@ -147,7 +147,7 @@ export async function readIssueDetail(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<IssueDetail>(body);
     if (envelope === null) return { status: "error", message: "The issue read answered with something that is not a read envelope." };
-    // Without a complete collaboration observation a null payload is not absence:
+    // note: Without a complete collaboration observation a null payload is not absence:
     // the record may exist in rows this read could not vouch for.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };

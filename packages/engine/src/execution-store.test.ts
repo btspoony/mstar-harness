@@ -73,7 +73,7 @@ import { previewExecutionRestore } from "./execution-recovery.js";
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-store-"));
 
 /**
- * The collaboration lane is user-level. Every fixture resolves `homedir` into
+ * invariant: The collaboration lane is user-level. Every fixture resolves `homedir` into
  * this temporary root; the guard in `collaborationLocationOf` refuses an escape
  * before a database is created in the operator's storage.
  */
@@ -151,7 +151,7 @@ function controlRoot(label: string): StoreContext {
 }
 
 /**
- * The collaboration lane this fixture's catalog writes address. The store is
+ * invariant: The collaboration lane this fixture's catalog writes address. The store is
  * user-level, so the module-level `homedir` spy above must resolve inside the
  * temporary root; this guard fails the case instead of writing to the real home.
  */
@@ -221,7 +221,7 @@ async function freshStore(label: string): Promise<{ context: StoreContext; epoch
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   try {
-    // The catalog writes these suites register live in the collaboration lane.
+    // note: The catalog writes these suites register live in the collaboration lane.
     const location = collaborationLocationOf(context);
     await initializeCollaborationStore(location);
     const db = new DatabaseSync(location.dbPath);
@@ -2010,7 +2010,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
   test("an unrelated current catalog edit never rewrites the sealed input", async () => {
     const { context } = await freshStore("domain-sealed-input");
     const initialized = await readExecutionState(context);
-    // A pin names the COLLABORATION catalog identity, which creation verifies
+    // note: A pin names the COLLABORATION catalog identity, which creation verifies
     // before its execution write transaction.
     const catalogAuthority = await readCollaborationAuthority(context);
     const planRevision = await registerPlan(context, "p-1");
@@ -3095,7 +3095,7 @@ describe("execution-domain: the optional review_base of a completed row", () => 
 });
 
 describe("execution-composite-intents: the reservation ledger", () => {
-  /** One reservation row; `phase` decides whether it still holds the plan. */
+  /** note: One reservation row; `phase` decides whether it still holds the plan. */
   const reservation = (
     db: StoreDb,
     epoch: number,
@@ -3129,15 +3129,15 @@ describe("execution-composite-intents: the reservation ledger", () => {
       seedExecutionGraph(db);
 
       reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
-      // A second PENDING reservation on the same addressed row is the exclusion.
+      // note: A second PENDING reservation on the same addressed row is the exclusion.
       expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(/UNIQUE|unique/);
-      // A declined or confirmed row released the plan, and another plan row is
+      // note: A declined or confirmed row released the plan, and another plan row is
       // independently reservable.
       reservation(db, epoch, { operationId: "op-c", planId: "p-1", phase: "declined" });
       reservation(db, epoch, { operationId: "op-d", planId: "p-1", phase: "confirmed" });
       reservation(db, epoch, { operationId: "op-e", planId: "p-2", phase: "prepared" });
       expect(scalar(db, "select count(*) as n from execution_collaboration_intents")).toBe(4);
-      // The phase vocabulary is closed at the storage boundary.
+      // note: The phase vocabulary is closed at the storage boundary.
       expect(() =>
         db
           .prepare("update execution_collaboration_intents set phase = 'abandoned' where operation_id = 'op-a'")
@@ -3154,7 +3154,7 @@ describe("execution-composite-intents: the reservation ledger", () => {
     try {
       seedExecutionGraph(db);
       reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
-      // The same operation id in the NEXT generation is a different reservation.
+      // note: The same operation id in the NEXT generation is a different reservation.
       reservation(db, epoch + 1, { operationId: "op-a", planId: "p-1", phase: "prepared" });
       expect(
         scalar(db, "select count(*) as n from execution_collaboration_intents where operation_id = 'op-a'"),
@@ -3170,7 +3170,7 @@ describe("execution-composite-intents: the reservation ledger", () => {
   test("the reservation ledger is part of the whole-store loss inventory", async () => {
     const { context, epoch } = await freshStore("composite-inventory");
     const backup = await backupStore(context, { out: join(context.harnessDir, "recovery", "composite.db") });
-    // A reservation recorded AFTER the recovery point must appear as a lost row,
+    // invariant: A reservation recorded AFTER the recovery point must appear as a lost row,
     // which is only possible when the inventory reads this table and its
     // FK-safe replacement position.
     const db = rawDb(storePath(context));

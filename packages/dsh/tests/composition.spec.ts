@@ -76,7 +76,7 @@ describe('@mstar-harness/dsh REAL-composition boot (direct ctx.plugin rows)', ()
     expect(cleanup.ok).toBe(false)
     expect(cleanup.violations.map((v) => v.code)).toContain('findings.zero-residual-open-issue')
 
-    // A refused authority is never an empty (passing) gate: an absent
+    // invariant: A refused authority is never an empty (passing) gate: an absent
     // harness cannot even anchor the repository identity probe, so the gate
     // refuses with the identity refusal instead of serving a zeroed pass.
     await expect(ctx.dshMstar.findingsCleanupGate({ harnessDir: join(harnessDir, 'absent') }, 'p1')).rejects.toMatchObject({

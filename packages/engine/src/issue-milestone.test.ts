@@ -45,7 +45,7 @@ beforeAll(async () => {
   mkdirSync(harness, { recursive: true });
   const location = resolveCollaborationLocation(context);
   await initializeCollaborationStore(location);
-  // The real activation also records this checkout's binding: an ACTIVE
+  // invariant: The real activation also records this checkout's binding: an ACTIVE
   // authority is never usable from an unbound checkout.
   const seeded = new DatabaseSync(location.dbPath);
   let authority: { storeId: string; epoch: number } | null = null;

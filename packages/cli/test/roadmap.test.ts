@@ -65,7 +65,7 @@ describe("roadmap CLI", () => {
     const reviewFile = join(dir, "review.json");
     writeFileSync(source, MARKDOWN);
     const revisionBefore = await readRoadmapAuthority(context, "proj-roadmap");
-    // Each read stamps its own snapshot instant; the roads must be unchanged.
+    // invariant: Each read stamps its own snapshot instant; the roads must be unchanged.
     const { collaboration: evidenceBefore, ...readBefore } = revisionBefore;
     expect(evidenceBefore.completeness).toBe("complete");
 

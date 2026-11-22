@@ -1,5 +1,5 @@
 /**
- * collaboration-store.ts -- the independent user-level collaboration store.
+ * invariant: collaboration-store.ts -- the independent user-level collaboration store.
  *
  * One current v1 DDL (not a replay of the combined store's nineteen historical
  * migrations), a create-only staged publication and active-only handles. Only
@@ -68,7 +68,7 @@ import {
 } from "./store-db.js";
 
 /**
- * The one current collaboration schema - the closed inventory of the Data
+ * why: The one current collaboration schema - the closed inventory of the Data
  * Model contract, at its current shape. Names in `issues`, `catalog_*`,
  * `project_*` and `sync_*` keep their existing domain vocabulary so the
  * domain SQL moved by the cutover does not see a second convention; nothing
@@ -371,7 +371,7 @@ create table cutover_publications(
 const COLLABORATION_SCHEMA: Migration = { version: 1, name: "collaboration-core", sql: COLLABORATION_SCHEMA_SQL };
 
 /**
- * The closed collaboration table inventory this build requires. A store that
+ * invariant: The closed collaboration table inventory this build requires. A store that
  * is missing one of these - or carries a table outside it - is not the current
  * collaboration schema, and a damaged one must refuse instead of admitting a
  * handle whose domain queries would fail later.
@@ -586,7 +586,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The lane's unreadable refusal, preserving the cause this call established. */
+/** note: The lane's unreadable refusal, preserving the cause this call established. */
 function unreadable(dbPath: string, detail: string, cause?: string): StoreError {
   return new StoreError(
     "collaboration.unreadable",
@@ -596,7 +596,7 @@ function unreadable(dbPath: string, detail: string, cause?: string): StoreError 
   );
 }
 
-/** A published store whose directory entry is not confirmed durable. */
+/** note: A published store whose directory entry is not confirmed durable. */
 function barrierRefusal(dbPath: string, error: unknown): StoreError {
   const cause = publicationCause(error);
   return new StoreError(
@@ -608,7 +608,7 @@ function barrierRefusal(dbPath: string, error: unknown): StoreError {
   );
 }
 
-/** The bounded-contention verdict stays the shared, actionable `store.busy`. */
+/** note: The bounded-contention verdict stays the shared, actionable `store.busy`. */
 function busyRefusal(dbPath: string): StoreError {
   return new StoreError(
     "store.busy",
@@ -617,7 +617,7 @@ function busyRefusal(dbPath: string): StoreError {
   );
 }
 
-/** Verdicts that stay their own top-level refusal instead of the lane's generic code. */
+/** why: Verdicts that stay their own top-level refusal instead of the lane's generic code. */
 const PASS_THROUGH_STORE_CODES: Readonly<Record<string, true>> = {
   "store.busy": true,
   "store.schema-unsupported": true,
@@ -625,7 +625,7 @@ const PASS_THROUGH_STORE_CODES: Readonly<Record<string, true>> = {
 };
 
 /**
- * Preserve a real cause: collaboration codes and the shared verdicts that name
+ * note: Preserve a real cause: collaboration codes and the shared verdicts that name
  * their own recovery pass through, contention stays busy, and the rest becomes
  * the lane's unreadable refusal.
  */
@@ -669,7 +669,7 @@ function staleBinding(
   );
 }
 
-/** The final path must be a regular file or absent, decided without following a link. */
+/** invariant: The final path must be a regular file or absent, decided without following a link. */
 function assertRegularTarget(dbPath: string): void {
   try {
     assertAbsentOrRegularStoreFile(dbPath);
@@ -678,13 +678,13 @@ function assertRegularTarget(dbPath: string): void {
   }
 }
 
-/** The one user-level storage tree: every canonical store lives beneath it. */
+/** note: The one user-level storage tree: every canonical store lives beneath it. */
 function privateStoreAnchor(): string {
   return join(homedir(), ".mstar", "repos");
 }
 
 /**
- * The addressable store path must live in the private user storage tree and be
+ * invariant: The addressable store path must live in the private user storage tree and be
  * reached without following a link: every EXISTING component between the user
  * home and the store's directory is inspected with `lstat` (a symlink is never
  * traversed), and each storage component from the anchor down carries no
@@ -706,10 +706,10 @@ function assertPrivateStorePath(dbPath: string): void {
     try {
       stats = lstatSync(current);
     } catch (error) {
-      if ((error as { code?: string }).code === "ENOENT") return; // creation makes the rest private
+      if ((error as { code?: string }).code === "ENOENT") return; // note: creation makes the rest private
       throw unreadable(current, `a storage component could not be examined (${publicationCause(error)})`);
     }
-    // `.mstar` may predate this lane and belong to other tooling; the storage
+    // invariant: `.mstar` may predate this lane and belong to other tooling; the storage
     // tree at and below the anchor is this lane's and must be private.
     const storageComponent = index >= 1;
     if (stats.isSymbolicLink()) throw unreadable(current, "a storage component is a symbolic link");
@@ -720,7 +720,7 @@ function assertPrivateStorePath(dbPath: string): void {
   }
 }
 
-/** An existing store's bytes must be private too. */
+/** invariant: An existing store's bytes must be private too. */
 function assertPrivateStoreFile(dbPath: string): void {
   let stats;
   try {
@@ -735,7 +735,7 @@ function assertPrivateStoreFile(dbPath: string): void {
 }
 
 /**
- * Every entry's admission checks, in one place: the private, link-free
+ * invariant: Every entry's admission checks, in one place: the private, link-free
  * namespace, the final target type, the private bytes and the lane's journal
  * layout - when the store exists. Refuses before creating directories or
  * opening SQLite.
@@ -745,7 +745,7 @@ function assertAdmittedTarget(dbPath: string): void {
   assertRegularTarget(dbPath);
   if (!existsSync(dbPath)) return;
   assertPrivateStoreFile(dbPath);
-  // The collaboration lane publishes and keeps DELETE-journal stores. A WAL
+  // invariant: The collaboration lane publishes and keeps DELETE-journal stores. A WAL
   // layout (sidecar or header) cannot be inspected without either creating a
   // `-shm` or guessing immutability, so it is refused before any open: no
   // journal is repaired, created or ignored.
@@ -762,7 +762,7 @@ function assertAdmittedTarget(dbPath: string): void {
 }
 
 /**
- * The closed table inventory, and nothing outside it. A dropped domain table or
+ * invariant: The closed table inventory, and nothing outside it. A dropped domain table or
  * a foreign/combined database copied onto this path refuses before admission.
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
@@ -838,7 +838,7 @@ function readMeta(db: StoreDb): CollaborationMeta {
 }
 
 /**
- * Ledger, current domain schema, metadata, trusted selection, required state and
+ * invariant: Ledger, current domain schema, metadata, trusted selection, required state and
  * (when given) the exact stamp must all agree before any handle or effect is
  * admitted. Every failure keeps its own distinguishable refusal.
  */
@@ -849,7 +849,7 @@ function admit(
   requirement: "active" | "any",
 ): CollaborationAuthority {
   try {
-    // The ledger's version verdict comes FIRST: a store written by a newer
+    // note: The ledger's version verdict comes FIRST: a store written by a newer
     // build is an upgrade requirement, not a damaged current schema, even when
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), [COLLABORATION_SCHEMA]);
@@ -888,7 +888,7 @@ function admit(
   }
 }
 
-/** One handle owner: `close` is idempotent so the entry points can share it. */
+/** why: One handle owner: `close` is idempotent so the entry points can share it. */
 function handleFor(db: StoreDb, authority: CollaborationAuthority): CollaborationStoreHandle {
   let closed = false;
   return {
@@ -903,7 +903,7 @@ function handleFor(db: StoreDb, authority: CollaborationAuthority): Collaboratio
 }
 
 /**
- * Async returns assimilate any object OR callable value that carries a `then`
+ * note: Async returns assimilate any object OR callable value that carries a `then`
  * function, so both shapes are "the effect is asynchronous" here.
  */
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -911,7 +911,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return typeof (value as { then?: unknown }).then === "function";
 }
 
-/** Statements that would end or re-take the transaction the wrapper owns. */
+/** why: Statements that would end or re-take the transaction the wrapper owns. */
 const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
   BEGIN: true,
   COMMIT: true,
@@ -922,7 +922,7 @@ const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
 };
 
 /**
- * The first SQL keyword, ignoring everything that can precede it without being
+ * invariant: The first SQL keyword, ignoring everything that can precede it without being
  * a statement of its own: whitespace, line and block comments, and any number
  * of empty statements (`;`). SQLite's own prepare skips those separators, so
  * `"; commit"` prepares the `commit` statement - the classifier must skip them
@@ -969,7 +969,7 @@ function batchRefusal(): StoreError {
 }
 
 /**
- * The effect's connection keeps transaction ownership with the wrapper. `exec`
+ * invariant: The effect's connection keeps transaction ownership with the wrapper. `exec`
  * is denied outright - a batch's leading keyword says nothing about later
  * statements - so the only mutation path is a single prepared statement. Every
  * transaction-control statement and every close is refused.
@@ -989,7 +989,7 @@ function guardedWriteDb(db: StoreDb): StoreDb {
   };
 }
 
-/** Connect with the same bounded transient read-open retry the execution lane uses. */
+/** note: Connect with the same bounded transient read-open retry the execution lane uses. */
 async function connectAt(
   dbPath: string,
   mode: "read" | "write",
@@ -1011,7 +1011,7 @@ async function connectAt(
 }
 
 /**
- * Admit one existing store on a READ-ONLY connection. `admit` names the only
+ * note: Admit one existing store on a READ-ONLY connection. `admit` names the only
  * state that may be returned: public handles admit `active`; initialization
  * continues a matching record in either state without clearing it.
  */
@@ -1024,7 +1024,7 @@ async function openAdmission(
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
-  // The lane refuses a WAL layout before any open, so this read needs no repair
+  // invariant: The lane refuses a WAL layout before any open, so this read needs no repair
   // and creates no sidecar.
   const db = await connectAt(dbPath, "read", timeout);
   try {
@@ -1036,7 +1036,7 @@ async function openAdmission(
 }
 
 /**
- * Synchronize the published subtree before a success is reported: every
+ * why: Synchronize the published subtree before a success is reported: every
  * existing directory from the user home down to the store's own directory (the
  * parent entry that names it and the directory itself), ending with the store's
  * directory, whose fsync makes the database entry durable. Continuation runs
@@ -1064,7 +1064,7 @@ function confirmPublishedChain(dbPath: string): void {
 }
 
 /**
- * Continue an already published record without clearing it. Reused by the
+ * invariant: Continue an already published record without clearing it. Reused by the
  * existing-path and competing-publication branches: both re-attempt the
  * directory barrier, so a retry after a failed barrier never reports success
  * for a name that is still not durable.
@@ -1073,14 +1073,14 @@ async function continueExisting(location: CollaborationLocation, timeout: number
   const handle = await openAdmission(location, "any", undefined, timeout);
   const authority = handle.authority;
   handle.close();
-  // The whole chain is re-confirmed: a previously failed ancestor barrier is
+  // note: The whole chain is re-confirmed: a previously failed ancestor barrier is
   // retried here, not only the final directory entry.
   confirmPublishedChain(location.dbPath);
   return authority;
 }
 
 /**
- * Ensure the store's directory chain exists: every existing component must
+ * invariant: Ensure the store's directory chain exists: every existing component must
  * already be a real directory, and creation makes the missing chain private.
  */
 function createStoreDirectories(dir: string): void {
@@ -1107,13 +1107,13 @@ function createStoreDirectories(dir: string): void {
   }
 }
 
-/** Retire this attempt's private staging alias and its directory. */
+/** note: Retire this attempt's private staging alias and its directory. */
 function discardStaging(stagingDir: string, stagingPath: string): void {
   removeStagingFiles(stagingPath);
   try {
     rmdirSync(stagingDir);
   } catch {
-    // The staging directory is private, engine-owned scratch: a failure leaves
+    // invariant: The staging directory is private, engine-owned scratch: a failure leaves
     // at most an empty directory that no code reads.
   }
 }
@@ -1142,7 +1142,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
   const dir = dirname(dbPath);
   createStoreDirectories(dir);
   const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
-  const stagingPath = join(stagingDir, basename(dbPath)); // reserved authority basename, protected by every host gate
+  const stagingPath = join(stagingDir, basename(dbPath)); // note: reserved authority basename, protected by every host gate
   try {
     mkdirSync(stagingDir, { mode: 0o700 });
   } catch (error) {
@@ -1181,14 +1181,14 @@ export async function initializeCollaborationStore(location: CollaborationLocati
       try {
         db.exec("rollback");
       } catch {
-        // nothing committed either way
+        // note: nothing committed either way
       }
       throw error;
     }
-    // The staged bytes are verified as this build's own complete store before
+    // note: The staged bytes are verified as this build's own complete store before
     // they can be named.
     authority = admit(db, location, undefined, "any");
-    // A hard link names one inode, not a journal: fold the staged journal into
+    // why: A hard link names one inode, not a journal: fold the staged journal into
     // the database file so the published name is self-contained.
     const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
     if (folded?.journal_mode !== "delete") {
@@ -1204,7 +1204,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
       try {
         db.close();
       } catch {
-        // connection-level failure; the staging name is unlinked below
+        // note: connection-level failure; the staging name is unlinked below
       }
     }
     discardStaging(stagingDir, stagingPath);
@@ -1216,14 +1216,14 @@ export async function initializeCollaborationStore(location: CollaborationLocati
   } catch (error) {
     discardStaging(stagingDir, stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      // A competing initializer published this scope first: continue that record
+      // note: A competing initializer published this scope first: continue that record
       // only after it is verified and its directory entry is confirmed.
       return continueExisting(location, timeout);
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
   try {
-    // The published subtree and its own name become durable before success.
+    // note: The published subtree and its own name become durable before success.
     confirmPublishedChain(dbPath);
   } finally {
     discardStaging(stagingDir, stagingPath);
@@ -1232,7 +1232,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
 }
 
 /**
- * Open the scope's active collaboration authority. Never creates a database:
+ * invariant: Open the scope's active collaboration authority. Never creates a database:
  * a missing one is `collaboration.not-initialized`, an inert staged one is
  * `collaboration.not-active`, and an invalid/corrupt/inaccessible one is
  * `collaboration.unreadable`. An expected stamp that no longer matches refuses
@@ -1279,7 +1279,7 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
 }
 
 // ---------------------------------------------------------------------------
-// The control checkout's binding to one collaboration authority
+// note: The control checkout's binding to one collaboration authority
 // ---------------------------------------------------------------------------
 
 /**
@@ -1293,7 +1293,7 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
 export type CollaborationBinding = Readonly<{
   version: 2;
   /**
-   * `claimed` while an activation holds the authority publication open: the
+   * why: `claimed` while an activation holds the authority publication open: the
    * checkout is already committed to that generation, so a crash leaves evidence
    * instead of an unbound checkout that looks fresh. `active` once the authority
    * is published (or a supported adoption recorded it).
@@ -1329,7 +1329,7 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
   try {
     parsed = JSON.parse(text);
   } catch {
-    // Unreadable is NOT fresh: the checkout cannot be proven to own the authority
+    // invariant: Unreadable is NOT fresh: the checkout cannot be proven to own the authority
     // it would use, and the supported route is an explicit re-bind.
     throw new StoreError(
       "collaboration.stale-binding",
@@ -1348,7 +1348,7 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
     typeof (parsed as { storeId?: unknown }).storeId !== "string" ||
     typeof (parsed as { epoch?: unknown }).epoch !== "number"
   ) {
-    // An unreadable binding is never treated as "fresh": the checkout cannot be
+    // invariant: An unreadable binding is never treated as "fresh": the checkout cannot be
     // proven to belong to the authority it would use, and the supported route is
     // to re-bind it deliberately.
     throw new StoreError(
@@ -1387,7 +1387,7 @@ export function writeCollaborationBinding(
   }
 }
 
-/** The ATTEMPT-scoped claim path: never the primary binding file. */
+/** invariant: The ATTEMPT-scoped claim path: never the primary binding file. */
 function bindingClaimPath(context: StoreContext): string {
   return join(context.harnessDir, "collaboration-binding.claim.json");
 }
@@ -1440,7 +1440,7 @@ export function clearBindingClaim(context: StoreContext): void {
   try {
     rmSync(bindingClaimPath(context), { force: true });
   } catch {
-    // scratch removal is best-effort
+    // note: scratch removal is best-effort
   }
 }
 
@@ -1471,13 +1471,13 @@ export function beginBindingClaim(
       rmSync(path, { force: true });
       syncDirectoryEntry(dirname(path));
     } catch {
-      // The claim is attempt scratch; removing it is best-effort.
+      // note: The claim is attempt scratch; removing it is best-effort.
     }
   };
 }
 
 /**
- * One recorded publication behind the live authority: the cutover's active
+ * invariant: One recorded publication behind the live authority: the cutover's active
  * publication row, the file-era activation phase row, the restore receipt row, or
  * the fresh-creation receipt of an ordinary `store init` lane — each with the
  * generation it names. This is durable lane data, never a mutable binding.
@@ -1525,7 +1525,7 @@ function recordedLineage(db: StoreDb): RecordedLineage[] {
       if (parsed === null || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
       if (row.operation_id.startsWith("restore:")) {
-        // A restore names its authority under `authority` (receipt document v2).
+        // note: A restore names its authority under `authority` (receipt document v2).
         const authority = record.authority;
         if (authority === null || typeof authority !== "object") continue;
         const restored = authority as Record<string, unknown>;
@@ -1573,7 +1573,7 @@ export async function adoptCollaborationBinding(
   options: { expectStoreId?: string } = {},
 ): Promise<CollaborationAdoption> {
   const location = resolveCollaborationLocation(context);
-  // Foreign checkout / legacy owner: the scope's authority is not this checkout's
+  // note: Foreign checkout / legacy owner: the scope's authority is not this checkout's
   // to adopt while it still owns a combined source.
   await assertControlCheckoutScope(context, location);
   const binding = readCollaborationBinding(context);
@@ -1604,7 +1604,7 @@ export async function adoptCollaborationBinding(
         `adoption refuses rather than binding the wrong generation. Nothing was written.`,
     );
   }
-  // Lineage is keyed by generation: records for the LIVE generation corroborate
+  // note: Lineage is keyed by generation: records for the LIVE generation corroborate
   // each other (an activation later restored, then adopted, still names one live
   // authority), while records for EARLIER generations are superseded history, not
   // ambiguity. Ambiguity is a lane whose live generation is unnamed but whose
@@ -1631,7 +1631,7 @@ export async function adoptCollaborationBinding(
         `it. Nothing was written.`,
     );
   }
-  // A recorded claim may be cleared only when it names the proven generation; a
+  // invariant: A recorded claim may be cleared only when it names the proven generation; a
   // mismatched claim is never promoted or silently replaced.
   const claim = readBindingClaim(context);
   if (claim !== null && (claim.storeId !== authority.storeId || claim.epoch !== authority.epoch)) {
@@ -1670,7 +1670,7 @@ export async function adoptCollaborationBinding(
   };
 }
 
-/** The fail-closed refusal of a present execution store this probe cannot read. */
+/** invariant: The fail-closed refusal of a present execution store this probe cannot read. */
 function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
   return new StoreError(
     "collaboration.unreadable",
@@ -1682,7 +1682,7 @@ function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
 }
 
 /**
- * The execution store path's shape, as `store-db`'s own open discriminates it:
+ * invariant: The execution store path's shape, as `store-db`'s own open discriminates it:
  * only a genuinely missing entry is "no store". A path that cannot be examined,
  * a directory or any other non-regular entry — including a dangling symlink,
  * which `existsSync` would follow to "absent" — is a PRESENT store that cannot
@@ -1692,14 +1692,14 @@ function executionStorePresence(dbPath: string): "absent" | "regular" | "unusabl
   try {
     return lstatSync(dbPath).isFile() ? "regular" : "unusable";
   } catch (error) {
-    // A path that cannot even be examined is an existing-but-unreadable store.
+    // invariant: A path that cannot even be examined is an existing-but-unreadable store.
     if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return "absent";
     return "unusable";
   }
 }
 
 /**
- * The legacy-owner refusal for a store whose held collaboration rows were READ,
+ * note: The legacy-owner refusal for a store whose held collaboration rows were READ,
  * optionally after the rest of the inspection failed.
  */
 function legacyOwnerRefusal(held: readonly string[], cause?: string): StoreError {
@@ -1713,7 +1713,7 @@ function legacyOwnerRefusal(held: readonly string[], cause?: string): StoreError
 }
 
 /**
- * Refuse a legacy collaboration owner: a combined store at the execution path
+ * invariant: Refuse a legacy collaboration owner: a combined store at the execution path
  * that still holds collaboration rows and records no fence.
  *
  * The execution lane is a SEPARATE domain, so this inspects the file directly
@@ -1735,7 +1735,7 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
   const presence = executionStorePresence(dbPath);
   if (presence === "absent") return;
   if (presence === "unusable") {
-    // A present-but-unreadable path is `store.corrupt` in the execution domain;
+    // invariant: A present-but-unreadable path is `store.corrupt` in the execution domain;
     // an adopted checkout leaves that verdict to it, an unbound one cannot rule
     // the shape out as a hidden legacy owner.
     if (ownershipProven) return;
@@ -1743,23 +1743,23 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
   }
   let probe: StoreDb;
   try {
-    // The same bounded read-open retry the execution lane uses: a same-process
+    // note: The same bounded read-open retry the execution lane uses: a same-process
     // writer's deferred sidecar cleanup reports a transient SQLITE_CANTOPEN for
     // an intact store.
     probe = await connectAt(dbPath, "read", busyTimeoutMs());
   } catch (error) {
-    // Vanished between the classification and the open: nothing local to inspect.
+    // note: Vanished between the classification and the open: nothing local to inspect.
     if (executionStorePresence(dbPath) === "absent") return;
-    // Bounded contention is transient and keeps its own retryable refusal.
+    // why: Bounded contention is transient and keeps its own retryable refusal.
     if (error instanceof StoreError && error.code === "store.busy") throw error;
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   }
-  // The held tables read SO FAR: once one is observed, nothing that follows can
+  // note: The held tables read SO FAR: once one is observed, nothing that follows can
   // admit this lane, whatever the binding says.
   const observed: string[] = [];
   try {
-    // A store recorded by another build is a verdict this probe must not guess
+    // invariant: A store recorded by another build is a verdict this probe must not guess
     // around: a newer/unknown chain means the collaboration layout is not this
     // build's to interpret, so its own upgrade refusal stands. A merely damaged
     // ledger says nothing about the rows, which the fence and counts still decide.
@@ -1778,12 +1778,12 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
     if (held.length === 0) return;
     throw legacyOwnerRefusal(held);
   } catch (error) {
-    // A typed verdict (schema/corrupt/fence/cutover) is already the answer.
+    // note: A typed verdict (schema/corrupt/fence/cutover) is already the answer.
     if (error instanceof StoreError) throw error;
-    // An observation already made is not undone by a later failure: the rows
+    // invariant: An observation already made is not undone by a later failure: the rows
     // were readable, so this is the legacy owner the cutover must move.
     if (observed.length > 0) throw legacyOwnerRefusal(observed, `${error instanceof Error ? error.message : String(error)}`);
-    // A lazy driver may reject the header only when the first statement runs.
+    // note: A lazy driver may reject the header only when the first statement runs.
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   } finally {
@@ -1792,13 +1792,13 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
 }
 
 /**
- * Refuse a retargeted checkout: an origin or `.mstarc` change never re-points a
+ * invariant: Refuse a retargeted checkout: an origin or `.mstarc` change never re-points a
  * binding. Returns the checkout's finalized binding (or `null`), so an admission
  * caller reads it once.
  */
 function assertBoundScope(context: StoreContext, location: CollaborationLocation): CollaborationBinding | null {
   const binding = readCollaborationBinding(context);
-  // A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
+  // note: A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
   if (binding === null || binding.state !== "active") return null;
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
     throw new StoreError(
@@ -1814,13 +1814,13 @@ function assertBoundScope(context: StoreContext, location: CollaborationLocation
 /** The checkout scope guard: the legacy-owner probe plus the retarget refusal. */
 export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
   const binding = assertBoundScope(context, location);
-  // A binding that names this repository and mode is proof of ADOPTION, not of an
+  // why: A binding that names this repository and mode is proof of ADOPTION, not of an
   // unreadable execution lane's innocence; it only keeps an uninspectable file
   // from becoming a collaboration refusal.
   await assertNoLegacyCollaborationOwner(context, binding !== null);
 }
 
-/** The scope guard's fuller form: the finalized binding is returned for the generation check. */
+/** note: The scope guard's fuller form: the finalized binding is returned for the generation check. */
 async function checkoutScopeBinding(
   context: StoreContext,
   location: CollaborationLocation,
@@ -1831,7 +1831,7 @@ async function checkoutScopeBinding(
 }
 
 /**
- * Refuse before any domain I/O when this checkout cannot own the resolved
+ * invariant: Refuse before any domain I/O when this checkout cannot own the resolved
  * authority:
  *
  * - an UNFENCED combined store that still holds collaboration rows is the legacy
@@ -1851,12 +1851,12 @@ async function assertControlBinding(
   authority: CollaborationAuthority,
   requirement: "read" | "write",
 ): Promise<void> {
-  // ONE scope pass returns the finalized binding: the retarget refusal, the
+  // note: ONE scope pass returns the finalized binding: the retarget refusal, the
   // legacy-owner probe and the generation comparison share one read.
   const binding = await checkoutScopeBinding(context, location);
   if (binding === null) {
     if (requirement === "read") return;
-    // A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
+    // why: A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
     // switched checkout or a lost/interrupted binding write, and silently adopting
     // it would let one repository's verbs reach another's data.
     throw new StoreError(
@@ -1900,7 +1900,7 @@ export async function openCollaborationStore(
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    // ONE comparison for both modes: a bound checkout proves the same repository,
+    // invariant: ONE comparison for both modes: a bound checkout proves the same repository,
     // mode, store and epoch, and only an UNBOUND read (a replacement clone) is
     // admitted without it — reading never writes the binding.
     await assertControlBinding(context, location, handle.authority, mode);
@@ -1918,7 +1918,7 @@ export async function readCollaborationAuthority(context: StoreContext): Promise
   return handle.authority;
 }
 
-/** One refusal's stable code (anything without one is the lane's generic cause). */
+/** note: One refusal's stable code (anything without one is the lane's generic cause). */
 function probeRefusal(error: unknown): { code: string; message: string } {
   const code = (error as { code?: unknown } | null | undefined)?.code;
   return {
@@ -1961,7 +1961,7 @@ export function readCollaborationObservation(
   handle: CollaborationStoreHandle,
   scope: CollaborationScope,
 ): CompleteCollaborationObservation {
-  // The observation's instant is the moment THIS source's own transaction reads
+  // invariant: The observation's instant is the moment THIS source's own transaction reads
   // its first row: a slow open of the other authority never backdates it.
   const asOf = new Date().toISOString();
   const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
@@ -2046,7 +2046,7 @@ export async function writeCollaborationStage<T>(
       try {
         db.exec("rollback");
       } catch {
-        // nothing committed either way
+        // note: nothing committed either way
       }
       throw error;
     }
@@ -2054,7 +2054,7 @@ export async function writeCollaborationStage<T>(
     try {
       db.close();
     } catch {
-      // connection-level failure; the transaction above already rolled back
+      // note: connection-level failure; the transaction above already rolled back
     }
   }
 }
@@ -2080,18 +2080,18 @@ export async function withCollaborationWrite<T>(
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
 
-  // Admission on a refusing read: a WAL layout was already refused, so this
+  // invariant: Admission on a refusing read: a WAL layout was already refused, so this
   // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
     const admitted = admit(probe, location, expected, "active");
-    // The binding is proved on the same refusing read, before a writer exists.
+    // note: The binding is proved on the same refusing read, before a writer exists.
     await assertControlBinding(context, location, admitted, "write");
   } finally {
     probe.close();
   }
 
-  // The writer never creates the database and never changes its journal mode:
+  // invariant: The writer never creates the database and never changes its journal mode:
   // a replacement that appears between the probe and here is refused without
   // being converted, and a vanished one cannot be recreated.
   const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
@@ -2104,7 +2104,7 @@ export async function withCollaborationWrite<T>(
     db.exec("begin immediate");
     try {
       const authority = admit(db, location, expected, "active");
-      // The transaction stays with this wrapper: the effect sees only a
+      // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
       const result = apply({
         db: guardedWriteDb(db),
@@ -2114,7 +2114,7 @@ export async function withCollaborationWrite<T>(
         },
       });
       if (isThenable(result)) {
-        // Consume the abandoned result before refusing: an async effect's
+        // invariant: Consume the abandoned result before refusing: an async effect's
         // rejection must not surface as an unhandled rejection after this call
         // has already reported the synchronous-effect refusal.
         void Promise.resolve(result).catch(() => undefined);
@@ -2130,7 +2130,7 @@ export async function withCollaborationWrite<T>(
       try {
         db.exec("rollback");
       } catch {
-        // nothing committed either way
+        // note: nothing committed either way
       }
       throw error;
     }
@@ -2138,7 +2138,7 @@ export async function withCollaborationWrite<T>(
     try {
       db.close();
     } catch {
-      // connection-level failure; the transaction above already rolled back
+      // note: connection-level failure; the transaction above already rolled back
     }
   }
 }

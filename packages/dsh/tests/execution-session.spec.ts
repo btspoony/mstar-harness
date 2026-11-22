@@ -62,7 +62,7 @@ function storedBinding(harnessDir: string, cwd: string): WorkflowSessionBinding 
  * engine reference the bind minted (the only thing an adoption ever accepts).
  */
 async function seedNativeAuthority(harnessDir: string): Promise<string> {
-  // Identity is declared inside the fixture root: without a local `.mstarc`
+  // note: Identity is declared inside the fixture root: without a local `.mstarc`
   // the repository probe escapes a bare temp root into `$TMPDIR` itself.
   const seedRoot = dirname(harnessDir)
   execFileSync('git', ['init', '-q', '-b', 'main', seedRoot], { stdio: 'ignore' })

@@ -95,7 +95,7 @@ export type MstarcConfig = {
   linear?: Record<string, string>;
   /** Raw `[linear.mapping]` override keys (unvalidated). */
   linearMapping?: Record<string, string>;
-  /** Raw `[collaboration]` keys (unvalidated; see `collaboration-identity.ts`). */
+  /** note: Raw `[collaboration]` keys (unvalidated; see `collaboration-identity.ts`). */
   collaboration?: { mode?: string; repoId?: string };
 };
 
@@ -154,7 +154,7 @@ export function parseMstarc(text: string): MstarcConfig {
       (section === LINEAR_SECTION ? linear : linearMapping)[key] = value;
       continue;
     }
-    // The additive `[collaboration]` section selects authority mode and an
+    // why: The additive `[collaboration]` section selects authority mode and an
     // optional origin-less id; validation belongs to `collaboration-identity`.
     // Every occurrence counts, empty included: a later blank value clears the
     // selector instead of silently keeping the earlier one.

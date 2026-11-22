@@ -10,7 +10,7 @@ import { getCommandDefinitions } from "../src/index.js";
 import { workflowCloseRecovery } from "../src/families/status.js";
 import type { InvocationContext } from "../src/types.js";
 
-/** Collaboration lanes created here live under a private home, never the operator's. */
+/** invariant: Collaboration lanes created here live under a private home, never the operator's. */
 const HOME_ROOT = mkdtempSync(path.join(tmpdir(), "status-command-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -158,7 +158,7 @@ describe("status command family", () => {
   test("collaboration command evidence: tech-debt reports its rollup's scope, revision and snapshot time", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-tech-debt-evidence-"));
     try {
-      // Issue authority is the repository's collaboration lane, so the fixture
+      // why: Issue authority is the repository's collaboration lane, so the fixture
       // needs a real checkout identity before a store can be created at all.
       execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
       writeFileSync(path.join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
@@ -190,7 +190,7 @@ describe("status command family", () => {
       await ensureCollaborationAuthority({ harnessDir: dir });
       const store = await initializeStore({ harnessDir: dir });
       store.close();
-      // A schema version this build does not support is a STRUCTURED refusal:
+      // invariant: A schema version this build does not support is a STRUCTURED refusal:
       // three distinct facts the command envelope must not drop.
       const writer = new DatabaseSync(resolveCollaborationLocation({ harnessDir: dir }).dbPath);
       try {
@@ -215,7 +215,7 @@ describe("status command family", () => {
   test("collaboration command evidence: an execution-only status view never queries collaboration", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-execution-only-"));
     try {
-      // A checkout with no origin and no [collaboration] identity: if this view
+      // note: A checkout with no origin and no [collaboration] identity: if this view
       // touched collaboration it could not answer at all.
       execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
       mkdirSync(path.join(dir, ".mstar"), { recursive: true });

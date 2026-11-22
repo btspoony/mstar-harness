@@ -15,7 +15,7 @@ import { executeCommand } from "../src/index.js";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import type { InvocationContext } from "../src/types.js";
 
-/** Collaboration lanes created here live under a private home, never the operator's. */
+/** invariant: Collaboration lanes created here live under a private home, never the operator's. */
 const HOME_ROOT = mkdtempSync(join(tmpdir(), "commands-milestone-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -30,7 +30,7 @@ afterAll(() => {
 });
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
 /**
- * A checkout that owns its collaboration lane: milestone authority is the
+ * why: A checkout that owns its collaboration lane: milestone authority is the
  * repository lane, so a fixture without an identity has no store at all.
  */
 async function laneFixture(cwd: string, harness: string): Promise<void> {
@@ -178,7 +178,7 @@ test("collaboration command evidence: milestone list carries its project's lane 
  expect(listed.status).toBe("ok");
  if(listed.status!=="ok") return;
  const read=listed.data as { milestones: unknown[]; collaboration: { scope:{kind:string;key:string};completeness:string;asOf:string } };
- // The list is one project-scoped lane read; the envelope's evidence names the
+ // note: The list is one project-scoped lane read; the envelope's evidence names the
  // same scope and instant it answered with.
  expect(read.collaboration).toMatchObject({ scope:{kind:"milestone",key:"proj-evidence"}, completeness:"complete" });
  expect(Number.isNaN(Date.parse(read.collaboration.asOf))).toBe(false);

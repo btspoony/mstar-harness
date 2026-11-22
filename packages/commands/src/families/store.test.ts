@@ -26,7 +26,7 @@ const atOrAboveRuntime = `${floorMajor + 1}.0.0`;
 const belowFloorRuntime = `${floorMajor - 1}.0.0`;
 
 
-/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = mkdtempSync(join(tmpdir(), "mstar-store-command-home-"));
 let laneHomeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -40,7 +40,7 @@ afterAll(() => {
 let repoSequence = 0;
 
 /**
- * Give a fixture root its repository identity: these store verbs need the
+ * why: Give a fixture root its repository identity: these store verbs need the
  * collaboration scope (`store.upgrade` establishes the lane before it imports),
  * so a GIT ORIGINLESS fixture declares one explicitly.
  */
@@ -449,7 +449,7 @@ test("a report destination is create-only: an existing file is never truncated, 
     const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.migrate");
     if (definition === undefined) throw new Error("missing store.migrate definition");
     const result = await definition.execute(definition.input.parse({ harness, out: destination }), invocation(root));
-    // The PREVIEW ran; only its report could not be published, and that is
+    // why: The PREVIEW ran; only its report could not be published, and that is
     // disclosed instead of the preview's own outcome.
     expect(result.status).toBe("ok");
     if (result.status !== "ok") throw new Error("expected the preview to succeed");

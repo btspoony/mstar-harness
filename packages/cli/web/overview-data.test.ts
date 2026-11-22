@@ -218,7 +218,7 @@ describe("outcome 2 — one degraded member still renders the page", () => {
 });
 
 describe("dashboard collaboration disclosure", () => {
-  /** A healthy payload with a distinctive residual count the disclosure must suppress. */
+  /** invariant: A healthy payload with a distinctive residual count the disclosure must suppress. */
   const counts = healthy({
     residuals: { state: "read", data: { open: 4242, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 4242 } } },
   });
@@ -242,7 +242,7 @@ describe("dashboard collaboration disclosure", () => {
   };
 
   test("a partial observation does not render its count or revision as healthy", () => {
-    // The envelope carries a real numeric storeRevision; the incomplete observation
+    // note: The envelope carries a real numeric storeRevision; the incomplete observation
     // means neither that revision nor the residual count may be presented.
     const partial = { ...envelope(counts), collaboration: observation("partial") };
     const outcome = overviewOutcome({ status: "ready", envelope: partial });
@@ -251,7 +251,7 @@ describe("dashboard collaboration disclosure", () => {
     expect(outcome.revision).toBeNull();
     if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
     expect(outcome.model.residuals.reason).toContain("catalog.discovery.missing-plan");
-    // Projection-backed execution data stays usable.
+    // note: Projection-backed execution data stays usable.
     expect(outcome.model.workflows.kind).toBe("populated");
     const html = render(overviewFromEnvelope(partial));
     expect(html).not.toContain("4242");

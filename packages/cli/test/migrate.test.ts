@@ -37,7 +37,7 @@ function fixtureTree(): string {
 }
 
 /**
- * A legacy fixture root is a real checkout of a repository for the migration
+ * invariant: A legacy fixture root is a real checkout of a repository for the migration
  * verbs: the file-era execution upgrade owns the repository's collaboration
  * authority too, so the root needs an identity and its lane needs a private
  * home (never the operator's real one).
@@ -48,7 +48,7 @@ function identifyFixture(root: string): void {
 }
 
 let fixtureSequence = 0;
-/** The isolated user home every spawned CLI call resolves the lane under. */
+/** note: The isolated user home every spawned CLI call resolves the lane under. */
 const LANE_HOME = mkdtempSync(join(tmpdir(), "migrate-cli-home-"));
 
 function treeFiles(root: string): string[] {

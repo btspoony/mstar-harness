@@ -177,38 +177,38 @@ export function dashboardFailure(error: unknown): { code: string; message: strin
   return { code: "internal-error", message: sanitizeFailureMessage(error instanceof Error ? error.message : String(error)) };
 }
 
-/** A filesystem SQLite path, with its optional journal sidecar. */
+/** note: A filesystem SQLite path, with its optional journal sidecar. */
 const STORE_PATH = /(?:[A-Za-z]:)?[\\/][^\s"'`,;:)\]}]*(?:\.db)(?:-(?:wal|shm|journal))?/g;
 
-/** A conventional authorization scheme; the credential that follows is redacted with it. */
+/** note: A conventional authorization scheme; the credential that follows is redacted with it. */
 const AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)";
 
-/** A credential-shaped key and its value, including an auth scheme and its credential. */
+/** note: A credential-shaped key and its value, including an auth scheme and its credential. */
 const CREDENTIAL = new RegExp(
   `\\b(token|secret|credential|password|passphrase|api[-_]?key|authorization)\\b(\\s*[=:]\\s*)(?:${AUTH_SCHEME}\\s+)?(?:"[^"]*"|'[^']*'|\\S+)`,
   "gi",
 );
 
-/** A scheme-led credential that appears without a labelled key (`refused Bearer …`). */
+/** invariant: A scheme-led credential that appears without a labelled key (`refused Bearer …`). */
 const AUTH_VALUE = new RegExp(`\\b(${AUTH_SCHEME})\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "gi");
 
-/** One Digest parameter: `name=value`, quoted or unquoted. */
+/** note: One Digest parameter: `name=value`, quoted or unquoted. */
 const DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`;
 
-/** A labelled Digest value: the scheme plus every comma-separated parameter it carries. */
+/** note: A labelled Digest value: the scheme plus every comma-separated parameter it carries. */
 const DIGEST_VALUE = new RegExp(
   `\\b(authorization)\\b(\\s*[=:]\\s*)Digest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`,
   "gi",
 );
 
-/** A Digest value without its label. */
+/** note: A Digest value without its label. */
 const DIGEST_BARE = new RegExp(`\\b(Digest)\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
 
 function sanitizeFailureMessage(message: string): string {
   const home = homedir();
   const withoutStore = message.replace(STORE_PATH, "{STORE_DB}");
   const withoutHome = home === "" ? withoutStore : withoutStore.split(home).join("~");
-  // Digest first: its value is a comma-separated parameter list, so the generic
+  // why: Digest first: its value is a comma-separated parameter list, so the generic
   // single-token rule would leave the remaining parameters behind. The generic
   // label rule then covers scheme-less values, and the bare scheme rules catch an
   // authorization value that appears without its header name.

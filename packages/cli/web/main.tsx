@@ -467,7 +467,7 @@ function WorkflowsDestination(props: { address: Address }) {
     );
   }
 
-  // The rows are execution data and stay; an unavailable catalog association is
+  // why: The rows are execution data and stay; an unavailable catalog association is
   // stated above them instead of leaving its join cell to read as a healthy `—`.
   const catalogNotice = workflowsCatalogNotice(outcome, copy);
 
@@ -476,7 +476,7 @@ function WorkflowsDestination(props: { address: Address }) {
       {catalogNotice === null ? null : <Notice lead={catalogNotice.lead} reason={catalogNotice.reason} />}
       <Workflows
         model={outcome.model}
-        // The head's closing segment reads the envelope's own revision, which the model does
+        // note: The head's closing segment reads the envelope's own revision, which the model does
         // not carry: it is a fact about the read, not about a workflow.
         {...(raw !== null && raw.status === "ready" && raw.envelope.storeRevision !== null
           ? { storeRevision: raw.envelope.storeRevision }
@@ -522,7 +522,7 @@ function WorkflowDetailDestination(props: { id: string }) {
     );
   }
 
-  // The execution record stays; an unavailable catalog association is stated
+  // invariant: The execution record stays; an unavailable catalog association is stated
   // above it, exactly as the list states the same optional gap.
   const catalogNotice = workflowDetailCatalogNotice(outcome, copy);
 
@@ -862,7 +862,7 @@ function Shell(props: {
           },
         }
       : storeOutcome;
-  // The footer's two facts are the page's own read, not a side read: the model
+  // why: The footer's two facts are the page's own read, not a side read: the model
   // downgrades an incomplete collaboration observation, so a suppressed count or
   // revision is suppressed here too.
   const revision = pageOutcome.kind === "ready" ? pageOutcome.revision : null;

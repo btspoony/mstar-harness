@@ -93,7 +93,7 @@ export async function readIterations(
     signal,
   );
   if (result.status !== "ready") return result;
-  // Membership, attribution and the total are catalog facts: a read the
+  // note: Membership, attribution and the total are catalog facts: a read the
   // collaboration authority did not vouch for is not an iteration list.
   const gap = requiredCollaborationRefusal(result.envelope);
   return gap === null ? result : { status: "error", message: gap };
@@ -121,7 +121,7 @@ export async function readIterationDetail(
     if (envelope === null) {
       return { status: "error", message: "The iteration read answered with something that is not a read envelope." };
     }
-    // The iteration itself is a catalog row: without a complete observation a
+    // invariant: The iteration itself is a catalog row: without a complete observation a
     // null payload cannot be called absent.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };

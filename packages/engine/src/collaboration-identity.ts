@@ -1,5 +1,5 @@
 /**
- * collaboration-identity.ts -- canonical repository identity and the explicit
+ * invariant: collaboration-identity.ts -- canonical repository identity and the explicit
  * collaboration mode behind user-level collaboration storage.
  *
  * Identity is the origin repository, never a checkout path, Git author,
@@ -19,10 +19,10 @@ import type { StoreContext } from "./store-db.js";
 export type CollaborationMode = "local" | "mirror";
 
 export type CollaborationLocation = Readonly<{
-  /** Canonical logical identity (`host[/owner...]/repo` or `id:<repo_id>`). */
+  /** note: Canonical logical identity (`host[/owner...]/repo` or `id:<repo_id>`). */
   repoKey: string;
   mode: CollaborationMode;
-  /** Canonical user-level database path; never created by resolution. */
+  /** invariant: Canonical user-level database path; never created by resolution. */
   dbPath: string;
 }>;
 
@@ -44,12 +44,12 @@ export class CollaborationIdentityError extends Error {
   }
 }
 
-/** Safe origin path segment: no separators, encoding, quotes or dot segments. */
+/** note: Safe origin path segment: no separators, encoding, quotes or dot segments. */
 const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
-/** Explicit origin-less id: `[a-z0-9][a-z0-9._-]{0,127}`. */
+/** note: Explicit origin-less id: `[a-z0-9][a-z0-9._-]{0,127}`. */
 const SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const DEFAULT_PORT: Record<string, string> = { "https:": "443", "http:": "80", "ssh:": "22" };
-/** DNS host: dot-separated non-empty labels; `~` stays reserved for `host~port`. */
+/** note: DNS host: dot-separated non-empty labels; `~` stays reserved for `host~port`. */
 const SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
 
 function unresolved(cause: string): never {
@@ -59,7 +59,7 @@ function unresolved(cause: string): never {
   );
 }
 
-/** Refuse literal and percent-encoded dot segments in a raw origin path. */
+/** invariant: Refuse literal and percent-encoded dot segments in a raw origin path. */
 function assertNoDotSegments(rawPath: string): void {
   for (const segment of rawPath.split("/")) {
     if (segment === "") continue;
@@ -70,7 +70,7 @@ function assertNoDotSegments(rawPath: string): void {
   }
 }
 
-/** Lowercase DNS host without its terminal dot; refusal when it is not a safe one. */
+/** note: Lowercase DNS host without its terminal dot; refusal when it is not a safe one. */
 function canonicalHost(raw: string): string {
   const host = raw.replace(/\.$/, "").toLowerCase();
   if (host === "") unresolved("The origin names no host");
@@ -79,7 +79,7 @@ function canonicalHost(raw: string): string {
   return host;
 }
 
-/** Split an origin into host (with `~port` for nondefault ports) and path. */
+/** note: Split an origin into host (with `~port` for nondefault ports) and path. */
 function splitOrigin(raw: string): { host: string; path: string } {
   const value = raw.trim();
   if (value === "") unresolved("The origin remote is empty");
@@ -114,13 +114,13 @@ function splitOrigin(raw: string): { host: string; path: string } {
     const host = port === "" || port === DEFAULT_PORT[protocol] ? hostname : `${hostname}~${port}`;
     return { host, path: parsed.pathname };
   }
-  // SCP SSH spelling: `[user@]host:path`; anything else is not portable.
+  // note: SCP SSH spelling: `[user@]host:path`; anything else is not portable.
   const scp = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(value);
   if (scp === null) unresolved("The origin is not a portable https, http, ssh or SCP SSH remote");
   return { host: canonicalHost(scp[1]!), path: scp[2]! };
 }
 
-/** Owner path below the host, with one terminal `.git` and slashes removed. */
+/** note: Owner path below the host, with one terminal `.git` and slashes removed. */
 function originPathSegments(path: string, host: string): string[] {
   const segments = path.split("/").filter((segment) => segment !== "");
   if (segments.length === 0) unresolved("The origin names no repository path");
@@ -138,7 +138,7 @@ function originPathSegments(path: string, host: string): string[] {
 }
 
 /**
- * The single `origin` URL, `null` when the remote is unconfigured, refusal when
+ * invariant: The single `origin` URL, `null` when the remote is unconfigured, refusal when
  * Git cannot answer or several fetch origins disagree.
  */
 function readOrigin(mainRoot: string): string | null {
@@ -233,7 +233,7 @@ function resolveMode(raw: string | undefined): CollaborationMode {
   );
 }
 
-/** Canonical key plus its filesystem directory segments. */
+/** note: Canonical key plus its filesystem directory segments. */
 function canonicalIdentity(mainRoot: string, repoId: string | undefined): { repoKey: string; dirs: string[] } {
   const origin = readOrigin(mainRoot);
   if (origin === null) {
@@ -251,7 +251,7 @@ function canonicalIdentity(mainRoot: string, repoId: string | undefined): { repo
 }
 
 /**
- * Basenames reserved for the authority database and its SQLite sidecars. A
+ * invariant: Basenames reserved for the authority database and its SQLite sidecars. A
  * repository segment that spells one must not become a directory with that
  * name, or one identity's database file would occupy another's storage dir.
  */
@@ -263,7 +263,7 @@ const RESERVED_AUTHORITY_BASENAMES: Readonly<Record<string, true>> = {
 };
 
 /**
- * Filesystem spelling of one directory segment: percent-encode uppercase ASCII
+ * invariant: Filesystem spelling of one directory segment: percent-encode uppercase ASCII
  * so case-insensitive filesystems keep case-sensitive repositories apart, and
  * percent-encode the head of a reserved basename so it cannot occupy the
  * authority filename namespace. `repoKey` keeps the canonical spelling.

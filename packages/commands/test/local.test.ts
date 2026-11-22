@@ -279,7 +279,7 @@ describe("shared host-health helpers", () => {
       data: { linkedWorktree: true, harnessDir: path.join(main, ".mstar"), collaboration: expected },
     });
 
-    // An unconfigured mode is disclosed as the engine's named diagnostic: the
+    // why: An unconfigured mode is disclosed as the engine's named diagnostic: the
     // command still resolves every existing field instead of failing.
     writeText(main, ".mstarc", "[config]\nreview_dir=process/reviews\n");
     const withoutMode = await definition.execute({ path: main }, context);

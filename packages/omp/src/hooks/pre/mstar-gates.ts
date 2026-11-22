@@ -1,5 +1,5 @@
 /**
- * omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
+ * invariant: omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
  * mode blocks engine-validated violations; soft dispatch findings are logged,
  * while authority refusals remain unconditional.
  *
@@ -110,7 +110,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
 }
 
 /**
- * Resolve the ACTIVE collaboration (issue/catalog) authority. An unavailable,
+ * invariant: Resolve the ACTIVE collaboration (issue/catalog) authority. An unavailable,
  * missing or staged lane refuses; no execution-store read and no
  * document-backed fallback is admitted.
  */
@@ -141,7 +141,7 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** The harness root of the register a write LANDS on through a symlink alias
+/** note: The harness root of the register a write LANDS on through a symlink alias
  * (stricter-wins veto): the landed destination is the authority the bytes
  * belong to even when the caller's own path already classified as a register
  * elsewhere. `null` when the write is not an alias or does not land on a

@@ -17,7 +17,7 @@ let db: StoreDb;
 const otherProjectId = "milestone-other-project";
 const projectId = "milestone-test-project";
 
-/** A synthetic checkout whose origin names the collaboration repository. */
+/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string): StoreContext {
   const repo = join(root, name);
   mkdirSync(repo, { recursive: true });
@@ -27,7 +27,7 @@ function checkout(name: string): StoreContext {
   return { harnessDir: join(repo, ".mstar") };
 }
 
-/** The private staged record flipped to active, plus the checkout binding the
+/** invariant: The private staged record flipped to active, plus the checkout binding the
  * real activation writes: an ACTIVE authority is never usable unbound. */
 function activateLocation(context: StoreContext): string {
   const location = resolveCollaborationLocation(context);
@@ -136,9 +136,9 @@ describe("milestone store", () => {
     await initializeCollaborationStore(resolveCollaborationLocation(staged));
     const stagedDb = new DatabaseSync(resolveCollaborationLocation(staged).dbPath);
     try {
-      // The opener refuses a staged lane before the domain guard is reached.
+      // invariant: The opener refuses a staged lane before the domain guard is reached.
       await expect(addMilestone(staged,{projectId,name:"Staged",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-active"});
-      // A handle that reaches the domain guard still refuses the staged row.
+      // invariant: A handle that reaches the domain guard still refuses the staged row.
       expect(() => readMilestonesOn(stagedDb,projectId)).toThrow(expect.objectContaining({code:"store.not-active"}));
     } finally {
       stagedDb.close();
@@ -156,9 +156,9 @@ describe("milestone store", () => {
     const current=revision();
     const scheduled=await addMilestone(context,{projectId,name:"Delivery counts",target:null,ordinal:9},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     const activated=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:scheduled.storeRevision});
-    // A rollup read is not the delivery decision: it reports zero open issues...
+    // note: A rollup read is not the delivery decision: it reports zero open issues...
     expect(readMilestonesOn(db,projectId,scheduled.milestoneId).milestones[0]).toMatchObject({openIssues:0});
-    // ...and a row written after that read, without moving the store revision,
+    // note: ...and a row written after that read, without moving the store revision,
     // is still counted by the delivery's own collaboration transaction.
     issue("I-MILESTONE-DELIVERY","open",scheduled.milestoneId);
     await expect(updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision})).rejects.toMatchObject({code:"milestone.open-issues"});
@@ -170,14 +170,14 @@ describe("milestone store", () => {
     const before=revision();
     const empty=await addMilestone(context,{projectId,name:"Empty delivery",target:null,ordinal:10},{operationId:crypto.randomUUID(),expectedStoreRevision:before});
     const activated=await updateMilestone(context,projectId,empty.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:empty.storeRevision});
-    // A complete observation proves zero linked issues, so delivery passes; the
+    // why: A complete observation proves zero linked issues, so delivery passes; the
     // rollup keeps reporting an empty milestone, not a missing one.
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({totalIssues:0,openIssues:0});
     const delivered=await updateMilestone(context,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
     expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({status:"delivered",totalIssues:0,openIssues:0,resolvedIssues:0,otherRetiredIssues:0});
 
-    // An unavailable observation is not an empty one: the same delivery refuses.
+    // invariant: An unavailable observation is not an empty one: the same delivery refuses.
     const staged=checkout("milestone-store-delivery-staged");
     mkdirSync(staged.harnessDir!,{recursive:true});
     await initializeCollaborationStore(resolveCollaborationLocation(staged));

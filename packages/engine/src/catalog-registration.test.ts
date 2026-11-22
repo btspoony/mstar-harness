@@ -24,7 +24,7 @@ import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /**
- * The collaboration lane is user-level, so every fixture pins `homedir` to a
+ * note: The collaboration lane is user-level, so every fixture pins `homedir` to a
  * temporary home: a real spy on the live module binding, restored after each
  * case. A registration publishes into this repository's ACTIVE lane.
  */

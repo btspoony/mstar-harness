@@ -504,10 +504,10 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     ;(bumped.state.storeFacts as { storeRevision: number | null }).storeRevision = revision + 1
     expect(panelDigestOf(bumped)).toBe(baseline)
 
-    // `asOf` is the moment each read established its snapshot: also volatile.
+    // note: `asOf` is the moment each read established its snapshot: also volatile.
     const reobserved = copy()
     if (reobserved.state === null || reobserved.state.storeFacts === undefined) throw new Error('expected store facts')
-    // Fixture-only: the deep copy is mutable JSON while the payload type is readonly.
+    // note: Fixture-only: the deep copy is mutable JSON while the payload type is readonly.
     const reobservedFacts = reobserved.state.storeFacts as { asOf: string | null }
     reobservedFacts.asOf = '2030-01-01T00:00:00.000Z'
     expect(panelDigestOf(reobserved)).toBe(baseline)

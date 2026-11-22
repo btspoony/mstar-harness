@@ -274,7 +274,7 @@ const EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION =
 /** The migration that recorded Dsh ledger legacy provenance columns. */
 const DSH_LEGACY_PROVENANCE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced the composite reservation ledger. */
+/** note: The migration that introduced the composite reservation ledger. */
 const EXECUTION_INTENTS_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "execution-collaboration-intents")?.version ?? Number.POSITIVE_INFINITY;
 
@@ -322,7 +322,7 @@ function corrupt(detail: string): ExecutionRecoveryError {
 
 
 // ---------------------------------------------------------------------------
-// Reading the execution and host authority domains
+// note: Reading the execution and host authority domains
 // ---------------------------------------------------------------------------
 
 type AuthorityDomain = "execution" | "host";
@@ -397,7 +397,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "migration_receipts",
-    // The legacy combined-store ledger stays execution domain: it is the
+    // invariant: The legacy combined-store ledger stays execution domain: it is the
     // historical record a pre-cutover store leaves behind, never live
     // collaboration authority (which is the lane's own phase rows).
     columns: ["id", "manifest_hash", "phase", "manifest_json", "mapping_json", "source_counts_json", "applied_at", "activated_at", "retired_at"],
@@ -407,7 +407,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "catalog_execution_bindings",
-    // Execution-owned: a workflow's pin to a catalog identity travels with the
+    // note: Execution-owned: a workflow's pin to a catalog identity travels with the
     // execution row it authorizes, not with the catalog document itself.
     columns: ["workflow_id", "catalog_kind", "catalog_id", "workflow_root_kind", "workflow_relative_path", "catalog_revision", "input_hash", "pin_json", "operation_id"],
     orderBy: "workflow_id, catalog_kind, catalog_id",
@@ -575,7 +575,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
 ];
 
 /**
- * The FK-safe replacement order: parents before children, so a whole-domain
+ * invariant: The FK-safe replacement order: parents before children, so a whole-domain
  * replacement never needs `foreign_keys=OFF` and never leaves the schema's own
  * constraints half-satisfied. Deletion runs in the exact reverse.
  *
@@ -632,7 +632,7 @@ function replacementOrder(availability: TableAvailability): readonly AuthorityTa
 
 type TableAvailability = {
   /**
-   * The tables THIS connection actually carries. A recorded schema version is
+   * invariant: The tables THIS connection actually carries. A recorded schema version is
    * not an inventory: the collaboration cutover's fence drops the moved
    * collaboration tables while keeping the schema version, so presence is read
    * from the connection, never derived from the version alone.
@@ -640,7 +640,7 @@ type TableAvailability = {
   tables: ReadonlySet<string>;
   execution: boolean;
   executionCoverage: boolean;
-  /** The composite reservation ledger exists from its introducing migration. */
+  /** note: The composite reservation ledger exists from its introducing migration. */
   executionIntents: boolean;
   host: boolean;
   dshLegacyProvenance: boolean;
@@ -1064,7 +1064,7 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
 }
 
 /**
- * The live authority generation, identity and rows read from ONE connection's
+ * invariant: The live authority generation, identity and rows read from ONE connection's
  * own snapshot: the `store_meta` singleton, the execution and host authority
  * rows and the committed operation receipts. The caller owns the snapshot — a
  * read handle's read transaction, or the restore's write transaction — so the
@@ -1117,7 +1117,7 @@ async function readCopyRows(
     db.exec("pragma query_only=ON");
     db.exec("begin");
     try {
-      // Presence comes from the copy's own catalog: a fenced image legitimately
+      // note: Presence comes from the copy's own catalog: a fenced image legitimately
       // lacks the moved collaboration tables.
       const availability = availabilityOf(schemaVersion, tableNamesOn(db));
       return {
@@ -1327,7 +1327,7 @@ function recoveryPointPath(context: StoreContext, root: string, backupPath: stri
 }
 
 /**
- * §8: the readable loss of one side against the other. The comparison is
+ * invariant: §8: the readable loss of one side against the other. The comparison is
  * content-based — a row is a difference unless BOTH sides hold it with the same
  * digest — because that is what makes a changed child or provenance row visible:
  * the tables §2.2 keeps outside the authority (`catalog_execution_bindings`,

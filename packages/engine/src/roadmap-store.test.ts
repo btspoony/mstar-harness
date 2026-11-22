@@ -26,7 +26,7 @@ const fixtures: string[] = [];
 const content = (projectId: string, description: string): string =>
   `---\nproject_id: ${projectId}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\ncustom_field: preserved\n---\n\n## Direction\n\n${description}\n\n## Goals\n\n- [ ] Parent goal\n  - [x] Nested goal\n\n`;
 
-/** A synthetic checkout whose origin names the collaboration repository. */
+/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string): StoreContext {
   const parent = mkdtempSync(join(ROOT, name));
   const repo = join(parent, "repo");
@@ -40,7 +40,7 @@ function checkout(name: string): StoreContext {
   return { harnessDir };
 }
 
-/** Publish the staged lane and this checkout's binding, as real activation does. */
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -121,7 +121,7 @@ describe("roadmap-authority transactional domain", () => {
     expect((await importRoadmapAuthority(context, review, { operationId: "op-import" }))).toEqual(receipt);
     const read = await readRoadmapAuthority(context, "project-reviewed");
     expect(read.roadmap?.contentMarkdown).toBe(editedContent);
-    // The receipt lives in the collaboration lane's standalone ledger.
+    // note: The receipt lives in the collaboration lane's standalone ledger.
     const receiptHandle = await openStore(context, "read");
     const importOperation = receiptHandle.db.prepare("select 1 from store_operations where operation_id='op-import'").get();
     receiptHandle.close();
@@ -159,7 +159,7 @@ describe("roadmap-authority transactional domain", () => {
     const missing = checkout("roadmap-no-authority");
     await expect(readRoadmapAuthority(missing, "project-missing")).rejects.toMatchObject({ code: "collaboration.not-initialized" });
     await initializeCollaborationStore(resolveCollaborationLocation(missing));
-    // A staged lane is refused at admission, never served as a zero-goal map.
+    // invariant: A staged lane is refused at admission, never served as a zero-goal map.
     await expect(readRoadmapAuthority(missing, "project-missing")).rejects.toMatchObject({ code: "collaboration.not-active" });
   });
 

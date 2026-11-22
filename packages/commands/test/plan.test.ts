@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 /**
- * The collaboration lane is user-level, so every residual case must resolve its
+ * invariant: The collaboration lane is user-level, so every residual case must resolve its
  * home to this fixture and never to the operator's real one.
  */
 const HOME_ROOT = mkdtempSync(path.join(os.tmpdir(), "plan-command-home-"));
@@ -315,7 +315,7 @@ describe("plan command family", () => {
 });
 
 /**
- * One residual-bearing checkout: a synthetic origin (the collaboration identity),
+ * note: One residual-bearing checkout: a synthetic origin (the collaboration identity),
  * an active combined store and — unless `collaboration: "absent"` — an ACTIVE
  * collaboration authority, plus a running workflow whose coordinator is bound.
  */
@@ -373,7 +373,7 @@ async function residualFixture(
   return { root, harness, workflow, plan, ctx };
 }
 
-/** The plan CAS token `plan.show` reports, or a fixture failure. */
+/** note: The plan CAS token `plan.show` reports, or a fixture failure. */
 function planTokenOf(envelope: { status: string; data: unknown }): string {
   if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("token" in envelope.data)) {
     throw new Error(`plan.show returned no execution token: ${JSON.stringify(envelope)}`);
@@ -420,7 +420,7 @@ describe("plan residual-add / residual-close composite commands", () => {
     const receipt = added.data as { replayed: boolean; token: string };
     expect(receipt.replayed).toBe(false);
 
-    // The same operation id and payload replay the recorded receipt instead of
+    // why: The same operation id and payload replay the recorded receipt instead of
     // capturing a second issue.
     const replayed = await definition("plan.issue-add").execute(request as never, data.ctx);
     expect(replayed.status).toBe("ok");

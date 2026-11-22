@@ -121,7 +121,7 @@ export function landedPathOf(filePath: string): string {
   }
 }
 
-/** The user-level collaboration database and its SQLite sidecars. The name is a
+/** invariant: The user-level collaboration database and its SQLite sidecars. The name is a
  * RESERVED authority filename everywhere — not only inside the user-level
  * namespace — so a copy can never be hand-written under any path, alias or
  * checkout. An unrelated same-named file is denied as the accepted fail-closed

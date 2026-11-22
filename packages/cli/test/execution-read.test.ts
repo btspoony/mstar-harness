@@ -512,7 +512,7 @@ describe("execution-cross-domain", () => {
     expect(
       projected !== null && typeof projected === "object" && "code" in projected ? projected.code : undefined,
     ).toBe("store.corrupt");
-    // The split boundary: the issues view's authority is the repository lane,
+    // invariant: The split boundary: the issues view's authority is the repository lane,
     // which is healthy — a corrupt execution store must not fail it, and the
     // empty answer is the lane's own genuine zero.
     const issues = await readDashboardView({ context: fixture.context, view: "issues" });

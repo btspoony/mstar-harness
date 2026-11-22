@@ -41,7 +41,7 @@ describe("unreadable store — refusal boundary and the documented fresh-clone b
       writeFileSync(storePath, CORRUPT_BYTES);
       const bytesBefore = readFileSync(storePath);
       const mstarc = join(root, ".mstarc");
-      // The declared layout carries the repository's collaboration identity
+      // invariant: The declared layout carries the repository's collaboration identity
       // too: `store init` pairs the lane and refuses without it. The repo_id
       // derives from the unique temp path so reruns never meet a lane a
       // previous run published and left ACTIVE.

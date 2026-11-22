@@ -67,7 +67,7 @@ type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
 const collaborationVerbs = ["plan", "apply", "activate", "restore", "adopt"] as const;
 
-/** The one flag table both store families publish. */
+/** note: The one flag table both store families publish. */
 const optionFlags: Record<keyof StoreInput, string> = {
   harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
   backup: "--backup <path>",
@@ -92,6 +92,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
+    // invariant: these branches recover through runtime-selected store verbs, so no single statically provable command covers them.
     // reachability: manual — the repo-identity, cutover-not-quiescent, cutover-unconfirmed and not-initialized branches recover through runtime-selected store verbs, persisted-evidence inspection, or the collaboration-restore route whose required flags directly follow the registered verb name, so the action-word candidate scan cannot parse them; no single statically provable command covers these branches
     : refusalEnvelope({
       command: id,
@@ -108,10 +109,10 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // explicit document that overrides the generated one).
         ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
         : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid" || code === "collaboration.mode-unavailable"
-          // Every repository-scoped store verb needs the checkout's collaboration identity and mode.
+          // note: Every repository-scoped store verb needs the checkout's collaboration identity and mode.
           ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
           : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
-            // A combined source or a competing target is settled by the reviewed cutover, never by a guessed merge.
+            // invariant: A combined source or a competing target is settled by the reviewed cutover, never by a guessed merge.
             ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then apply and activate it with mstar store collaboration apply --harness <abs> --manifest <abs-manifest> and mstar store collaboration activate --harness <abs> --manifest <abs-manifest>. A source or target another activation owns is preserved, never overwritten."
             : code === "collaboration.cutover-not-quiescent"
               ? "Settle the pending mirror batches or catalog registrations the refusal names with their own verbs, stop the remaining writers, then retry the same reviewed manifest."
@@ -203,7 +204,7 @@ function outputPath(value: string | undefined, cwd: string): string | undefined 
   return value === undefined ? undefined : resolveCliPath(value, cwd);
 }
 /**
- * Publish ONE operator report create-only, beside the operation it describes.
+ * invariant: Publish ONE operator report create-only, beside the operation it describes.
  *
  * A report is evidence, never an authority: the destination must be a NEW name,
  * so an operator can never truncate a source, a recovery manifest or a live
@@ -217,7 +218,7 @@ function publishReport(
 ): { out: string | null; reportError: { code: string; message: string } | null } {
   if (out === undefined) return { out: null, reportError: null };
   const target = path.resolve(out);
-  // EVERY step — directory creation, the private write, the create-only link and
+  // invariant: EVERY step — directory creation, the private write, the create-only link and
   // the cleanup — sits inside this report-only boundary: a committed operation's
   // outcome is never replaced by a report failure, not even by its own cleanup.
   let tmp: string | null = null;
@@ -244,14 +245,14 @@ function publishReport(
       try {
         rmSync(tmp, { force: true });
       } catch {
-        // cleanup is best-effort scratch removal; it never decides the outcome
+        // invariant: cleanup is best-effort scratch removal; it never decides the outcome
       }
     }
   }
 }
 
 /**
- * The create-only default manifest below the selected harness's recovery folder.
+ * invariant: The create-only default manifest below the selected harness's recovery folder.
  * The receipt discloses it, so an operator who omitted `--out` still knows
  * exactly which two images and which manifest now exist.
  */
@@ -294,7 +295,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       case "store.init": {
         const fact = findLegacyWorkspaceFact(context.harnessDir);
         if (fact !== null) throw new StoreError("store.already-exists", `${fact}. Nothing was created.`);
-        // The repository's collaboration authority comes first: a fresh init
+        // note: The repository's collaboration authority comes first: a fresh init
         // creates or reuses it WITHOUT clearing it, and only this checkout's
         // execution is initialized here.
         const collaboration = await ensureCollaborationAuthority(context);
@@ -317,7 +318,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
-        // The two owners meet here: this checkout's collaboration authority is
+        // invariant: The two owners meet here: this checkout's collaboration authority is
         // established (create/reuse, never cleared) before the execution half
         // can report any imported state. A combined source with collaboration
         // rows refuses with the cutover route, and the import itself refuses a
@@ -353,7 +354,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         }));
       }
       case "store.backup": {
-        // A repository backup is the verified PAIR of both domains, never one
+        // invariant: A repository backup is the verified PAIR of both domains, never one
         // execution image sold as a full backup.
         const out = outputPath(input.out, invocation.cwd) ?? defaultBackupManifestPath(context.harnessDir);
         const receipt: RepositoryBackupReceipt = await backupRepositoryStores(context, { out: absoluteFile(out, "--out") });
@@ -413,7 +414,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
  */
 
 /**
- * The one operator lifecycle of the collaboration authority. `--harness` names
+ * invariant: The one operator lifecycle of the collaboration authority. `--harness` names
  * an absolute operation TARGET (this checkout's harness), never a discovered
  * root, so every verb here runs against the scope the operator named and no
  * other.
@@ -450,7 +451,7 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       return ok(id, { ...receipt, receiptFile: report.out, reportError: report.reportError });
     }
     if (verb === "adopt") {
-      // The explicit adoption verb: binds THIS checkout to an already ACTIVE
+      // note: The explicit adoption verb: binds THIS checkout to an already ACTIVE
       // authority whose recorded lineage proves the exact live generation. It
       // mutates no collaboration data.
       const adoption = await adoptCollaborationBinding(context, {
@@ -466,7 +467,7 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       const authority = await restoreCollaborationBackup(context, receipt, {
         operator: required(input.operator, "--operator"),
         attestation,
-        // The pair is resolved beside the manifest the OPERATOR supplied, not a
+        // note: The pair is resolved beside the manifest the OPERATOR supplied, not a
         // recorded absolute path: a moved, intact pair restores from its new home.
         manifestPath: absoluteFile(required(input.backup, "--backup"), "--backup"),
       });
@@ -518,7 +519,7 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
     id,
     cli: { path: ["store", "collaboration", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    // `harness` names the operation's target, so the connection pin must not rewrite it.
+    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,
     effects: ["read", "write"],
