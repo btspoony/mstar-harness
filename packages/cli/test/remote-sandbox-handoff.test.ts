@@ -15,18 +15,19 @@
  * B consumes only what a provider traversal and the bare origin carry: the fixture renders
  * the provider's own confirmed records into its snapshots, so nothing A held is passed in.
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { RemoteSnapshot } from "@mstar-harness/engine";
+import type { RunResult } from "./harness";
 import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
   TRACKED_BRANCH,
   RemoteCollaborationFixture,
+  boundedRun,
   fixtureGit,
   type OutboxIntent,
   type OutboxPermit,
@@ -289,6 +290,26 @@ function reconstruct(source: HandoffSource): Readonly<{ b: RemoteSandbox; shown:
   return { b, shown: b.runJson(["issue", "show", "--id", issueRef, "--harness", b.harness]) };
 }
 
+/**
+ * note: One bounded Git probe under an exact environment: the hostile global configuration is
+ * named explicitly and `HOME` is private, so the runner's own `GIT_DIR`, signing setup and hooks
+ * never reach it, and a wedged Git or signer is killed at the fixture deadline.
+ */
+function hostileGitProbe(cwd: string, args: readonly string[], home: string, config: string): RunResult {
+  return boundedRun(["git", ...args], {
+    cwd,
+    env: {
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      HOME: home,
+      TMPDIR: process.env.TMPDIR ?? tmpdir(),
+      TZ: "UTC",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: config,
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
+}
+
 describe("remote handoff", () => {
   const hosts: RemoteCollaborationFixture[] = [];
 
@@ -314,19 +335,27 @@ describe("remote handoff", () => {
     const ambientGitDir = process.env.GIT_DIR;
     process.env.GIT_CONFIG_GLOBAL = hostileConfig;
     try {
-      // note: Non-vacuity: a plain Git child that inherits this configuration cannot commit.
+      // note: Non-vacuity: a bounded Git child under exactly this hostile configuration and a
+      // private HOME cannot commit, so the fixture's later success is not a vacuous pass.
       const probe = join(hostileRoot, "probe");
+      const probeHome = join(hostileRoot, "home");
       mkdirSync(probe, { recursive: true });
-      execFileSync("git", ["init", "-q"], { cwd: probe, stdio: "ignore" });
+      mkdirSync(probeHome, { recursive: true });
+      expect(hostileGitProbe(probe, ["init", "-q"], probeHome, hostileConfig).exitCode).toBe(0);
       writeFileSync(join(probe, "probe.txt"), "probe\n");
-      execFileSync("git", ["add", "probe.txt"], { cwd: probe, stdio: "ignore" });
-      expect(() =>
-        execFileSync("git", ["-c", "user.name=probe", "-c", "user.email=probe@example.test", "commit", "-q", "-m", "probe"], {
-          cwd: probe,
-          stdio: "ignore",
-        }),
-      ).toThrow();
-      // note: The second inherited fact: a runner-set GIT_DIR that names no repository.
+      expect(hostileGitProbe(probe, ["add", "probe.txt"], probeHome, hostileConfig).exitCode).toBe(0);
+      const refused = hostileGitProbe(
+        probe,
+        ["-c", "user.name=probe", "-c", "user.email=probe@example.test", "commit", "-q", "-m", "probe"],
+        probeHome,
+        hostileConfig,
+      );
+      // note: A killed child (124) would prove only the deadline, so the refusal must be Git's own.
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.exitCode).not.toBe(124);
+      expect(refused.stderr).toContain("gpg");
+      // note: The second inherited fact: a runner-set GIT_DIR that names no repository, which
+      // the fixture's own Git children ignore.
       process.env.GIT_DIR = join(hostileRoot, "not-a-repository");
 
       const fixture = host("hostile-git");
