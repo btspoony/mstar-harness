@@ -1056,7 +1056,20 @@ async function runRemoteComposite<T>(
       committedAt: nowRfc3339(),
       facts: JSON.stringify({ remote: null }),
     };
-    return finalizeComposite(context, intent, receipt, effects.finalize);
+    try {
+      return await finalizeComposite(context, intent, receipt, effects.finalize);
+    } catch (error) {
+      if (codeOf(error) === "collaboration.operation-partial") throw error;
+      throw partialRefusal({
+        intent,
+        phase: "prepared",
+        confirmed: [],
+        cause: error,
+        recovery:
+          `The reservation is retained: reissue the same verb with the same --operation id once the named execution ` +
+          `authority is available; nothing provider-side is re-applied.`,
+      });
+    }
   }
   const pending = remoteIntents.find((entry) => entry.state !== "confirmed");
   if (pending !== undefined) {
@@ -1096,7 +1109,24 @@ async function runRemoteComposite<T>(
       })),
     }),
   };
-  return finalizeComposite(context, intent, receipt, effects.finalize);
+  try {
+    return await finalizeComposite(context, intent, receipt, effects.finalize);
+  } catch (error) {
+    if (codeOf(error) === "collaboration.operation-partial") throw error;
+    // invariant: Q2: every provider effect is confirmed and durable. An execution-acknowledgement
+    // failure discloses exactly those components and the same-operation replay path instead of
+    // reporting the local error alone and obscuring the external effect.
+    throw partialRefusal({
+      intent,
+      phase: "collaboration-confirmed",
+      confirmed: remoteIntents.map((entry) => `provider:${entry.operationId}`),
+      cause: error,
+      recovery:
+        `The confirmed provider components named above are recorded and are never re-sent. Reissue this SAME verb ` +
+        `with the SAME --operation id once the named execution cause is corrected: only the execution acknowledgement ` +
+        `is committed.`,
+    });
+  }
 }
 
 /**
