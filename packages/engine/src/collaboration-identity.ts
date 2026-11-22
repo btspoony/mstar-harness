@@ -747,9 +747,11 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
     }
     return;
   }
-  // note: A selector published during a local/mirror mutation decides this scope's phase:
-  // re-resolve fully so a draining selector refuses and an active one keeps its verdict.
-  resolveCollaborationLocation(context);
+  // invariant: This admission proved a live-confirmed ABSENCE; a ref present now is a
+  // selector published during the mutation, never the absence the writer was admitted under.
+  selectorStale(
+    `The origin's ${AUTHORITY_REF} now names ${live}, but this mutation was admitted under a confirmed absence of it`,
+  );
 }
 
 /**
@@ -757,7 +759,9 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
  * for this control harness. Every origin-backed checkout proves its selection
  * from the origin's protected selector ref first: a local/mirror checkout keeps
  * its own lane only when that live lookup confirms no selector. A `remote` mode
- * additionally returns the checked selection. Throws `CollaborationIdentityError`
+ * requires the checked selection; a local/mirror mode that admits beside an
+ * ACTIVE local/mirror selector retains that exact commit for its write fence.
+ * Throws `CollaborationIdentityError`
  * on an unresolved identity or mode, an unchecked selector, or a selector that
  * disagrees with this checkout.
  */
@@ -781,12 +785,17 @@ export function resolveCollaborationLocation(
     if (mode === "remote") {
       if (published === null) selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
       selection = published;
-    } else if (published !== null && published.phase === "draining") {
-      // invariant: A draining selector stops old writers: a local/mirror lane must not write
-      // alongside a generation that is still being reconciled into its successor.
-      selectorStale(
-        `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
-      );
+    } else if (published !== null) {
+      if (published.phase === "draining") {
+        // invariant: A draining selector stops old writers: a local/mirror lane must not write
+        // alongside a generation that is still being reconciled into its successor.
+        selectorStale(
+          `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
+        );
+      }
+      // invariant: An ACTIVE selector is retained for local/mirror too, so the commit fence
+      // compares the exact admitted commit instead of accepting any later same-mode selector.
+      selection = published;
     }
   }
   const home = options.userHome ?? homedir();

@@ -657,7 +657,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
         const location = resolveCollaborationLocation(context);
         remote = location.mode === "remote";
         if (remote) remoteLocation = location;
-        if (location.selection !== undefined) {
+        if (remote === true && location.selection !== undefined) {
           remoteSelection = {
             selectorCommit: location.selection.commit,
             generation: location.selection.generation,

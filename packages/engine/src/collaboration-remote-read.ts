@@ -24,7 +24,7 @@ import {
   type CollaborationProviderScope,
   type CollaborationScope,
 } from "./collaboration-store.js";
-import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, assertSelectionUnchanged, type CollaborationLocation } from "./collaboration-identity.js";
 import {
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
@@ -53,6 +53,15 @@ import { parseRoadmapContent } from "./roadmap-content.js";
 const PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEVERITY_RANK: Record<Severity, number> = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
 const TERMINAL = new Set<Disposition>(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
+
+/**
+ * note: The read's sample-to-snapshot gap seam: a regression binds a successor between the
+ * captured `{location,binding}` pair and the SQLite snapshot. Production runs without a callback.
+ */
+let remoteReadSampleGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteReadSampleGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteReadSampleGapForTest = callback;
+}
 
 // ---------------------------------------------------------------------------
 // note: Admitted project evidence for one read
@@ -150,11 +159,28 @@ export async function openRemoteReadView(
       );
     }
   }
+  // note: The sample the caller took is re-observed at the boundary: a regression binds a
+  // successor in this window, so a matching pair alone is not proof the lane stood still.
+  await remoteReadSampleGapForTest?.();
   // note: ONE sample: the lane is admitted for the location and binding this view reads and
   // stamps itself with, so a concurrent rebind never labels rows with another generation.
   const handle = await openRemoteCache(context, "read", { location, binding });
   try {
     handle.db.exec("begin");
+    // invariant: The row snapshot must belong to the SAME selector generation the pair named.
+    // A successor committed before this transaction began leaves the predecessor's rows in
+    // place, so a bound-generation-stable read could otherwise satisfy the successor's gate.
+    const latest = handle.db
+      .prepare("select max(generation) as generation from remote_bindings")
+      .get() as { generation?: unknown } | undefined;
+    if (latest?.generation !== binding.generation) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This read sampled selector commit ${selection.commit} generation ${String(binding.generation)}, but the cache ` +
+          `lane has since committed generation ${String(latest?.generation ?? "none")}; the sampled generation is ` +
+          `inspection-only. Re-run the read against the current scope; nothing was returned from the predecessor.`,
+      );
+    }
     const rows = handle.db
       .prepare(
         "select b.project_key, b.workspace_id, b.team_id, b.provider_project_id, b.journal_issue_id, b.verified_at, " +
@@ -164,6 +190,9 @@ export async function openRemoteReadView(
       )
       .all(binding.generation, ...requested) as StoredEvidenceRow[];
     handle.db.exec("commit");
+    // invariant: The admitted selector commit is re-proved on the live ref at the read
+    // boundary: a moved ref refuses instead of answering a superseded generation's rows.
+    assertSelectionUnchanged(context, location);
     const byProject = new Map(rows.map((row) => [row.project_key, row]));
     const now = Date.now();
     const projects = new Map<string, RemoteProjectEvidence>();
@@ -591,10 +620,12 @@ export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): Issu
           )
           // note: The page contract needs a TOTAL order: newest provider update first, then
           // project and the immutable provider id, so `offset` names the same rows on a re-read.
+          // The input accepts whole-second and fractional UTC spellings for one instant, so
+          // the key is the parsed instant, never the text.
           .sort((left, right) => {
-            if (left.issue.providerUpdatedAt !== right.issue.providerUpdatedAt) {
-              return left.issue.providerUpdatedAt < right.issue.providerUpdatedAt ? 1 : -1;
-            }
+            const leftAt = Date.parse(left.issue.providerUpdatedAt);
+            const rightAt = Date.parse(right.issue.providerUpdatedAt);
+            if (leftAt !== rightAt) return rightAt - leftAt;
             if (left.projectId !== right.projectId) return left.projectId < right.projectId ? -1 : 1;
             const leftId = left.issue.identity.issueId;
             const rightId = right.issue.identity.issueId;

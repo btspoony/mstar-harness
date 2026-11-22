@@ -29,6 +29,7 @@ import {
   rmdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -2326,6 +2327,51 @@ export type CollaborationAdoption = Readonly<{
 }>;
 
 /**
+ * note: The lane state adoption reads: an ACTIVE v1 lane is proven by the immutable v1
+ * ledger and layout (never migrated here), a current lane by the full current admission.
+ * Either way the checkout's binding is only written AFTER this read, so the explicit
+ * adoption is the supported recovery for a replacement clone of a v1 authority.
+ */
+async function readAdoptionSnapshot(location: CollaborationLocation): Promise<{
+  authority: CollaborationAuthority;
+  lineage: RecordedLineage[];
+}> {
+  assertStoreRuntimeSupported();
+  // invariant: Adoption reads an EXISTING lane through the same private, link-free,
+  // non-WAL admission every other entry uses; it never creates one.
+  assertAdmittedTarget(location.dbPath);
+  if (!existsSync(location.dbPath)) throw notInitialized(location.dbPath);
+  const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
+  try {
+    const appliedMax = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+    if (appliedMax < current) {
+      if (appliedMax !== COLLABORATION_SCHEMA.version) {
+        throw new StoreError(
+          "store.schema-drift",
+          `The collaboration store at ${location.dbPath} records schema version ${String(appliedMax)}; adoption ` +
+            `recognizes the immutable v1 ledger or the current version only. Inspect the lane with mstar path resolve; ` +
+            `nothing was written.`,
+        );
+      }
+      assertLegacySchema(db, location.dbPath);
+    } else {
+      assertCurrentSchema(db, location.dbPath);
+    }
+    const meta = readMeta(db);
+    if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
+      throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+    }
+    const authority: CollaborationAuthority = { ...meta, schemaVersion: appliedMax };
+    return { authority, lineage: authority.state === "active" ? recordedLineage(db) : [] };
+  } catch (error) {
+    throw asRefusal(location.dbPath, error);
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * `store collaboration adopt` — the ONLY supported way a replacement clone (or any
  * other bound-less checkout) acquires an existing ACTIVE authority's binding.
  *
@@ -2344,6 +2390,7 @@ export async function adoptCollaborationBinding(
   options: { expectStoreId?: string } = {},
 ): Promise<CollaborationAdoption> {
   const location = resolveCollaborationLocation(context);
+  if (location.mode === "remote") remoteLaneRefusal();
   // note: Foreign checkout / legacy owner: the scope's authority is not this checkout's
   // to adopt while it still owns a combined source.
   await assertControlCheckoutScope(context, location);
@@ -2356,10 +2403,7 @@ export async function adoptCollaborationBinding(
     );
   }
 
-  const snapshot = await readCollaborationStage(location, ({ db, authority }) => ({
-    authority,
-    lineage: authority.state === "active" ? recordedLineage(db) : [],
-  }));
+  const snapshot = await readAdoptionSnapshot(location);
   const authority = snapshot.authority;
   if (authority.state !== "active") {
     throw new StoreError(
@@ -2630,19 +2674,33 @@ export function localPredecessorRetiredPath(
 }
 
 /**
+ * note: The retirement's publish-to-snapshot seam: a regression simulates a competing
+ * checkout that preserved a different image after this one's last inode check.
+ */
+let localPredecessorPublicationGapForTest: (() => void | Promise<void>) | undefined;
+export function setLocalPredecessorPublicationGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  localPredecessorPublicationGapForTest = callback;
+}
+
+/**
  * invariant: Retire the matched predecessor under write exclusion. The lane is proved to
  * be exactly this record (repository key, mode, store id, epoch) inside a
- * `BEGIN IMMEDIATE`, then renames beside itself: its rows survive as
- * inaccessible history and the canonical name is free for the verified cache.
+ * `BEGIN IMMEDIATE`, then MOVED beside itself without ever replacing an image:
+ * a hard link creates the preserved name only if it is still free, and the
+ * canonical name is removed after it. Its rows survive as inaccessible history
+ * and the canonical name is free for the verified cache.
  *
- * The checked selector is re-proved immediately before the rename, inside the
+ * The checked selector is re-proved immediately before the move, inside the
  * caller's transition exclusion: a selector that moved (or was deleted) while
  * this verb waited leaves the canonical predecessor untouched, so the later
  * cache transaction can never be the first step that notices the drift.
  *
- * A replay after a crash between the rename and the cache publication finds the
- * already-retired image and continues; a vanished predecessor with no retired
- * image refuses, so a lost authority is never re-created from nothing.
+ * A replay after a crash between the link and the unlink finds both names on
+ * one inode and completes the move; a preserved image of other bytes, or a
+ * vanished predecessor with no retired image, refuses so a lost authority is
+ * never re-created from nothing and history is never overwritten.
  */
 export async function retireLocalPredecessorLane(
   context: StoreContext,
@@ -2662,6 +2720,19 @@ export async function retireLocalPredecessorLane(
     );
   }
   if (existsSync(retiredPath)) {
+    // note: A crash after the link leaves both names on one inode; completing that move is
+    // not replacement. Any other image is a different authority's history and is preserved.
+    const source = statSync(location.dbPath);
+    const preserved = statSync(retiredPath);
+    if (source.dev === preserved.dev && source.ino === preserved.ino) {
+      try {
+        unlinkSync(location.dbPath);
+        syncDirectoryEntry(dirname(location.dbPath));
+      } catch (error) {
+        throw barrierRefusal(location.dbPath, error);
+      }
+      return retiredPath;
+    }
     throw new StoreError(
       "collaboration.stale-binding",
       `A preserved ${predecessor.mode} predecessor image already exists at ${retiredPath}; it is never overwritten. ` +
@@ -2727,8 +2798,26 @@ export async function retireLocalPredecessorLane(
       `the predecessor lane this transition proved`,
     );
   }
-  renameSync(location.dbPath, retiredPath);
+  // note: The gap a competing checkout's completed retirement lands in: the archive name is
+  // still free here, so only the create-if-absent link below decides which image survives.
+  await localPredecessorPublicationGapForTest?.();
   try {
+    linkSync(location.dbPath, retiredPath);
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `A preserved ${predecessor.mode} predecessor image appeared at ${retiredPath} while this transition was retiring ` +
+          `the lane; it is never replaced. Inspect the transition before repeating it; nothing was changed.`,
+      );
+    }
+    throw unreadable(
+      location.dbPath,
+      `its preserved predecessor image could not be published (${publicationCause(error)})`,
+    );
+  }
+  try {
+    unlinkSync(location.dbPath);
     syncDirectoryEntry(dirname(location.dbPath));
   } catch (error) {
     throw barrierRefusal(location.dbPath, error);

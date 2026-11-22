@@ -37,7 +37,7 @@ import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity,
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteSnapshot } from "./collaboration-remote.js";
-import { openRemoteReadView } from "./collaboration-remote-read.js";
+import { openRemoteReadView, setRemoteReadSampleGapForTest } from "./collaboration-remote-read.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
@@ -2444,6 +2444,48 @@ describe("remote read boundary", () => {
     });
     const current = await openRemoteReadView(context);
     expect(current).toMatchObject({ selectorCommit: commit4, generation: 4 });
+  });
+
+  test("a cache generation committed after the read's sample never satisfies the gate", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-read-sample-generation");
+    const commit3 = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit3));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit3, check, completeSnapshot(check), 0));
+    const observed = await observePlanFindings(context, "20261122-remote-authority");
+    expect(observed).toMatchObject({ source: "remote", selectorCommit: commit3, generation: 3 });
+
+    // note: The successor becomes live AND bound after the resample captured its matching
+    // {location,binding} pair, but before its SQLite snapshot opened.
+    let sampled = false;
+    setRemoteReadSampleGapForTest(async () => {
+      if (sampled) return;
+      sampled = true;
+      const commit4 = fixture.publish({
+        generation: 4,
+        previous: { selectorCommit: commit3, generation: 3, mode: "remote" },
+        cutover: {
+          operator: "fixture-operator",
+          reviewedAt: FIXTURE_AT,
+          sourceFenced: true,
+          pendingOperationIds: [],
+          verifiedTargetDigest: "d".repeat(64),
+        },
+      });
+      await bindRemoteAuthority(context, fixture.batch(commit4, 4));
+    });
+    try {
+      // invariant: The predecessor's rows are inspection-only once the successor committed;
+      // they may never satisfy the completion gate under the new generation's live selector.
+      await expect(assertPlanFindingsCurrent(context, observed)).rejects.toMatchObject({
+        code: "collaboration.stale-binding",
+        message: expect.stringContaining("has since committed generation 4"),
+      });
+    } finally {
+      setRemoteReadSampleGapForTest(undefined);
+    }
+    expect(sampled).toBe(true);
   });
 
   test("a project-scoped overview never carries another project's catalog identity", async () => {

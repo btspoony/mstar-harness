@@ -1685,4 +1685,38 @@ describe("remote issue reads", () => {
     const last = await listIssues(context, { limit: 1, offset: 3 });
     expect(last.providerIssues?.map((issue) => issue.title)).toEqual(["Native oldest"]);
   });
+
+  test("provider-only pages order mixed timestamp spellings by instant", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote-page-instants");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const native = (issueId: string, title: string, providerUpdatedAt: string) => ({
+      identity: { ...check.scope, issueId },
+      nativeTitle: title,
+      nativeStatus: "Todo",
+      providerUpdatedAt,
+      mstar: null,
+    });
+    const snapshot: RemoteSnapshot = {
+      ...base,
+      issues: [
+        // note: Only MStar subjects carry findings semantics; the page's native arm is under test.
+        ...base.issues.filter((issue) => issue.mstar !== null),
+        // invariant: Within one second `00.500Z` is NEWER than whole-second `00Z`; a text
+        // comparison puts `Z` after `.` and would page the earlier issue first.
+        native("aaaaaaaa-0000-4000-8000-000000000001", "Fractional half", "2026-11-20T00:00:00.500Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000002", "Whole second", "2026-11-20T00:00:00Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000003", "Earlier", "2026-11-19T23:59:59.999Z"),
+      ],
+    };
+    await ingestRemoteObservation(context, submission(commit, check, snapshot, 0));
+
+    const first = await listIssues(context, { limit: 1 });
+    expect(first.providerIssues?.map((issue) => issue.title)).toEqual(["Fractional half"]);
+    const second = await listIssues(context, { limit: 2, offset: 1 });
+    expect(second.providerIssues?.map((issue) => issue.title)).toEqual(["Whole second", "Earlier"]);
+  });
 });
