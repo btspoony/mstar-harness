@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { remoteEventHead, type RemoteEvent } from "@mstar-harness/engine";
 import { CLI_ROOT, type RunResult } from "../harness";
 
 export const AUTHORITY_REF = "refs/heads/mstar-collaboration-authority";
@@ -201,6 +202,34 @@ export function parseSandboxCommand(result: RunResult): SandboxCommand {
   };
 }
 
+/**
+ * note: The confirmed record the provider holds for one operation: the frozen event's
+ * reference and head plus its complete MStar subject. A traversal renders it onto the
+ * native issue it names; losing the record leaves that issue visible and unmarked.
+ */
+export type ProviderIssueRecord = Readonly<{
+  issueRef: string;
+  head: readonly string[];
+  subject: Readonly<Record<string, unknown>>;
+}>;
+
+/** note: One provider record: the event the host appended and the identity it landed on. */
+type ProviderEffect = Readonly<{
+  operationId: string;
+  attemptId: string;
+  recordId: string;
+  identity: Record<string, unknown>;
+  event: RemoteEvent;
+}>;
+
+/** note: One provider record as a traversal renders it; a project event carries no issue record. */
+function providerRecord(effect: ProviderEffect): ProviderIssueRecord | null {
+  const { change } = effect.event;
+  return change.kind === "project-replace"
+    ? null
+    : { issueRef: change.issueRef, head: [remoteEventHead(effect.event)], subject: change.mstar };
+}
+
 export class RemoteCollaborationFixture {
   private readonly root: string;
   private readonly origin: string;
@@ -209,9 +238,7 @@ export class RemoteCollaborationFixture {
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
   /** note: The provider records this host actually holds; only `send` appends, only `lookup` reads. */
-  private readonly effects: Array<
-    Readonly<{ operationId: string; attemptId: string; recordId: string; identity: Record<string, unknown>; event: unknown }>
-  > = [];
+  private readonly effects: ProviderEffect[] = [];
   /** note: Every provider call the TEST RUNNER made; the CLI has no channel into this state. */
   readonly providerCalls: Array<Readonly<{ kind: "send" | "lookup"; operationId: string }>> = [];
   private issues: readonly FixtureIssue[] = [
@@ -376,6 +403,29 @@ export class RemoteCollaborationFixture {
     this.issues = issues;
   }
 
+  /** note: The confirmed issue record the provider holds for one operation; `null` once discarded. */
+  confirmedIssue(operationId: string): ProviderIssueRecord | null {
+    const effect = this.effects.find((entry) => entry.operationId === operationId);
+    return effect === undefined ? null : providerRecord(effect);
+  }
+
+  /**
+   * note: The provider loses its confirmed record for one operation. The native issue itself
+   * stays readable, so the traversal still shows the issue but no marker: its existence is
+   * never mistaken for the record's survival.
+   */
+  discardEffects(operationId: string): void {
+    for (let index = this.effects.length - 1; index >= 0; index -= 1) {
+      if (this.effects[index]!.operationId === operationId) this.effects.splice(index, 1);
+    }
+  }
+
+  /** note: The confirmed issue record the provider holds for one native issue, if it holds one. */
+  private recordFor(issueId: string): ProviderIssueRecord | null {
+    const effect = this.effects.find((entry) => entry.identity.issueId === issueId);
+    return effect === undefined ? null : providerRecord(effect);
+  }
+
   /**
    * The host sends one issued permit to the provider and records the effect it actually
    * produced. Called twice for one attempt it records a duplicate effect, which is exactly
@@ -396,7 +446,8 @@ export class RemoteCollaborationFixture {
       attemptId: permit.attemptId,
       recordId,
       identity,
-      event: permit.frozenRequest.event,
+      // note: The provider stores the frozen event it received; its DTO crosses as opaque JSON.
+      event: permit.frozenRequest.event as RemoteEvent,
     });
     return {
       version: 1,
@@ -501,19 +552,23 @@ export class RemoteCollaborationFixture {
           ],
           catalogLinks: [],
         },
-        issues: this.issues.map((issue) => ({
-          identity: {
-            provider: "linear",
-            workspaceId: project.workspaceId,
-            teamId: project.teamId,
-            projectId: project.projectId,
-            issueId: issue.issueId,
-          },
-          nativeTitle: issue.title,
-          nativeStatus: issue.status,
-          providerUpdatedAt: issue.updatedAt,
-          mstar: null,
-        })),
+        issues: this.issues.map((issue) => {
+          const record = this.recordFor(issue.issueId);
+          return {
+            identity: {
+              provider: "linear",
+              workspaceId: project.workspaceId,
+              teamId: project.teamId,
+              projectId: project.projectId,
+              issueId: issue.issueId,
+            },
+            nativeTitle: issue.title,
+            nativeStatus: issue.status,
+            providerUpdatedAt: issue.updatedAt,
+            // note: A record the provider no longer holds renders as an unmarked native issue.
+            mstar: record === null ? null : { issueRef: record.issueRef, head: record.head, ...record.subject },
+          };
+        }),
       },
     };
   }
