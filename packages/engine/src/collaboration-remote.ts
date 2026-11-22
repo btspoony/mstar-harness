@@ -1821,11 +1821,10 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
  * a conflicting tie cannot replace the recorded one. Three asymmetric ties are
  * admitted: a byte-identical replay, an addressed negative check tied with a
  * recorded positive - a revocation invalidates serving even in the same
- * millisecond - and, only where `replayUnsafeFidelity` says the caller re-records
- * the refusal it is admitted for, the exact positive check a decoder-detected
- * `unsafe-fidelity` observation recorded under its negative outcome. The reverse
- * never holds: a tied positive cannot reverse a recorded negative and restore the
- * binding.
+ * millisecond - and, only where `replayUnsafeFidelity` says this submission is the
+ * decoded `unsafe-fidelity` refusal it is admitted for, the exact positive check
+ * such an observation recorded under its negative outcome. The reverse never holds:
+ * a tied positive cannot reverse a recorded negative and restore the binding.
  */
 function assertCheckAdvances(
   projectId: string,
@@ -2017,7 +2016,12 @@ function recordObservation(
       `The cache binds ${submission.check.projectId} to another selector commit than the submission names. Nothing was written.`,
     );
   }
-  assertCheckAdvances(submission.check.projectId, submission.check, stored, { replayUnsafeFidelity: true });
+  // invariant: Only the branch that re-persists a decoded `unsafe-fidelity` refusal may replay
+  // the check that refusal was recorded from. A snapshot that now decodes is a positive
+  // observation, and a tied positive never restores what the refusal revoked.
+  assertCheckAdvances(submission.check.projectId, submission.check, stored, {
+    replayUnsafeFidelity: unsafe !== null,
+  });
   const current = db
     .prepare("select revision from remote_observations where generation = ? and project_key = ?")
     .get(submission.generation, submission.check.projectId);

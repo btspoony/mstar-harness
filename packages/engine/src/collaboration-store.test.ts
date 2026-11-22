@@ -2636,13 +2636,24 @@ describe("remote observation cache", () => {
     const fixture = remoteFixture("allowlist");
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
-    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
-    const check = positiveCheck();
-    const base = completeSnapshot(check);
+    // note: Every submission carries its own host check. Serving is restored after a refusal
+    // only from a strictly newer check, so this fixture advances the instant per submission.
+    let clock = Date.now() - 20_000;
+    const nextCheck = (): ScopeCheck => {
+      clock += 200;
+      return positiveCheck({ checkedAt: new Date(clock).toISOString() });
+    };
+    await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      checks: [nextCheck()],
+    });
+    const base = completeSnapshot(nextCheck());
     const subject = base.issues[0]!.mstar!;
     const submit = (snapshot: unknown) =>
       ingestRemoteObservation(context, {
-        ...observation(check, { snapshot }),
+        ...observation(nextCheck(), { snapshot }),
         selectorCommit: commit,
         generation: 3,
       });
@@ -2725,7 +2736,7 @@ describe("remote observation cache", () => {
     };
     expect(
       await ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision: 1,
           snapshot: { ...base, issues: [{ ...base.issues[0]!, mstar: importedSubject }, base.issues[1]!] },
         }),
@@ -2808,7 +2819,7 @@ describe("remote observation cache", () => {
     // portable, so the credential/path rule refuses shapes, not business text.
     expect(
       await ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision: invalidatedRevision,
           snapshot: withSubject({
             transitions: [
@@ -2837,7 +2848,7 @@ describe("remote observation cache", () => {
     // portable: a URL path and a relative reference are accepted.
     expect(
       await ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision: invalidatedRevision + 1,
           snapshot: withSubject({
             transitions: [
@@ -2863,7 +2874,7 @@ describe("remote observation cache", () => {
     // only an assigned credential, a credential-bearing URL or a home path refuses.
     expect(
       await ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision: invalidatedRevision + 2,
           snapshot: withSubject({
             transitions: [
@@ -2889,7 +2900,7 @@ describe("remote observation cache", () => {
     // assignment, so the historical note survives the boundary unchanged.
     expect(
       await ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision: invalidatedRevision + 3,
           snapshot: withSubject({
             transitions: [
@@ -3123,9 +3134,20 @@ describe("remote observation cache", () => {
     const refused = ["R5", "R6", "R7"].map(pick);
     expect(portable.kind).toBe("migration");
 
-    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
-    const check = positiveCheck();
-    const base = completeSnapshot(check);
+    // note: Every submission carries its own host check. Serving is restored after a refusal
+    // only from a strictly newer check, so this fixture advances the instant per submission.
+    let clock = Date.now() - 20_000;
+    const nextCheck = (): ScopeCheck => {
+      clock += 200;
+      return positiveCheck({ checkedAt: new Date(clock).toISOString() });
+    };
+    await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      checks: [nextCheck()],
+    });
+    const base = completeSnapshot(nextCheck());
     const subject = base.issues[0]!.mstar!;
     const provenanceEntry = (row: ProvenanceRow): Record<string, unknown> => ({
       eventId: "55555555-5555-4555-8555-555555555555",
@@ -3141,7 +3163,7 @@ describe("remote observation cache", () => {
     });
     const submitProvenance = (row: ProvenanceRow, expectRevision: number) =>
       ingestRemoteObservation(context, {
-        ...observation(check, {
+        ...observation(nextCheck(), {
           expectRevision,
           snapshot: {
             ...base,
@@ -6920,6 +6942,22 @@ describe("remote outbox qc fixes", () => {
     expect(evidence.verified_at).toBe(check.checkedAt);
     expect(JSON.parse(evidence.verification_json)).toMatchObject({ outcome: { kind: "unsafe-fidelity" } });
     expect(evidence.writer_id).toBeNull();
+
+    // invariant: The exception belongs to the refusal branch alone: a decodable positive
+    // observation resubmitted at the refused instant is stale and re-authorizes nothing.
+    await expect(
+      ingestRemoteObservation(context, {
+        ...observation(check, { selectorCommit: commit, generation: 3, expectRevision: 1 }),
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+    expect(JSON.parse(bindingEvidence(dbPath).verification_json)).toMatchObject({
+      outcome: { kind: "unsafe-fidelity" },
+    });
+    expect(bindingEvidence(dbPath).writer_id).toBeNull();
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      projects: [{ revision: 1, completeness: "unavailable", code: "remote.unsafe-fidelity" }],
+    });
 
     // invariant: The observation itself may replay exactly that refused submission at the same
     // instant, and the replay records the refusal again instead of restoring the binding.
