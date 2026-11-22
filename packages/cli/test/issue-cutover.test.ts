@@ -599,8 +599,9 @@ describe("mstar status — the issue authority is never read as an empty rollup 
 });
 
 // ---------------------------------------------------------------------------
-// The remote observation lane: CLI admission, native detail and the refusal
-// that keeps this v2 cache from performing a cache-only adoption.
+// The remote observation and outbox lane at the CLI boundary: admission, native
+// detail, and the full provider-free loop from a durable intent to a recorded
+// receipt. No provider is reachable from any command here.
 // ---------------------------------------------------------------------------
 
 describe("remote collaboration CLI", () => {
@@ -667,7 +668,7 @@ describe("remote collaboration CLI", () => {
     };
   }
 
-  test("status|bind|observe admit evidence, native detail is visible, and adopt-issue refuses without mutation", () => {
+  test("status|bind|observe admit evidence, native detail is visible, and the outbox loop settles an adoption", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-remote-cli-")));
     roots.push(root);
     const fixture = remoteRepo(root);
@@ -771,7 +772,8 @@ describe("remote collaboration CLI", () => {
     expect(guessed.exitCode).toBe(1);
     expect(jsonOf(guessed).code).toBe("issue.scope-refused");
 
-    // invariant: The unmarked native issue is never closed by its native status.
+    // invariant: The unmarked native issue is never closed by its native status: it carries no
+    // MStar subject, so no remote replacement addresses it (the enqueue refuses before writing).
     const closed = runCli(
       [
         "issue", "close",
@@ -785,7 +787,7 @@ describe("remote collaboration CLI", () => {
       fixture.repo,
       env,
     );
-    expect(jsonOf(closed)).toMatchObject({ code: "collaboration.mode-unavailable" });
+    expect(jsonOf(closed)).toMatchObject({ code: "issue.not-found" });
 
     const adoption = {
       version: 1,
@@ -808,20 +810,57 @@ describe("remote collaboration CLI", () => {
     };
     const adoptInput = join(root, "adopt.json");
     writeFileSync(adoptInput, JSON.stringify(adoption));
-    const refused = runCli(
+    const operation = "99999999-9999-4999-8999-999999999999";
+    const remote = ["store", "collaboration", "remote"];
+    const adopted = runCli(
       [
-        "store", "collaboration", "remote", "adopt-issue",
+        ...remote, "adopt-issue",
         "--project", remoteIds.projectId,
         "--issue", remoteIds.providerIssueId,
-        "--operation", "99999999-9999-4999-8999-999999999999",
+        "--operation", operation,
         "--input", adoptInput,
         "--harness", fixture.harness,
       ],
       fixture.repo,
       env,
     );
-    expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).code).toBe("remote.outbox-unavailable");
+    // invariant: The adoption is ONE durable intent, and the command's exit 0 discloses the
+    // outbox state instead of claiming the issue was adopted.
+    expect(adopted.exitCode).toBe(0);
+    expect(jsonOf(adopted)).toMatchObject({ operationId: operation, state: "enqueued", replayed: false });
+
+    const pending = runCli([...remote, "outbox-pending", "--harness", fixture.harness, "--project", remoteIds.projectId], fixture.repo, env);
+    expect(pending.exitCode).toBe(0);
+    expect(jsonOf(pending).intents).toEqual([expect.objectContaining({ operationId: operation, projectId: remoteIds.projectId })]);
+
+    const dispatched = runCli([...remote, "outbox-dispatch", "--harness", fixture.harness, "--operation", operation], fixture.repo, env);
+    expect(dispatched.exitCode).toBe(0);
+    const permit = jsonOf(dispatched).permit as Record<string, any>;
+    // note: Assert field-by-field: Bun's `toMatchObject` writes asymmetric matchers into the
+    // received object, which would replace the permit values this receipt is built from.
+    expect(permit.operationId).toBe(operation);
+    expect(typeof permit.attemptId).toBe("string");
+    expect(typeof permit.requestHash).toBe("string");
+
+    const receiptFile = join(root, "receipt.json");
+    const receipt = {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      projectId: remoteIds.projectId,
+      operationId: operation,
+      attemptId: permit.attemptId,
+      requestHash: permit.requestHash,
+      observedAt: new Date().toISOString(),
+      outcome: { kind: "unconfirmed", reason: "no-response" },
+    };
+    writeFileSync(receiptFile, JSON.stringify(receipt));
+    const recorded = runCli([...remote, "outbox-receipt", "--harness", fixture.harness, "--input", receiptFile], fixture.repo, env);
+    // note: Exit 0 acknowledges the durable evidence; only `confirmed` is an effect success.
+    expect(recorded.exitCode).toBe(0);
+    expect(jsonOf(recorded)).toMatchObject({ state: "unconfirmed" });
+    const shownIntent = runCli([...remote, "outbox-show", "--harness", fixture.harness, "--operation", operation], fixture.repo, env);
+    expect(jsonOf(shownIntent)).toMatchObject({ state: "unconfirmed", attemptId: permit.attemptId, disclosure: "full" });
 
     // invariant: No cache-only adoption is performed: the observation revision and the
     // visible issue set are exactly what the admission recorded.
@@ -831,5 +870,27 @@ describe("remote collaboration CLI", () => {
     const afterPage = jsonOf(relisted);
     expect(afterPage.total).toBe(0);
     expect(afterPage.providerIssues).toHaveLength(1);
+
+    // note: The host's provider effect is the exact frozen event on the addressed record.
+    const confirmedFile = join(root, "confirmed.json");
+    writeFileSync(confirmedFile, JSON.stringify({
+      ...receipt,
+      observedAt: new Date().toISOString(),
+      outcome: {
+        kind: "confirmed",
+        identity: {
+          provider: "linear",
+          workspaceId: remoteIds.workspaceId,
+          teamId: remoteIds.teamId,
+          projectId: remoteIds.providerProjectId,
+          issueId: remoteIds.providerIssueId,
+        },
+        recordId: "abababab-abab-4bab-8bab-abababababab",
+        event: permit.frozenRequest.event,
+      },
+    }));
+    const confirmed = runCli([...remote, "outbox-receipt", "--harness", fixture.harness, "--input", confirmedFile], fixture.repo, env);
+    expect(confirmed.exitCode).toBe(0);
+    expect(jsonOf(confirmed)).toMatchObject({ state: "confirmed" });
   }, 60_000);
 });

@@ -107,6 +107,10 @@ describe("store and execution command surface", () => {
       "store.collaboration.adopt",
       "store.collaboration.remote.status", "store.collaboration.remote.bind", "store.collaboration.remote.observe",
       "store.collaboration.remote.adopt-issue",
+      "store.collaboration.remote.outbox-pending", "store.collaboration.remote.outbox-show",
+      "store.collaboration.remote.outbox-dispatch", "store.collaboration.remote.outbox-receipt",
+      "store.collaboration.remote.outbox-reconcile", "store.collaboration.remote.outbox-resolve",
+      "store.collaboration.remote.outbox-abandon",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",

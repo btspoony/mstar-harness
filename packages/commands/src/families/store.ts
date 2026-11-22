@@ -34,6 +34,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { getStoreRemoteOutboxCommandDefinitions } from "./store-remote-outbox.js";
 import { resolveCliPath } from "../host-health.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -143,7 +144,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         : code === "remote.selector-unavailable" || code === "remote.unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale"
           ? "Restore Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs>; the Host Agent refreshes the scope and resubmits mstar store collaboration remote observe --input <file|->. A required read is never answered from local rows."
           : code === "remote.outbox-unavailable"
-            ? "This checkout's v2 cache has no durable outbox, so an adoption intent cannot be recorded and nothing was written; no cache-only adoption exists. Confirm the observed native issue with mstar issue show --id <provider-issue-id> --project <local-project-id>; the durable adoption intent arrives with the remote outbox plan."
+            ? "This checkout's collaboration lane holds no durable outbox, so nothing was enqueued and nothing was sent. Advance the lane with mstar store upgrade --operator <name> --harness <abs>, then rerun the same verb with the same operation id; the observed native issue is still readable with mstar issue show --id <provider-issue-id> --project <local-project-id>."
             : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked" || code === "remote.unsafe-fidelity"
               ? "Correct the document or the host's verified tenant/team/project scope, permissions and field fidelity, then resubmit mstar store collaboration remote bind|observe --input <file|-> for the checked selector commit and generation."
               : code === "store.upgrade-attestation-missing"
@@ -640,13 +641,13 @@ function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition
     observe:
       "Accept one verification/observation submission and replace one project's cache evidence atomically. A negative check records the invalidation and returns its named refusal; a partial snapshot is stored as partial. It never creates or adopts an issue.",
     "adopt-issue":
-      "Validate a strict adoption document against the exact observed, UNMARKED native issue. This v2 cache has no durable outbox, so the verb refuses remote.outbox-unavailable and writes nothing: no cache-only adoption exists. A title, a native status or an already marked issue never adopts.",
+      "Validate a strict adoption document against the exact observed, UNMARKED native issue and freeze it as ONE durable outbox intent under --operation. The returned state is the durable fact: an enqueued intent is not an adopted issue. A marked or differently referenced issue refuses, and no title, native status or caller-supplied project adopts.",
   };
   const effects: Record<(typeof remoteVerbs)[number], readonly CommandEffect[]> = {
     status: ["read"],
     bind: ["read", "write"],
     observe: ["read", "write"],
-    "adopt-issue": ["read"],
+    "adopt-issue": ["read", "write"],
   };
   const options = optionKeys.map((key) => ({
     key,
@@ -726,5 +727,6 @@ export function getStoreCommandDefinitions(): readonly CommandDefinition[] {
     ...verbs.map((verb) => cliDefinition(`store.${verb}`)),
     ...collaborationVerbs.map((verb) => collaborationDefinition(verb)),
     ...remoteVerbs.map((verb) => remoteDefinition(verb)),
+    ...getStoreRemoteOutboxCommandDefinitions(),
   ];
 }

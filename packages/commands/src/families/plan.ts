@@ -168,7 +168,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                         // The refusal names which half is missing or moved, so the
                         // operator reissues the SAME operation id (never a new one,
                         // which would allocate a second issue) once that half is fixed.
-                        ? "The residual's collaboration effect or its plan finalization is incomplete. Bring back the named collaboration authority: read the plan row with mstar plan show --workflow <workflow-id> --plan <plan-id>, then reissue the same verb with the same --operation id and payload; never retry under a new operation id."
+                        ? "The residual's collaboration effect or its plan finalization is incomplete. In a remote checkout the provider intent is settled first: inspect it with mstar store collaboration remote outbox-show --harness <abs> --operation <intent-id>, dispatch it and record its receipt, then reissue this same verb with the same --operation id and payload; never retry under a new operation id."
                         : id === "plan.issue-add"
                           ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries '<json-array>'."
                           : id === "plan.issue-close"
