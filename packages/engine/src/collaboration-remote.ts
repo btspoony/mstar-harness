@@ -2298,16 +2298,69 @@ function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
-/** note: A frozen subject is strict JSON: unlisted runtime values never reach the stored request. */
-function frozenSubject(value: unknown, path: string): Record<string, unknown> {
+/**
+ * invariant: The event's issue subject is the complete normalized MStar document
+ * with the same field allowlists the snapshot applies, minus the derived `head`
+ * and the outer duplicate `issueRef`. An empty or partial subject never freezes.
+ */
+function frozenIssueSubject(value: unknown, path: string): Record<string, unknown> {
   const body = record(value, path);
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(body);
-  } catch {
-    return invalid(path, "must be JSON-serializable");
+  if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
+  if ("issueRef" in body) invalid(`${path}.issueRef`, "duplicates the event's reference");
+  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"]);
+  return {
+    fields: mstarFields(body.fields, `${path}.fields`),
+    occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
+      occurrence(entry, `${path}.occurrences[${index}]`),
+    ),
+    transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
+      transition(entry, `${path}.transitions[${index}]`),
+    ),
+    relations: list(body.relations, `${path}.relations`).map((entry, index) =>
+      relation(entry, `${path}.relations[${index}]`),
+    ),
+    provenance: list(body.provenance, `${path}.provenance`).map((entry, index) =>
+      provenanceLink(entry, `${path}.provenance[${index}]`),
+    ),
+    projectMoves: list(body.projectMoves, `${path}.projectMoves`).map((entry, index) =>
+      projectMove(entry, `${path}.projectMoves[${index}]`),
+    ),
+  };
+}
+
+/**
+ * invariant: The event's project subject is the snapshot's normalized project
+ * document - every member present, no derived `head`, no `binding` (the
+ * selected transport scope supplies it) and nothing outside the allowlist.
+ */
+function frozenProjectSubject(value: unknown, path: string, projectKey: string): Record<string, unknown> {
+  const body = record(value, path);
+  if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
+  if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
+  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"]);
+  const projectId = text(body.projectId, `${path}.projectId`);
+  if (projectId !== projectKey) invalid(`${path}.projectId`, "must be the event's project");
+  const milestones = list(body.milestones, `${path}.milestones`).map((entry, index) =>
+    milestone(entry, `${path}.milestones[${index}]`),
+  );
+  if (new Set(milestones.map((entry) => entry.milestoneId)).size !== milestones.length) {
+    invalid(`${path}.milestones`, "must not repeat a milestone id");
   }
-  return record(JSON.parse(serialized), path);
+  const catalogEntities = list(body.catalogEntities, `${path}.catalogEntities`).map((entry, index) =>
+    catalogEntity(entry, `${path}.catalogEntities[${index}]`),
+  );
+  if (new Set(catalogEntities.map((entry) => `${entry.kind}:${entry.id}`)).size !== catalogEntities.length) {
+    invalid(`${path}.catalogEntities`, "must not repeat a (kind, id) pair");
+  }
+  return {
+    projectId,
+    milestones,
+    roadmap: roadmap(body.roadmap, `${path}.roadmap`),
+    catalogEntities,
+    catalogLinks: list(body.catalogLinks, `${path}.catalogLinks`).map((entry, index) =>
+      catalogLink(entry, `${path}.catalogLinks[${index}]`),
+    ),
+  };
 }
 
 function intentBinding(raw: unknown): RemoteIntentBinding {
@@ -2352,25 +2405,29 @@ function remoteEvent(raw: unknown, binding: RemoteIntentBinding): RemoteEvent {
   if (projectId !== binding.projectKey) invalid("request.event.projectId", "must be the binding's project");
   const change = record(body.change, "request.event.change");
   const kind = oneOf(change.kind, REMOTE_CHANGE_KINDS, "request.event.change.kind");
+  const parents = digestHead(body.parents, "request.event.parents");
+  // invariant: `[]` is initial genesis or adoption only: a replacement cites the heads it replaces.
+  if (kind === "issue-replace" && parents.length === 0) {
+    invalid("request.event.parents", "a replacement must cite at least one replaced head");
+  }
   let frozen: RemoteEventChange;
   if (kind === "project-replace") {
     allowOnly(change, "request.event.change", ["kind", "project"]);
-    const project = frozenSubject(change.project, "request.event.change.project");
-    if ("binding" in project) invalid("request.event.change.project.binding", "is supplied by the selected scope");
-    frozen = { kind, project };
+    frozen = { kind, project: frozenProjectSubject(change.project, "request.event.change.project", projectId) };
   } else {
     allowOnly(change, "request.event.change", ["kind", "issueRef", "mstar"]);
-    const mstar = frozenSubject(change.mstar, "request.event.change.mstar");
-    if ("head" in mstar) invalid("request.event.change.mstar.head", "is derived and is not frozen");
-    if ("issueRef" in mstar) invalid("request.event.change.mstar.issueRef", "duplicates the event's reference");
-    frozen = { kind, issueRef: assertIssueRef(change.issueRef), mstar };
+    frozen = {
+      kind,
+      issueRef: assertIssueRef(change.issueRef),
+      mstar: frozenIssueSubject(change.mstar, "request.event.change.mstar"),
+    };
   }
   return {
     version: 1,
     repoKey: text(body.repoKey, "request.event.repoKey"),
     projectId,
     operationId: linearId(body.operationId, "request.event.operationId"),
-    parents: digestHead(body.parents, "request.event.parents"),
+    parents,
     change: frozen,
   };
 }

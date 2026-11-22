@@ -66,6 +66,7 @@ import {
   tableNamesOn,
   validateAppliedMigrations,
   walShapedStoreFile,
+  type AppliedMigration,
   type Migration,
   type StoreConnectOptions,
   type StoreContext,
@@ -1480,6 +1481,30 @@ function readMeta(db: StoreDb): CollaborationMeta {
 }
 
 /**
+ * invariant: The Data Model refuses unknown checksums. Every recorded collaboration
+ * migration row must carry this build's own compiled name and bytes, not only a
+ * contiguous version id; otherwise a lane whose DDL another build wrote would be
+ * admitted and replayed. `store.corrupt` maps to `collaboration.unreadable` at
+ * admission and stays itself for the explicit upgrade.
+ */
+function validateCollaborationMigrations(applied: AppliedMigration[]): number {
+  const version = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
+  for (const row of applied) {
+    const compiled = COLLABORATION_MIGRATIONS.find((migration) => migration.version === row.version)!;
+    if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
+      throw new StoreError(
+        "store.corrupt",
+        `The collaboration store records a v${String(row.version)} "${row.name}" migration that is not this build's ` +
+          `compiled "${compiled.name}" migration; the lane is refused rather than trusted on unknown bytes. ` +
+          `Nothing was modified.`,
+        { migration: row.version, recordedChecksum: row.checksum, compiledChecksum: migrationChecksum(compiled) },
+      );
+    }
+  }
+  return version;
+}
+
+/**
  * invariant: Ledger, current domain schema, metadata, trusted selection, required state and
  * (when given) the exact stamp must all agree before any handle or effect is
  * admitted. Every failure keeps its own distinguishable refusal.
@@ -1494,7 +1519,7 @@ function admit(
     // note: The ledger's version verdict comes FIRST: a store written by a newer
     // build is an upgrade requirement, not a damaged current schema, even when
     // that build's layout no longer matches this one's inventory.
-    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
       throw upgradeRequired(location.dbPath, schemaVersion);
     }
@@ -1952,7 +1977,7 @@ export async function upgradeCollaborationStore(
     db.exec("begin immediate");
     try {
       const applied = readAppliedMigrations(db, false);
-      const appliedMax = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
+      const appliedMax = validateCollaborationMigrations(applied);
       const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
       const meta = readMeta(db);
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
@@ -1992,14 +2017,6 @@ export async function upgradeCollaborationStore(
         db.exec("commit");
         return receipt(current, 0);
       }
-      const recordedV1 = applied[0];
-      if (recordedV1 === undefined || recordedV1.checksum !== migrationChecksum(COLLABORATION_SCHEMA)) {
-        throw new StoreError(
-          "store.corrupt",
-          `The collaboration store at ${dbPath} records a v1 checksum that is not this build's immutable ` +
-            `"collaboration-core" migration; the lane is refused rather than rebuilt on unknown bytes. Nothing was modified.`,
-        );
-      }
       const fromVersion = appliedMax;
       let issuesBackfilled = 0;
       if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
@@ -2023,16 +2040,6 @@ export async function upgradeCollaborationStore(
           migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
           nowRfc3339(),
         );
-      } else {
-        const recordedV2 = applied[1];
-        if (recordedV2 === undefined || recordedV2.checksum !== migrationChecksum(COLLABORATION_REMOTE_SCHEMA)) {
-          throw new StoreError(
-            "store.corrupt",
-            `The collaboration store at ${dbPath} records a v2 checksum that is not this build's ` +
-              `"collaboration-remote-cache" migration; the lane is refused rather than advanced on unknown bytes. ` +
-              `Nothing was modified.`,
-          );
-        }
       }
       // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
       // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
@@ -2480,7 +2487,7 @@ async function readAdoptionSnapshot(location: CollaborationLocation): Promise<{
   if (!existsSync(location.dbPath)) throw notInitialized(location.dbPath);
   const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
   try {
-    const appliedMax = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    const appliedMax = validateCollaborationMigrations(readAppliedMigrations(db, false));
     const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
     if (appliedMax < current) {
       if (appliedMax !== COLLABORATION_SCHEMA.version) {
@@ -2790,7 +2797,7 @@ export async function readLocalPredecessorLane(location: CollaborationLocation):
   if (!existsSync(location.dbPath)) return null;
   const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
   try {
-    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey) {
       throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
@@ -2885,7 +2892,7 @@ export async function retireLocalPredecessorLane(
   try {
     db.exec("begin immediate");
     try {
-      validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+      validateCollaborationMigrations(readAppliedMigrations(db, false));
       const meta = readMeta(db);
       if (
         meta.repoKey !== location.repoKey ||

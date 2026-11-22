@@ -1435,6 +1435,20 @@ function ledgerVersions(dbPath: string): number[] {
   }
 }
 
+/** note: The recorded ledger exactly as the lane holds it, for no-mutation assertions. */
+function ledgerRows(dbPath: string): Array<{ version: number; name: string; checksum: string }> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db.prepare("select version, name, checksum from schema_version order by version").all() as Array<{
+      version: number;
+      name: string;
+      checksum: string;
+    }>;
+  } finally {
+    db.close();
+  }
+}
+
 function hasColumn(dbPath: string, table: string, column: string): boolean {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1561,6 +1575,36 @@ describe("collaboration remote schema ladder", () => {
       code: "collaboration.unreadable",
     });
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+  });
+
+  test("a current lane whose recorded migration name or checksum is unknown refuses admission and replay", async () => {
+    const altered = [
+      { version: 1, column: "checksum", value: "e".repeat(64) },
+      { version: 2, column: "checksum", value: "e".repeat(64) },
+      { version: 3, column: "checksum", value: "e".repeat(64) },
+      { version: 3, column: "name", value: "foreign-outbox" },
+    ] as const;
+    for (const [index, change] of altered.entries()) {
+      const repo = makeRepo(`https://github.com/v2-upgrade/checksum-${String(index)}.git`);
+      const context = contextAt(repo);
+      const location = locationAt(repo);
+      writeV1Lane(location, seedV1History);
+      activate(location.dbPath);
+      await upgradeCollaborationStore(context, "ops-engineer");
+      const db = new DatabaseSync(location.dbPath);
+      try {
+        db.prepare(`update schema_version set ${change.column} = ? where version = ?`).run(change.value, change.version);
+      } finally {
+        db.close();
+      }
+      const before = ledgerRows(location.dbPath);
+
+      // invariant: Neither admission nor the already-current upgrade replay trusts a
+      // ledger row whose bytes are not this build's compiled migration.
+      await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+      await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({ code: "store.corrupt" });
+      expect(ledgerRows(location.dbPath)).toEqual(before);
+    }
   });
 
   test("a stale or unbound checkout never migrates a v1 lane it does not own", async () => {
@@ -4038,6 +4082,31 @@ function intentBindingFor(commit: string): Record<string, unknown> {
   };
 }
 
+/** note: The complete normalized project document a project event freezes (no head, no binding). */
+function completeProjectSubject(): Record<string, unknown> {
+  const project = completeSnapshot().project;
+  return {
+    projectId: project.projectId,
+    milestones: project.milestones,
+    roadmap: project.roadmap,
+    catalogEntities: project.catalogEntities,
+    catalogLinks: project.catalogLinks,
+  };
+}
+
+/** note: The complete normalized issue subject a replacement freezes (no head, no issueRef). */
+function completeIssueSubject(): Record<string, unknown> {
+  const issue = completeSnapshot().issues[0]!.mstar!;
+  return {
+    fields: issue.fields,
+    occurrences: issue.occurrences,
+    transitions: issue.transitions,
+    relations: issue.relations,
+    provenance: issue.provenance,
+    projectMoves: issue.projectMoves,
+  };
+}
+
 /** note: One journal project-replace intent: the smallest complete frozen request. */
 function intentRequest(
   fixture: { repoKey: string },
@@ -4053,7 +4122,7 @@ function intentRequest(
       projectId: SELECTED_PROJECT.localProjectId,
       operationId,
       parents: [],
-      change: { kind: "project-replace", project: { revision: 1 } },
+      change: { kind: "project-replace", project: completeProjectSubject() },
     },
     target: SELECTED_PROJECT.journalIssueId,
     expectedHeads: [],
@@ -4192,5 +4261,90 @@ describe("remote outbox intents", () => {
     ).rejects.toMatchObject({ code: "collaboration.unreadable" });
     // invariant: The refusal created no table, lane or intent.
     expect(tableNames(dbPath)).toEqual(before);
+  });
+
+  test("a frozen subject is the complete normalized document and refuses unknown or sensitive fields", async () => {
+    const fixture = remoteFixture("outbox-subject");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const project = completeProjectSubject();
+    const change = (operationId: string, value: Record<string, unknown>, target: string): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents: value.kind === "issue-replace" ? ["a".repeat(64)] : [],
+          change: value,
+        },
+        target,
+      });
+    const issueChange = (mstar: unknown): Record<string, unknown> => ({
+      kind: "issue-replace",
+      issueRef: FORGED_ISSUE_REF,
+      mstar,
+    });
+
+    const refusals = [
+      // note: A partial project document is not the complete normalized subject.
+      change("00000000-0000-4000-8000-0000000000c1", { kind: "project-replace", project: { projectId: SELECTED_PROJECT.localProjectId } }, SELECTED_PROJECT.journalIssueId),
+      // note: Credential-shaped and unrelated keys never reach the stored request.
+      change("00000000-0000-4000-8000-0000000000c2", { kind: "project-replace", project: { ...project, token: "sk-live-1234" } }, SELECTED_PROJECT.journalIssueId),
+      change("00000000-0000-4000-8000-0000000000c3", { kind: "project-replace", project: { ...project, headers: { authorization: "Bearer x" } } }, SELECTED_PROJECT.journalIssueId),
+      change("00000000-0000-4000-8000-0000000000c4", { kind: "project-replace", project: { ...project, binding: {} } }, SELECTED_PROJECT.journalIssueId),
+      // note: An empty or partial issue subject (and its derived head) is never frozen.
+      change("00000000-0000-4000-8000-0000000000c5", issueChange({}), MSTAR_ISSUE),
+      change("00000000-0000-4000-8000-0000000000c6", issueChange({ ...completeIssueSubject(), head: ["a".repeat(64)] }), MSTAR_ISSUE),
+      change(
+        "00000000-0000-4000-8000-0000000000c7",
+        issueChange({ ...completeIssueSubject(), fields: { ...(completeIssueSubject().fields as Record<string, unknown>), token: "x" } }),
+        MSTAR_ISSUE,
+      ),
+    ];
+    for (const request of refusals) {
+      await expect(prepareRemoteIntent(context, request)).rejects.toMatchObject({ code: "remote.input-invalid" });
+    }
+    // invariant: Every refusal happened before persistence.
+    expect(outboxRows(location.dbPath)).toEqual([]);
+  });
+
+  test("a replacement must cite its replaced heads before anything is enqueued", async () => {
+    const fixture = remoteFixture("outbox-parents");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const replacement = (operationId: string, parents: string[]): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents,
+          change: { kind: "issue-replace", issueRef: FORGED_ISSUE_REF, mstar: completeIssueSubject() },
+        },
+        target: MSTAR_ISSUE,
+      });
+
+    // invariant: `[]` is genesis or adoption only; a replacement without a replaced head refuses.
+    await expect(
+      prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000d1", [])),
+    ).rejects.toMatchObject({ code: "remote.input-invalid", message: expect.stringContaining("replaced head") });
+    expect(outboxRows(location.dbPath)).toEqual([]);
+
+    // invariant: With its replaced head the same shape is a normal enqueued replacement.
+    const accepted = await prepareRemoteIntent(
+      context,
+      replacement("00000000-0000-4000-8000-0000000000d2", ["a".repeat(64)]),
+    );
+    expect(accepted).toMatchObject({ state: "enqueued", target: MSTAR_ISSUE });
+    const pending = await readPendingIntents(context, SELECTED_PROJECT.localProjectId);
+    expect(pending.intents).toMatchObject([
+      { operationId: "00000000-0000-4000-8000-0000000000d2", kind: "issue-replace", target: MSTAR_ISSUE },
+    ]);
   });
 });
