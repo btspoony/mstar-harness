@@ -118,6 +118,7 @@ import {
   linkIssueScopedOn,
   observedPlanTargets,
   residualGenesisSubject,
+  resolveObservedCanonicalTarget,
   IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
@@ -1653,7 +1654,7 @@ export async function residualCloseExecutionPlan(
           kind: "issue-replace",
           issueId: operation.issueId,
           executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
-          next: (current) => {
+          next: (current, observed) => {
             const subject = current as Record<string, unknown>;
             const fields = subject.fields as Record<string, unknown>;
             const linked = (subject.provenance as Array<Record<string, unknown>>).some(
@@ -1683,10 +1684,25 @@ export async function residualCloseExecutionPlan(
                 `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${operation.disposition}`,
               );
             }
+            // note: The same canonical gate the ordinary closure body runs: a duplicate/superseded
+            // target must be observed here, must not be the closing issue itself, and is stored by
+            // its portable reference.
+            const canonicalRef = resolveObservedCanonicalTarget(
+              observed,
+              operation.issueId,
+              operation.disposition,
+              operation.evidence,
+            );
             if (operation.disposition === "resolved") {
               assertObservedMultiPlanAcceptance(observedPlanTargets(subject), operation.evidence);
             }
-            return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
+            return closedRemoteSubject(
+              subject,
+              operation.disposition,
+              canonicalRef === null ? operation.evidence : { ...operation.evidence, canonicalIssueId: canonicalRef },
+              actor,
+              at,
+            );
           },
           origin: {
             verb: "residual-close",

@@ -1185,6 +1185,44 @@ function assertObservedRelation(observed: RemoteObservedSubject, issueId: string
   }
 }
 
+/**
+ * note: The canonical gate of a duplicate/superseded closure against the OBSERVED project: the
+ * target must be observed there, carry a portable reference the frozen relation can name, and
+ * must not be the closing issue itself - whether either is named by provider id or by portable
+ * reference. Returns that reference; `null` for a disposition with no canonical target. Shared by
+ * the ordinary remote closure and the plan-scoped residual-close composite.
+ */
+export function resolveObservedCanonicalTarget(
+  observed: RemoteObservedSubject,
+  issueId: string,
+  disposition: TerminalDisposition,
+  evidence: ClosureEvidence,
+): string | null {
+  if (disposition !== "duplicate" && disposition !== "superseded") return null;
+  const canonical = evidence.canonicalIssueId!;
+  // note: The closing subject is resolved once, so both of its aliases name the same issue whether
+  // the caller addressed it by its provider id or by its portable reference.
+  const self = observedIssue(observed, issueId);
+  if (
+    self !== undefined &&
+    (canonical === self.identity.issueId || (self.mstar !== null && canonical === self.mstar.issueRef))
+  ) {
+    throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
+  }
+  const target = observedIssue(observed, canonical);
+  if (target === undefined) {
+    throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
+  }
+  if (target.mstar === null) {
+    throw new IssueError(
+      "issue.invalid-disposition",
+      `Canonical issue ${canonical} is observed in project ${observed.projectId} without a portable reference, so a ` +
+        `duplicate/superseded relation cannot name it. Adopt that issue first, then retry with its mstar:issue reference.`,
+    );
+  }
+  return target.mstar.issueRef;
+}
+
 /** note: The capture's own provenance row: the reviewed business record, never a raw payload. */
 function captureProvenance(eventId: string, cols: OccurrenceColumns): Record<string, unknown> {
   return {
@@ -2517,19 +2555,17 @@ export async function closeIssue(
             `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${disposition}`,
           );
         }
-        if (disposition === "duplicate" || disposition === "superseded") {
-          const canonical = evidence.canonicalIssueId!;
-          const native = observedIssue(observed, issueId);
-          const self = canonical === issueId || canonical === native?.mstar?.issueRef;
-          if (self) throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
-          if (observedIssue(observed, canonical) === undefined) {
-            throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
-          }
-        }
+        const canonicalRef = resolveObservedCanonicalTarget(observed, issueId, disposition, evidence);
         if (disposition === "resolved") {
           assertObservedMultiPlanAcceptance(observedPlanTargets(subject), evidence);
         }
-        return closedRemoteSubject(subject, disposition, evidence, mutation.actor, at);
+        return closedRemoteSubject(
+          subject,
+          disposition,
+          canonicalRef === null ? evidence : { ...evidence, canonicalIssueId: canonicalRef },
+          mutation.actor,
+          at,
+        );
       },
       origin: {
         verb: "closeIssue",

@@ -140,6 +140,39 @@ function withSecondPlanLink(snapshot: RemoteSnapshot): RemoteSnapshot {
 }
 
 /**
+ * A second MARKED observed issue beside the fixture's own, so a duplicate/superseded
+ * closure has a canonical target that carries a portable reference the frozen relation
+ * can name.
+ */
+function withCanonicalTarget(snapshot: RemoteSnapshot): RemoteSnapshot {
+  const [first, second, ...rest] = snapshot.issues;
+  if (first === undefined || first.mstar === null) return snapshot;
+  return {
+    ...snapshot,
+    issues: [
+      first,
+      {
+        ...first,
+        identity: { ...first.identity, issueId: "88888888-8888-4888-8888-888888888888" },
+        nativeTitle: "Canonical native title",
+        mstar: {
+          ...first.mstar,
+          issueRef: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          head: ["4".repeat(64)],
+          occurrences: [],
+          transitions: [],
+          relations: [],
+          provenance: [],
+          projectMoves: [],
+        },
+      },
+      ...(second === undefined ? [] : [second]),
+      ...rest,
+    ],
+  };
+}
+
+/**
  * The plan provenance one composite's own scope check reads: the residual-close
  * remote half refuses an issue whose observed subject names no link to THIS plan,
  * so the fixture subjects name the link before any gate below it can answer.
@@ -456,6 +489,57 @@ test("a plan-scoped remote residual-close enforces multi-plan acceptance", async
   expect(all.code).toBe("collaboration.operation-partial");
   expect(outboxRows(fixture.context)).toHaveLength(1);
   expect(outboxRows(fixture.context)[0]).toMatchObject({ state: "enqueued" });
+});
+
+test("a plan-scoped remote residual-close enforces the canonical gate", async () => {
+  const fixture = await remotePlanFixture("residual-close-canonical", (snapshot) =>
+    withCanonicalTarget(withResidualPlanLinks(snapshot)),
+  );
+  const close = (
+    operationId: string,
+    disposition: "duplicate" | "superseded",
+    canonicalIssueId: string,
+    issueId: string = REMOTE_IDS.markedIssueId,
+  ): Promise<{ code: string }> =>
+    refusalOf(async () =>
+      mutateExecutionPlan({ ...fixture.context, caller: fixture.caller }, {
+        operationId,
+        session: fixture.session,
+        expected: await fixture.token(),
+        planId: RESIDUAL_PLAN_ID,
+        operation: {
+          kind: "residual-close" as const,
+          issueId,
+          disposition,
+          expectedIssueRevision: 1,
+          evidence: { reason: "same defect", references: ["qa/run.md"], canonicalIssueId, alignmentRef: "QA gate: Approve" },
+        },
+      }),
+    );
+
+  // invariant: The closing issue is never its own canonical target, by provider id or by IssueRef.
+  expect((await close("residual-canonical-self", "duplicate", REMOTE_IDS.markedIssueId)).code).toBe("issue.invalid-disposition");
+  expect((await close("residual-canonical-self-ref", "superseded", REMOTE_IDS.issueRef)).code).toBe("issue.invalid-disposition");
+  // invariant: A subject addressed by its portable reference still refuses its own native alias.
+  expect(
+    (await close("residual-canonical-alias", "duplicate", REMOTE_IDS.markedIssueId, REMOTE_IDS.issueRef)).code,
+  ).toBe("issue.invalid-disposition");
+  // invariant: A canonical target the observed project does not carry is never frozen.
+  expect((await close("residual-canonical-missing", "duplicate", "99999999-9999-4999-8999-999999999999")).code).toBe(
+    "issue.not-found",
+  );
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+  // invariant: An observed canonical target passes the gate, and the frozen relation names its
+  // portable reference even when the caller addressed it by provider id.
+  expect(
+    (await close("residual-canonical-observed", "duplicate", "88888888-8888-4888-8888-888888888888")).code,
+  ).toBe("collaboration.operation-partial");
+  const change = frozenChange(outboxRows(fixture.context)[0]!);
+  expect(change.mstar.relations).toContainEqual({
+    relation: "duplicate-of",
+    target: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  });
+  expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 
 // ---------------------------------------------------------------------------
