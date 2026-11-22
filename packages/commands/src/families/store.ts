@@ -349,15 +349,8 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
         const operator = required(input.operator, "--operator");
-        // invariant: An existing v1 collaboration lane is advanced by the v2 migration BEFORE
-        // current-only admission can refuse it with the very command the operator ran.
-        const collaborationUpgrade = await upgradeExistingCollaborationStore(context, operator);
-        // invariant: The two owners meet here: this checkout's collaboration authority is
-        // established (create/reuse, never cleared) before the execution half
-        // can report any imported state. A combined source with collaboration
-        // rows refuses with the cutover route, and the import itself refuses a
-        // staged lane.
-        await ensureCollaborationAuthority(context);
+        // invariant: Caller-input usage is decided before any lane is touched, so a malformed
+        // selector or an unreadable attestation file leaves an existing v1 lane exactly as it was.
         // The schema cutover's safety disposal needs the existing operator/stop
         // attestation when a retired plan-PM claim is present. The engine's own
         // validator is the authority; the CLI reads the absolute JSON file and
@@ -376,6 +369,15 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             code: "store.upgrade-dsh-ack-unmatched",
           });
         }
+        // invariant: An existing v1 collaboration lane is advanced by the v2 migration BEFORE
+        // current-only admission can refuse it with the very command the operator ran.
+        const collaborationUpgrade = await upgradeExistingCollaborationStore(context, operator);
+        // invariant: The two owners meet here: this checkout's collaboration authority is
+        // established (create/reuse, never cleared) before the execution half
+        // can report any imported state. A combined source with collaboration
+        // rows refuses with the cutover route, and the import itself refuses a
+        // staged lane.
+        await ensureCollaborationAuthority(context);
         const upgraded = await upgradeStoreMinimal({
           context,
           operator,
@@ -564,7 +566,7 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
 }
 
 /**
- * Read a JSON argument for a remote verb: a file path, or `-` for stdin. An
+ * note: Read a JSON argument for a remote verb: a file path, or `-` for stdin. An
  * unreadable path or a body that is not JSON is a USAGE refusal (exit 2) naming
  * the flag; no store work has happened yet.
  */
@@ -589,7 +591,7 @@ async function readRemoteJson(invocation: InvocationContext, value: string | und
 }
 
 /**
- * The remote observation lane: `status|bind|observe|adopt-issue` under
+ * note: The remote observation lane: `status|bind|observe|adopt-issue` under
  * `store collaboration remote`. `--harness` names this checkout's harness
  * explicitly, exactly like the collaboration cutover family; no provider call,
  * credential or transport exists here.

@@ -312,7 +312,7 @@ function urlRefusal(raw: string): string | null {
   try {
     url = new URL(raw);
   } catch {
-    // shortcut: a URL the parser rejects is refused only by its visible home path; upgrade if a malformed form can carry a credential.
+    // shortcut: a URL the parser rejects is refused only by its visible home path; upgrade: when a malformed form can carry a credential.
     return null;
   }
   if (url.username !== "" || url.password !== "") return "carries URL userinfo credentials";
@@ -861,6 +861,7 @@ function provenanceRecord(body: Record<string, unknown>, path: string): Record<s
   if (typeof raw !== "string") unsafeFidelity(`${path}.legacyJson`, "must be the legacy row's JSON text or null");
   // shortcut: one legacy register row is a small JSON document; 64 KiB is far above any
   // observed row, and a larger one is refused rather than parsed unbounded.
+  // upgrade: when a legacy register row can exceed 64 KiB.
   if (raw.length > 64 * 1024) unsafeFidelity(`${path}.legacyJson`, "is too large to be one legacy register row");
   let parsed: unknown;
   try {
@@ -2178,7 +2179,7 @@ function adoptionDocument(raw: unknown): AdoptionDocument {
 }
 
 /**
- * The genesis subject an adoption appends: the reviewed complete MStar subject for `retain`,
+ * note: The genesis subject an adoption appends: the reviewed complete MStar subject for `retain`,
  * or the capture's own fields and first occurrence for `new`. It is validated by the same
  * freeze an ordinary replacement takes, so an incomplete genesis never reaches the outbox.
  */
@@ -4726,7 +4727,7 @@ function traversalCurrent(asOf: unknown): boolean {
 }
 
 /**
- * Read the project's current complete observation together with the binding it was frozen
+ * note: Read the project's current complete observation together with the binding it was frozen
  * under. An ordinary remote write needs an exact base: a partial, absent or stale observation
  * refuses instead of freezing a guessed parent set.
  */
@@ -4819,7 +4820,7 @@ type ObservedIssue = Readonly<{
 }>;
 
 /**
- * Resolve the project one addressed issue lives in. A remote write addresses one project; a
+ * note: Resolve the project one addressed issue lives in. A remote write addresses one project; a
  * caller that names none is answered by scanning the SELECTED projects only, and an issue the
  * caches do not observe is never guessed into an unbound project.
  */
@@ -4931,7 +4932,7 @@ function derivedUuid(bytes: Buffer): string {
 }
 
 /**
- * The replay of one ordinary write: an operation id that already holds a frozen intent returns
+ * note: The replay of one ordinary write: an operation id that already holds a frozen intent returns
  * THAT intent, so a retried verb never re-derives a different subject (a minted reference, a
  * milestone id, a recorded time) and never rewrites the accepted request. The identity is the
  * recorded business verb and its complete normalized request: a different verb, target or payload

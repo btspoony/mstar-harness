@@ -750,7 +750,7 @@ export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> 
 };
 
 /**
- * The v2 current-schema columns (plus the shared ledger table). A table that kept its
+ * note: The v2 current-schema columns (plus the shared ledger table). A table that kept its
  * name but lost a required column is a damaged store, not a current one, and
  * must refuse at admission instead of failing a later domain query.
  */
@@ -1491,6 +1491,7 @@ function validateCollaborationMigrations(applied: AppliedMigration[]): number {
   const version = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
   for (const row of applied) {
     const compiled = COLLABORATION_MIGRATIONS.find((migration) => migration.version === row.version)!;
+    // invariant: The lane's executed DDL must be exactly this build's compiled migration.
     // hash-gate: authorized — Identify the lane's executed DDL as this build's compiled migration: a differing checksum means another build wrote the schema, so refusing is the only safe verdict.
     if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
       throw new StoreError(

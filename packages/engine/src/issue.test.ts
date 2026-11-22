@@ -1606,7 +1606,7 @@ describe("issue action vocabulary", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Remote selection: portable reference, native detail and a refused write path
+// note: Remote selection: portable reference, native detail and a refused write path
 // ---------------------------------------------------------------------------
 
 describe("remote issue reads", () => {

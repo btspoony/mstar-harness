@@ -268,7 +268,7 @@ export const ISSUE_ACTION_NAMES: readonly IssueAction[] = Object.keys(ISSUE_ACTI
 export type IssueReceipt = {
   issueId: string;
   /**
-   * The established occurrence: the local row id, or the frozen occurrence's provider-neutral
+   * note: The established occurrence: the local row id, or the frozen occurrence's provider-neutral
    * event id in `remote` mode (where no local row exists).
    */
   occurrenceId?: number | string;
@@ -1097,7 +1097,7 @@ function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
 }
 
 /**
- * The remote branch of every ordinary issue write: freeze the normalized effect as one durable
+ * note: The remote branch of every ordinary issue write: freeze the normalized effect as one durable
  * outbox intent and report it. A confirmed intent reports the recorded business result of an
  * identical replay; anything else is `remote.effect-pending`, never business success, and no
  * local SQL effect ever stands in for the provider.

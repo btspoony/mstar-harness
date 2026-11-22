@@ -86,7 +86,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  // An engine-authored refusal carries the durable facts of its own outcome; a remote
+  // note: An engine-authored refusal carries the durable facts of its own outcome; a remote
   // enqueue's operation id and state are exactly what the caller must not lose.
   const engineDetails = error !== null && typeof error === "object" && "details" in error
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)

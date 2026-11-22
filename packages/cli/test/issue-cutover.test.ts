@@ -599,7 +599,7 @@ describe("mstar status — the issue authority is never read as an empty rollup 
 });
 
 // ---------------------------------------------------------------------------
-// The remote observation and outbox lane at the CLI boundary: admission, native
+// note: The remote observation and outbox lane at the CLI boundary: admission, native
 // detail, and the full provider-free loop from a durable intent to a recorded
 // receipt. No provider is reachable from any command here.
 // ---------------------------------------------------------------------------

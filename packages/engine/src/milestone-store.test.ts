@@ -199,7 +199,7 @@ describe("milestone store", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Remote selection: milestone status is read from admitted evidence
+// note: Remote selection: milestone status is read from admitted evidence
 // ---------------------------------------------------------------------------
 
 describe("remote milestones", () => {

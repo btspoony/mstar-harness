@@ -62,9 +62,9 @@ export type RemoteScopeFixture = {
   bare: string;
   repoKey: string;
   context(): StoreContext;
-  /** Publish (or republish) the selector; returns the checked commit. */
+  /** note: Publish (or republish) the selector; returns the checked commit. */
   publish(overrides?: Record<string, unknown>): string;
-  /** The strict verification batch for the published generation; `extra` covers further selected projects. */
+  /** note: The strict verification batch for the published generation; `extra` covers further selected projects. */
   batch(commit: string, generation?: number, extra?: ScopeCheck[]): { version: 1; selectorCommit: string; generation: number; checks: ScopeCheck[] };
 };
 

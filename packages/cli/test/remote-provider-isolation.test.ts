@@ -1,5 +1,5 @@
 /**
- * Provider isolation and the remote refusal matrix at the shipped boundary.
+ * note: Provider isolation and the remote refusal matrix at the shipped boundary.
  *
  * Two independent proofs: a static walk of the remote modules' reachable
  * production imports and their owning manifests, and a runtime guard preloaded
@@ -13,7 +13,7 @@
  * provider state lives in the test runner, each sandbox owns its workspace and
  * `HOME`, and only public JSON documents cross into the child.
  */
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -475,6 +475,34 @@ describe("provider isolation: the shipped remote path", () => {
       expect(attempt('require("node:tls").connect(443, "127.0.0.1")')).not.toBe(0);
       expect(attempt('new WebSocket("wss://example.test/socket")')).not.toBe(0);
       expect(attempt(`require("node:fs").readFileSync(${JSON.stringify(guard.sentinel)})`)).not.toBe(0);
+      // note: The sentinel is compared by canonical identity: a symlink to it, a `file:` URL and a
+      // `..`-spelled path name the same file and are all refused.
+      const sentinelLink = join(root, "host-credential.link");
+      symlinkSync(guard.sentinel, sentinelLink);
+      expect(attempt(`require("node:fs").readFileSync(${JSON.stringify(sentinelLink)})`)).not.toBe(0);
+      expect(attempt(`require("node:fs").readFileSync(new URL("file://${guard.sentinel}"))`)).not.toBe(0);
+      // invariant: Copying the sentinel discloses it just as reading it does, and the copy never lands.
+      const copied = join(root, "copied-credential.txt");
+      expect(
+        attempt(`require("node:fs").copyFileSync(${JSON.stringify(guard.sentinel)}, ${JSON.stringify(copied)})`),
+      ).not.toBe(0);
+      expect(existsSync(copied)).toBe(false);
+      expect(
+        attempt(`require("node:fs").cpSync(${JSON.stringify(sentinelLink)}, ${JSON.stringify(join(root, "copied-tree.txt"))})`),
+      ).not.toBe(0);
+      // note: A recursive copy of the sentinel's own directory discloses it just the same.
+      expect(
+        attempt(`require("node:fs").cpSync(${JSON.stringify(root)}, ${JSON.stringify(join(root, "tree-copy"))})`),
+      ).not.toBe(0);
+      // note: A descriptor that already IS the sentinel (an inherited fd) is refused by identity;
+      // this child's stdin is the credential file.
+      const readv = Bun.spawnSync([node, "-e", "require(\"node:fs\").readvSync(0, [Buffer.alloc(8)])"], {
+        env: environment,
+        stdin: Bun.file(guard.sentinel),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(readv.exitCode).not.toBe(0);
       expect(attempt('require("node:child_process").execFileSync("sh", ["-c", "true"])')).not.toBe(0);
       // note: The one allowed subprocess is exactly the pinned Git executable, by path or by PATH.
       expect(attempt(`require("node:child_process").execFileSync(${JSON.stringify(git)}, ["--version"])`)).toBe(0);
@@ -532,7 +560,7 @@ describe("provider isolation: the shipped remote path", () => {
       expect(kinds).toContain("network:https");
       expect(kinds).toContain("network:tls");
       expect(kinds).toContain("network:websocket");
-      expect(kinds.filter((kind) => kind === "fs:credential-read")).toHaveLength(3);
+      expect(kinds.filter((kind) => kind === "fs:credential-read")).toHaveLength(9);
       expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(5);
       expect(kinds.filter((kind) => kind === "spawn:shell")).toHaveLength(1);
     } finally {

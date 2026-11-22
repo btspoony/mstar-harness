@@ -123,7 +123,7 @@ function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, mile
 }
 
 /**
- * The remote branch of every milestone write: freeze the new project journal document as one
+ * note: The remote branch of every milestone write: freeze the new project journal document as one
  * durable outbox intent and report it. A confirmed intent reports the recorded business result of
  * an identical replay; anything else is `remote.effect-pending`. A milestone row is never written
  * locally in `remote` mode.

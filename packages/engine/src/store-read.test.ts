@@ -1795,7 +1795,7 @@ describe("collaboration projection sources", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Remote read boundary: admitted evidence only, never a local-row zero
+// note: Remote read boundary: admitted evidence only, never a local-row zero
 // ---------------------------------------------------------------------------
 
 describe("remote read boundary", () => {
@@ -2167,7 +2167,7 @@ describe("remote read boundary", () => {
       });
     };
 
-    // B unobserved: A's filtered list is answered, never refused on B's missing evidence.
+    // note: B unobserved: A's filtered list is answered, never refused on B's missing evidence.
     expectation(await filtered());
     const partialB = secondCheck();
     await ingestRemoteObservation(context, submission(commit, partialB, secondSnapshot(partialB, "partial"), 0));
