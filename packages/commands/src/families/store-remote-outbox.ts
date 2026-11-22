@@ -28,6 +28,11 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema, refusalEnvelope } from "../envelope.js";
+import {
+  remoteForkObservationDocumentSchema,
+  remoteReceiptDocumentSchema,
+  remoteResolutionDocumentSchema,
+} from "../store-remote-documents.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
 const inputSchema = z.object({
@@ -203,6 +208,19 @@ async function execute(id: string, input: OutboxInput, invocation: InvocationCon
   }
 }
 
+/**
+ * note: The strict `--input` document each outbox verb carries, published through schema
+ * discovery (`payloadSchemas.inputDocument`). The descriptor name is deliberately NOT an
+ * input field: the CLI value of `--input` stays a file path (or `-` for stdin), so only
+ * discovery sees the schema and nothing reshapes the path input.
+ */
+const outboxInputDocuments: Partial<Record<OutboxVerb, z.ZodType>> = {
+  "outbox-dispatch": remoteForkObservationDocumentSchema,
+  "outbox-receipt": remoteReceiptDocumentSchema,
+  "outbox-reconcile": remoteReceiptDocumentSchema,
+  "outbox-resolve": remoteResolutionDocumentSchema,
+};
+
 function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unknown> {
   const id = `store.collaboration.remote.${verb}`;
   const optionsByVerb: Record<OutboxVerb, (keyof OutboxInput)[]> = {
@@ -230,10 +248,10 @@ function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unkn
     project: "the local project id whose current-binding intents this listing reports",
     operation: "the caller-owned operation UUID this verb addresses (never a display id)",
     input: verb === "outbox-dispatch"
-      ? "optional path (absolute, or relative to the working directory) to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent"
+      ? "optional path (absolute, or relative to the working directory) to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.outbox-dispatch`"
       : verb === "outbox-resolve"
-        ? "path (absolute, or relative to the working directory) to the reviewed resolution JSON `{version,operationId,operator,reason,event}`, or - for stdin"
-        : "path (absolute, or relative to the working directory) to the strict receipt JSON document, or - for stdin",
+        ? "path (absolute, or relative to the working directory) to the reviewed resolution JSON, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.outbox-resolve`"
+        : "path (absolute, or relative to the working directory) to the strict receipt JSON document, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.<verb>`",
     reason: "why this intent is abandoned; the reason is retained with the attempt history",
   };
   const descriptions: Record<OutboxVerb, string> = {
@@ -271,6 +289,9 @@ function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unkn
     id,
     cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
+    // note: `payloadSchemas.inputDocument` is the strict JSON the --input flag carries;
+    // the flag's own value stays a file path, so no admission schema changes.
+    ...(outboxInputDocuments[verb] === undefined ? {} : { payloads: { inputDocument: { schema: outboxInputDocuments[verb] } } }),
     // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,

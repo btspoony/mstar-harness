@@ -627,10 +627,86 @@ describe("remote outbox commands", () => {
     const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
     expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
     expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
-    const stillPending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
+  });
+
+  test("each remote/outbox verb publishes its --input document schema for discovery", () => {
+    const byId = new Map(getCommandDefinitions().map((entry) => [entry.id, entry]));
+    const withDocument = [
+      "store.collaboration.remote.bind",
+      "store.collaboration.remote.observe",
+      "store.collaboration.remote.adopt-issue",
+      "store.collaboration.remote.outbox-dispatch",
+      "store.collaboration.remote.outbox-receipt",
+      "store.collaboration.remote.outbox-reconcile",
+      "store.collaboration.remote.outbox-resolve",
+    ];
+    for (const id of withDocument) {
+      const definition = byId.get(id);
+      expect(definition, id).toBeDefined();
+      const schema = definition?.payloads?.inputDocument?.schema;
+      expect(schema, id).toBeDefined();
+      const json = schema?.toJSONSchema() as { properties?: Record<string, unknown>; required?: string[] };
+      // note: Each document carries its own marker field; the resolution envelope has no
+      // version member and the adoption publishes its arms, so the shared assertion reads
+      // the serialized schema instead of assuming one shape.
+      const marker = id.endsWith("adopt-issue") ? "sourceIssue"
+        : id.endsWith("outbox-resolve") ? "operator"
+          : id.endsWith("outbox-dispatch") ? "conflictOperationId"
+            : "version";
+      expect(JSON.stringify(json), id).toContain(marker);
+      // invariant: The option help names the published shape, so an author finds the
+      // document without leaving --help.
+      const inputOption = definition?.cli.options.find((option) => option.key === "input");
+      expect(String(inputOption?.help)).toContain("payloadSchemas.inputDocument");
+    }
+    // note: The observation's own strict document: every envelope field is required.
+    const observe = byId.get("store.collaboration.remote.observe")?.payloads?.inputDocument?.schema?.toJSONSchema() as {
+      properties?: Record<string, unknown>;
+    };
+    expect(Object.keys(observe.properties ?? {})).toEqual([
+      "version",
+      "selectorCommit",
+      "generation",
+      "check",
+      "expectRevision",
+      "snapshot",
+    ]);
+    for (const id of ["store.collaboration.remote.status", "store.collaboration.remote.outbox-pending", "store.collaboration.remote.outbox-show", "store.collaboration.remote.outbox-abandon"]) {
+      expect(byId.get(id)?.payloads, id).toBeUndefined();
+    }
+  });
+
+  test("one receipt refusal lists every invalid envelope field at once", async () => {
+    const fixture = remoteFixture("aggregate-refusal");
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
       harness: fixture.harness,
-      project: IDS.projectId,
-    }, fixture.repo));
-    expect((stillPending.intents as unknown[]).length).toBe(4);
+      input: fixture.path("bad-envelope", {
+        version: 2,
+        selectorCommit: "not-a-git-object",
+        generation: -1,
+        projectId: 7,
+        operationId: "not-a-uuid",
+        attemptId: "also-not",
+        requestHash: "short",
+        observedAt: "not-a-time",
+        outcome: { kind: "confirmed" },
+      }),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: EVERY invalid envelope field is named by the ONE refusal, so the caller
+    // fixes the whole document per attempt instead of discovering one field per submission.
+    for (const field of [
+      "receipt.version",
+      "receipt.selectorCommit",
+      "receipt.generation",
+      "receipt.projectId",
+      "receipt.operationId",
+      "receipt.attemptId",
+      "receipt.requestHash",
+      "receipt.observedAt",
+    ]) {
+      expect(message).toContain(field);
+    }
   });
 });

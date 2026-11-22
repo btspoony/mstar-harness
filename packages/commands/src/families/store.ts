@@ -35,6 +35,11 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { getStoreRemoteOutboxCommandDefinitions } from "./store-remote-outbox.js";
+import {
+  remoteAdoptionDocumentSchema,
+  remoteBindDocumentSchema,
+  remoteObserveDocumentSchema,
+} from "../store-remote-documents.js";
 import { resolveCliPath } from "../host-health.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -625,6 +630,18 @@ async function executeRemote(id: string, input: StoreInput, invocation: Invocati
   }
 }
 
+/**
+ * note: The strict `--input` document each remote verb carries, published through schema
+ * discovery (`payloadSchemas.inputDocument`). The descriptor name is deliberately NOT an
+ * input field: the CLI value of `--input` stays a file path (or `-` for stdin), so only
+ * discovery sees the schema and nothing reshapes the path input.
+ */
+const remoteInputDocuments: Partial<Record<(typeof remoteVerbs)[number], z.ZodType>> = {
+  bind: remoteBindDocumentSchema,
+  observe: remoteObserveDocumentSchema,
+  "adopt-issue": remoteAdoptionDocumentSchema,
+};
+
 function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition<StoreInput, unknown> {
   const id = `store.collaboration.remote.${verb}`;
   const optionsByVerb: Record<(typeof remoteVerbs)[number], (keyof StoreInput)[]> = {
@@ -640,7 +657,7 @@ function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition
     project: "the local project id this cache binds; native issue detail and adoption require it, and it is never guessed",
     issue: "the exact immutable Linear provider issue id (a UUID, never a display id such as ENG-42)",
     operation: "caller-owned UUID for this adoption intent; unique across the repository",
-    input: "path to the strict JSON document, or - for stdin",
+    input: "path to the strict JSON document, or - for stdin; the document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.<verb>`",
   };
   const descriptions: Record<(typeof remoteVerbs)[number], string> = {
     status:
@@ -668,6 +685,9 @@ function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition
     id,
     cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
+    // note: `payloadSchemas.inputDocument` is the strict JSON the --input flag carries;
+    // the flag's own value stays a file path, so no admission schema changes.
+    ...(remoteInputDocuments[verb] === undefined ? {} : { payloads: { inputDocument: { schema: remoteInputDocuments[verb] } } }),
     // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,
