@@ -2793,23 +2793,23 @@ describe("remote observation cache", () => {
         }),
       ),
     ).rejects.toThrow(/evidence\.detail_doc/);
-    // note: The refusals wrote nothing: the portable projection is still the stored revision.
-    expect(storedHistory()).toEqual({
-      occurrences: [expect.objectContaining({ imported: true })],
-      transitions: [
-        expect.objectContaining({
-          imported: true,
-          evidence: expect.objectContaining({ closureEvidence: "PR #42 / commit abc1234" }),
-        }),
-      ],
+    // invariant: Every unsafe field invalidates the addressed cache instead of leaving the
+    // previous snapshot current; the named refusal is reported only after that write landed.
+    const invalidated = await readRemoteStatus(context);
+    const invalidatedRevision = invalidated.projects[0]!.revision;
+    expect(invalidated).toMatchObject({
+      available: false,
+      projects: [{ completeness: "unavailable", code: "remote.unsafe-fidelity" }],
     });
+    expect(invalidatedRevision).toBeGreaterThan(2);
+    expect(cacheRows(locationAt(fixture.repo).dbPath).identities).toEqual([]);
 
     // note: Control - ordinary business prose carrying a URL and a relative reference stays
     // portable, so the credential/path rule refuses shapes, not business text.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(check, {
-          expectRevision: 2,
+          expectRevision: invalidatedRevision,
           snapshot: withSubject({
             transitions: [
               {
@@ -2828,7 +2828,7 @@ describe("remote observation cache", () => {
         selectorCommit: commit,
         generation: 3,
       }),
-    ).toMatchObject({ revision: 3, completeness: "complete" });
+    ).toMatchObject({ revision: invalidatedRevision + 1, completeness: "complete" });
     expect(storedHistory().transitions[0]!.evidence).toMatchObject({
       closureEvidence: "See https://example.test/pull/42 for the fix and PR #42 / commit abc1234",
     });
@@ -2838,7 +2838,7 @@ describe("remote observation cache", () => {
     expect(
       await ingestRemoteObservation(context, {
         ...observation(check, {
-          expectRevision: 3,
+          expectRevision: invalidatedRevision + 1,
           snapshot: withSubject({
             transitions: [
               {
@@ -2857,14 +2857,14 @@ describe("remote observation cache", () => {
         selectorCommit: commit,
         generation: 3,
       }),
-    ).toMatchObject({ revision: 4, completeness: "complete" });
+    ).toMatchObject({ revision: invalidatedRevision + 2, completeness: "complete" });
 
     // note: Control - a bare credential word in prose and an ordinary URL stay portable;
     // only an assigned credential, a credential-bearing URL or a home path refuses.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(check, {
-          expectRevision: 4,
+          expectRevision: invalidatedRevision + 2,
           snapshot: withSubject({
             transitions: [
               {
@@ -2883,14 +2883,14 @@ describe("remote observation cache", () => {
         selectorCommit: commit,
         generation: 3,
       }),
-    ).toMatchObject({ revision: 5, completeness: "complete" });
+    ).toMatchObject({ revision: invalidatedRevision + 3, completeness: "complete" });
 
     // invariant: A credential label followed by a phrase is business prose, not an
     // assignment, so the historical note survives the boundary unchanged.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(check, {
-          expectRevision: 5,
+          expectRevision: invalidatedRevision + 3,
           snapshot: withSubject({
             transitions: [
               {
@@ -2909,11 +2909,11 @@ describe("remote observation cache", () => {
         selectorCommit: commit,
         generation: 3,
       }),
-    ).toMatchObject({ revision: 6, completeness: "complete" });
+    ).toMatchObject({ revision: invalidatedRevision + 4, completeness: "complete" });
     expect(storedHistory().transitions[0]!.evidence).toMatchObject({
       closureEvidence: "Token: rotation scheduled",
     });
-  });
+  }, 20_000);
 
   /** note: Apply one reviewed legacy register import and return the source lane it wrote. */
   async function migratedSource(name: string, entries: Record<string, unknown>[]): Promise<CollaborationLocation> {
@@ -3064,10 +3064,14 @@ describe("remote observation cache", () => {
       generation: 3,
     }).catch((error: unknown) => error);
 
-    // invariant: The unsafe field is named, never dropped, and the refusal wrote nothing.
+    // invariant: The unsafe field is named, never dropped, and the addressed cache is left
+    // unavailable instead of continuing to serve the previous revision.
     expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(refusal)).toContain("evidence.detail_doc");
-    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(0);
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      projects: [{ revision: 1, completeness: "unavailable", code: "remote.unsafe-fidelity" }],
+    });
   });
 
   test("a real migrated provenance row enters only as its reviewed portable record", async () => {
@@ -3201,8 +3205,8 @@ describe("remote observation cache", () => {
     expect(raw).not.toContain("legacyJson");
     expect(raw).not.toContain("Users/operator");
 
-    // invariant: A provenance row whose content is not portable refuses by name and leaves the
-    // stored revision untouched.
+    // invariant: A provenance row whose content is not portable refuses by name and invalidates
+    // the addressed cache, so the previous complete revision is never served behind the refusal.
     const refusal: unknown = await submitProvenance(unsafe, 1).catch((error: unknown) => error);
     expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(refusal)).toContain("legacyJson.detail_doc");
@@ -3214,11 +3218,21 @@ describe("remote observation cache", () => {
       expect(urlShapeRefusal).toMatchObject({ code: "remote.unsafe-fidelity" });
       expect(String(urlShapeRefusal)).toContain("legacyJson.");
     }
-    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(1);
+    const invalidated = await readRemoteStatus(context);
+    const invalidatedRevision = invalidated.projects[0]!.revision;
+    expect(invalidated).toMatchObject({
+      available: false,
+      projects: [{ completeness: "unavailable", code: "remote.unsafe-fidelity" }],
+    });
+    expect(invalidatedRevision).toBeGreaterThan(1);
 
-    // invariant: The same label-plus-phrase note is business prose, so it stays portable.
-    expect(await submitProvenance(prose, 1)).toMatchObject({ revision: 2, completeness: "complete" });
-    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(2);
+    // invariant: The same label-plus-phrase note is business prose, so it stays portable and
+    // restores serving at the invalidated base.
+    expect(await submitProvenance(prose, invalidatedRevision)).toMatchObject({
+      revision: invalidatedRevision + 1,
+      completeness: "complete",
+    });
+    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(invalidatedRevision + 1);
   });
 
   test("a rebind refuses a replaced cache identity and reinitializes a missing one", async () => {

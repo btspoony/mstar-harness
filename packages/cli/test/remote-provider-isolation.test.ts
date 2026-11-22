@@ -13,7 +13,7 @@
  * provider state lives in the test runner, each sandbox owns its workspace and
  * `HOME`, and only public JSON documents cross into the child.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -63,19 +63,52 @@ function forbiddenImport(specifier: string): boolean {
   return NETWORK_MODULES[specifier] === true || PROVIDER_MODULES.some((pattern) => pattern.test(specifier));
 }
 
-/** note: Every reachable production file, relative to the repository root. */
-function walkRemoteImports(): Map<string, string> {
+/** note: Resolve one production specifier to its source: relative, or a workspace package entry/subpath. */
+function resolveProductionFile(
+  specifier: string,
+  fromFile: string,
+  workspace: ReadonlyMap<string, string>,
+): string | null {
+  if (specifier.startsWith(".")) return resolve(fromFile, "..", specifier.replace(/\.js$/, ".ts"));
+  for (const [name, entry] of workspace) {
+    if (specifier === name) return entry;
+    if (specifier.startsWith(`${name}/`)) {
+      const candidate = join(entry, "..", `${specifier.slice(name.length + 1)}.ts`);
+      return existsSync(candidate) ? candidate : null;
+    }
+  }
+  return null;
+}
+
+/** note: Each production workspace package's manifest name and the source entry it resolves to. */
+function workspaceSources(): Map<string, string> {
+  const packages = join(REPO_ROOT, "packages");
+  const sources = new Map<string, string>();
+  for (const entry of readdirSync(packages, { withFileTypes: true })) {
+    const manifestPath = join(packages, entry.name, "package.json");
+    if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown };
+    const source = join(packages, entry.name, "src/index.ts");
+    if (typeof manifest.name === "string" && existsSync(source)) sources.set(manifest.name, source);
+  }
+  return sources;
+}
+
+/** note: Every reachable production file (absolute), following workspace packages across their boundary. */
+function walkRemoteImports(
+  roots: readonly string[] = REMOTE_ROOTS.map((path) => join(REPO_ROOT, path)),
+  workspace: ReadonlyMap<string, string> = workspaceSources(),
+): Map<string, string> {
   const files = new Map<string, string>();
-  const pending = REMOTE_ROOTS.map((path) => join(REPO_ROOT, path));
+  const pending = [...roots];
   while (pending.length > 0) {
     const file = pending.pop()!;
     if (files.has(file)) continue;
     const source = readFileSync(file, "utf8");
     files.set(file, source);
-    for (const match of source.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)(["'])([^"']+)\1/g)) {
-      const specifier = match[2]!;
-      if (!specifier.startsWith(".")) continue;
-      pending.push(resolve(file, "..", specifier.replace(/\.js$/, ".ts")));
+    for (const specifier of importSpecifiers(source)) {
+      const next = resolveProductionFile(specifier, file, workspace);
+      if (next !== null) pending.push(next);
     }
   }
   return files;
@@ -126,12 +159,20 @@ function guardUnder(root: string): Guard {
   return { log: join(root, "provider-guard.log"), sentinel };
 }
 
+/** note: The one executable the runtime guard allows; any other `git` on PATH is foreign. */
+function pinnedGit(): string {
+  const git = Bun.which("git");
+  if (git === null) throw new Error("the runtime provider guard needs a `git` binary");
+  return realpathSync(git);
+}
+
 function guardEnvironment(sandbox: RemoteSandbox, guard: Guard, overrides: Record<string, string> = {}): Record<string, string> {
   return {
     ...sandbox.environment,
     NODE_OPTIONS: `--require ${GUARD}`,
     MSTAR_NO_PROVIDER_LOG: guard.log,
     MSTAR_NO_PROVIDER_SENTINEL: guard.sentinel,
+    MSTAR_NO_PROVIDER_GIT: pinnedGit(),
     ...overrides,
   };
 }
@@ -168,6 +209,31 @@ function assertGuardClean(guard: Guard): void {
   expect(records.filter((record) => record.kind !== "loaded")).toEqual([]);
 }
 
+/**
+ * note: A host-only credential must never reach the child environment, a host-submitted
+ * document, a CLI answer DTO or a persisted cache/outbox row.
+ */
+function assertCredentialAbsent(
+  credential: string,
+  sandbox: RemoteSandbox,
+  answers: readonly SandboxCommand[],
+  guard: Guard,
+): void {
+  expect(JSON.stringify(sandbox.environment)).not.toContain(credential);
+  expect(JSON.stringify(guardEnvironment(sandbox, guard))).not.toContain(credential);
+  const documents = join(sandbox.dir, "host");
+  for (const name of readdirSync(documents)) {
+    expect(readFileSync(join(documents, name), "utf8")).not.toContain(credential);
+  }
+  for (const answer of answers) {
+    expect(answer.result.stdout + answer.result.stderr).not.toContain(credential);
+  }
+  const caches = sandboxCacheFiles(sandbox.home);
+  // invariant: The assertion is never vacuous: the cache and outbox rows were persisted.
+  expect(caches).toHaveLength(1);
+  for (const path of caches) expect(readFileSync(path, "utf8")).not.toContain(credential);
+}
+
 describe("provider isolation: the shipped remote path", () => {
   test("changed remote modules reach no provider client, credential lookup or outbound transport", () => {
     const files = walkRemoteImports();
@@ -201,11 +267,39 @@ describe("provider isolation: the shipped remote path", () => {
     expect(stdio).not.toContain("@modelcontextprotocol/client");
   });
 
+  test("the walk crosses a workspace package boundary and would reject a provider import behind it", () => {
+    const files = walkRemoteImports();
+    // invariant: The commands family imports the engine by package name; the walk must enter it.
+    expect([...files.keys()]).toContain(join(REPO_ROOT, "packages/engine/src/index.ts"));
+
+    // note: Negative control - a provider SDK reached only through a workspace package boundary is
+    // still found, so the real walk cannot silently stop at the package specifier.
+    const root = mkdtempSync(join(tmpdir(), "mstar-static-boundary-"));
+    try {
+      const entry = join(root, "entry.ts");
+      const inner = join(root, "pkg/inner.ts");
+      mkdirSync(join(root, "pkg"), { recursive: true });
+      writeFileSync(entry, 'import { value } from "@mstar-harness/synthetic";\n');
+      writeFileSync(join(root, "pkg/index.ts"), 'export { value } from "./inner.js";\n');
+      writeFileSync(inner, 'import { LinearClient } from "@linear/sdk";\n');
+      const walked = walkRemoteImports([entry], new Map([["@mstar-harness/synthetic", join(root, "pkg/index.ts")]]));
+      const forbidden = [...walked.entries()].flatMap(([file, source]) =>
+        importSpecifiers(source)
+          .filter(forbiddenImport)
+          .map((specifier) => `${file} imports ${specifier}`),
+      );
+      expect(forbidden).toEqual([`${inner} imports @linear/sdk`]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("the runtime guard refuses a network call, a sentinel read and a foreign spawn", () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-provider-guard-"));
     const guard = guardUnder(root);
     const node = Bun.which("node");
     if (node === null) throw new Error("the runtime provider guard needs a `node` binary");
+    const git = pinnedGit();
     const environment = {
       PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
       HOME: root,
@@ -214,9 +308,12 @@ describe("provider isolation: the shipped remote path", () => {
       NODE_OPTIONS: `--require ${GUARD}`,
       MSTAR_NO_PROVIDER_LOG: guard.log,
       MSTAR_NO_PROVIDER_SENTINEL: guard.sentinel,
+      MSTAR_NO_PROVIDER_GIT: git,
     };
-    const attempt = (script: string): number | null =>
-      Bun.spawnSync([node, "-e", script], { env: environment, stdout: "pipe", stderr: "pipe" }).exitCode;
+    const attempt = (script: string, overrides: Record<string, string> = {}): number | null =>
+      Bun.spawnSync([node, "-e", script], { env: { ...environment, ...overrides }, stdout: "pipe", stderr: "pipe" }).exitCode;
+    const attemptModule = (script: string): number | null =>
+      Bun.spawnSync([node, "--input-type=module", "-e", script], { env: environment, stdout: "pipe", stderr: "pipe" }).exitCode;
 
     try {
       expect(attempt('globalThis.fetch("https://example.test/linear")')).not.toBe(0);
@@ -227,8 +324,31 @@ describe("provider isolation: the shipped remote path", () => {
       expect(attempt('new WebSocket("wss://example.test/socket")')).not.toBe(0);
       expect(attempt(`require("node:fs").readFileSync(${JSON.stringify(guard.sentinel)})`)).not.toBe(0);
       expect(attempt('require("node:child_process").execFileSync("sh", ["-c", "true"])')).not.toBe(0);
-      // note: The one allowed subprocess is the Git runner the remote path already uses.
+      // note: The one allowed subprocess is exactly the pinned Git executable, by path or by PATH.
+      expect(attempt(`require("node:child_process").execFileSync(${JSON.stringify(git)}, ["--version"])`)).toBe(0);
       expect(attempt('require("node:child_process").execFileSync("git", ["--version"])')).toBe(0);
+
+      // note: A same-named executable earlier on PATH is foreign even though its basename is `git`.
+      const foreign = join(root, "git");
+      const marker = join(root, "foreign-git-ran");
+      writeFileSync(foreign, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`);
+      chmodSync(foreign, 0o755);
+      expect(
+        attempt('require("node:child_process").execFileSync("git", ["--version"])', {
+          PATH: `${root}:${environment.PATH}`,
+        }),
+      ).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+
+      // note: A Node ESM child imports builtins by name; the same channels must deny it too.
+      expect(attemptModule(`import { readFileSync } from "node:fs"; readFileSync(${JSON.stringify(guard.sentinel)});`)).not.toBe(0);
+      expect(
+        attemptModule('import { readFile } from "node:fs/promises"; await readFile(process.env.MSTAR_NO_PROVIDER_SENTINEL);'),
+      ).not.toBe(0);
+      expect(attemptModule('import { execFileSync } from "node:child_process"; execFileSync("sh", ["-c", "true"]);')).not.toBe(0);
+      expect(
+        attemptModule(`import { execFileSync } from "node:child_process"; execFileSync(${JSON.stringify(git)}, ["--version"]);`),
+      ).toBe(0);
 
       const kinds = guardRecords(guard.log).map((record) => record.kind);
       expect(kinds).toContain("network:fetch");
@@ -237,8 +357,8 @@ describe("provider isolation: the shipped remote path", () => {
       expect(kinds).toContain("network:https");
       expect(kinds).toContain("network:tls");
       expect(kinds).toContain("network:websocket");
-      expect(kinds).toContain("fs:credential-read");
-      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(1);
+      expect(kinds.filter((kind) => kind === "fs:credential-read")).toHaveLength(3);
+      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -254,65 +374,78 @@ describe("provider isolation: the built CLI under the deny-and-record guard", ()
   });
 
   test("the bootstrap loop and one confirmed outbox effect run with zero provider attempts", () => {
-    fixture = new RemoteCollaborationFixture("remote-provider-isolation");
-    const published = fixture.publish(1);
-    const sandbox = fixture.sandbox("guarded");
-    const guard = guardUnder(sandbox.dir);
-    const cli = (args: readonly string[]): SandboxCommand => guardedJson(sandbox, guard, args);
-    const harness = sandbox.harness;
+    const credential = "fixture-host-credential-never-serialized";
+    process.env.LINEAR_API_KEY = credential;
+    try {
+      fixture = new RemoteCollaborationFixture("remote-provider-isolation");
+      const published = fixture.publish(1);
+      const sandbox = fixture.sandbox("guarded");
+      const guard = guardUnder(sandbox.dir);
+      const answers: SandboxCommand[] = [];
+      const cli = (args: readonly string[]): SandboxCommand => {
+        const answer = guardedJson(sandbox, guard, args);
+        answers.push(answer);
+        return answer;
+      };
+      const harness = sandbox.harness;
 
-    const bound = cli([
-      ...REMOTE, "bind", "--harness", harness,
-      "--input", sandbox.writeJson("bind", {
-        version: 1,
-        selectorCommit: published.commit,
-        generation: published.generation,
-        checks: [fixture.verify()],
-      }),
-    ]);
-    expect(bound.exitCode).toBe(0);
-    expect(cli(["store", "init", "--harness", harness]).exitCode).toBe(0);
-    const observed = cli([
-      ...REMOTE, "observe", "--harness", harness,
-      "--input", sandbox.writeJson("observe", fixture.observe(REMOTE_PROJECT, 0)),
-    ]);
-    expect(observed.exitCode).toBe(0);
-    expect(cli(["issue", "list", "--harness", harness]).data.providerIssues).toHaveLength(1);
+      const bound = cli([
+        ...REMOTE, "bind", "--harness", harness,
+        "--input", sandbox.writeJson("bind", {
+          version: 1,
+          selectorCommit: published.commit,
+          generation: published.generation,
+          checks: [fixture.verify()],
+        }),
+      ]);
+      expect(bound.exitCode).toBe(0);
+      expect(cli(["store", "init", "--harness", harness]).exitCode).toBe(0);
+      const observed = cli([
+        ...REMOTE, "observe", "--harness", harness,
+        "--input", sandbox.writeJson("observe", fixture.observe(REMOTE_PROJECT, 0)),
+      ]);
+      expect(observed.exitCode).toBe(0);
+      expect(cli(["issue", "list", "--harness", harness]).data.providerIssues).toHaveLength(1);
 
-    const operation = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const adopted = cli([
-      ...REMOTE, "adopt-issue", "--harness", harness,
-      "--project", REMOTE_PROJECT.localProjectId,
-      "--issue", FIXTURE_ISSUE_ID,
-      "--operation", operation,
-      "--input", sandbox.writeJson("adopt", adoptionDocument(operation)),
-    ]);
-    expect(adopted.exitCode).toBe(0);
-    expect(adopted.data.state).toBe("enqueued");
+      const operation = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const adopted = cli([
+        ...REMOTE, "adopt-issue", "--harness", harness,
+        "--project", REMOTE_PROJECT.localProjectId,
+        "--issue", FIXTURE_ISSUE_ID,
+        "--operation", operation,
+        "--input", sandbox.writeJson("adopt", adoptionDocument(operation)),
+      ]);
+      expect(adopted.exitCode).toBe(0);
+      expect(adopted.data.state).toBe("enqueued");
 
-    const dispatched = cli([...REMOTE, "outbox-dispatch", "--harness", harness, "--operation", operation]);
-    expect(dispatched.exitCode).toBe(0);
-    const permit = dispatched.data.permit as unknown as OutboxPermit;
-    const confirmed = fixture.send(permit);
-    const recorded = cli([
-      ...REMOTE, "outbox-receipt", "--harness", harness,
-      "--input", sandbox.writeJson("receipt", confirmed),
-    ]);
-    expect(recorded.exitCode).toBe(0);
-    expect(recorded.data.state).toBe("confirmed");
+      const dispatched = cli([...REMOTE, "outbox-dispatch", "--harness", harness, "--operation", operation]);
+      expect(dispatched.exitCode).toBe(0);
+      const permit = dispatched.data.permit as unknown as OutboxPermit;
+      const confirmed = fixture.send(permit);
+      const recorded = cli([
+        ...REMOTE, "outbox-receipt", "--harness", harness,
+        "--input", sandbox.writeJson("receipt", confirmed),
+      ]);
+      expect(recorded.exitCode).toBe(0);
+      expect(recorded.data.state).toBe("confirmed");
 
-    const status = cli([...REMOTE, "status", "--harness", harness]);
-    expect(status.data).toMatchObject({
-      available: false,
-      projects: [expect.objectContaining({ completeness: "unavailable", code: "remote.effect-confirmed" })],
-    });
-    // invariant: An invalidated cache answers no count at all, rather than a zero total.
-    const listed = cli(["issue", "list", "--harness", harness]);
-    expect(listed.exitCode).toBe(1);
-    expect(listed.code).toBe("remote.unavailable");
-    expect(listed.data.total).toBeUndefined();
-    expect(fixture.providerCalls).toEqual([{ kind: "send", operationId: operation }]);
-    assertGuardClean(guard);
+      const status = cli([...REMOTE, "status", "--harness", harness]);
+      expect(status.data).toMatchObject({
+        available: false,
+        projects: [expect.objectContaining({ completeness: "unavailable", code: "remote.effect-confirmed" })],
+      });
+      // invariant: An invalidated cache answers no count at all, rather than a zero total.
+      const listed = cli(["issue", "list", "--harness", harness]);
+      expect(listed.exitCode).toBe(1);
+      expect(listed.code).toBe("remote.unavailable");
+      expect(listed.data.total).toBeUndefined();
+      expect(fixture.providerCalls).toEqual([{ kind: "send", operationId: operation }]);
+      // invariant: The host credential is present only in host state; it reaches no child or row.
+      assertCredentialAbsent(credential, sandbox, answers, guard);
+      assertGuardClean(guard);
+    } finally {
+      delete process.env.LINEAR_API_KEY;
+    }
   }, 60_000);
 });
 
@@ -423,8 +556,9 @@ describe("remote refusals at the CLI boundary", () => {
       expect(sandbox.runJson(["issue", "list", "--harness", harness]).data.providerIssues).toHaveLength(1);
     }
 
-    // invariant: A positive snapshot carrying a portable field the cache cannot keep is
-    // refused as remote.unsafe-fidelity BEFORE anything is written.
+    // invariant: A positive snapshot carrying a portable field the cache cannot keep refuses the
+    // observation by name AND invalidates the addressed cache, so no reader keeps serving the
+    // previous complete revision behind the refusal.
     const oversizeCheck = positive();
     const base = submission(oversizeCheck, revision, true);
     const snapshot = base.snapshot as Record<string, unknown>;
@@ -482,9 +616,20 @@ describe("remote refusals at the CLI boundary", () => {
     const oversize = sandbox.observe({ ...base, snapshot: { ...snapshot, issues: [...(snapshot.issues as unknown[]), marked] } });
     expect(oversize.exitCode).toBe(1);
     expect(oversize.code).toBe("remote.unsafe-fidelity");
-    expect(sandbox.status().data.projects).toEqual([
-      expect.objectContaining({ revision, completeness: "complete" }),
+    revision += 1;
+    const invalidated = sandbox.status();
+    expect(invalidated.data.available).toBe(false);
+    expect(invalidated.data.projects).toEqual([
+      expect.objectContaining({ revision, completeness: "unavailable", code: "remote.unsafe-fidelity" }),
     ]);
+    const blockedRead = sandbox.runJson(["issue", "list", "--harness", harness]);
+    expect(blockedRead.exitCode).toBe(1);
+    expect(blockedRead.code).toBe("remote.unavailable");
+    expect(blockedRead.data.total).toBeUndefined();
+    const blockedDispatch = sandbox.runJson([...REMOTE, "outbox-dispatch", "--harness", harness, "--operation", operation]);
+    expect(blockedDispatch.exitCode).toBe(1);
+    expect(blockedDispatch.code).toBe("remote.dispatch-refused");
+    expect(blockedDispatch.data.permit).toBeUndefined();
   }, 60_000);
 
   test("the outbox settles a pre-send refusal, a lost response and an ambiguous lookup without provider access", () => {

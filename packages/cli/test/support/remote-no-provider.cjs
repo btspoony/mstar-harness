@@ -2,7 +2,8 @@
  * Test-only preload: deny and RECORD every outbound provider channel a CLI child
  * could open. It is loaded with `NODE_OPTIONS=--require` into the built CLI, so a
  * regression that reaches the network, a provider credential outside the sandbox,
- * or a non-Git subprocess fails the child instead of silently passing the suite.
+ * or a subprocess other than the pinned Git executable fails the child instead of silently
+ * passing the suite.
  *
  * Zero violations means the guard loaded and observed none: the "loaded" record is
  * written first, so a suite can never mistake an unloaded guard for a clean run.
@@ -85,7 +86,39 @@ guardRead("createReadStream", fs);
 guardRead("readFile", fs.promises);
 guardRead("open", fs.promises);
 
-const isGit = (command) => path.basename(String(command)) === "git";
+const allowedGit = process.env.MSTAR_NO_PROVIDER_GIT ?? "";
+
+/** note: Resolve through PATH exactly like the child would, so only the pinned executable is allowed. */
+function executablePath(command) {
+  const value = String(command);
+  const candidates = value.includes(path.sep)
+    ? [value]
+    : (process.env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((dir) => path.join(dir, value));
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // note: A missing or non-executable candidate is not the pinned Git.
+    }
+  }
+  return null;
+}
+
+function isGit(command) {
+  if (allowedGit === "") return false;
+  const resolved = executablePath(command);
+  if (resolved === null) return false;
+  try {
+    return resolved === fs.realpathSync(allowedGit);
+  } catch {
+    return false;
+  }
+}
+
 function guardSpawn(name) {
   const original = childProcess[name];
   childProcess[name] = function guardedSpawn(command, ...rest) {
@@ -101,3 +134,7 @@ guardSpawn("execFileSync");
 ["exec", "execSync", "fork"].forEach((name) => {
   childProcess[name] = denied("spawn:shell");
 });
+
+// note: A Node ESM child reads builtin named exports from a facade that snapshots this
+// module's exports; re-sync after the patches so `import { readFileSync }` cannot bypass them.
+require("node:module").syncBuiltinESMExports();
