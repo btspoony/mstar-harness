@@ -116,6 +116,14 @@ Ordinary business verbs in a `remote` checkout (issue capture/occurrence/triage/
 
 Exit codes stay the contract's: a malformed or unreadable `--input` document is usage (exit 2) and mutates nothing, a domain refusal is exit 1, and a successful inspection or durable state recording is exit 0 with the actual state. No command opens a provider connection.
 
+#### Sandbox handoff and durability
+
+A fresh sandbox recovers a confirmed collaboration picture from exactly two durable sources: the provider's confirmed records and pushed Git. Its bootstrap is the ordinary sequence — clone the tracked branch, `remote status`, verified `remote bind`, `store init` for a fresh execution lane, then a complete `observe` — and it reads neither the first sandbox's `HOME`, workspace, cache nor execution store. Nothing is flushed at the end of a session: the effect exists once the provider receipt is `confirmed`, and the tracked result exists once Git carries it, so a sandbox removed after those two facts hands off everything a successor needs.
+
+Durability is exactly the survival of those two copies. The host handoff reports `remote.handoff-unavailable` — a host report, not a CLI exit — naming the `missing` and `recovered` components from `provider`/`git` and `recoverable: boolean|null`: `false` when a missing component is proven gone with no surviving copy, `null` when its survival is neither proven nor disproven. Losing one source is reported by name while the other stays usable, though neither copy replaces the other; losing both is irrecoverable, and no command reconstructs the missing data. A request found only after a lost response is confirmed by unique exact evidence before it can be handed off, never by a guessed create or a reported success.
+
+Implementation status: the handoff is proven locally against the controlled host fixture (two sandboxes with separate `HOME`/workspace, a local bare Git origin and in-process provider state), and the private cache is a rebuildable observation, never a backup. Live Linear permissions, field-fidelity limits, exact event round-trip, Git server protection policy and operational sender exclusion remain unverified until separately authorized release/operational acceptance.
+
 ### Cross-domain operations and their receipts
 
 Four composite actions span both domains — residual add, residual close, execution registration, and minimal import (including its upgrade caller). Each keeps a durable intent in the execution store's `execution_collaboration_intents` (`prepared`, `declined` with its deterministic cause, or `confirmed`) and its effect plus receipt in the collaboration lane's `collaboration_operations`; a standalone collaboration write is one-domain. The execution delta and the collaboration effect commit in separate `BEGIN IMMEDIATE` transactions with no nested write transaction and no `ATTACH`; each reservation excludes only the facts its operation will finalize.
@@ -165,4 +173,4 @@ Mirror delivery is split by design: the engine records run leases and results (`
 - **A new consumer or a changed source requirement** → update read completeness and the view declarations in `store-read.ts` in the same change.
 - **A change to the cutover, fence or lock protocol** → update the cutover section and [store-authority.md](store-authority.md) (fence ledger, execution schema advance).
 - **A change to the backup pair, restore boundary, or composite receipts** → update that section and the command list.
-- **Provider work, a new remote capability, or cross-authority moves** → an ADR first; this page states only implemented, locally verified behavior and never promises a provider round-trip. The outbox is the provider-free surface; provider transport and the sandbox handoff remain unimplemented.
+- **Provider work, a new remote capability, or cross-authority moves** → an ADR first; this page states only implemented, locally verified behavior and never promises a provider round-trip. The outbox is the provider-free surface; provider transport remains unimplemented, and the sandbox handoff above is proven only against the controlled host fixture.
