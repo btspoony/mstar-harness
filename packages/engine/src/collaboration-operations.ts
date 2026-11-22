@@ -37,7 +37,7 @@
  */
 import { createHash } from "node:crypto";
 import { withCollaborationWrite, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
-import { readRemoteIntent, type RemoteIntent, type RemoteIntentRead } from "./collaboration-remote.js";
+import { durableRemoteIntentIds, readRemoteIntent, type RemoteIntent, type RemoteIntentRead } from "./collaboration-remote.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { isPlainObject } from "./coordination-write.js";
 import {
@@ -1007,6 +1007,14 @@ export type CollaborationCompositeEffects<T> = Readonly<{
    * admitted remote rewrite, and the frame refuses.
    */
   remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[] | null>;
+  /**
+   * note: Every remote operation id this composite's provider effect is addressed by, derived
+   * from the reservation key exactly as `remote` derives them. A remote effect always names
+   * them: the frame's decline decision re-reads these rows at the freeze/decline boundary
+   * (`durableRemoteIntentIds`), so a winner that froze between this attempt's sample and its
+   * refusal is never declined away.
+   */
+  remoteIds?(intent: CompositeIntent): readonly string[];
 }>;
 
 /**
@@ -1217,6 +1225,27 @@ function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undef
 }
 
 /**
+ * why: The race-safe proof a decline needs: which of this composite's remote operation ids
+ * already holds a durable outbox intent, read under the freeze's own write lane. Returns `null`
+ * when absence is PROVED (no rows, lane readable) so the caller may decline; any id found, or a
+ * lane that cannot be read at all, proves nothing either way and retains the reservation.
+ */
+async function durableRemoteIntentProof<T>(
+  context: ExecutionContext | StoreContext,
+  effects: CollaborationCompositeEffects<T>,
+  intent: CompositeIntent,
+): Promise<readonly string[] | null> {
+  const ids = effects.remoteIds?.(intent) ?? [];
+  if (ids.length === 0) return [];
+  try {
+    const durable = await durableRemoteIntentIds(context as StoreContext, ids);
+    return durable.length === 0 ? null : durable;
+  } catch {
+    return ids;
+  }
+}
+
+/**
  * why: A `remote` checkout's composite has no local collaboration effect to apply: the provider
  * event is the effect. The frame finalizes ONLY the execution delta of a reservation whose
  * outbox intent is confirmed, and reports the durable state otherwise — never a business success
@@ -1258,6 +1287,26 @@ async function runRemoteComposite<T>(
     // reservation out from under its durable intent; the reservation is retained and the same-id
     // replay completes from the frozen intent instead.
     if (isDeterministicRefusal(error) && detailsOf(error)?.durable_intent !== true) {
+      // invariant: This refusal proves a PRE-freeze failure only against the sample it was decided
+      // on: a concurrent same-id attempt that froze after that sample is invisible to it. The
+      // decline therefore re-reads the composite's outbox rows UNDER the freeze's own write lane
+      // first; a durable intent found there (or a lane that cannot be read, which proves nothing
+      // either way) keeps the reservation prepared for the same-id replay instead of releasing a
+      // winner's reservation out from under its frozen intent.
+      const durableIds = await durableRemoteIntentProof(context, effects, intent);
+      if (durableIds !== null) {
+        throw partialRefusal({
+          intent,
+          phase: "prepared",
+          confirmed: [],
+          cause: error,
+          recovery:
+            `This refusal was decided on a sampled provider state, but operation ${durableIds.join(", ")} already ` +
+            `holds a durable intent under this reservation, so the reservation is retained: reissue the SAME verb ` +
+            `with the SAME --operation id and payload; the frozen intent is reused (settled by dispatch, receipt and ` +
+            `confirmation), never re-frozen or re-sent.`,
+        });
+      }
       const cause: DeclineCause = {
         code: codeOf(error) as string,
         message:

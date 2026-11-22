@@ -640,6 +640,7 @@ export async function commitExecutionRegistration(
       });
       return result;
     },
+    remoteIds: () => [remoteCompositeOperationId(prepared.intent.key)],
   });
 }
 

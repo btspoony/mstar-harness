@@ -91,6 +91,17 @@ export function setRemoteWriteScopeGapForTest(callback: (() => void | Promise<vo
   remoteWriteScopeGapForTest = callback;
 }
 
+/**
+ * note: The replay-admission gap seam: a regression completes a concurrent same-id attempt
+ * between the replay admission that saw no durable row and the scope read that decides the
+ * write, so the write is decided against the state the winner's settled effect produced.
+ * Production runs without a callback.
+ */
+let remoteReplayAdmissionGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteReplayAdmissionGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteReplayAdmissionGapForTest = callback;
+}
+
 /** note: The bound provider record an MStar issue is anchored to. */
 export type ProviderIssueIdentity = Readonly<{
   provider: "linear";
@@ -492,6 +503,9 @@ function collected<T>(errors: string[] | undefined, read: () => T, fallback: T):
   try {
     return read();
   } catch (error) {
+    // invariant: `remote.unsafe-fidelity` is its own refusal class (the observation boundary
+    // records and replays it), so it is never flattened into a structural aggregate.
+    if (error instanceof StoreError && error.code === "remote.unsafe-fidelity") throw error;
     errors.push(diagnosticOf(error));
     return fallback;
   }
@@ -689,24 +703,24 @@ const MSTAR_FIELD_KEYS = [
   "closureNote", "createdAt", "updatedAt", "revision", "milestoneId",
 ] as const;
 
-function mstarFields(value: unknown, path: string): Record<string, unknown> {
+function mstarFields(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, MSTAR_FIELD_KEYS);
+  allowOnly(body, path, MSTAR_FIELD_KEYS, errors);
   return {
-    title: text(body.title, `${path}.title`),
-    kind: oneOf(body.kind, ISSUE_KINDS, `${path}.kind`),
-    severity: oneOf(body.severity, ISSUE_SEVERITIES, `${path}.severity`),
-    disposition: oneOf(body.disposition, ISSUE_DISPOSITIONS, `${path}.disposition`),
-    impact: text(body.impact, `${path}.impact`),
-    acceptance: text(body.acceptance, `${path}.acceptance`),
-    owner: nullableString(body.owner, `${path}.owner`),
-    registeredAt: nullableInstant(body.registeredAt, `${path}.registeredAt`),
-    closedAt: nullableInstant(body.closedAt, `${path}.closedAt`),
-    closureNote: nullableString(body.closureNote, `${path}.closureNote`),
-    createdAt: instant(body.createdAt, `${path}.createdAt`),
-    updatedAt: instant(body.updatedAt, `${path}.updatedAt`),
-    revision: positiveInteger(body.revision, `${path}.revision`),
-    milestoneId: nullableString(body.milestoneId, `${path}.milestoneId`),
+    title: collected(errors, () => text(body.title, `${path}.title`), ""),
+    kind: collected(errors, () => oneOf(body.kind, ISSUE_KINDS, `${path}.kind`), "bug"),
+    severity: collected(errors, () => oneOf(body.severity, ISSUE_SEVERITIES, `${path}.severity`), "high"),
+    disposition: collected(errors, () => oneOf(body.disposition, ISSUE_DISPOSITIONS, `${path}.disposition`), "open"),
+    impact: collected(errors, () => text(body.impact, `${path}.impact`), ""),
+    acceptance: collected(errors, () => text(body.acceptance, `${path}.acceptance`), ""),
+    owner: collected(errors, () => nullableString(body.owner, `${path}.owner`), null),
+    registeredAt: collected(errors, () => nullableInstant(body.registeredAt, `${path}.registeredAt`), null),
+    closedAt: collected(errors, () => nullableInstant(body.closedAt, `${path}.closedAt`), null),
+    closureNote: collected(errors, () => nullableString(body.closureNote, `${path}.closureNote`), null),
+    createdAt: collected(errors, () => instant(body.createdAt, `${path}.createdAt`), ""),
+    updatedAt: collected(errors, () => instant(body.updatedAt, `${path}.updatedAt`), ""),
+    revision: collected(errors, () => positiveInteger(body.revision, `${path}.revision`), 0),
+    milestoneId: collected(errors, () => nullableString(body.milestoneId, `${path}.milestoneId`), null),
   };
 }
 
@@ -715,23 +729,23 @@ const OCCURRENCE_KEYS = [
   "observedBehavior", "evidence", "discoveredAt", "recordedAt", "imported",
 ] as const;
 
-function occurrence(value: unknown, path: string): Record<string, unknown> {
+function occurrence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, OCCURRENCE_KEYS);
+  allowOnly(body, path, OCCURRENCE_KEYS, errors);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    occurrenceKey: text(body.occurrenceKey, `${path}.occurrenceKey`),
-    sourceKind: text(body.sourceKind, `${path}.sourceKind`),
-    sourceIdentity: text(body.sourceIdentity, `${path}.sourceIdentity`),
-    rootCauseKey: text(body.rootCauseKey, `${path}.rootCauseKey`),
-    acceptanceKey: text(body.acceptanceKey, `${path}.acceptanceKey`),
-    location: text(body.location, `${path}.location`),
-    observedBehavior: text(body.observedBehavior, `${path}.observedBehavior`),
-    evidence: stringList(body.evidence, `${path}.evidence`),
-    discoveredAt: nullableInstant(body.discoveredAt, `${path}.discoveredAt`),
-    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    occurrenceKey: collected(errors, () => text(body.occurrenceKey, `${path}.occurrenceKey`), ""),
+    sourceKind: collected(errors, () => text(body.sourceKind, `${path}.sourceKind`), ""),
+    sourceIdentity: collected(errors, () => text(body.sourceIdentity, `${path}.sourceIdentity`), ""),
+    rootCauseKey: collected(errors, () => text(body.rootCauseKey, `${path}.rootCauseKey`), ""),
+    acceptanceKey: collected(errors, () => text(body.acceptanceKey, `${path}.acceptanceKey`), ""),
+    location: collected(errors, () => text(body.location, `${path}.location`), ""),
+    observedBehavior: collected(errors, () => text(body.observedBehavior, `${path}.observedBehavior`), ""),
+    evidence: collected(errors, () => stringList(body.evidence, `${path}.evidence`), []),
+    discoveredAt: collected(errors, () => nullableInstant(body.discoveredAt, `${path}.discoveredAt`), null),
+    recordedAt: collected(errors, () => instant(body.recordedAt, `${path}.recordedAt`), ""),
     // note: The domain's imported provenance is a business field of the history, not a private detail.
-    imported: boolean(body.imported, `${path}.imported`),
+    imported: collected(errors, () => boolean(body.imported, `${path}.imported`), false),
   };
 }
 
@@ -739,12 +753,12 @@ function occurrence(value: unknown, path: string): Record<string, unknown> {
  * invariant: Freezing a new intent applies the issue domain's dedup rule; an
  * observed chain is provider evidence and is never re-judged by this boundary.
  */
-function frozenOccurrence(value: unknown, path: string): Record<string, unknown> {
-  const row = occurrence(value, path);
+function frozenOccurrence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
+  const row = occurrence(value, path, errors);
   return {
     ...row,
-    rootCauseKey: semanticKey(row.rootCauseKey, `${path}.rootCauseKey`),
-    acceptanceKey: semanticKey(row.acceptanceKey, `${path}.acceptanceKey`),
+    rootCauseKey: collected(errors, () => semanticKey(row.rootCauseKey, `${path}.rootCauseKey`), ""),
+    acceptanceKey: collected(errors, () => semanticKey(row.acceptanceKey, `${path}.acceptanceKey`), ""),
   };
 }
 
@@ -762,14 +776,18 @@ const TRANSITION_KEYS = [
  */
 const TRANSITION_EVIDENCE_KEYS = ["reason", "scope", "references", "canonicalIssueId", "alignmentRef"] as const;
 
-function transitionEvidence(value: unknown, path: string): Record<string, unknown> {
+function transitionEvidence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, TRANSITION_EVIDENCE_KEYS);
+  allowOnly(body, path, TRANSITION_EVIDENCE_KEYS, errors);
   const evidence: Record<string, unknown> = {};
   for (const key of TRANSITION_EVIDENCE_KEYS) {
     if (!(key in body)) continue;
-    evidence[key] =
-      key === "references" ? stringList(body.references, `${path}.references`) : nullableString(body[key], `${path}.${key}`);
+    evidence[key] = collected(
+      errors,
+      () =>
+        key === "references" ? stringList(body.references, `${path}.references`) : nullableString(body[key], `${path}.${key}`),
+      key === "references" ? [] : null,
+    );
   }
   return evidence;
 }
@@ -810,7 +828,7 @@ const IMPORTED_RECORD_KEYS: ReadonlySet<string> = new Set(
   IMPORTED_RECORD_FIELDS.flatMap(([portable, legacy]) => [portable, legacy]),
 );
 
-function importedRecord(value: unknown, path: string): Record<string, string | null> {
+function importedRecord(value: unknown, path: string, errors?: string[]): Record<string, string | null> {
   const body = record(value, path);
   for (const key of Object.keys(body)) {
     if (!IMPORTED_RECORD_KEYS.has(key)) {
@@ -822,49 +840,72 @@ function importedRecord(value: unknown, path: string): Record<string, string | n
     // note: The portable document is accepted again, so an export of a stored snapshot round-trips.
     // Only a name that differs can be sent twice; most legacy spellings are already the portable one.
     if (key !== legacy && legacy in body && key in body) {
-      invalid(`${path}.${key}`, `duplicates ${legacy}; send one spelling`);
+      const message = `${path}.${key}: duplicates ${legacy}; send one spelling`;
+      if (errors === undefined) invalid(`${path}.${key}`, `duplicates ${legacy}; send one spelling`);
+      errors.push(message);
     }
     if (!(legacy in body) && !(key in body)) continue;
     // note: A refusal names the spelling the sender used, so the offending field is findable.
+    // `portableValue` stays outside the collector: its fidelity refusal is its own class.
     const sent = legacy in body ? legacy : key;
-    portable[key] = portableValue(body[sent], `${path}.${sent}`);
+    const read = () => portableValue(body[sent], `${path}.${sent}`);
+    if (errors === undefined) {
+      portable[key] = read();
+      continue;
+    }
+    try {
+      portable[key] = read();
+    } catch (error) {
+      if (error instanceof StoreError && error.code !== "remote.unsafe-fidelity") {
+        errors.push(diagnosticOf(error));
+        portable[key] = null;
+        continue;
+      }
+      throw error;
+    }
   }
   if (Object.keys(portable).length === 0) {
-    invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
+    const message = `${path}: must carry the imported record's business fields (legacy id, title, lifecycle, ...)`;
+    if (errors === undefined) invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
+    errors.push(message);
   }
   return portable;
 }
 
-function transition(value: unknown, path: string): Record<string, unknown> {
+function transition(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, TRANSITION_KEYS);
-  if (!("evidence" in body)) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
-  const imported = boolean(body.imported, `${path}.imported`);
+  allowOnly(body, path, TRANSITION_KEYS, errors);
+  if (!("evidence" in body)) {
+    const message = `${path}.evidence: must be present (the recorded transition evidence)`;
+    if (errors === undefined) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
+    errors.push(message);
+  }
+  const imported = collected(errors, () => boolean(body.imported, `${path}.imported`), false);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    fromDisposition: oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`),
-    toDisposition: oneOf(body.toDisposition, ISSUE_DISPOSITIONS, `${path}.toDisposition`),
-    actor: nullableString(body.actor, `${path}.actor`),
-    occurredAt: nullableInstant(body.occurredAt, `${path}.occurredAt`),
-    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
-    reason: text(body.reason, `${path}.reason`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    fromDisposition: collected(errors, () => oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`), "open"),
+    toDisposition: collected(errors, () => oneOf(body.toDisposition, ISSUE_DISPOSITIONS, `${path}.toDisposition`), "open"),
+    actor: collected(errors, () => nullableString(body.actor, `${path}.actor`), null),
+    occurredAt: collected(errors, () => nullableInstant(body.occurredAt, `${path}.occurredAt`), null),
+    recordedAt: collected(errors, () => instant(body.recordedAt, `${path}.recordedAt`), ""),
+    reason: collected(errors, () => text(body.reason, `${path}.reason`), ""),
     evidence: imported
-      ? importedRecord(body.evidence, `${path}.evidence`)
-      : transitionEvidence(body.evidence, `${path}.evidence`),
-    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+      ? importedRecord(body.evidence, `${path}.evidence`, errors)
+      : transitionEvidence(body.evidence, `${path}.evidence`, errors),
+    issueRevision: collected(errors, () => nonNegativeInteger(body.issueRevision, `${path}.issueRevision`), 0),
     imported,
   };
 }
 
 const RELATION_KEYS = ["relation", "target"] as const;
 
-function relation(value: unknown, path: string): Record<string, unknown> {
+function relation(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, RELATION_KEYS);
+  allowOnly(body, path, RELATION_KEYS, errors);
   return {
-    relation: oneOf(body.relation, ISSUE_RELATIONS, `${path}.relation`),
+    relation: collected(errors, () => oneOf(body.relation, ISSUE_RELATIONS, `${path}.relation`), "related"),
     // note: A dangling target stays as the spellable reference; the read boundary renders it unresolved.
-    target: assertIssueRef(text(body.target, `${path}.target`)),
+    target: collected(errors, () => assertIssueRef(text(body.target, `${path}.target`)), "mstar:issue:00000000-0000-4000-8000-000000000000"),
   };
 }
 
@@ -893,12 +934,14 @@ const PROVENANCE_KEYS = [
  * Only the portable projection is persisted, as `legacyRecord`, and a stored
  * snapshot's `legacyRecord` is accepted again so an export round-trips.
  */
-function provenanceRecord(body: Record<string, unknown>, path: string): Record<string, string | null> | null {
+function provenanceRecord(body: Record<string, unknown>, path: string, errors?: string[]): Record<string, string | null> | null {
   if ("legacyJson" in body && "legacyRecord" in body) {
-    invalid(`${path}.legacyRecord`, "duplicates legacyJson; send one representation");
+    const message = `${path}.legacyRecord: duplicates legacyJson; send one representation`;
+    if (errors === undefined) invalid(`${path}.legacyRecord`, "duplicates legacyJson; send one representation");
+    errors.push(message);
   }
   if ("legacyRecord" in body) {
-    return body.legacyRecord === null ? null : importedRecord(body.legacyRecord, `${path}.legacyRecord`);
+    return body.legacyRecord === null ? null : importedRecord(body.legacyRecord, `${path}.legacyRecord`, errors);
   }
   if (!("legacyJson" in body) || body.legacyJson === null) return null;
   const raw = body.legacyJson;
@@ -913,43 +956,50 @@ function provenanceRecord(body: Record<string, unknown>, path: string): Record<s
   } catch {
     unsafeFidelity(`${path}.legacyJson`, "is not JSON the reviewed representation can read");
   }
-  return importedRecord(parsed, `${path}.legacyJson`);
+  return importedRecord(parsed, `${path}.legacyJson`, errors);
 }
 
-function provenanceLink(value: unknown, path: string): Record<string, unknown> {
+function provenanceLink(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, PROVENANCE_KEYS);
-  const target = portableValue(text(body.target, `${path}.target`), `${path}.target`);
-  if (target === null) invalid(`${path}.target`, "must be a non-empty string");
-  const sourceHash = text(body.sourceHash, `${path}.sourceHash`);
-  if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
+  allowOnly(body, path, PROVENANCE_KEYS, errors);
+  // note: `portableValue` stays outside the collector: its fidelity refusal is its own class.
+  const readTarget = () => {
+    const target = portableValue(text(body.target, `${path}.target`), `${path}.target`);
+    if (target === null) invalid(`${path}.target`, "must be a non-empty string");
+    return target;
+  };
+  const readHash = () => {
+    const sourceHash = text(body.sourceHash, `${path}.sourceHash`);
+    if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
+    return sourceHash;
+  };
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    kind: oneOf(body.kind, provenanceKinds(), `${path}.kind`),
-    target,
-    sourceHash,
-    origin: oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`),
-    legacyProject: portableValue(body.legacyProject, `${path}.legacyProject`),
-    legacyBucket: portableValue(body.legacyBucket, `${path}.legacyBucket`),
-    legacyEntryId: portableValue(body.legacyEntryId, `${path}.legacyEntryId`),
-    legacyRecord: provenanceRecord(body, path),
-    importedAt: nullableInstant(body.importedAt, `${path}.importedAt`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    kind: collected(errors, () => oneOf(body.kind, provenanceKinds(), `${path}.kind`), "plan"),
+    target: collected(errors, readTarget, ""),
+    sourceHash: collected(errors, readHash, ""),
+    origin: collected(errors, () => oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`), "scoped"),
+    legacyProject: collected(errors, () => portableValue(body.legacyProject, `${path}.legacyProject`), null),
+    legacyBucket: collected(errors, () => portableValue(body.legacyBucket, `${path}.legacyBucket`), null),
+    legacyEntryId: collected(errors, () => portableValue(body.legacyEntryId, `${path}.legacyEntryId`), null),
+    legacyRecord: provenanceRecord(body, path, errors),
+    importedAt: collected(errors, () => nullableInstant(body.importedAt, `${path}.importedAt`), null),
   };
 }
 
 const PROJECT_MOVE_KEYS = ["eventId", "fromProject", "toProject", "actor", "reason", "occurredAt", "issueRevision"] as const;
 
-function projectMove(value: unknown, path: string): Record<string, unknown> {
+function projectMove(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, PROJECT_MOVE_KEYS);
+  allowOnly(body, path, PROJECT_MOVE_KEYS, errors);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    fromProject: text(body.fromProject, `${path}.fromProject`),
-    toProject: text(body.toProject, `${path}.toProject`),
-    actor: text(body.actor, `${path}.actor`),
-    reason: text(body.reason, `${path}.reason`),
-    occurredAt: instant(body.occurredAt, `${path}.occurredAt`),
-    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    fromProject: collected(errors, () => text(body.fromProject, `${path}.fromProject`), ""),
+    toProject: collected(errors, () => text(body.toProject, `${path}.toProject`), ""),
+    actor: collected(errors, () => text(body.actor, `${path}.actor`), ""),
+    reason: collected(errors, () => text(body.reason, `${path}.reason`), ""),
+    occurredAt: collected(errors, () => instant(body.occurredAt, `${path}.occurredAt`), ""),
+    issueRevision: collected(errors, () => nonNegativeInteger(body.issueRevision, `${path}.issueRevision`), 0),
   };
 }
 
@@ -2537,27 +2587,27 @@ function writeOrigin(value: unknown, path: string): RemoteWriteOrigin {
  * with the same field allowlists the snapshot applies, minus the derived `head`
  * and the outer duplicate `issueRef`. An empty or partial subject never freezes.
  */
-function frozenIssueSubject(value: unknown, path: string): Record<string, unknown> {
+function frozenIssueSubject(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("issueRef" in body) invalid(`${path}.issueRef`, "duplicates the event's reference");
-  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"]);
+  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"], errors);
   return {
-    fields: mstarFields(body.fields, `${path}.fields`),
-    occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
-      frozenOccurrence(entry, `${path}.occurrences[${index}]`),
+    fields: mstarFields(body.fields, `${path}.fields`, errors),
+    occurrences: collected(errors, () => list(body.occurrences, `${path}.occurrences`), []).map((entry, index) =>
+      frozenOccurrence(entry, `${path}.occurrences[${index}]`, errors),
     ),
-    transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
-      transition(entry, `${path}.transitions[${index}]`),
+    transitions: collected(errors, () => list(body.transitions, `${path}.transitions`), []).map((entry, index) =>
+      transition(entry, `${path}.transitions[${index}]`, errors),
     ),
-    relations: list(body.relations, `${path}.relations`).map((entry, index) =>
-      relation(entry, `${path}.relations[${index}]`),
+    relations: collected(errors, () => list(body.relations, `${path}.relations`), []).map((entry, index) =>
+      relation(entry, `${path}.relations[${index}]`, errors),
     ),
-    provenance: list(body.provenance, `${path}.provenance`).map((entry, index) =>
-      provenanceLink(entry, `${path}.provenance[${index}]`),
+    provenance: collected(errors, () => list(body.provenance, `${path}.provenance`), []).map((entry, index) =>
+      provenanceLink(entry, `${path}.provenance[${index}]`, errors),
     ),
-    projectMoves: list(body.projectMoves, `${path}.projectMoves`).map((entry, index) =>
-      projectMove(entry, `${path}.projectMoves[${index}]`),
+    projectMoves: collected(errors, () => list(body.projectMoves, `${path}.projectMoves`), []).map((entry, index) =>
+      projectMove(entry, `${path}.projectMoves[${index}]`, errors),
     ),
   };
 }
@@ -2674,7 +2724,7 @@ function remoteEvent(raw: unknown, binding: RemoteIntentBinding, errors?: string
         },
         "",
       ),
-      mstar: frozenIssueSubject(change.mstar, `${path}.change.mstar`),
+      mstar: frozenIssueSubject(change.mstar, `${path}.change.mstar`, errors),
     };
   }
   return { version: 1, repoKey, projectId, operationId, parents, change: frozen };
@@ -2855,6 +2905,24 @@ const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
   "conflict",
   "abandoned",
 ];
+
+/**
+ * why: The decline decision's serialization point: the remote-cache write lane, the same lock
+ * `prepareRemoteIntent` freezes under. A row committed before this call is always visible here,
+ * so a composite can prove absence against the freeze order instead of against its own sample,
+ * and a durable intent frozen by a concurrent same-id attempt is never declined away.
+ */
+export async function durableRemoteIntentIds(
+  context: StoreContext,
+  operationIds: readonly string[],
+): Promise<readonly string[]> {
+  return withRemoteCacheWrite(context, (handle) =>
+    operationIds.filter(
+      (operationId) =>
+        handle.db.prepare("select 1 as found from remote_outbox where operation_id = ?").get(operationId) !== undefined,
+    ),
+  );
+}
 
 /**
  * note: The one confirmed receipt an intent recorded, re-validated through the contract's
@@ -5046,6 +5114,42 @@ export type RemoteObservedSubject = Readonly<{
  */
 export type RemoteNoChange = Readonly<{ noChange: unknown }>;
 
+/**
+ * invariant: The boundary an established answer is proved at, exactly as an insert is: inside
+ * the remote-cache write lane, the lock every freeze takes. The `unchanged` decision read a
+ * SAMPLE, so at the decision boundary this re-reads the outbox row under the operation id — a
+ * concurrent capture that froze it between the replay lookup and this answer is a replay or a
+ * collision, never an established success answered over it — and re-proves the sampled
+ * observation revision, refusing a no-op decided on a superseded base.
+ */
+async function proveEstablishedNoOp(
+  context: StoreContext,
+  proof: { operationId: string; binding: RemoteIntentBinding; sampledRevision: number },
+): Promise<"durable" | "proven"> {
+  return withRemoteCacheWrite(context, (handle) => {
+    const row = handle.db
+      .prepare("select 1 as found from remote_outbox where operation_id = ?")
+      .get(proof.operationId) as { found?: number } | undefined;
+    if (row !== undefined) return "durable" as const;
+    const current = observationRevisionOf(handle.db, proof.binding.generation, proof.binding.projectKey);
+    if (current === proof.sampledRevision) return "proven" as const;
+    throw new StoreError(
+      "collaboration.observation-stale",
+      `The observed scope of project ${proof.binding.projectKey} moved under this write's sampled base (observation ` +
+        `revision ${String(proof.sampledRevision)} at read, ${String(current)} at the established answer), so its ` +
+        `no-op decision cannot answer on it. Re-run \`mstar store collaboration remote observe\` and reissue the ` +
+        `SAME verb with the SAME operation id; nothing was enqueued.`,
+      {
+        projectId: proof.binding.projectKey,
+        sampledRevision: proof.sampledRevision,
+        freezeRevision: current,
+        recovery:
+          "Re-run `mstar store collaboration remote observe --harness <abs> --input <file|->` for this project, then reissue the SAME verb with the SAME operation id.",
+      },
+    );
+  });
+}
+
 export type RemoteIssueWrite = Readonly<{
   projectId?: string;
   operationId: string;
@@ -5244,17 +5348,19 @@ export async function prepareRemoteIssueWrite(
       : issueRefForOperation(operationId));
   const replayTarget =
     addressedIssue === undefined || !UUID.test(addressedIssue) ? undefined : linearId(addressedIssue, "issueId");
+  const replayProjectKey = write?.projectId === undefined ? null : text(write.projectId, "projectId");
   const replay = await replayedIntent(
     context,
     operationId,
     kind,
-    write?.projectId === undefined ? null : text(write.projectId, "projectId"),
+    replayProjectKey,
     replayTarget,
     replayRef,
     executionKey,
     origin,
   );
   if (replay !== null) return replay;
+  await remoteReplayAdmissionGapForTest?.();
   if (kind === "issue-create") {
     const issueRef = declaredRef ?? issueRefForOperation(operationId);
     if (write?.issueId !== undefined && write.issueId !== null) invalid("issueId", "must be absent for a create");
@@ -5314,9 +5420,30 @@ export async function prepareRemoteIssueWrite(
   const observed = { projectId, project: scope.snapshot.project, issues: scope.snapshot.issues };
   const current = native.mstar === null ? null : currentIssueSubject(native.mstar);
   // invariant: A write the observed authority already carries is the domain's own no-op, decided
-  // BEFORE a second event is frozen; a conflicting payload refuses through the same callback.
+  // BEFORE a second event is frozen; a conflicting payload refuses through the same callback. The
+  // answer is replay-first and observation-proven like an insert: the boundary re-check under the
+  // write lane serves a durable same-id operation instead of it, and refuses a no-op whose
+  // sampled base a concurrent effect superseded.
   const established = write.unchanged?.(current, observed) ?? null;
-  if (established !== null) return { noChange: established };
+  if (established !== null) {
+    const proof = await proveEstablishedNoOp(context, {
+      operationId,
+      binding: scope.binding,
+      sampledRevision: scope.observationRevision,
+    });
+    if (proof === "durable") {
+      const durable = await replayedIntent(context, operationId, kind, replayProjectKey, replayTarget, replayRef, executionKey, origin);
+      if (durable === null) {
+        throw new StoreError(
+          "store.corrupt",
+          `Operation ${operationId} holds a durable outbox row that no longer replays; nothing was enqueued.`,
+          { operationId },
+        );
+      }
+      return durable;
+    }
+    return { noChange: established };
+  }
   return prepareRemoteIntent(context, {
     binding: scope.binding,
     event: {

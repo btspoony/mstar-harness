@@ -28,6 +28,7 @@ import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   bindRemoteAuthority,
   ingestRemoteObservation,
+  prepareRemoteIntent,
   setRemoteWriteScopeGapForTest,
   type RemoteSnapshot,
 } from "./collaboration-remote.js";
@@ -706,6 +707,69 @@ test("a scope that moves after the last sample refuses the freeze and keeps retr
   });
   expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
   expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a durable operation under the same id refuses an established no-op answer", async () => {
+  const fixture = await remoteFixture("capture-noop-overlap");
+  const operationId = "30000000-0000-4000-8000-00000000000c";
+  // note: The bounded overlap of the no-op answer: the losing capture passes replay admission
+  // (no outbox row yet) and pauses inside the write's own scope read, while a DIFFERENT-payload
+  // capture freezes the SAME operation id in that gap. The winner's row is durable before the
+  // loser's sampled no-op decision, so only a re-read at that decision boundary can refuse the
+  // collision; the observed no-op alone would report a false established success over it.
+  let samples = 0;
+  setRemoteWriteScopeGapForTest(async () => {
+    samples += 1;
+    if (samples < 2) return;
+    setRemoteWriteScopeGapForTest(undefined);
+    const marked = completeSnapshot(positiveCheck()).issues[0]!.mstar!;
+    // note: The frozen event's subject carries no derived `head` or outer `issueRef`.
+    const { issueRef: _derivedRef, head: _derivedHead, ...subject } = marked;
+    await prepareRemoteIntent(fixture.context, {
+      binding: {
+        generation: 3,
+        projectKey: REMOTE_IDS.projectId,
+        selectorCommit: fixture.commit,
+        provider: "linear",
+        workspaceId: REMOTE_IDS.workspaceId,
+        teamId: REMOTE_IDS.teamId,
+        projectId: REMOTE_IDS.providerProjectId,
+        journalIssueId: REMOTE_IDS.journalIssueId,
+        writerId: REMOTE_IDS.writerId,
+      },
+      event: {
+        version: 1,
+        repoKey: fixture.scope.repoKey,
+        projectId: REMOTE_IDS.projectId,
+        operationId,
+        parents: ["2".repeat(64)],
+        change: {
+          kind: "issue-replace",
+          issueRef: REMOTE_IDS.issueRef,
+          mstar: { ...subject, occurrences: [...subject.occurrences, { ...subject.occurrences[0]!, occurrenceKey: "winner-payload" }] },
+        },
+      },
+      target: REMOTE_IDS.markedIssueId,
+      expectedHeads: ["2".repeat(64)],
+      executionKey: null,
+      origin: { verb: "capture", request: { different: true } },
+    });
+  });
+  const refused = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput({ occurrenceKey: "occurrence-one" }), {
+      operationId,
+      actor: "project-manager",
+    }),
+  );
+  expect(samples).toBe(2);
+  // invariant: The established answer is replay-first like an insert: the boundary re-reads the
+  // outbox row under the same id, and a different request frozen there is a collision, never a
+  // false established success.
+  expect(refused.code).toBe("remote.operation-conflict");
+  expect(refused.message).toContain("frozen under the business request");
+  const rows = outboxRows(fixture.context);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ operation_id: operationId, state: "enqueued" });
 });
 
 // ---------------------------------------------------------------------------

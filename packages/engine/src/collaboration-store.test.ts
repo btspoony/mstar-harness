@@ -74,6 +74,7 @@ import {
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
   setRemoteIntentSampleGapForTest,
+  setRemoteReplayAdmissionGapForTest,
   setRemoteWriteScopeGapForTest,
   type ForkObservation,
   type RemoteEvent,
@@ -4827,6 +4828,47 @@ describe("remote outbox lifecycle", () => {
     ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
   });
 
+  test("one receipt refusal aggregates the subject's field and history defects together", async () => {
+    const cache = await outboxCache("receipt-subject-aggregate");
+    const operationId = "00000000-0000-4000-8000-000000000211";
+    const intent = await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, operationId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
+    const subject = completeIssueSubject();
+    const fields = { ...(subject.fields as Record<string, unknown>), title: 7, revision: -1 };
+    const occurrences = [{ ...(subject.occurrences as Record<string, unknown>[])[0]!, eventId: "not-a-uuid" }];
+    const event = {
+      version: 1,
+      repoKey: cache.fixture.repoKey,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      parents: [OBSERVED_ISSUE_HEAD],
+      change: { kind: "issue-replace", issueRef: FORGED_ISSUE_REF, mstar: { ...subject, fields, occurrences } },
+    };
+
+    // invariant: ONE structural refusal answers every defect INSIDE the known event arm — both bad
+    // subject fields and the malformed history row — instead of stopping at the first one.
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        receiptInput(cache.commit, operationId, attemptId, intent.requestHash, {
+          kind: "confirmed",
+          identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+          recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeeb",
+          event,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringMatching(
+        /receipt\.outcome\.event\.change\.mstar\.fields\.title[\s\S]*receipt\.outcome\.event\.change\.mstar\.fields\.revision[\s\S]*receipt\.outcome\.event\.change\.mstar\.occurrences\[0\]\.eventId/,
+      ),
+    });
+    // invariant: The structural refusal happened before any outbox access: the attempt stays
+    // unconfirmed with no recorded evidence row.
+    expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "unconfirmed" });
+    expect((await readRemoteIntent(cache.context, operationId)).receipts).toHaveLength(0);
+  });
+
   test("a changed provider base, a stale binding and a fork surface instead of a send or an overwrite", async () => {
     const moved = await outboxCache("outbox-base");
     const operationId = "00000000-0000-4000-8000-000000000301";
@@ -6572,6 +6614,84 @@ describe("remote composite flows", () => {
     const completed = await residualAddExecutionPlan(execution, request);
     expect(completed.operationId).toBe("residual-remote-overlap");
     expect(await intentPhases(cache.context, "residual-remote-overlap")).toEqual(["confirmed"]);
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+  }, 30_000);
+
+  test("a sampled refusal before insertion cannot decline a reservation whose intent the winner froze", async () => {
+    const cache = await outboxCache("composite-decline-proof");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "decline-proof",
+      operation: { kind: "residual-add" as const, entries: [residualEntry("proof-a")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    // note: The bounded overlap of the OTHER branch: the loser passes replay admission (no outbox
+    // row yet), and the winner freezes, dispatches and CONFIRMS the same id inside the loser's
+    // replay-admission gap, then a refresh installs the winner's settled outcome. The loser's
+    // create path now refuses deterministically (`remote.scope-mismatch`) from a fresh sample,
+    // before its own outbox transaction — an error that carries no durable-intent tag, so only
+    // a re-read at the freeze/decline boundary can prove the winner's row.
+    let overlapped = false;
+    setRemoteReplayAdmissionGapForTest(async () => {
+      if (overlapped) return;
+      overlapped = true;
+      setRemoteReplayAdmissionGapForTest(undefined);
+      const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "decline-proof"), 0);
+      const queued = await refusalOf(() => residualAddExecutionPlan(execution, request));
+      expect(queued.code).toBe("collaboration.operation-partial");
+      await confirmIntent(cache, entryId, "88888888-8888-4888-8888-888888888881");
+      const check = positiveCheck();
+      const established = linkedSnapshot(workflow.planId);
+      const at = new Date().toISOString();
+      const snapshot: RemoteSnapshot = {
+        ...established,
+        issues: [
+          ...established.issues,
+          {
+            identity: { ...providerScope(), issueId: "88888888-8888-4888-8888-888888888882" },
+            nativeTitle: "Winner genesis",
+            nativeStatus: "Todo",
+            providerUpdatedAt: at,
+            mstar: {
+              issueRef: issueRefForOperation(entryId),
+              head: ["7".repeat(64)],
+              fields: { ...(completeIssueSubject().fields as Record<string, unknown>) },
+              occurrences: [],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          },
+        ],
+      };
+      await ingestRemoteObservation(
+        cache.context,
+        observation(check, { selectorCommit: cache.commit, generation: 3, expectRevision: 2, snapshot }),
+      );
+    });
+    const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(overlapped).toBe(true);
+    expect(refused.code).toBe("collaboration.operation-partial");
+    expect(refused.message).toContain("already holds a durable intent");
+    expect(detailsOf(refused)).toMatchObject({ phase: "prepared", operation_id: "decline-proof" });
+    expect(String(detailsOf(refused).recovery)).toContain("SAME");
+    // invariant: The reservation is never declined on a refusal that cannot prove absence at the
+    // freeze/decline boundary: the winner's settled intent keeps its reservation prepared.
+    expect(await intentPhases(cache.context, "decline-proof")).toEqual(["prepared"]);
+    const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "decline-proof"), 0);
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+    expect(outboxStateOf(cache.dbPath, entryId)).toBe("confirmed");
+
+    // invariant: The reservation is genuinely resumable: reissuing the SAME operation id replays
+    // the winner's confirmed intent and finalizes the execution delta, never a second freeze.
+    const completed = await residualAddExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("decline-proof");
+    expect(await intentPhases(cache.context, "decline-proof")).toEqual(["confirmed"]);
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
   }, 30_000);
 

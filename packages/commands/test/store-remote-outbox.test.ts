@@ -951,6 +951,117 @@ describe("remote outbox commands", () => {
     expect(message).toContain("mstar schema --command store.collaboration.remote.outbox-receipt");
   });
 
+  test("one receipt refusal aggregates the subject's field and history defects through the published command", async () => {
+    const fixture = remoteFixture("aggregate-subject-defects");
+    const document = {
+      version: 1,
+      selectorCommit: fixture.commit,
+      generation: 3,
+      projectId: IDS.projectId,
+      operationId: "00000000-0000-4000-8000-0000000000d4",
+      attemptId: "00000000-0000-4000-8000-0000000000d5",
+      requestHash: "b".repeat(64),
+      observedAt: new Date().toISOString(),
+      outcome: {
+        kind: "confirmed",
+        identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+        recordId: "00000000-0000-4000-8000-0000000000d6",
+        event: {
+          version: 1,
+          repoKey: "fixture-repo",
+          projectId: IDS.projectId,
+          operationId: "00000000-0000-4000-8000-0000000000d7",
+          parents: ["c".repeat(64)],
+          change: {
+            kind: "issue-replace",
+            issueRef: "mstar:issue:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            mstar: {
+              fields: {
+                title: 7,
+                kind: "bug",
+                severity: "high",
+                disposition: "open",
+                impact: "i",
+                acceptance: "a",
+                owner: null,
+                registeredAt: null,
+                closedAt: null,
+                closureNote: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                revision: -1,
+                milestoneId: null,
+              },
+              occurrences: [
+                {
+                  eventId: "not-a-uuid",
+                  occurrenceKey: "k",
+                  sourceKind: "review",
+                  sourceIdentity: "review:x",
+                  rootCauseKey: "x.cause",
+                  acceptanceKey: "x.acceptance",
+                  location: "l",
+                  observedBehavior: "b",
+                  evidence: [],
+                  discoveredAt: null,
+                  recordedAt: new Date().toISOString(),
+                  imported: false,
+                },
+              ],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          },
+        },
+      },
+    };
+    // invariant: The published document — engine-owned since the convergence — reports all
+    // three defects of the known event arm together, exactly as the runtime refusal does.
+    const schema = definition("store.collaboration.remote.outbox-receipt").payloads?.inputDocument?.schema;
+    expect(schema).toBeDefined();
+    const parsed = schema!.safeParse(document);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      // note: The outcome and its `change` are unions of arms, so zod v4 nests each arm's issues
+      // under the union issue's `errors`; every level is walked for the together-report assertion.
+      const paths: string[] = [];
+      const pending = [...parsed.error.issues];
+      while (pending.length > 0) {
+        const issue = pending.shift() as { path: PropertyKey[]; errors?: unknown };
+        paths.push(issue.path.join("."));
+        if (Array.isArray(issue.errors)) pending.push(...(issue.errors as unknown[]).flat() as { path: PropertyKey[] }[]);
+      }
+      const joined = paths.join("\n");
+      // note: Inside a union arm zod v4 reports the path relative to the union value, so the
+      // subject defects appear under their `mstar.` prefix; the together-report assertion reads
+      // those.
+      for (const defect of [
+        "mstar.fields.title",
+        "mstar.fields.revision",
+        "mstar.occurrences.0.eventId",
+      ]) {
+        expect(joined).toContain(defect);
+      }
+    }
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-subject", document),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: ONE runtime refusal answers the whole known event arm — both bad subject fields
+    // and the malformed history row — so the caller corrects the document in one pass.
+    for (const diagnostic of [
+      "receipt.outcome.event.change.mstar.fields.title",
+      "receipt.outcome.event.change.mstar.fields.revision",
+      "receipt.outcome.event.change.mstar.occurrences[0].eventId",
+    ]) {
+      expect(message).toContain(diagnostic);
+    }
+  });
+
   test("one receipt refusal lists every invalid envelope field at once", async () => {
     const fixture = remoteFixture("aggregate-refusal");
     const result = await invoke("store.collaboration.remote.outbox-receipt", {

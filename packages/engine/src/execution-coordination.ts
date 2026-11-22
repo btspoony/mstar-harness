@@ -1251,6 +1251,8 @@ type ResidualComposite = {
   apply(handle: CollaborationStoreHandle): string;
   /** note: The remote half: freeze (or replay) the provider intents from the same admitted payload. */
   remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[]>;
+  /** note: The remote ids the frame's decline decision re-reads at the freeze/decline boundary. */
+  remoteIds?(intent: CompositeIntent): readonly string[];
 };
 
 /**
@@ -1387,6 +1389,7 @@ async function runResidualComposite(
   return runCollaborationComposite<ExecutionReceipt<ExecutionPlanView>>(context, prepared.intent, {
     apply: composite.apply,
     ...(composite.remote === undefined ? {} : { remote: composite.remote }),
+    ...(composite.remoteIds === undefined ? {} : { remoteIds: composite.remoteIds }),
     finalize: (tx, receipt) =>
       finalizeResidualComposite(tx, resolved, prepared.intent, prepared.reservedRevision, requestHash, composite.kind, receipt),
   });
@@ -1582,6 +1585,7 @@ export async function residualAddExecutionPlan(
       // one of them is, and the frame reports every durable one it has to wait for.
       return intents;
     },
+    remoteIds: (intent) => derived.map((_, index) => remoteCompositeEntryOperationId(intent.key, index)),
   });
 }
 
@@ -1724,6 +1728,7 @@ export async function residualCloseExecutionPlan(
         }),
       );
     },
+    remoteIds: (intent) => [remoteCompositeOperationId(intent.key)],
   });
 }
 
