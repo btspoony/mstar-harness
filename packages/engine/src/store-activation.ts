@@ -70,6 +70,7 @@ import {
   readCollaborationAuthority,
   readCollaborationBinding,
   readCollaborationStage,
+  readRemoteCacheAuthority,
   writeCollaborationBinding,
   writeCollaborationStage,
   type CollaborationAuthority,
@@ -2003,8 +2004,19 @@ export async function restoreCollaborationBackup(
   receipt: RepositoryBackupReceipt,
   options: { operator: string; attestation: ActivationAttestation; manifestPath?: string },
 ): Promise<CollaborationAuthority> {
-  const supplied = requireRepositoryBackupReceipt(receipt);
   const location = resolveCollaborationLocation(context);
+  // invariant: A restored SQLite image is never provider authority: a remote checkout's
+  // binding and cache are re-established by the reviewed bind and a fresh
+  // observation, so no backup can reauthorize Linear.
+  if (location.mode === "remote") {
+    throw new StoreError(
+      "collaboration.mode-unavailable",
+      `This checkout selects remote collaboration, where the provider is the authority: restoring a local image ` +
+        `cannot restore or retarget that authority. Re-establish the cache with "mstar store collaboration remote bind" ` +
+        `and a complete "remote observe". Nothing was written.`,
+    );
+  }
+  const supplied = requireRepositoryBackupReceipt(receipt);
   // invariant: Two pre-publication guards come FIRST: the addressed CHECKOUT must be able to
   // own this authority (no unfenced legacy owner, no retargeted binding), and the
   // canonical target must pass its private-path admission. Both refuse before a
@@ -2409,6 +2421,11 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
         `created or changed.`,
     );
   }
+  // invariant: A remote checkout's `store init` initializes EXECUTION state only: the
+  // collaboration cache was created and verified by the reviewed `remote bind`
+  // under this exact selector generation, and initialization never creates a
+  // local authority in its place.
+  if (location.mode === "remote") return readRemoteCacheAuthority(context);
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {
     // invariant: The standard: an ACTIVE authority is NEVER adopted by `store init` — not on

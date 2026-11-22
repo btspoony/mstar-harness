@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
+import { assertIssueRef, initializeCollaborationStore, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
 import { MIGRATION_MANIFEST_VERSION, planStoreMigration, StoreMigrationError } from "./store-migrate.js";
 import type { StoreContext } from "./store-db.js";
 
@@ -440,6 +440,16 @@ describe("store-migrate apply", () => {
     // invariant: The checkout's execution store was never created or written.
     expect(existsSync(join(harness, "store.db"))).toBe(false);
 
+    // invariant: Every imported issue carries one portable reference, minted by the import
+    // path (never derived from the legacy tuple) and stable across the replay below.
+    const refs = await laneRows(context, "select id, issue_ref from issues order by id");
+    const portable = refs.map((row) => {
+      if (typeof row.issue_ref !== "string") throw new Error("an imported issue has no issue_ref");
+      assertIssueRef(row.issue_ref);
+      return row.issue_ref;
+    });
+    expect(new Set(portable).size).toBe(portable.length);
+
     // Exact rerun of the identical manifest: replay returns the same IDs and
     // counts with no additional writes.
     const revisionBefore = receipt.storeRevision;
@@ -450,6 +460,9 @@ describe("store-migrate apply", () => {
     expect(replay.counts.created).toBe(0);
     expect(replay.storeRevision).toBe(revisionBefore);
     expect((await laneMeta(context)).revision).toBe(revisionBefore);
+    expect(await laneRows(context, "select issue_ref from issues order by id")).toEqual(
+      refs.map((row) => ({ issue_ref: row.issue_ref })),
+    );
   });
 
   test("apply accepts register byte drift but still refuses a changed source set", async () => {

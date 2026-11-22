@@ -79,6 +79,9 @@ function makeRepo(origin: string, mode = "local"): string {
   git(dir, "config", "user.name", "Cutover Test");
   git(dir, "config", "user.email", "cutover@example.test");
   git(dir, "config", "remote.origin.url", origin);
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this
+  // fixture's own repository, which never publishes the selector ref.
+  git(dir, "config", `url.${dir}.insteadOf`, origin);
   writeFileSync(
     join(dir, ".mstarc"),
     `[collaboration]\nmode=${mode}\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,

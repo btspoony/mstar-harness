@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
+import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
 import { readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -258,8 +258,8 @@ describe("collaboration issues", () => {
     const at = "2026-11-21T00:00:00.000Z";
     await seedCollab(context, (db) => {
       db.prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, revision, provider, identity_key)" +
-          " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row')",
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, revision, provider, identity_key, issue_ref)" +
+          " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row', 'mstar:issue:11111111-1111-4111-8111-111111111111')",
       ).run(at, at);
     });
     // note: The sync ledger records its own standalone receipt under this id.
@@ -273,6 +273,38 @@ describe("collaboration issues", () => {
       code: "store.operation-conflict",
     });
     expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
+  });
+
+  test("capture mints one portable IssueRef per issue and a recurrence keeps it", async () => {
+    const context = ctx("issue-ref-");
+    await activeIssueStore(context);
+    const created = await captureIssue(context, baseInput(), mut("ref-first"));
+    const rows = await readCollab(context, (db) =>
+      db.prepare("select id, issue_ref from issues order by id").all(),
+    );
+    expect(rows).toHaveLength(1);
+    const first = rows[0] as { id: string; issue_ref: string };
+    expect(first.id).toBe(created.issueId);
+    assertIssueRef(first.issue_ref);
+
+    // invariant: A recurrence appends history to the same issue and never re-keys it.
+    const recurrence = await captureIssue(context, baseInput({ occurrenceKey: "run-2" }), mut("ref-second"));
+    expect(recurrence.issueId).toBe(created.issueId);
+    // invariant: A different semantic identity is a different issue with its own reference.
+    const other = await captureIssue(
+      context,
+      baseInput({ rootCauseKey: "other-cause", occurrenceKey: "run-3" }),
+      mut("ref-third"),
+    );
+    expect(other.issueId).not.toBe(created.issueId);
+    const after = await readCollab(context, (db) =>
+      db.prepare("select id, issue_ref from issues order by id").all(),
+    );
+    const refs = after.map((row) => {
+      if (row === null || typeof row !== "object" || !("issue_ref" in row)) throw new Error("a row has no issue_ref");
+      return String(row.issue_ref);
+    });
+    expect(refs).toEqual([first.issue_ref, expect.stringMatching(/^mstar:issue:[0-9a-f-]{36}$/)]);
   });
 
   test("a staged collaboration store is not issue read authority", async () => {
@@ -705,22 +737,22 @@ describe("query order and literal search", () => {
     await seedCollab(context, (db) => {
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null', 'mstar:issue:10000000-0000-4000-8000-000000000000')",
         )
         .run("I-000010", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old', 'mstar:issue:11000000-0000-4000-8000-000000000000')",
         )
         .run("I-000011", "2026-09-01T00:00:00.000Z", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med', 'mstar:issue:12000000-0000-4000-8000-000000000000')",
         )
         .run("I-000012", "2026-09-18T00:00:00.000Z", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit', 'mstar:issue:13000000-0000-4000-8000-000000000000')",
         )
         .run("I-000013", "2026-08-01T00:00:00.000Z", now, now);
     });

@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import {
+  mintIssueRef,
   openCollaborationStore,
   readCollaborationObservation,
   withCollaborationWrite,
@@ -980,8 +981,8 @@ export function captureIssueOn(
   const issueId = `I-${String(counter.nextValue).padStart(6, "0")}`;
   db.prepare("update issue_counter set next_value = next_value + 1 where id = 1").run();
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key) " +
-      "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key, issue_ref) " +
+      "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?, ?)",
   ).run(
     issueId,
     projectId,
@@ -995,6 +996,7 @@ export function captureIssueOn(
     at,
     at,
     identityKey,
+    mintIssueRef(),
   );
   const occurrenceId = insertOccurrence(db, issueId, cols, at);
   insertCaptureProvenance(db, issueId, cols);

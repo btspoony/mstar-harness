@@ -35,18 +35,28 @@ import {
 } from "./collaboration-identity.js";
 import {
   assertControlCheckoutScope,
+  assertIssueRef,
+  COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
   openCollaborationStore,
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  upgradeCollaborationStore,
   withCollaborationWrite,
   writeCollaborationBinding,
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
-import { MIGRATIONS, initializeStore, openStore, type StoreContext } from "./store-db.js";
-import { ensureCollaborationAuthority } from "./store-activation.js";
+import {
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  readRemoteStatus,
+  type RemoteSnapshot,
+  type ScopeCheck,
+} from "./collaboration-remote.js";
+import { MIGRATIONS, SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, openStore, type StoreContext } from "./store-db.js";
+import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
@@ -93,6 +103,9 @@ const COLLABORATION_TABLES = [
   "project_roadmaps",
   "provenance",
   "relations",
+  "remote_bindings",
+  "remote_issue_identities",
+  "remote_observations",
   "schema_version",
   "sync_cursor",
   "sync_runs",
@@ -297,7 +310,7 @@ describe("collaboration store", () => {
       repoKey: "github.com/acme/staged",
       mode: "local",
       state: "staged",
-      schemaVersion: 1,
+      schemaVersion: 2,
       epoch: 1,
       revision: 0,
       catalogRevision: 0,
@@ -316,7 +329,10 @@ describe("collaboration store", () => {
         db.close();
       }
     })();
-    expect(versions).toEqual([{ version: 1, name: "collaboration-core" }]);
+    expect(versions).toEqual([
+      { version: 1, name: "collaboration-core" },
+      { version: 2, name: "collaboration-remote-cache" },
+    ]);
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
 
@@ -424,7 +440,7 @@ describe("collaboration store", () => {
     const writer = new DatabaseSync(location.dbPath);
     try {
       writer
-        .prepare("insert into schema_version(version, name, checksum, applied_at) values (2, 'future', 'x', ?)")
+        .prepare("insert into schema_version(version, name, checksum, applied_at) values (3, 'future', 'x', ?)")
         .run("2026-11-21T00:00:00.000Z");
       // invariant: A newer layout no longer matches this build's inventory; the verdict is
       // still the upgrade requirement, never "damaged store".
@@ -434,7 +450,7 @@ describe("collaboration store", () => {
     }
     const expected = {
       code: "store.schema-unsupported",
-      details: { storeSchemaVersion: 2, supportedSchemaMax: 1, firstUnsupportedMigration: 2 },
+      details: { storeSchemaVersion: 3, supportedSchemaMax: 2, firstUnsupportedMigration: 3 },
     };
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject(expected);
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject(expected);
@@ -1305,5 +1321,782 @@ describe("collaboration host authority", () => {
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: v2 `collaboration-remote-cache`: the explicit upgrade and its backfill
+// ---------------------------------------------------------------------------
+
+/** note: A real v1 lane: the immutable v1 migration, its ledger row, and an active record. */
+function writeV1Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  mkdirSync(dirname(location.dbPath), { recursive: true, mode: 0o700 });
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    const v1 = COLLABORATION_MIGRATIONS[0]!;
+    db.exec(v1.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v1.version,
+      v1.name,
+      migrationChecksum(v1),
+      "2026-11-21T00:00:00.000Z",
+    );
+    db.prepare(
+      "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, " +
+        "catalog_revision, created_at, activated_at) values (1, ?, 'local', 'v1-store', 'active', 1, 2, 0, ?, ?)",
+    ).run(location.repoKey, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+/** note: Two issues with one occurrence: the history the upgrade must preserve. */
+function seedV1History(db: DatabaseSync): void {
+  const insert = db.prepare(
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key) " +
+      "values (?, 'fixture-project', ?, 'bug', 'high', 'resolved', 'i', 'a', ?, ?, ?)",
+  );
+  insert.run("I-000001", "First", "2026-11-01T00:00:00.000Z", "2026-11-02T00:00:00.000Z", "key-one");
+  insert.run("I-000002", "Second", "2026-11-03T00:00:00.000Z", "2026-11-04T00:00:00.000Z", "key-two");
+  db.prepare(
+    "insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, " +
+      "location, observed_behavior, evidence_json, recorded_at) values ('I-000001', 'occ-1', 'review', 'src', 'rc', 'ac', " +
+      "'loc', 'obs', '[]', '2026-11-01T00:00:00.000Z')",
+  ).run();
+  db.prepare(
+    "insert into relations(from_issue, relation, to_issue) values ('I-000001', 'related', 'I-000002')",
+  ).run();
+}
+
+function issueRefs(dbPath: string): Array<{ id: string; issue_ref: string }> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db.prepare("select id, issue_ref from issues order by id").all() as Array<{ id: string; issue_ref: string }>;
+  } finally {
+    db.close();
+  }
+}
+
+function ledgerVersions(dbPath: string): number[] {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (db.prepare("select version from schema_version order by version").all() as Array<{ version: number }>).map(
+      (row) => row.version,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function hasColumn(dbPath: string, table: string, column: string): boolean {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>).some(
+      (entry) => entry.name === column,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+describe("collaboration v2 remote cache schema", () => {
+  test("an explicit upgrade preserves v1 history and backfills one stable reference per issue", async () => {
+    const repo = makeRepo("https://github.com/v2-upgrade/upgrade.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV1Lane(location, seedV1History);
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual([1]);
+    expect(hasColumn(location.dbPath, "issues", "issue_ref")).toBe(false);
+
+    // invariant: Ordinary reads never migrate an admitted old lane: both name the upgrade.
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+    await expect(initializeCollaborationStore(location)).rejects.toMatchObject({
+      code: "collaboration.upgrade-required",
+    });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.upgrade-required",
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual([1]);
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({
+      version: 1,
+      fromVersion: 1,
+      toVersion: 2,
+      storeId: "v1-store",
+      epoch: 1,
+      issuesBackfilled: 2,
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+
+    const refs = issueRefs(location.dbPath);
+    expect(refs.map((row) => row.id)).toEqual(["I-000001", "I-000002"]);
+    for (const row of refs) assertIssueRef(row.issue_ref);
+    expect(new Set(refs.map((row) => row.issue_ref)).size).toBe(2);
+
+    // invariant: History and the lane's recorded revision survive the rebuild verbatim.
+    const history = new DatabaseSync(location.dbPath);
+    try {
+      expect((history.prepare("select count(*) as n from occurrences").get() as { n: number }).n).toBe(1);
+      expect((history.prepare("select count(*) as n from relations").get() as { n: number }).n).toBe(1);
+      expect((history.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision).toBe(2);
+    } finally {
+      history.close();
+    }
+
+    // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
+    const replay = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(replay).toMatchObject({ fromVersion: 2, toVersion: 2, issuesBackfilled: 0 });
+    expect(issueRefs(location.dbPath)).toEqual(refs);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(2);
+  });
+
+  test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
+    // note: A recorded v1 checksum that is not this build's immutable migration.
+    const wrongChecksumRepo = makeRepo("https://github.com/v2-upgrade/wrong-checksum.git");
+    const wrongChecksum = locationAt(wrongChecksumRepo);
+    writeV1Lane(wrongChecksum, (db) => db.prepare("update schema_version set checksum = ? where version = 1").run("f".repeat(64)));
+    await expect(upgradeCollaborationStore(contextAt(wrongChecksumRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "store.corrupt",
+    });
+    expect(ledgerVersions(wrongChecksum.dbPath)).toEqual([1]);
+
+    // note: A v2 table without its ledger row is a partial apply: refused, never re-applied.
+    const partialRepo = makeRepo("https://github.com/v2-upgrade/partial.git");
+    const partial = locationAt(partialRepo);
+    writeV1Lane(partial, (db) => db.exec("create table remote_bindings(generation integer)"));
+    await expect(upgradeCollaborationStore(contextAt(partialRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerVersions(partial.dbPath)).toEqual([1]);
+
+    // note: Half of the issues rebuild (the column already added) is the one shape that would
+    // otherwise re-mint stable references: it refuses instead.
+    const halfRepo = makeRepo("https://github.com/v2-upgrade/half.git");
+    const half = locationAt(halfRepo);
+    writeV1Lane(half, (db) => db.exec("alter table issues add column issue_ref text"));
+    await expect(upgradeCollaborationStore(contextAt(halfRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "store.corrupt",
+      message: expect.stringContaining("partially applied v2"),
+    });
+    expect(ledgerVersions(half.dbPath)).toEqual([1]);
+
+    // invariant: The upgrade records the operator it attests.
+    const anonymous = makeRepo("https://github.com/v2-upgrade/anonymous.git");
+    writeV1Lane(locationAt(anonymous));
+    await expect(upgradeCollaborationStore(contextAt(anonymous), "  ")).rejects.toMatchObject({
+      code: "store.attestation-invalid",
+    });
+    expect(ledgerVersions(locationAt(anonymous).dbPath)).toEqual([1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Remote observation cache: explicit bind, scoped ingest and status
+// ---------------------------------------------------------------------------
+
+const SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
+
+const SELECTED_PROJECT = {
+  localProjectId: "fixture-project",
+  provider: "linear",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  teamId: "22222222-2222-4222-8222-222222222222",
+  projectId: "33333333-3333-4333-8333-333333333333",
+  journalIssueId: "44444444-4444-4444-8444-444444444444",
+  writerId: "55555555-5555-4555-8555-555555555555",
+} as const;
+
+const SECOND_PROJECT = {
+  ...SELECTED_PROJECT,
+  localProjectId: "fixture-second",
+  projectId: "99999999-9999-4999-8999-999999999999",
+  journalIssueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+} as const;
+
+/**
+ * note: One isolated remote fixture: a unique canonical origin (so its lane path is its own),
+ * the checkout that resolves it, and the bare origin its selector is published to.
+ */
+function remoteFixture(name: string): {
+  repoKey: string;
+  repo: string;
+  payload(overrides?: Record<string, unknown>): Record<string, unknown>;
+  publish(payload: Record<string, unknown>): string;
+} {
+  const slug = `${name}-${sequence++}`;
+  const origin = `https://github.com/remote-fixture/${slug}.git`;
+  const repoKey = `github.com/remote-fixture/${slug}`;
+  const bare = join(ROOT, `remote-origin-${slug}.git`);
+  git(ROOT, "init", "-q", "--bare", bare);
+  const repo = join(ROOT, `remote-repo-${slug}`);
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-q");
+  git(repo, "config", "user.name", "Remote Store Test");
+  git(repo, "config", "user.email", "remote-store@example.test");
+  git(repo, "config", "remote.origin.url", origin);
+  git(repo, "config", `url.${bare}.insteadOf`, origin);
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+  const publisher = join(ROOT, `remote-publisher-${slug}`);
+  mkdirSync(publisher, { recursive: true });
+  git(publisher, "init", "-q");
+  git(publisher, "config", "user.name", "Remote Selector Test");
+  git(publisher, "config", "user.email", "publisher@example.test");
+  return {
+    repoKey,
+    repo,
+    payload(overrides = {}) {
+      return {
+        version: 1,
+        repoKey,
+        generation: 3,
+        mode: "remote",
+        phase: "active",
+        projects: [SELECTED_PROJECT],
+        previous: null,
+        cutover: null,
+        ...overrides,
+      };
+    },
+    publish(payload) {
+      writeFileSync(join(publisher, "authority.json"), `${JSON.stringify(payload, null, 2)}\n`);
+      git(publisher, "add", "authority.json");
+      git(publisher, "commit", "-q", "-m", "publish selector");
+      git(publisher, "push", "-q", "--force", bare, `HEAD:${SELECTOR_REF}`);
+      return git(publisher, "rev-parse", "HEAD");
+    },
+  };
+}
+
+const MSTAR_ISSUE = "66666666-6666-4666-8666-666666666666";
+const PROVIDER_ONLY_ISSUE = "77777777-7777-4777-8777-777777777777";
+const FORGED_ISSUE_REF = "mstar:issue:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const SECOND_ISSUE_REF = "mstar:issue:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+function providerScope(project: typeof SELECTED_PROJECT | typeof SECOND_PROJECT = SELECTED_PROJECT) {
+  return {
+    provider: "linear" as const,
+    workspaceId: project.workspaceId,
+    teamId: project.teamId,
+    projectId: project.projectId,
+  };
+}
+
+function positiveCheck(overrides: Partial<ScopeCheck> = {}): ScopeCheck {
+  return {
+    projectId: SELECTED_PROJECT.localProjectId,
+    scope: providerScope(),
+    journalIssueId: SELECTED_PROJECT.journalIssueId,
+    checkedAt: new Date(Date.now() - 1_000).toISOString(),
+    outcome: {
+      kind: "verified",
+      readerId: "reader-one",
+      writerId: SELECTED_PROJECT.writerId,
+      capabilities: {
+        fullRead: true,
+        appendOnly: true,
+        exactLookup: true,
+        fieldFidelity: true,
+        privateAudience: true,
+      },
+    },
+    ...overrides,
+  };
+}
+
+/** note: A complete fixture scope: project binding, milestones, roadmap, portable catalog and history. */
+function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
+  const at = "2026-11-20T00:00:00.000Z";
+  return {
+    asOf: new Date(Date.parse(check.checkedAt) - 5_000).toISOString(),
+    coverage: { kind: "complete" },
+    project: {
+      projectId: check.projectId,
+      head: ["1".repeat(64)],
+      binding: check.scope,
+      milestones: [
+        {
+          milestoneId: "milestone-1",
+          name: "First delivery",
+          target: "2026-12-01",
+          status: "active",
+          ordinal: 0,
+          revision: 1,
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+      roadmap: { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: at },
+      catalogEntities: [
+        {
+          kind: "project",
+          id: "fixture-project",
+          title: "Fixture project",
+          description: null,
+          documentKind: null,
+          lifecycle: "active",
+          revision: 1,
+        },
+        {
+          kind: "plan",
+          id: "plan-1",
+          title: "Plan one",
+          description: "d",
+          documentKind: null,
+          lifecycle: "active",
+          revision: 1,
+        },
+        {
+          kind: "document",
+          id: "spec-1",
+          title: "Spec one",
+          description: null,
+          documentKind: "spec",
+          lifecycle: "active",
+          revision: 1,
+        },
+      ],
+      catalogLinks: [
+        { fromKind: "plan", fromId: "plan-1", relation: "belongs-to", toKind: "project", toId: "fixture-project", ordinal: 0 },
+        { fromKind: "plan", fromId: "plan-1", relation: "spec-ref", toKind: "document", toId: "spec-1", ordinal: 0 },
+      ],
+    },
+    issues: [
+      {
+        identity: { ...check.scope, issueId: MSTAR_ISSUE },
+        nativeTitle: "Native title one",
+        nativeStatus: "Todo",
+        providerUpdatedAt: at,
+        mstar: {
+          issueRef: FORGED_ISSUE_REF,
+          head: ["2".repeat(64)],
+          fields: { title: "Adopted title", disposition: "open" },
+          occurrences: [{ occurrenceKey: "occurrence-one", sourceKind: "review" }],
+          transitions: [{ from: "open", to: "resolved", reason: "fixed" }],
+          relations: [],
+          provenance: { kind: "review", target: "diff" },
+          projectMoves: [],
+        },
+      },
+      {
+        identity: { ...check.scope, issueId: PROVIDER_ONLY_ISSUE },
+        nativeTitle: "Unmarked native issue",
+        nativeStatus: "Done",
+        providerUpdatedAt: at,
+        mstar: null,
+      },
+    ],
+  };
+}
+
+function observation(
+  check: ScopeCheck = positiveCheck(),
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    version: 1,
+    selectorCommit: "",
+    generation: 0,
+    check,
+    expectRevision: 0,
+    snapshot: completeSnapshot(check),
+    ...overrides,
+  };
+}
+
+function cacheRows(dbPath: string): {
+  bindings: number;
+  observations: number;
+  identities: Array<{ provider_issue_id: string; issue_ref: string | null }>;
+  mode: string;
+  localIssues: number;
+  localCatalog: number;
+  localProjectBindings: number;
+} {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const count = (table: string): number => (db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n;
+    return {
+      bindings: count("remote_bindings"),
+      observations: count("remote_observations"),
+      identities: db
+        .prepare("select provider_issue_id, issue_ref from remote_issue_identities order by provider_issue_id")
+        .all() as Array<{ provider_issue_id: string; issue_ref: string | null }>,
+      mode: (db.prepare("select mode from collaboration_meta where id = 1").get() as { mode: string }).mode,
+      localIssues: count("issues"),
+      localCatalog: count("catalog_entities"),
+      localProjectBindings: count("project_bindings"),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+describe("remote observation cache", () => {
+  test("a fresh bind creates the cache lane and a complete observation never touches local authority", async () => {
+    const fixture = remoteFixture("fresh");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+
+    // note: Before any bind the status discloses an unbound checkout and creates nothing.
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      code: "collaboration.stale-binding",
+      binding: { state: "unbound" },
+    });
+    expect(existsSync(location.dbPath)).toBe(false);
+
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ version: 1, selectorCommit: commit, generation: 3, replayed: false });
+    expect(bound.binding).toMatchObject({
+      version: 3,
+      state: "active",
+      mode: "remote",
+      repoKey: fixture.repoKey,
+      selectorCommit: commit,
+      generation: 3,
+    });
+    expect(bound.availability).toEqual([
+      { projectId: SELECTED_PROJECT.localProjectId, revision: 0, completeness: "unavailable", code: null },
+    ]);
+    expect(cacheRows(location.dbPath)).toMatchObject({ bindings: 1, observations: 1, mode: "remote" });
+
+    const check = positiveCheck();
+    const result = await ingestRemoteObservation(context, {
+      ...observation(check),
+      selectorCommit: commit,
+      generation: 3,
+    });
+    expect(result).toMatchObject({
+      projectId: SELECTED_PROJECT.localProjectId,
+      generation: 3,
+      revision: 1,
+      completeness: "complete",
+      code: null,
+    });
+    expect(result.asOf).toBe(completeSnapshot(check).asOf);
+
+    // invariant: The cache holds the provider evidence and the identity projection; the local
+    // domain tables (`issues`, `catalog_*`, `project_bindings`) stay untouched.
+    const rows = cacheRows(location.dbPath);
+    expect(rows.identities).toEqual([
+      { provider_issue_id: MSTAR_ISSUE, issue_ref: FORGED_ISSUE_REF },
+      { provider_issue_id: PROVIDER_ONLY_ISSUE, issue_ref: null },
+    ]);
+    expect(rows.localIssues).toBe(0);
+    expect(rows.localCatalog).toBe(0);
+    expect(rows.localProjectBindings).toBe(0);
+
+    const status = await readRemoteStatus(context, SELECTED_PROJECT.localProjectId);
+    expect(status).toMatchObject({
+      available: true,
+      binding: { state: "bound", generation: 3, selectorCommit: commit },
+      projects: [
+        {
+          projectId: SELECTED_PROJECT.localProjectId,
+          revision: 1,
+          completeness: "complete",
+          freshness: "fresh",
+          outcome: "verified",
+        },
+      ],
+    });
+
+    // invariant: The local domain entries still refuse a remote selection: the cache is never
+    // read or written as local authority.
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+
+    // invariant: `store init` requires the populated remote binding and never creates a local
+    // authority in its place.
+    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 2 });
+
+    // invariant: A restored local image never reauthorizes the provider. The receipt and
+    // attestation are placeholders: the route refuses before either is read.
+    const unreachableReceipt = {} as RepositoryBackupReceipt;
+    const unreachableAttestation = {} as ActivationAttestation;
+    await expect(
+      restoreCollaborationBackup(context, unreachableReceipt, {
+        operator: "ops-engineer",
+        attestation: unreachableAttestation,
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+  });
+
+  test("a same-scope replay is idempotent and a partial or negative observation is never current", async () => {
+    const fixture = remoteFixture("replay");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const batch = { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] };
+    await bindRemoteAuthority(context, batch);
+    const replay = await bindRemoteAuthority(context, batch);
+    expect(replay).toMatchObject({ replayed: true, generation: 3 });
+    expect(cacheRows(location.dbPath).bindings).toBe(1);
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, { ...observation(check), selectorCommit: commit, generation: 3 });
+
+    // invariant: A verified snapshot replaces the whole project (never unions) and advances the
+    // revision only at the expected base.
+    const second = await ingestRemoteObservation(context, {
+      ...observation(check, { expectRevision: 1 }),
+      selectorCommit: commit,
+      generation: 3,
+    });
+    expect(second.revision).toBe(2);
+    await expect(
+      ingestRemoteObservation(context, { ...observation(check, { expectRevision: 1 }), selectorCommit: commit, generation: 3 }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+
+    // note: A known gap is stored as `partial` with its code; the status never calls it fresh.
+    const partial = await ingestRemoteObservation(context, {
+      ...observation(check, {
+        expectRevision: 2,
+        snapshot: {
+          ...completeSnapshot(check),
+          coverage: { kind: "partial", stream: "comments", nextCursor: "cursor-2", code: "remote.comments-truncated" },
+        },
+      }),
+      selectorCommit: commit,
+      generation: 3,
+    });
+    expect(partial).toMatchObject({ revision: 3, completeness: "partial", code: "remote.comments-truncated" });
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      projects: [{ completeness: "partial", freshness: "incomplete", code: "remote.comments-truncated" }],
+    });
+
+    // invariant: A negative check invalidates the cache and is reported by its own code AFTER
+    // the invalidation committed: no reader can see the old snapshot as current.
+    const denied = positiveCheck({
+      checkedAt: new Date(Date.now() - 500).toISOString(),
+      outcome: { kind: "denied" },
+    });
+    await expect(
+      ingestRemoteObservation(context, {
+        ...observation(denied, { expectRevision: 3, snapshot: null }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).rejects.toMatchObject({ code: "remote.denied" });
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      projects: [{ completeness: "unavailable", revision: 4, code: "remote.denied", freshness: "incomplete" }],
+    });
+    // note: The active projection is cleared with the invalidation, not merely marked stale.
+    expect(cacheRows(location.dbPath).identities).toEqual([]);
+    const cleared = new DatabaseSync(location.dbPath);
+    try {
+      expect(
+        cleared.prepare("select snapshot_json, as_of from remote_observations").get() as { snapshot_json: unknown; as_of: unknown },
+      ).toEqual({ snapshot_json: null, as_of: null });
+    } finally {
+      cleared.close();
+    }
+  });
+
+  test("a rebind advances only through the reviewed lineage and never downgrades", async () => {
+    const fixture = remoteFixture("rebind");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: first,
+      generation: 1,
+      checks: [positiveCheck()],
+    });
+
+    // note: A successor that does not name the recorded generation is an unfenced predecessor.
+    const unfenced = fixture.publish(fixture.payload({ generation: 2, previous: null, cutover: null }));
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: unfenced,
+        generation: 2,
+        checks: [positiveCheck()],
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 1 });
+
+    // note: A fenced, pending-free cutover naming the predecessor is admitted.
+    const second = fixture.publish(
+      fixture.payload({
+        generation: 2,
+        previous: { selectorCommit: first, generation: 1, mode: "remote" },
+        cutover: {
+          operator: "ops-engineer",
+          reviewedAt: "2026-11-22T00:00:00Z",
+          sourceFenced: true,
+          pendingOperationIds: [],
+          verifiedTargetDigest: "e".repeat(64),
+        },
+      }),
+    );
+    const rebound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: second,
+      generation: 2,
+      checks: [positiveCheck()],
+    });
+    expect(rebound.binding).toMatchObject({ version: 3, generation: 2, selectorCommit: second });
+
+    // invariant: The superseded generation is preserved as history, not deleted or re-keyed.
+    const db = new DatabaseSync(locationAt(fixture.repo).dbPath);
+    try {
+      expect((db.prepare("select count(*) as n from remote_bindings").get() as { n: number }).n).toBe(2);
+      expect(
+        (db.prepare("select generation from remote_bindings order by generation").all() as Array<{ generation: number }>).map(
+          (row) => row.generation,
+        ),
+      ).toEqual([1, 2]);
+    } finally {
+      db.close();
+    }
+
+    // note: The selector itself refuses a fenced-false transition before any bind sees it.
+    const unsafe = fixture.payload({
+      generation: 3,
+      previous: { selectorCommit: second, generation: 2, mode: "remote" },
+      cutover: {
+        operator: "ops-engineer",
+        reviewedAt: "2026-11-22T00:00:00Z",
+        sourceFenced: false,
+        pendingOperationIds: [],
+        verifiedTargetDigest: "e".repeat(64),
+      },
+    });
+    fixture.publish(unsafe);
+    expect(() => locationAt(fixture.repo)).toThrow("collaboration.stale-binding");
+  });
+
+  test("wrong scope, a missing project and unverified batches never bind or observe", async () => {
+    const fixture = remoteFixture("scope");
+    const commit = fixture.publish(
+      fixture.payload({ projects: [SELECTED_PROJECT, SECOND_PROJECT] }),
+    );
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+
+    // note: Every selected project needs its own positive check.
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation: 3,
+        checks: [positiveCheck()],
+      }),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    // note: A check for another tenant is not a check for this project.
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation: 3,
+        checks: [
+          positiveCheck(),
+          positiveCheck({
+            projectId: SECOND_PROJECT.localProjectId,
+            scope: { ...providerScope(), teamId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
+            journalIssueId: SECOND_PROJECT.journalIssueId,
+          }),
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    // note: A negative verification is never a binding.
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation: 3,
+        checks: [positiveCheck({ outcome: { kind: "revoked" } })],
+      }),
+    ).rejects.toMatchObject({ code: "remote.revoked" });
+    expect(existsSync(location.dbPath)).toBe(false);
+
+    // note: A batch for another selector generation cannot bind this checkout.
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: "d".repeat(40),
+        generation: 3,
+        checks: [positiveCheck()],
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+
+    // note: Bind both projects, then observe one with a foreign-scope snapshot and a missing one.
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      checks: [
+        positiveCheck(),
+        positiveCheck({ projectId: SECOND_PROJECT.localProjectId, scope: providerScope(SECOND_PROJECT), journalIssueId: SECOND_PROJECT.journalIssueId }),
+      ],
+    });
+    expect(bound.availability).toHaveLength(2);
+    const foreignCheck = positiveCheck();
+    const complete = completeSnapshot(foreignCheck);
+    const foreignSnapshot: RemoteSnapshot = {
+      ...complete,
+      project: {
+        ...complete.project,
+        binding: { ...providerScope(), projectId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" },
+      },
+    };
+    await expect(
+      ingestRemoteObservation(context, {
+        ...observation(foreignCheck, { snapshot: foreignSnapshot }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    // invariant: A verified check with no snapshot is never recorded as current.
+    await expect(
+      ingestRemoteObservation(context, {
+        ...observation(positiveCheck(), { snapshot: null }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
+    expect(cacheRows(location.dbPath).observations).toBe(2);
+
+    // invariant: A draining selector is a predecessor to reconcile, never the cache's target.
+    const draining = remoteFixture("draining");
+    const drainingCommit = draining.publish(
+      draining.payload({
+        phase: "draining",
+        previous: { selectorCommit: "f".repeat(40), generation: 2, mode: "remote" },
+        cutover: {
+          operator: "ops-engineer",
+          reviewedAt: "2026-11-22T00:00:00Z",
+          sourceFenced: false,
+          pendingOperationIds: ["operation-one"],
+          verifiedTargetDigest: "e".repeat(64),
+        },
+      }),
+    );
+    await expect(
+      bindRemoteAuthority(contextAt(draining.repo), {
+        version: 1,
+        selectorCommit: drainingCommit,
+        generation: 3,
+        checks: [positiveCheck()],
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
   });
 });
