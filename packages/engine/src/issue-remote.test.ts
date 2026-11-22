@@ -25,10 +25,16 @@ import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { bindRemoteAuthority, ingestRemoteObservation, type RemoteSnapshot } from "./collaboration-remote.js";
+import {
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  setRemoteWriteScopeGapForTest,
+  type RemoteSnapshot,
+} from "./collaboration-remote.js";
 import { assignIssueMilestone, captureIssue, closeIssue, type CaptureInput, type ClosureEvidence } from "./issue.js";
 import {
   completeSnapshot,
+  confirmFrozenIntent,
   createRemoteScope,
   FIXTURE_AT,
   positiveCheck,
@@ -79,11 +85,11 @@ function frozenChange(row: Record<string, unknown>): { kind: string; issueRef: s
 }
 
 /** note: One refusal as its envelope: the test's own failure when nothing refused. */
-async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string }> {
+async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string; details?: unknown }> {
   try {
     await run();
   } catch (error) {
-    return error as { code: string };
+    return error as { code: string; message: string; details?: unknown };
   }
   throw new Error("fixture: the operation should have refused");
 }
@@ -167,6 +173,105 @@ function withCanonicalTarget(snapshot: RemoteSnapshot): RemoteSnapshot {
         },
       },
       ...(second === undefined ? [] : [second]),
+      ...rest,
+    ],
+  };
+}
+
+/**
+ * The fixture's provider-only issue carrying the capture's occurrence as its genesis subject,
+ * exactly as a re-observation would install it between a capture's dedupe read and its freeze:
+ * the identity the old snapshot did not carry is now marked on the authority.
+ */
+function withAdoptedOccurrence(snapshot: RemoteSnapshot, overrides: Partial<CaptureInput> = {}): RemoteSnapshot {
+  const input = captureInput(overrides);
+  return {
+    ...snapshot,
+    issues: snapshot.issues.map((issue) =>
+      issue.mstar === null && issue.identity.issueId === REMOTE_IDS.providerOnlyIssueId
+        ? {
+            ...issue,
+            mstar: {
+              issueRef: "mstar:issue:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              head: ["7".repeat(64)],
+              fields: {
+                title: input.title,
+                kind: input.kind,
+                severity: input.severity,
+                disposition: "open",
+                impact: input.impact,
+                acceptance: input.acceptance,
+                owner: null,
+                registeredAt: FIXTURE_AT,
+                closedAt: null,
+                closureNote: null,
+                createdAt: FIXTURE_AT,
+                updatedAt: FIXTURE_AT,
+                revision: 1,
+                milestoneId: null,
+              },
+              occurrences: [
+                {
+                  eventId: "11111111-1111-4111-8111-199999999999",
+                  occurrenceKey: input.occurrenceKey,
+                  sourceKind: input.sourceKind,
+                  sourceIdentity: input.sourceIdentity,
+                  rootCauseKey: input.rootCauseKey,
+                  acceptanceKey: input.acceptanceKey,
+                  location: input.location,
+                  observedBehavior: input.observedBehavior,
+                  evidence: input.evidence,
+                  discoveredAt: input.discoveredAt,
+                  recordedAt: FIXTURE_AT,
+                  imported: false,
+                },
+              ],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          }
+        : issue,
+    ),
+  };
+}
+
+/**
+ * The observed marked issue carrying ONE more occurrence, exactly as a re-observation would
+ * install it between a capture's dedupe read and its freeze: the same identity triple, the given
+ * occurrence key, and content that matches the capture input built from the same overrides.
+ */
+function withExtraOccurrence(snapshot: RemoteSnapshot, overrides: Partial<CaptureInput> = {}): RemoteSnapshot {
+  const input = captureInput(overrides);
+  const [first, ...rest] = snapshot.issues;
+  if (first === undefined || first.mstar === null) return snapshot;
+  return {
+    ...snapshot,
+    issues: [
+      {
+        ...first,
+        mstar: {
+          ...first.mstar,
+          occurrences: [
+            ...first.mstar.occurrences,
+            {
+              eventId: "11111111-1111-4111-8111-199999999999",
+              occurrenceKey: input.occurrenceKey,
+              sourceKind: input.sourceKind,
+              sourceIdentity: input.sourceIdentity,
+              rootCauseKey: input.rootCauseKey,
+              acceptanceKey: input.acceptanceKey,
+              location: input.location,
+              observedBehavior: input.observedBehavior,
+              evidence: input.evidence,
+              discoveredAt: input.discoveredAt,
+              recordedAt: FIXTURE_AT,
+              imported: false,
+            },
+          ],
+        },
+      },
       ...rest,
     ],
   };
@@ -383,6 +488,16 @@ test("the same identity appends one occurrence through one issue-replace", async
   expect(occurrences).toHaveLength(2);
   expect(occurrences[0]).toMatchObject({ occurrenceKey: "occurrence-one" });
   expect(occurrences[1]).toMatchObject({ occurrenceKey: "run-2" });
+
+  // invariant: The confirmed append receipt answers the observed occurrence: the recorded
+  // provider effect, not a pending row, is the business outcome a replay reports.
+  await confirmFrozenIntent(fixture.context, rows[0]!.operation_id as string);
+  const confirmed = await captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), {
+    operationId: "30000000-0000-4000-8000-000000000002",
+    actor: "project-manager",
+  });
+  expect(confirmed).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, revision: 2, created: false });
+  expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 
 test("only a new identity enqueues issue-create", async () => {
@@ -421,6 +536,90 @@ test("a reused occurrence key refuses like the local capture body", async () => 
   expect(outboxRows(fixture.context)).toHaveLength(0);
 });
 
+test("a snapshot that moves under the dedupe read never freezes a second subject", async () => {
+  const fixture = await remoteFixture("capture-moved-snapshot");
+  const identity = { occurrenceKey: "moved-in", sourceIdentity: "review:moved", rootCauseKey: "moved.cause", acceptanceKey: "moved.acceptance" };
+  // note: A re-observation installs the same identity BETWEEN the capture's dedupe read and the
+  // freeze, so the create must be decided against the freeze-time snapshot, not the older sample.
+  let sampled = false;
+  setRemoteWriteScopeGapForTest(async () => {
+    if (sampled) return;
+    sampled = true;
+    setRemoteWriteScopeGapForTest(undefined);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, positiveCheck(), withAdoptedOccurrence(completeSnapshot(positiveCheck()), identity), 1),
+    );
+  });
+  const refused = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput(identity), {
+      operationId: "30000000-0000-4000-8000-000000000006",
+      actor: "project-manager",
+    }),
+  );
+  expect(sampled).toBe(true);
+  expect(refused.code).toBe("remote.scope-mismatch");
+  expect(refused.message).toContain("already carries this identity");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+
+  // invariant: The named correction route works: after the refresh the SAME capture answers the
+  // established receipt instead of freezing anything.
+  const established = await captureIssue(fixture.context, captureInput(identity), {
+    operationId: "30000000-0000-4000-8000-000000000007",
+    actor: "project-manager",
+  });
+  expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("an occurrence that arrives before the freeze answers the established receipt instead of appending twice", async () => {
+  const fixture = await remoteFixture("capture-freeze-race");
+  // note: The dedupe read sees NO occurrence with this key (so the capture chooses append), and
+  // the re-observation installs it before the replacement is formed.
+  let sampled = false;
+  setRemoteWriteScopeGapForTest(async () => {
+    if (sampled) return;
+    sampled = true;
+    setRemoteWriteScopeGapForTest(undefined);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, positiveCheck(), withExtraOccurrence(completeSnapshot(positiveCheck()), { occurrenceKey: "race-key" }), 1),
+    );
+  });
+  const receipt = await captureIssue(fixture.context, captureInput({ occurrenceKey: "race-key" }), {
+    operationId: "30000000-0000-4000-8000-000000000008",
+    actor: "project-manager",
+  });
+  expect(sampled).toBe(true);
+  expect(receipt).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, created: false });
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("an operation id with a frozen entry answers through the replay gate, not an observed no-op", async () => {
+  const fixture = await remoteFixture("capture-metadata-collision");
+  const operationId = "30000000-0000-4000-8000-000000000009";
+  const queued = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), { operationId, actor: "project-manager" }),
+  );
+  expect(queued.code).toBe("remote.effect-pending");
+  expect(outboxRows(fixture.context)).toHaveLength(1);
+
+  // note: The access check expires, so the frozen request is disclosed metadata-only: the serial
+  // replay identity still answers FIRST, exactly as the local operation ledger does.
+  const db = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+  try {
+    db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
+  } finally {
+    db.close();
+  }
+  const replay = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput({ occurrenceKey: "occurrence-one" }), { operationId, actor: "project-manager" }),
+  );
+  expect(replay.code).toBe("remote.unavailable");
+  expect(replay.message).toContain("cannot be replayed");
+  expect(outboxRows(fixture.context)).toHaveLength(1);
+});
+
 // ---------------------------------------------------------------------------
 // I-001225 — remote close gates
 // ---------------------------------------------------------------------------
@@ -435,6 +634,9 @@ test("a remote closure refuses an already-terminal issue", async () => {
     }),
   );
   expect(refused.code).toBe("issue.invalid-disposition");
+  // invariant: The refusal names the usable next steps: inspect, reopen only deliberately.
+  expect(JSON.stringify(refused.details)).toContain("mstar issue show");
+  expect(JSON.stringify(refused.details)).toContain("mstar issue reopen");
   expect(outboxRows(fixture.context)).toHaveLength(0);
 });
 
@@ -449,6 +651,10 @@ test("a remote closure enforces multi-plan acceptance against the observed proje
     }),
   );
   expect(one.code).toBe("issue.invalid-disposition");
+  // invariant: The refusal names the two supported corrections: the complete references, or an
+  // honest scope:all in the original verb's evidence file.
+  expect(JSON.stringify(one.details)).toContain("scope");
+  expect(JSON.stringify(one.details)).toContain("evidence file");
   expect(outboxRows(fixture.context)).toHaveLength(0);
   // note: The whole acceptance verified: the closure enqueues.
   const all = await refusalOf(() =>
@@ -459,6 +665,54 @@ test("a remote closure enforces multi-plan acceptance against the observed proje
     }),
   );
   expect(all.code).toBe("remote.effect-pending");
+  expect(outboxRows(fixture.context)).toHaveLength(1);
+});
+
+test("an unscoped remote closure enforces the canonical gate and stores the portable reference", async () => {
+  const fixture = await remoteFixture("close-canonical-unscoped", withCanonicalTarget);
+  const close = (
+    operationId: string,
+    disposition: "duplicate" | "superseded",
+    canonicalIssueId: string,
+    issueId: string = REMOTE_IDS.markedIssueId,
+  ): Promise<{ code: string }> =>
+    refusalOf(() =>
+      closeIssue(
+        fixture.context,
+        issueId,
+        disposition,
+        { reason: "same defect", references: ["qa/run.md"], canonicalIssueId, alignmentRef: "QA gate: Approve" },
+        { operationId, actor: "project-manager", expectedRevision: 1 },
+      ),
+    );
+
+  // invariant: The closing issue is never its own canonical target, by provider id or by IssueRef.
+  expect((await close("30000000-0000-4000-8000-000000000020", "duplicate", REMOTE_IDS.markedIssueId)).code).toBe(
+    "issue.invalid-disposition",
+  );
+  expect((await close("30000000-0000-4000-8000-000000000021", "superseded", REMOTE_IDS.issueRef)).code).toBe(
+    "issue.invalid-disposition",
+  );
+  // invariant: A subject addressed by its portable reference still refuses its own native alias.
+  expect(
+    (await close("30000000-0000-4000-8000-000000000022", "duplicate", REMOTE_IDS.markedIssueId, REMOTE_IDS.issueRef))
+      .code,
+  ).toBe("issue.invalid-disposition");
+  // invariant: A canonical target the observed project does not carry is never frozen.
+  expect(
+    (await close("30000000-0000-4000-8000-000000000023", "duplicate", "99999999-9999-4999-8999-999999999999")).code,
+  ).toBe("issue.not-found");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+  // invariant: An observed canonical target passes the gate, and the frozen relation names its
+  // portable reference even when the caller addressed it by provider id.
+  expect(
+    (await close("30000000-0000-4000-8000-000000000024", "duplicate", "88888888-8888-4888-8888-888888888888")).code,
+  ).toBe("remote.effect-pending");
+  const change = frozenChange(outboxRows(fixture.context)[0]!);
+  expect(change.mstar.relations).toContainEqual({
+    relation: "duplicate-of",
+    target: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  });
   expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 

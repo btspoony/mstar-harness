@@ -6058,6 +6058,151 @@ describe("remote composite flows", () => {
     expect(await intentPhases(cache.context, "residual-remote-close-abandoned")).toEqual(["declined"]);
   }, 30_000);
 
+  test("a mixed settlement declines with its confirmed components named and recovers only the missing work", async () => {
+    const cache = await outboxCache("composite-mixed-settlement");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-mixed",
+      operation: { kind: "residual-add" as const, entries: [residualEntry("mixed-a"), residualEntry("mixed-b")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const queued = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const key = compositeKeyOf(cache.context, "residual-remote-mixed");
+    const idA = remoteCompositeEntryOperationId(key, 0);
+    const idB = remoteCompositeEntryOperationId(key, 1);
+    // note: The provider confirmed the FIRST entry and the operator withdrew the second, so the
+    // batch's settled state is mixed before the composite is reissued under its own id.
+    await confirmIntent(cache, idA, "77777777-7777-4777-8777-777777777781");
+    await abandonRemoteIntent(cache.context, { operationId: idB, reason: "entry withdrawn by review" });
+
+    // invariant: The settled mixed state is never declined as effect-free: the confirmed
+    // component is named in the terminal receipt, and only the incomplete work is recovered.
+    const declined = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(declined.code).toBe("remote.effect-abandoned");
+    expect(declined.message).toContain(`provider:${idA}`);
+    expect(declined.message).toContain("ONLY the incomplete work");
+    expect(declined.message).not.toContain("Nothing was applied");
+    expect(detailsOf(declined)).toMatchObject({
+      phase: "declined",
+      operation_id: "residual-remote-mixed",
+      confirmed_components: [`provider:${idA}`],
+      abandoned_components: [idB],
+    });
+    expect(await intentPhases(cache.context, "residual-remote-mixed")).toEqual(["declined"]);
+
+    // invariant: The recovery route works: the confirmed receipt invalidated the cached base (and
+    // bumped its revision), so the operator re-observes first, exactly as the retained refusals
+    // name; a NEW operation id whose entries name ONLY the missing residual is then admitted and
+    // freezes exactly one new intent (the confirmed one is never re-sent).
+    await reobserve(cache, 2);
+    const recovered = await refusalOf(() =>
+      residualAddExecutionPlan(execution, {
+        ...request,
+        operationId: "residual-remote-mixed-2",
+        operation: { kind: "residual-add" as const, entries: [residualEntry("mixed-b")] },
+      }),
+    );
+    expect(recovered.code).toBe("collaboration.operation-partial");
+    const enqueued = outboxRows(cache.dbPath).filter((row) => row.state === "enqueued");
+    expect(enqueued).toHaveLength(1);
+    expect(outboxStateOf(cache.dbPath, idA)).toBe("confirmed");
+  }, 30_000);
+
+  test("a first-entry deterministic refusal declines its reservation so a corrected same-plan retry proceeds", async () => {
+    const cache = await outboxCache("composite-entry-zero-decline");
+    const workflow = await remoteExecutionWorkflow(cache);
+    // why: The plan bucket names a project the checked selector does not select, so entry zero
+    // refuses deterministically BEFORE any provider intent is frozen.
+    setPlanProjectBucket(cache.context, workflow.planId, "project-not-selected");
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-entry-zero",
+      operation: { kind: "residual-add" as const, entries: [residualEntry("zero-a"), residualEntry("zero-b")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(refused.code).toBe("remote.scope-mismatch");
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+    expect(await intentPhases(cache.context, "residual-entry-zero")).toEqual(["declined"]);
+
+    // invariant: The corrected request under a new id on the SAME plan proceeds and freezes.
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const corrected = await refusalOf(() =>
+      residualAddExecutionPlan(execution, { ...request, operationId: "residual-entry-zero-corrected" }),
+    );
+    expect(corrected.code).toBe("collaboration.operation-partial");
+    expect(outboxRows(cache.dbPath)).toHaveLength(2);
+  });
+
+  test("a frozen intent behind expired read permission keeps its reservation and resumes after re-observation", async () => {
+    const cache = await outboxCache("composite-frozen-permission");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-frozen-perm",
+      operation: {
+        kind: "residual-close" as const,
+        issueId: MSTAR_ISSUE,
+        disposition: "resolved" as const,
+        evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: 1,
+      },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-frozen-perm"));
+
+    // note: The access check expires while the row is frozen: replaying the verb fails through the
+    // replay disclosure gate, which is an environment state, never a decision about the request.
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
+    } finally {
+      db.close();
+    }
+    const replay = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(replay.code).toBe("collaboration.operation-partial");
+    expect(replay.message).toContain("read access is denied or expired");
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+    expect(await intentPhases(cache.context, "residual-frozen-perm")).toEqual(["prepared"]);
+
+    // invariant: `remote observe` restores the read permission, and the SAME id resumes: the
+    // settled intent confirms and only the execution delta is committed.
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 2,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    await confirmIntent(cache, outboxId, MSTAR_ISSUE);
+    const completed = await residualCloseExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("residual-frozen-perm");
+    expect(await intentPhases(cache.context, "residual-frozen-perm")).toEqual(["confirmed"]);
+  }, 30_000);
+
   test("a remote registration publishes its catalog delta into the project journal", async () => {
     const cache = await outboxCache("composite-registration");
     (await initializeStore(cache.context)).close();

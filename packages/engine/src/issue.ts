@@ -1424,6 +1424,8 @@ async function captureIssueRemote(
   // the cycle before they initialize.
   const { readRemoteIntent, readRemoteObservedIssues } = await import("./collaboration-remote.js");
   const origin = { verb: "captureIssue", request: { input, actor: mutation.actor } } as const;
+  const identityOf = (row: Record<string, unknown>): boolean =>
+    row.sourceIdentity === cols.sourceIdentity && row.rootCauseKey === cols.rootCauseKey && row.acceptanceKey === cols.acceptanceKey;
   const appendToIssue = (issueRef: string): Promise<IssueReceipt> => {
     const at = nowRfc3339();
     return queueRemoteIssueWrite(context, {
@@ -1453,6 +1455,28 @@ async function captureIssueRemote(
           occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
         };
       },
+      // invariant: The freeze-time subject answers the established occurrence, exactly as the
+      // local body answers its own tables: an occurrence that arrived between the dedupe read and
+      // this freeze is answered, never appended a second time.
+      unchanged: (current, observed) => {
+        const subject = current!;
+        const occurrences = (subject.occurrences ?? []) as Record<string, unknown>[];
+        const sameKey = occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
+        if (sameKey === undefined) return null;
+        if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
+          throw new IssueError(
+            "issue.occurrence-conflict",
+            "occurrence_key was reused with a different observation; the original occurrence is retained.",
+          );
+        }
+        return {
+          issueId: observedIssue(observed, issueRef)?.identity.issueId ?? issueRef,
+          ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
+          revision: Number((subject.fields as Record<string, unknown>).revision ?? 0),
+          storeRevision: 0,
+          created: false,
+        } satisfies IssueReceipt;
+      },
       origin,
     });
   };
@@ -1461,19 +1485,45 @@ async function captureIssueRemote(
       projectId: input.projectId,
       operationId: mutation.operationId,
       kind: "issue-create",
-      next: () => genesisIssueSubject(input, nowRfc3339()),
+      next: (_current, observed) => {
+        // invariant: The freeze-time snapshot decides the create: an identity the authority
+        // already carries is never created twice, whatever the older dedupe read sampled.
+        const movedRef = observed.issues.find(
+          (issue) => issue.mstar !== null && issue.mstar.occurrences.some(identityOf),
+        )?.mstar?.issueRef;
+        if (movedRef !== undefined) {
+          throw new StoreError(
+            "remote.scope-mismatch",
+            `The observed authority already carries this identity on ${movedRef}; the observation moved under ` +
+              `the capture's read. Refresh it with \`remote observe\` and retry — the capture then answers append or the ` +
+              `established receipt. Nothing was enqueued.`,
+            { issueRef: movedRef },
+          );
+        }
+        return genesisIssueSubject(input, nowRfc3339());
+      },
       origin,
     });
   try {
     const frozen = await readRemoteIntent(context, mutation.operationId);
-    if (frozen.disclosure === "full" && frozen.event !== null) {
-      const change = frozen.event.change;
-      // note: A capture never freezes a project-replace; re-asking through the create
-      // path lets the replay check answer that collision with its recorded refusal.
-      return change.kind === "issue-create" || change.kind === "project-replace"
-        ? createIssue()
-        : appendToIssue(change.issueRef);
+    // invariant: The writer's own replay identity answers FIRST, exactly as the local body checks
+    // its operation ledger before its tables: an existing frozen entry under this operation id is
+    // answered (or refused) through the replay gate, never bypassed by an observed no-op. A
+    // metadata-only disclosure still names the row, so it refuses instead of guessing from state.
+    if (frozen.disclosure !== "full" || frozen.event === null) {
+      throw new StoreError(
+        "remote.unavailable",
+        `Operation ${mutation.operationId} cannot be replayed: the project's current read access is denied or expired, so its frozen ` +
+          `request stays withheld. Reverify the scope with \`remote observe\` and retry; nothing was enqueued.`,
+        { operationId: mutation.operationId, state: frozen.state },
+      );
     }
+    const change = frozen.event.change;
+    // note: A capture never freezes a project-replace; re-asking through the create
+    // path lets the replay check answer that collision with its recorded refusal.
+    return change.kind === "issue-create" || change.kind === "project-replace"
+      ? createIssue()
+      : appendToIssue(change.issueRef);
   } catch (error) {
     if (!(error instanceof StoreError && error.code === "remote.intent-not-found")) throw error;
   }
@@ -2263,11 +2313,35 @@ export function assertObservedMultiPlanAcceptance(plans: readonly string[], evid
   for (const ref of evidence.references ?? []) refs[ref] = true;
   const coversAll = evidence.scope === "all" || plans.every((plan) => refs[plan]);
   if (!coversAll) {
-    throw new IssueError(
+    throw refusalWithDetails(
       "issue.invalid-disposition",
       "A multi-plan obligation stays open until its whole acceptance is verified; one linked plan is not enough.",
+      {
+        linked_plans: [...plans],
+        recovery:
+          `Supply closure-evidence references covering every linked plan (${plans.join(", ")}), or declare the whole ` +
+          `acceptance with "scope": "all" in the original verb's evidence file, then reissue; nothing was enqueued.`,
+      },
     );
   }
+}
+
+/**
+ * note: The terminal-state transition refusal with its usable next steps, shared by the local
+ * closure body and both remote paths: inspect first; reopen only when a terminal issue is
+ * intentionally being changed.
+ */
+export function terminalTransitionRefusal(observedDisposition: string, disposition: TerminalDisposition): IssueError {
+  return refusalWithDetails(
+    "issue.invalid-disposition",
+    `Only open\u2192terminal is accepted; ${observedDisposition} cannot transition to ${disposition}`,
+    {
+      observed_disposition: observedDisposition,
+      requested_disposition: disposition,
+      recovery:
+        "Inspect the issue with `mstar issue show --id <id>`; reopen it with `mstar issue reopen` only if you intend to change a terminal issue.",
+    },
+  );
 }
 
 /**
@@ -2430,10 +2504,7 @@ export function closeIssueOn(
   requireExpectedRevision(mutation, issue.revision);
 
   if (issue.disposition !== "open") {
-    throw new IssueError(
-      "issue.invalid-disposition",
-      `Only open\u2192terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
-    );
+    throw terminalTransitionRefusal(issue.disposition, disposition);
   }
 
   if (disposition === "duplicate" || disposition === "superseded") {
@@ -2550,10 +2621,7 @@ export async function closeIssue(
         const fields = subject.fields as Record<string, unknown>;
         requireExpectedRevision(mutation, Number(fields.revision));
         if (fields.disposition !== "open") {
-          throw new IssueError(
-            "issue.invalid-disposition",
-            `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${disposition}`,
-          );
+          throw terminalTransitionRefusal(String(fields.disposition), disposition);
         }
         const canonicalRef = resolveObservedCanonicalTarget(observed, issueId, disposition, evidence);
         if (disposition === "resolved") {

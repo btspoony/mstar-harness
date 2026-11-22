@@ -81,6 +81,15 @@ export function setRemoteIntentSampleGapForTest(callback: (() => void | Promise<
   remoteIntentSampleGapForTest = callback;
 }
 
+/**
+ * note: The write-scope gap seam: a regression re-observes the scope between the sampled base a
+ * caller deduped against and the write that freezes against it. Production runs without a callback.
+ */
+let remoteWriteScopeGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteWriteScopeGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteWriteScopeGapForTest = callback;
+}
+
 /** note: The bound provider record an MStar issue is anchored to. */
 export type ProviderIssueIdentity = Readonly<{
   provider: "linear";
@@ -4835,6 +4844,7 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
         `The stored observation of project ${projectId} is unreadable; nothing was enqueued.`,
       );
     }
+    await remoteWriteScopeGapForTest?.();
     return {
       location,
       selection,

@@ -694,9 +694,12 @@ function remoteRegistrationProject(workflow: CatalogExecutionWorkflow): string |
 }
 
 /**
- * invariant: The effect facts a REMOTE registration's finalization pins. The provider journal is the
- * committed effect, so every reviewed entity is published exactly as frozen; the portable document
- * holds no catalog revision, so the pinned revision is 0 rather than a local counter.
+ * invariant: The effect facts a REMOTE registration's finalization pins. The confirmed EVENT each
+ * receipt names is the published content — the original event, or the confirmed repair's own
+ * replacement — so every reviewed entity must be readable in one of those journals before any
+ * binding is written from it; a settled repair that omits the reviewed delta is disclosed and
+ * declined (`remote.effect-mismatch`), never finalized from the original request. The portable
+ * document holds no catalog revision, so the pinned revision is 0 rather than a local counter.
  */
 function remoteRegistrationFacts(
   facts: string,
@@ -708,18 +711,58 @@ function remoteRegistrationFacts(
   } catch {
     parsed = null;
   }
-  if (!isPlainObject(parsed) || !("remote" in parsed)) {
+  if (!isPlainObject(parsed) || !("remote" in parsed) || !Array.isArray(parsed.remote)) {
     throw new StoreError(
       "store.corrupt",
       "the committed remote registration effect carries no readable remote facts",
     );
   }
+  const published = new Map<string, { kind: string; id: string; revision: number }>();
+  for (const entry of parsed.remote) {
+    if (!isPlainObject(entry) || !isPlainObject(entry.event)) {
+      throw new StoreError(
+        "collaboration.unreadable",
+        "the confirmed remote registration effect carries no readable provider event, so it proves no published row",
+      );
+    }
+    const change = entry.event.change;
+    if (
+      !isPlainObject(change) ||
+      change.kind !== "project-replace" ||
+      !isPlainObject(change.project) ||
+      !Array.isArray(change.project.catalogEntities)
+    ) {
+      throw new StoreError(
+        "collaboration.unreadable",
+        "the confirmed remote registration effect is not a readable project journal with catalog rows",
+      );
+    }
+    for (const row of change.project.catalogEntities) {
+      if (!isPlainObject(row) || typeof row.kind !== "string" || typeof row.id !== "string") continue;
+      published.set(`${row.kind}:${row.id}`, {
+        kind: row.kind,
+        id: row.id,
+        revision: typeof row.revision === "number" ? row.revision : 1,
+      });
+    }
+  }
   return {
     catalogRevision: 0,
-    entities: delta.entities.map((entity) => ({
-      reviewed: { kind: entity.kind, id: entity.id },
-      published: { kind: entity.kind, id: entity.id, revision: 1 },
-    })),
+    entities: delta.entities.map((entity) => {
+      const row = published.get(`${entity.kind}:${entity.id}`);
+      if (row === undefined) {
+        throw new StoreError(
+          "remote.effect-mismatch",
+          `the confirmed provider effect publishes no ${entity.kind} ${JSON.stringify(entity.id)} row, so the reviewed ` +
+            `registration's business outcome never landed; the execution binding is not written from a guessed identity. ` +
+            `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, ` +
+            `then publish the reviewed delta with a NEW registration under a new operation id — it appends to the confirmed ` +
+            `journal, and the settled effect is never re-sent.`,
+          { missing_entity: { kind: entity.kind, id: entity.id } },
+        );
+      }
+      return { reviewed: { kind: entity.kind, id: entity.id }, published: { kind: row.kind, id: row.id, revision: row.revision } };
+    }),
   };
 }
 
