@@ -1805,17 +1805,19 @@ async function replaceDerivedLaneBelow(
 }
 
 /**
- * note: The derived-cache replacement's post-staging seam: a regression fails the publication after
- * the staged successor exists and before the canonical name is released.
+ * note: The replacement's stale-probe seam: a competing bind (and, behind it, a real writer that
+ * freezes an outbox row) lands between this attempt's decision to replace and its critical section.
+ * The probe is re-taken inside that critical section, so the seam never authorizes replacing bytes
+ * that advanced.
  */
-let remoteCacheReplacementGapForTest: (() => void) | undefined;
-export function setRemoteCacheReplacementGapForTest(callback: (() => void) | undefined): void {
+let remoteCacheReplacementGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementGapForTest(callback: (() => void | Promise<void>) | undefined): void {
   remoteCacheReplacementGapForTest = callback;
 }
 
 /**
- * note: The replacement's release window seam: a regression publishes a competing current cache
- * between this attempt's release of the canonical name and its own create-only link.
+ * note: The publication seam: a regression fails after the predecessor is preserved and the
+ * successor is fully staged, immediately before the one atomic rename that publishes it.
  */
 let remoteCacheReplacementPublishGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteCacheReplacementPublishGapForTest(
@@ -1912,25 +1914,20 @@ export async function initializeRemoteCacheStore(
 /** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
 type RetainedLaneIdentity = Readonly<{ storeId: string; epoch: number }>;
 
-async function createOrContinueStore(
-  location: CollaborationLocation,
-  options: { replaceBelowVersion?: number; expectedIdentity?: RetainedLaneIdentity } = {},
-): Promise<CollaborationAuthority> {
-  const dbPath = location.dbPath;
-  const timeout = busyTimeoutMs();
-  assertAdmittedTarget(dbPath);
-  let retained: RetainedLaneIdentity | undefined;
-  if (existsSync(dbPath)) {
-    if (options.replaceBelowVersion === undefined || location.mode !== "remote") return continueExisting(location, timeout);
-    retained = await replaceDerivedLaneBelow(
-      location,
-      options.replaceBelowVersion,
-      timeout,
-      options.expectedIdentity,
-    );
-    if (retained === undefined) return continueExisting(location, timeout);
-  }
+/** note: One staged, admitted successor: its private names and the authority its bytes prove. */
+type StagedStore = Readonly<{ stagingDir: string; stagingPath: string; authority: CollaborationAuthority }>;
 
+/**
+ * invariant: Build the complete successor in a private staging directory before it can be named:
+ * every supported migration applied in order, the retained (or a fresh) identity recorded, the
+ * bytes admitted as this build's own complete store, and the journal folded into one database file.
+ */
+async function stageCompleteStore(
+  location: CollaborationLocation,
+  retained: RetainedLaneIdentity | undefined,
+  timeout: number,
+): Promise<StagedStore> {
+  const dbPath = location.dbPath;
   const dir = dirname(dbPath);
   createStoreDirectories(dir);
   const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
@@ -2011,60 +2008,23 @@ async function createOrContinueStore(
     throw asRefusal(dbPath, error);
   }
 
-  // invariant: The derived cache's successor is already staged and verified. Its previous bytes
-  // are preserved beside the lane BEFORE the canonical name is released, so a publication that
-  // fails or loses a race leaves them intact and never overwrites the winner's cache.
-  let preservedPath: string | undefined;
-  if (retained !== undefined) {
-    try {
-      remoteCacheReplacementGapForTest?.();
-    } catch (error) {
-      discardStaging(stagingDir, stagingPath);
-      throw asRefusal(dbPath, error);
-    }
-    preservedPath = join(dir, `.replaced-${process.pid}-${randomUUID()}.db`);
-    try {
-      // note: Create-only, so a preserved image of other bytes is never overwritten.
-      linkSync(dbPath, preservedPath);
-    } catch (error) {
-      discardStaging(stagingDir, stagingPath);
-      throw unreadable(
-        dbPath,
-        `its derived cache could not be preserved before replacement (${publicationCause(error)})`,
-      );
-    }
-    try {
-      unlinkSync(dbPath);
-    } catch (error) {
-      // note: The canonical name still holds the previous bytes; the preserved duplicate is dropped.
-      rmSync(preservedPath, { force: true });
-      discardStaging(stagingDir, stagingPath);
-      throw barrierRefusal(dbPath, error);
-    }
-    // note: A stale sidecar would otherwise be picked up by the replacement's name.
-    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
-    // note: The release window a competing publisher can land in; only the create-only links below
-    // decide whose cache keeps the canonical name.
-    await remoteCacheReplacementPublishGapForTest?.();
-  }
+  return { stagingDir, stagingPath, authority };
+}
+
+/**
+ * invariant: Create the scope's store when no bytes are named: one create-only hard link publishes
+ * the staged successor. A competing initializer that won the name first keeps its cache; nothing
+ * another attempt published is ever deleted.
+ */
+async function createFreshStore(location: CollaborationLocation, timeout: number): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const staged = await stageCompleteStore(location, undefined, timeout);
   try {
-    linkSync(stagingPath, dbPath);
+    linkSync(staged.stagingPath, dbPath);
   } catch (error) {
-    discardStaging(stagingDir, stagingPath);
+    discardStaging(staged.stagingDir, staged.stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      // invariant: A competing initializer published this scope between release and link: its cache
-      // is never deleted, and the preserved image of what this attempt replaced stays beside it.
       return continueExisting(location, timeout);
-    }
-    if (preservedPath !== undefined) {
-      // invariant: Restore the previous bytes with a create-only link, so a name that won the race
-      // in the meantime is never overwritten. A failed restore keeps the preserved image.
-      try {
-        linkSync(preservedPath, dbPath);
-        rmSync(preservedPath, { force: true });
-      } catch {
-        // note: The preserved image remains for the operator; the canonical name is another's.
-      }
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
@@ -2072,11 +2032,104 @@ async function createOrContinueStore(
     // note: The published subtree and its own name become durable before success.
     confirmPublishedChain(dbPath);
   } finally {
-    discardStaging(stagingDir, stagingPath);
+    discardStaging(staged.stagingDir, staged.stagingPath);
   }
-  if (preservedPath !== undefined) rmSync(preservedPath, { force: true });
-  return authority;
+  return staged.authority;
 }
+
+/**
+ * invariant: Replace one verified pre-outbox derived lane with a staged successor, inside ONE
+ * critical section under the lane's replacement lock: the ownership/schema probe, the staging, the
+ * preservation of the predecessor and the publication all hold that lock, so a probe taken before
+ * another binder advanced the lane can never authorize overwriting its bytes — and a replacement
+ * that publishes a v3 cache and an ordinary writer's frozen outbox row are never unlinked.
+ *
+ * The predecessor is preserved by hard link (same inode) before the name moves, and the successor
+ * is published with ONE atomic rename: the canonical name is never absent, so an interruption
+ * leaves either the predecessor or the successor named, never a fresh-init ambiguity.
+ */
+async function replaceDerivedLane(
+  location: CollaborationLocation,
+  below: number,
+  expected: RetainedLaneIdentity | undefined,
+  timeout: number,
+): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const retained = await replaceDerivedLaneBelow(location, below, timeout, expected);
+  if (retained === undefined) return continueExisting(location, timeout);
+  const staged = await stageCompleteStore(location, retained, timeout);
+  const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
+  try {
+    // note: Create-only, so a preserved image of other bytes is never overwritten.
+    linkSync(dbPath, preservedPath);
+  } catch (error) {
+    discardStaging(staged.stagingDir, staged.stagingPath);
+    throw unreadable(dbPath, `its derived cache could not be preserved before replacement (${publicationCause(error)})`);
+  }
+  try {
+    await remoteCacheReplacementPublishGapForTest?.();
+    // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
+    // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
+    // cache another process advanced while the successor was staged.
+    const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
+    if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
+      // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
+      discardStaging(staged.stagingDir, staged.stagingPath);
+      rmSync(preservedPath, { force: true });
+      return continueExisting(location, timeout);
+    }
+    // note: A stale sidecar would otherwise be picked up by the replacement's name.
+    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    renameSync(staged.stagingPath, dbPath);
+  } catch (error) {
+    // note: The canonical name still holds the predecessor; the preserved duplicate is dropped.
+    discardStaging(staged.stagingDir, staged.stagingPath);
+    rmSync(preservedPath, { force: true });
+    throw asRefusal(
+      dbPath,
+      error instanceof StoreError
+        ? error
+        : unreadable(dbPath, `the staged store could not be published over its predecessor (${publicationCause(error)})`),
+    );
+  }
+  try {
+    // note: The published subtree and its own name become durable before success.
+    confirmPublishedChain(dbPath);
+  } finally {
+    discardStaging(staged.stagingDir, staged.stagingPath);
+  }
+  rmSync(preservedPath, { force: true });
+  return staged.authority;
+}
+
+async function createOrContinueStore(
+  location: CollaborationLocation,
+  options: { replaceBelowVersion?: number; expectedIdentity?: RetainedLaneIdentity } = {},
+): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const timeout = busyTimeoutMs();
+  assertAdmittedTarget(dbPath);
+  if (options.replaceBelowVersion !== undefined && location.mode === "remote") {
+    // note: The replacement decision is taken INSIDE the lane's critical section (below), so a
+    // probe taken before it can never authorize replacing bytes that advanced in the meantime.
+    await remoteCacheReplacementGapForTest?.();
+    // note: The lane's own directory chain exists before its lock file can be created.
+    createStoreDirectories(dirname(dbPath));
+    // note: A lazy import keeps this module free of a static cycle with the lock primitive's owner.
+    const { withCollaborationLockFile } = await import("./collaboration-cutover.js");
+    return withCollaborationLockFile(
+      join(dirname(dbPath), "collaboration-cache-replace.lock"),
+      "remote cache replacement",
+      async () =>
+        existsSync(dbPath)
+          ? replaceDerivedLane(location, options.replaceBelowVersion as number, options.expectedIdentity, timeout)
+          : createFreshStore(location, timeout),
+    );
+  }
+  if (existsSync(dbPath)) return continueExisting(location, timeout);
+  return createFreshStore(location, timeout);
+}
+
 
 /** note: What one explicit upgrade did: the versions crossed and the references it minted. */
 export type CollaborationUpgradeReceipt = Readonly<{

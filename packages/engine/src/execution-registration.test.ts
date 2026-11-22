@@ -1945,6 +1945,25 @@ function remotePlanWorkflow(
   };
 }
 
+/** note: One reviewed ITERATION registration against a REMOTE project journal. */
+function remoteIterationWorkflow(
+  context: StoreContext,
+  input: { iterationId: string; rows: Array<{ planId: string; title: string }> },
+): RegisterIterationWorkflowOptions {
+  const compassRef = writeReviewedCompass(context.harnessDir, input.iterationId);
+  return {
+    harnessDir: context.harnessDir,
+    compassRef,
+    branch: { base: "main", integration: `iteration/${input.iterationId}`, target: "main" },
+    rows: input.rows.map((row) => {
+      writePlanDocument(context.harnessDir, row.planId, row.title);
+      return { id: row.planId, title: row.title, file: `plans/${row.planId}.md` };
+    }),
+    project: REMOTE_IDS.projectId,
+    startedAt: TS,
+  };
+}
+
 type RemoteFixture = Readonly<{
   scope: ReturnType<typeof createRemoteScope>;
   commit: string;
@@ -2010,6 +2029,13 @@ function frozenProviderIntent(error: unknown): string {
     throw new Error(`fixture: the refusal names no frozen provider intent (${JSON.stringify(frozen)})`);
   }
   return frozen[0];
+}
+
+/** note: The refusal's structured details, as the CLI publishes them. */
+function detailsOf(error: unknown): Record<string, unknown> {
+  if (error === null || typeof error !== "object" || !("details" in error)) return {};
+  const details = (error as { details?: unknown }).details;
+  return details !== null && typeof details === "object" ? (details as Record<string, unknown>) : {};
 }
 
 /** note: The trusted caller of ONE registration: it must name the workflow that request creates. */
@@ -2239,7 +2265,248 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     expect(corrected).toMatchObject({ code: "collaboration.operation-partial" });
     expect(outboxRows(fixture.context).some((row) => row.state === "enqueued")).toBe(true);
-  });
+  }, 30_000);
+
+  test("a confirmed repair that keeps the reviewed ids but changes a field writes no execution binding", async () => {
+    const fixture = await remoteFixture("remote-register-repair-changed-field");
+    const context = registrationContext(fixture, WORKFLOW_ID);
+    const planId = "20260921-changed-field";
+    const options = remotePlanWorkflow(fixture.context, {
+      planId,
+      title: "Reviewed title",
+      workflowId: WORKFLOW_ID,
+    });
+    const pending = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "plan", workflowId: WORKFLOW_ID, options },
+      operationId: "op-remote-changed-field",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    const providerIntent = frozenProviderIntent(pending);
+
+    // note: The reviewed replacement settles the fork but publishes the same plan ID with another
+    // title — a legal project-replace that keeps every ID and changes the reviewed content.
+    const heads = await conflictFrozenIntent(fixture.context, providerIntent);
+    const original = await readRemoteIntent(fixture.context, providerIntent);
+    if (original.event === null || original.event.change.kind !== "project-replace") {
+      throw new Error("fixture: the conflicted intent discloses no frozen journal");
+    }
+    const journal = original.event.change.project;
+    const resolutionId = "00000000-0000-4000-8000-0000000008c1";
+    await prepareRemoteResolution(fixture.context, providerIntent, {
+      operationId: resolutionId,
+      operator: "ops-engineer",
+      reason: "settle the fork with another spelling",
+      event: {
+        ...original.event,
+        operationId: resolutionId,
+        parents: heads,
+        change: {
+          kind: "project-replace",
+          project: {
+            ...journal,
+            catalogEntities: (journal.catalogEntities as Array<Record<string, unknown>>).map((row) =>
+              row.kind === "plan" && row.id === planId ? { ...row, title: "Settled title" } : row,
+            ),
+          },
+        },
+      },
+    });
+    await confirmFrozenIntent(fixture.context, resolutionId);
+
+    // invariant: ID presence is not the reviewed outcome: the changed portable field is disclosed
+    // with the settled operation and record, and no execution workflow or binding is recorded.
+    const refused = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "plan", workflowId: WORKFLOW_ID, options },
+      operationId: "op-remote-changed-field",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: "remote.effect-mismatch" });
+    expect(detailsOf(refused)).toMatchObject({
+      settled_operations: [resolutionId],
+      mismatched_entity: { kind: "plan", id: planId },
+    });
+    expect(detailsOf(refused).settled_records).toHaveLength(1);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toBeUndefined();
+    expect(await reservationRow(fixture.context, "op-remote-changed-field")).toMatchObject({
+      phase: "declined",
+      cause_code: "remote.effect-mismatch",
+    });
+  }, 30_000);
+
+  test("a confirmed repair that preserves every id but drops a required link writes no execution binding", async () => {
+    const fixture = await remoteFixture("remote-register-repair-dropped-link");
+    const iterationId = "20260921-remote-dropped-link";
+    const planId = "20260921-dropped-link-plan";
+    const options = remoteIterationWorkflow(fixture.context, {
+      iterationId,
+      rows: [{ planId, title: "Linked plan" }],
+    });
+    const context = registrationContext(fixture, iterationId);
+    const pending = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-dropped-link",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    const providerIntent = frozenProviderIntent(pending);
+
+    // note: The reviewed replacement settles the fork and publishes EVERY entity row but omits the
+    // reviewed `plan belongs-to iteration` link the shipped iteration emits.
+    const heads = await conflictFrozenIntent(fixture.context, providerIntent);
+    const original = await readRemoteIntent(fixture.context, providerIntent);
+    if (original.event === null || original.event.change.kind !== "project-replace") {
+      throw new Error("fixture: the conflicted intent discloses no frozen journal");
+    }
+    const journal = original.event.change.project;
+    const resolutionId = "00000000-0000-4000-8000-0000000008c2";
+    await prepareRemoteResolution(fixture.context, providerIntent, {
+      operationId: resolutionId,
+      operator: "ops-engineer",
+      reason: "settle the fork without the membership link",
+      event: {
+        ...original.event,
+        operationId: resolutionId,
+        parents: heads,
+        change: {
+          kind: "project-replace",
+          project: {
+            ...journal,
+            catalogLinks: (journal.catalogLinks as Array<Record<string, unknown>>).filter(
+              (link) => !(link.fromKind === "plan" && link.fromId === planId && link.relation === "belongs-to"),
+            ),
+          },
+        },
+      },
+    });
+    await confirmFrozenIntent(fixture.context, resolutionId);
+
+    // invariant: The reviewed relation is part of the business outcome; its absence is disclosed
+    // and declined instead of binding the workflow from an incomplete settlement.
+    const refused = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-dropped-link",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: "remote.effect-mismatch" });
+    expect(detailsOf(refused)).toMatchObject({
+      settled_operations: [resolutionId],
+      missing_link: {
+        from: { kind: "plan", id: planId },
+        relation: "belongs-to",
+        to: { kind: "iteration", id: iterationId },
+      },
+    });
+    expect(await bindingOf(fixture.context, iterationId)).toBeUndefined();
+    expect(await reservationRow(fixture.context, "op-remote-dropped-link")).toMatchObject({
+      phase: "declined",
+      cause_code: "remote.effect-mismatch",
+    });
+  }, 30_000);
+
+  test("a same-target correction after a partial settlement adopts the settled rows and publishes the omission", async () => {
+    const fixture = await remoteFixture("remote-register-partial-correction");
+    const iterationId = "20260921-remote-partial-correction";
+    const firstPlan = "20260921-correction-a";
+    const secondPlan = "20260921-correction-b";
+    const options = remoteIterationWorkflow(fixture.context, {
+      iterationId,
+      rows: [
+        { planId: firstPlan, title: "First row" },
+        { planId: secondPlan, title: "Second row" },
+      ],
+    });
+    const context = registrationContext(fixture, iterationId);
+    const pending = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-partial-correction",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    const providerIntent = frozenProviderIntent(pending);
+
+    // note: The reviewed replacement publishes the iteration, its first plan row and the links it
+    // carries — and omits the second plan row.
+    const heads = await conflictFrozenIntent(fixture.context, providerIntent);
+    const original = await readRemoteIntent(fixture.context, providerIntent);
+    if (original.event === null || original.event.change.kind !== "project-replace") {
+      throw new Error("fixture: the conflicted intent discloses no frozen journal");
+    }
+    const journal = original.event.change.project as unknown as ReturnType<typeof completeSnapshot>["project"];
+    const resolutionId = "00000000-0000-4000-8000-0000000008c3";
+    const settledJournal = {
+      ...journal,
+      catalogEntities: journal.catalogEntities.filter((row) => !(row.kind === "plan" && row.id === secondPlan)),
+      catalogLinks: journal.catalogLinks.filter((link) => !(link.fromKind === "plan" && link.fromId === secondPlan)),
+    };
+    await prepareRemoteResolution(fixture.context, providerIntent, {
+      operationId: resolutionId,
+      operator: "ops-engineer",
+      reason: "settle the fork with the first row only",
+      event: {
+        ...original.event,
+        operationId: resolutionId,
+        parents: heads,
+        change: { kind: "project-replace", project: settledJournal },
+      },
+    });
+    await confirmFrozenIntent(fixture.context, resolutionId);
+    await expect(
+      registerShippedCatalogExecution(context, {
+        actor: "project-manager",
+        workflow: { kind: "iteration", workflowId: iterationId, options },
+        operationId: "op-remote-partial-correction",
+        expected: fixture.token,
+      }),
+    ).rejects.toMatchObject({ code: "remote.effect-mismatch" });
+
+    // invariant: The same-outcome correction is the SAME registration under a NEW operation id: the
+    // rows the settlement already carries identically are adopted and only the omission is
+    // published, so the already-published rows never trip their create-only check.
+    const cacheDb = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+    let revision = 0;
+    try {
+      const row = cacheDb
+        .prepare("select revision from remote_observations where project_key = ? order by revision desc limit 1")
+        .get(REMOTE_IDS.projectId) as { revision?: unknown } | undefined;
+      revision = typeof row?.revision === "number" ? row.revision : 0;
+    } finally {
+      cacheDb.close();
+    }
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(
+        fixture.commit,
+        check,
+        { ...base, project: { ...base.project, ...settledJournal } },
+        revision,
+      ),
+    );
+    const corrected = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-partial-correction-2",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    expect(corrected).toMatchObject({ code: "collaboration.operation-partial" });
+    const enqueued = outboxRows(fixture.context).filter((row) => row.state === "enqueued");
+    expect(enqueued).toHaveLength(1);
+    const frozen = JSON.parse(String(enqueued[0]!.request_json)) as {
+      event: { change: { project: { catalogEntities: Array<Record<string, unknown>>; catalogLinks: Array<Record<string, unknown>> } } };
+    };
+    const entities = frozen.event.change.project.catalogEntities;
+    const links = frozen.event.change.project.catalogLinks;
+    expect(entities.filter((row) => row.kind === "plan" && row.id === firstPlan)).toHaveLength(1);
+    expect(entities).toContainEqual(expect.objectContaining({ kind: "plan", id: secondPlan, title: "Second row" }));
+    expect(links.filter((link) => link.fromId === firstPlan)).toHaveLength(1);
+    expect(links).toContainEqual(
+      expect.objectContaining({ fromKind: "plan", fromId: secondPlan, relation: "belongs-to", toKind: "iteration" }),
+    );
+  }, 30_000);
 
   test("a confirmed settlement with an undisclosed receipt keeps its reservation instead of finalizing", async () => {
     const fixture = await remoteFixture("remote-register-repair-undisclosed");

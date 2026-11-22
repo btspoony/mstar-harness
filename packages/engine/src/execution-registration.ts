@@ -39,7 +39,9 @@ import {
   linkCatalogEntitiesOn,
   readCatalogStoreVersionsOn,
   registerCatalogEntityOn,
+  type CatalogEntityInput,
   type CatalogKey,
+  type CatalogLinkInput,
   type CatalogReceipt,
   type ComposedStoreRevision,
 } from "./catalog.js";
@@ -548,30 +550,30 @@ export async function commitExecutionRegistration(
         executionKey: { ...prepared.intent.key, operationId },
         next: (current) => {
           const entities = current.catalogEntities as Array<Record<string, unknown>>;
-          const published: Array<Record<string, unknown>> = [];
+          const nextEntities = [...entities];
           for (const entity of plan.request.delta.entities) {
-            if (
-              entities.some((row) => row.kind === entity.kind && row.id === entity.id) ||
-              published.some((row) => row.kind === entity.kind && row.id === entity.id)
-            ) {
-              throw new CatalogError(
-                "catalog.duplicate",
-                `${entity.kind} ${entity.id} is already registered in the observed project; nothing was enqueued.`,
-              );
+            const desired = portableCatalogRow(entity);
+            const existing = nextEntities.find((row) => row.kind === entity.kind && row.id === entity.id);
+            if (existing !== undefined) {
+              // invariant: An observed row that ALREADY carries exactly the reviewed portable
+              // content is the same published outcome, so it is adopted: a correction after a
+              // partially settled repair publishes only what is missing instead of replaying (or
+              // silently overwriting) settled rows. Different content is another write, not a
+              // duplicate of this review, and is refused.
+              if (!samePortableCatalogRow(existing, desired)) {
+                throw new CatalogError(
+                  "catalog.duplicate",
+                  `${entity.kind} ${entity.id} is already registered in the observed project with different ` +
+                    `content; nothing was enqueued. Review the settled row before republishing it.`,
+                );
+              }
+              continue;
             }
-            published.push({
-              kind: entity.kind,
-              id: entity.id,
-              title: entity.title,
-              description: entity.description ?? null,
-              documentKind: entity.documentKind ?? null,
-              lifecycle: entity.lifecycle ?? "active",
-              revision: 1,
-            });
+            nextEntities.push(desired);
           }
-          const links = current.catalogLinks as Array<Record<string, unknown>>;
-          const known = new Set([...entities, ...published].map((row) => `${String(row.kind)}:${String(row.id)}`));
-          const appended = (plan.request.delta.links ?? []).map((link) => {
+          const known = new Set(nextEntities.map((row) => `${String(row.kind)}:${String(row.id)}`));
+          const nextLinks = [...(current.catalogLinks as Array<Record<string, unknown>>)];
+          for (const link of plan.request.delta.links ?? []) {
             for (const endpoint of [link.from, link.to]) {
               if (!known.has(`${endpoint.kind}:${endpoint.id}`)) {
                 throw new CatalogError(
@@ -580,16 +582,10 @@ export async function commitExecutionRegistration(
                 );
               }
             }
-            return {
-              fromKind: link.from.kind,
-              fromId: link.from.id,
-              relation: link.relation,
-              toKind: link.to.kind,
-              toId: link.to.id,
-              ordinal: link.ordinal ?? 0,
-            };
-          });
-          return { ...current, catalogEntities: [...entities, ...published], catalogLinks: [...links, ...appended] };
+            const desired = portableCatalogLink(link);
+            if (!nextLinks.some((row) => samePortableCatalogLink(row, desired))) nextLinks.push(desired);
+          }
+          return { ...current, catalogEntities: nextEntities, catalogLinks: nextLinks };
         },
         origin: {
           verb: "execution-register",
@@ -693,13 +689,97 @@ function remoteRegistrationProject(workflow: CatalogExecutionWorkflow): string |
   return projects.length === 1 ? projects[0]! : null;
 }
 
+/** note: One reviewed catalog entity as the PORTABLE row a remote project journal publishes. */
+function portableCatalogRow(entity: CatalogEntityInput): Record<string, unknown> {
+  return {
+    kind: entity.kind,
+    id: entity.id,
+    title: entity.title,
+    description: entity.description ?? null,
+    documentKind: entity.documentKind ?? null,
+    lifecycle: entity.lifecycle ?? "active",
+    revision: 1,
+  };
+}
+
+/** note: One reviewed link as the portable journal row (an absent ordinal is the journal's 0). */
+function portableCatalogLink(link: CatalogLinkInput): Record<string, unknown> {
+  return {
+    fromKind: link.from.kind,
+    fromId: link.from.id,
+    relation: link.relation,
+    toKind: link.to.kind,
+    toId: link.to.id,
+    ordinal: link.ordinal ?? 0,
+  };
+}
+
+/**
+ * invariant: The portable content of one journal row, compared field by field: the metadata and
+ * lifecycle a registration publishes, at the journal's own normalization (`description` and
+ * `documentKind` null, `lifecycle` active). The row's own revision is not reviewed content.
+ * Checkout-only location facts (`rootKind`, `relativePath`) are never part of the journal.
+ */
+function samePortableCatalogRow(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
+  const field = (value: unknown): unknown => value ?? null;
+  return (
+    row.kind === desired.kind &&
+    row.id === desired.id &&
+    row.title === desired.title &&
+    field(row.description) === desired.description &&
+    field(row.documentKind) === desired.documentKind &&
+    (row.lifecycle ?? "active") === desired.lifecycle
+  );
+}
+
+/** note: Whether one journal link row is exactly the reviewed relation (ordinal absent means 0). */
+function samePortableCatalogLink(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
+  return (
+    row.fromKind === desired.fromKind &&
+    row.fromId === desired.fromId &&
+    row.relation === desired.relation &&
+    row.toKind === desired.toKind &&
+    row.toId === desired.toId &&
+    (row.ordinal ?? 0) === desired.ordinal
+  );
+}
+
+/**
+ * invariant: The refusal of a settled remote effect that does not carry the reviewed business
+ * outcome. It names the operation and record the provider actually settled and a supported
+ * same-outcome correction: a re-observed, NEW registration of the SAME workflow adopts the rows
+ * the settlement already carries identically and publishes only what is missing, so settled work
+ * is never re-sent or overwritten.
+ */
+function remoteEffectMismatch(
+  settled: ReadonlyArray<{ operationId: string; recordId: string | null }>,
+  what: string,
+  details: Record<string, unknown>,
+): StoreError {
+  const operations = settled.map((entry) => entry.operationId).join(", ") || "(unrecorded)";
+  const records = settled.map((entry) => entry.recordId).filter((id): id is string => id !== null);
+  return new StoreError(
+    "remote.effect-mismatch",
+    `the confirmed provider effect ${operations}${records.length === 0 ? "" : ` (record ${records.join(", ")})`} ${what}, ` +
+      `so the reviewed registration's business outcome never fully landed and the execution binding is not written from ` +
+      `a guessed identity. Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> ` +
+      `--operation ${settled[0]?.operationId ?? "<uuid>"}\`; then re-observe the project with ` +
+      `\`mstar store collaboration remote observe --harness <abs> --input <file|->\` and reissue this SAME registration ` +
+      `for the SAME workflow under a NEW operation id: rows the settlement already carries identically are adopted, only ` +
+      `the missing work is published, and the settled effect is never re-sent.`,
+    { settled_operations: settled.map((entry) => entry.operationId), settled_records: records, ...details },
+  );
+}
+
 /**
  * invariant: The effect facts a REMOTE registration's finalization pins. The confirmed EVENT each
  * receipt names is the published content — the original event, or the confirmed repair's own
- * replacement — so every reviewed entity must be readable in one of those journals before any
- * binding is written from it; a settled repair that omits the reviewed delta is disclosed and
- * declined (`remote.effect-mismatch`), never finalized from the original request. The portable
- * document holds no catalog revision, so the pinned revision is 0 rather than a local counter.
+ * replacement — so the reviewed delta's NORMALIZED PORTABLE FIELDS and LINKS must all be readable
+ * in one of those journals before any binding is written from them. Presence of a `(kind, id)` is
+ * never enough: a settlement that alters a reviewed title/lifecycle or drops a `belongs-to` link is
+ * disclosed and declined (`remote.effect-mismatch`), never finalized from the original request. The
+ * portable document holds no catalog revision, so the pinned revision is 0 rather than a local
+ * counter.
  */
 function remoteRegistrationFacts(
   facts: string,
@@ -717,7 +797,9 @@ function remoteRegistrationFacts(
       "the committed remote registration effect carries no readable remote facts",
     );
   }
-  const published = new Map<string, { kind: string; id: string; revision: number }>();
+  const rows = new Map<string, Record<string, unknown>>();
+  const links: Array<Record<string, unknown>> = [];
+  const settled: Array<{ operationId: string; recordId: string | null }> = [];
   for (const entry of parsed.remote) {
     if (!isPlainObject(entry) || !isPlainObject(entry.event)) {
       throw new StoreError(
@@ -737,31 +819,62 @@ function remoteRegistrationFacts(
         "the confirmed remote registration effect is not a readable project journal with catalog rows",
       );
     }
+    settled.push({
+      operationId: typeof entry.operationId === "string" ? entry.operationId : "(unrecorded)",
+      recordId: typeof entry.recordId === "string" ? entry.recordId : null,
+    });
     for (const row of change.project.catalogEntities) {
       if (!isPlainObject(row) || typeof row.kind !== "string" || typeof row.id !== "string") continue;
-      published.set(`${row.kind}:${row.id}`, {
-        kind: row.kind,
-        id: row.id,
-        revision: typeof row.revision === "number" ? row.revision : 1,
+      rows.set(`${row.kind}:${row.id}`, row);
+    }
+    for (const link of Array.isArray(change.project.catalogLinks) ? change.project.catalogLinks : []) {
+      if (isPlainObject(link)) links.push(link);
+    }
+  }
+  for (const entity of delta.entities) {
+    const row = rows.get(`${entity.kind}:${entity.id}`);
+    if (row === undefined) {
+      throw remoteEffectMismatch(settled, `publishes no ${entity.kind} ${JSON.stringify(entity.id)} row`, {
+        missing_entity: { kind: entity.kind, id: entity.id },
       });
+    }
+    if (!samePortableCatalogRow(row, portableCatalogRow(entity))) {
+      throw remoteEffectMismatch(
+        settled,
+        `publishes ${entity.kind} ${JSON.stringify(entity.id)} with different portable content than the reviewed delta`,
+        { mismatched_entity: { kind: entity.kind, id: entity.id } },
+      );
+    }
+  }
+  for (const link of delta.links ?? []) {
+    const desired = portableCatalogLink(link);
+    if (!links.some((row) => samePortableCatalogLink(row, desired))) {
+      throw remoteEffectMismatch(
+        settled,
+        `publishes no ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ${link.to.kind} ` +
+          `${JSON.stringify(link.to.id)} link`,
+        {
+          missing_link: {
+            from: { kind: link.from.kind, id: link.from.id },
+            relation: link.relation,
+            to: { kind: link.to.kind, id: link.to.id },
+          },
+        },
+      );
     }
   }
   return {
     catalogRevision: 0,
     entities: delta.entities.map((entity) => {
-      const row = published.get(`${entity.kind}:${entity.id}`);
-      if (row === undefined) {
-        throw new StoreError(
-          "remote.effect-mismatch",
-          `the confirmed provider effect publishes no ${entity.kind} ${JSON.stringify(entity.id)} row, so the reviewed ` +
-            `registration's business outcome never landed; the execution binding is not written from a guessed identity. ` +
-            `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, ` +
-            `then publish the reviewed delta with a NEW registration under a new operation id \u2014 it appends to the confirmed ` +
-            `journal, and the settled effect is never re-sent.`,
-          { missing_entity: { kind: entity.kind, id: entity.id } },
-        );
-      }
-      return { reviewed: { kind: entity.kind, id: entity.id }, published: { kind: row.kind, id: row.id, revision: row.revision } };
+      const row = rows.get(`${entity.kind}:${entity.id}`) as Record<string, unknown>;
+      return {
+        reviewed: { kind: entity.kind, id: entity.id },
+        published: {
+          kind: entity.kind,
+          id: entity.id,
+          revision: typeof row.revision === "number" ? row.revision : 1,
+        },
+      };
     }),
   };
 }
