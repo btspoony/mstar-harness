@@ -87,6 +87,13 @@ function ctx(name: string) {
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
     cwd: checkoutRoot,
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
+    { cwd: checkoutRoot },
+  );
   writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(checkoutRoot, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -793,6 +800,9 @@ async function liveAuthority(name: string): Promise<LiveAuthority> {
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
   git(["remote", "add", "origin", `https://github.com/acme/${basename(root)}.git`], root);
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  git(["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`], root);
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   const workflowId = LIVE_WORKFLOW_ID;

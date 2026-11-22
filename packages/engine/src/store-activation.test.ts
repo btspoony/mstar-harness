@@ -2965,6 +2965,12 @@ describe("repository backup pair", () => {
 function originCheckout(name: string, origin: string): Fixture {
   const fixture = repoWorkspace(name);
   execFileSync("git", ["remote", "add", "origin", origin], { cwd: fixture.checkout, stdio: ["ignore", "pipe", "pipe"] });
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${fixture.checkout}.insteadOf`, origin], {
+    cwd: fixture.checkout,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   // note: The repository identity comes from the ORIGIN; the checkout only declares its mode.
   writeFileSync(join(fixture.checkout, ".mstarc"), "[collaboration]\nmode=local\n");
   return fixture;

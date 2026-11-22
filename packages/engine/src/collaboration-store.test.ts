@@ -120,6 +120,9 @@ function makeRepo(origin: string): string {
   git(dir, "config", "user.name", "Collaboration Store Test");
   git(dir, "config", "user.email", "store@example.test");
   git(dir, "config", "remote.origin.url", origin);
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  git(dir, "config", `url.${dir}.insteadOf`, origin);
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   return dir;
 }
@@ -1295,12 +1298,10 @@ describe("collaboration host authority", () => {
     }
 
     // invariant: A checkout recorded against a remote selector never drifts onto the local
-    // rows: the domain gate refuses before any admission opens them.
+    // rows: a live-confirmed absence of that recorded selector refuses the resolution before
+    // any admission can open them.
     writeFileSync(bindingFile, remoteBinding());
-    const location = locationAt(repo);
-    await expect(assertControlCheckoutScope(context, location)).rejects.toMatchObject({
-      code: "collaboration.stale-binding",
-    });
+    expect(() => locationAt(repo)).toThrow("collaboration.stale-binding");
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });

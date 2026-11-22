@@ -70,6 +70,12 @@ function workspace(name: string, originSlug = name): { root: string; harness: st
   const root = realpathSync(mkdtempSync(join(ROOT, name)));
   execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${originSlug}.git`], {
+    cwd: root,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });

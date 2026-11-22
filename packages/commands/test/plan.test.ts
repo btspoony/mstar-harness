@@ -328,6 +328,9 @@ async function residualFixture(
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: root });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${name}.git`], { cwd: root });
   writeFileSync(path.join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = path.join(root, ".mstar");
   mkdirSync(path.join(harness, "plans"), { recursive: true });

@@ -21,6 +21,7 @@ import {
   withCollaborationWrite,
   writeCollaborationBinding,
   PUSH_DIRECTION,
+  normalizeRepoRemote,
   type ProviderItem,
   type StoreDb,
 } from "@mstar-harness/engine";
@@ -103,8 +104,17 @@ async function fixture(
   const repoRoot = join(dir, "repo");
   mkdirSync(repoRoot, { recursive: true });
   git(repoRoot, ["init", "-q"]);
-  const repo = REPO_PREFIX + "-" + basename(dir);
-  git(repoRoot, ["remote", "add", "origin", "git@github.com:" + repo + ".git"]);
+  const canonical = "git@github.com:" + REPO_PREFIX + "-" + basename(dir) + ".git";
+  git(repoRoot, ["remote", "add", "origin", canonical]);
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  git(repoRoot, ["config", `url.${repoRoot}.insteadOf`, canonical]);
+  // note: The mirror derives its repository identity from `get-url`, which applies that rewrite;
+  // the fixture's markers and ledger rows must carry the same value the command stamps.
+  const repo = normalizeRepoRemote(execFileSync("git", ["-C", repoRoot, "remote", "get-url", "origin"], {
+    encoding: "utf8",
+  }).trim());
+  if (repo === null) throw new Error("fixture origin must name a repository");
   git(repoRoot, ["config", "user.name", "Ada Lovelace"]);
   git(repoRoot, ["config", "user.email", options.email ?? "ada@example.com"]);
   writeFileSync(

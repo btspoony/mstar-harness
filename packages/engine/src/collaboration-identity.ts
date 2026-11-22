@@ -68,12 +68,17 @@ export type CollaborationSelector = Readonly<{
   cutover: CollaborationSelectorCutover | null;
 }>;
 
-/** invariant: What a checked selector commit selected: its object ID, generation, phase and projects. */
+/**
+ * invariant: What a checked selector commit selected: its object ID, generation, phase, projects,
+ * and the validated predecessor/cutover evidence a draining or lineage consumer reconciles with.
+ */
 export type CollaborationSelection = Readonly<{
   commit: string;
   generation: number;
   phase: "active" | "draining";
   projects: readonly CollaborationSelectorProject[];
+  previous: CollaborationSelectorPrevious | null;
+  cutover: CollaborationSelectorCutover | null;
 }>;
 
 export type CollaborationLocation = Readonly<{
@@ -326,12 +331,9 @@ function selectorPayload(mainRoot: string, commit: string): unknown {
   try {
     gitProbe(mainRoot, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", commit]);
   } catch {
-    // why: A clone usually holds the object already; only the transfer is optional, the proof is not.
-    try {
-      gitProbe(mainRoot, ["cat-file", "-e", `${commit}^{commit}`]);
-    } catch {
-      selectorUnavailable(`Git could not fetch selector commit ${commit} from the origin remote`);
-    }
+    // invariant: A locally held object is not proof the origin's commit was fetched; the
+    // transfer is the proof, so a failed fetch refuses instead of reading held objects.
+    selectorUnavailable(`Git could not fetch selector commit ${commit} from the origin remote`);
   }
   let text: string;
   try {
@@ -352,11 +354,20 @@ function nonEmpty(value: unknown): value is string {
 }
 
 /**
+ * note: An immutable Linear object ID: a canonical lowercase UUID. Labels (`Engineering`),
+ * issue identifiers (`ENG-42`) and every other spelling are not identities.
+ */
+const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** note: Canonical SHA-256: lowercase hex, exactly 64 characters, as the cutover contract requires. */
+const CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
+
+/**
  * invariant: Provider identifiers are the immutable Linear object IDs, never a label, a URL or
  * an issue identifier such as `ENG-42`.
  */
 function providerId(value: unknown): value is string {
-  return nonEmpty(value) && !value.includes("://") && !/^[A-Z][A-Z0-9]*-\d+$/.test(value);
+  return typeof value === "string" && LINEAR_ID.test(value);
 }
 
 /** note: The payload's positive safe integer fields: generations and the private epoch. */
@@ -439,7 +450,9 @@ function parseSelectorCutover(
   if (!Array.isArray(cutover.pendingOperationIds) || !cutover.pendingOperationIds.every(nonEmpty)) {
     selectorUnavailable("The selector's cutover pendingOperationIds is not a list of operation ids");
   }
-  if (!nonEmpty(cutover.verifiedTargetDigest)) selectorUnavailable("The selector's cutover has no verified target digest");
+  if (typeof cutover.verifiedTargetDigest !== "string" || !CANONICAL_SHA256.test(cutover.verifiedTargetDigest)) {
+    selectorUnavailable("The selector's cutover verified target digest is not a canonical SHA-256");
+  }
   if (phase === "active" && cutover.sourceFenced !== true) {
     selectorStale("The selector is active but its cutover is not source-fenced");
   }
@@ -501,31 +514,35 @@ function remoteBindingRecorded(context: StoreContext): boolean {
 }
 
 /**
- * invariant: Remote selection: the origin's live selector lookup, its fetched commit, a second
- * lookup proving that commit is still the ref's, and the payload read from that commit.
+ * invariant: Selection for any origin-backed checkout: the origin's live selector lookup, its
+ * fetched commit, a second lookup proving that commit is still the ref's, and the payload read
+ * from that commit. `null` is a live-confirmed absence, never a failed check.
  */
-function resolveRemoteSelection(
+function resolvePublishedSelector(
   context: StoreContext,
   mainRoot: string,
-  origin: string | null,
   repoKey: string,
-): CollaborationSelection {
-  if (origin === null) {
-    // invariant: An origin-less scope stays local/mirror: remote needs an origin to publish a selector.
-    selectorUnavailable("This repository has no origin remote, so it cannot enroll in remote collaboration");
-  }
+  mode: CollaborationMode,
+): CollaborationSelection | null {
   const commit = lookupSelector(mainRoot);
   if (commit === null) {
     if (remoteBindingRecorded(context)) {
       selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
     }
-    selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
+    return null;
   }
-  const selector = parseSelector(selectorPayload(mainRoot, commit), repoKey, "remote");
+  const selector = parseSelector(selectorPayload(mainRoot, commit), repoKey, mode);
   // invariant: The commit is read only if the ref still names it: a selector that moved mid-read selects nothing.
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  return { commit, generation: selector.generation, phase: selector.phase, projects: selector.projects };
+  return {
+    commit,
+    generation: selector.generation,
+    phase: selector.phase,
+    projects: selector.projects,
+    previous: selector.previous,
+    cutover: selector.cutover,
+  };
 }
 
 function resolveMode(raw: string | undefined): CollaborationMode {
@@ -595,8 +612,10 @@ function encodeSegment(segment: string): string {
 
 /**
  * Canonical collaboration identity, explicit mode and user-level database path
- * for this control harness. A `remote` mode additionally proves its selection
- * from the origin's protected selector ref. Throws `CollaborationIdentityError`
+ * for this control harness. Every origin-backed checkout proves its selection
+ * from the origin's protected selector ref first: a local/mirror checkout keeps
+ * its own lane only when that live lookup confirms no selector. A `remote` mode
+ * additionally returns the checked selection. Throws `CollaborationIdentityError`
  * on an unresolved identity or mode, an unchecked selector, or a selector that
  * disagrees with this checkout.
  */
@@ -609,8 +628,25 @@ export function resolveCollaborationLocation(
   const config = readConfig(mainRoot);
   const identity = canonicalIdentity(mainRoot, config.repoId);
   const mode = resolveMode(config.mode);
-  const selection =
-    mode === "remote" ? resolveRemoteSelection(context, mainRoot, identity.origin, identity.repoKey) : undefined;
+  let selection: CollaborationSelection | undefined;
+  if (identity.origin === null) {
+    // invariant: An origin-less scope stays local/mirror: remote needs an origin to publish a selector.
+    if (mode === "remote") {
+      selectorUnavailable("This repository has no origin remote, so it cannot enroll in remote collaboration");
+    }
+  } else {
+    const published = resolvePublishedSelector(context, mainRoot, identity.repoKey, mode);
+    if (mode === "remote") {
+      if (published === null) selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
+      selection = published;
+    } else if (published !== null && published.phase === "draining") {
+      // invariant: A draining selector stops old writers: a local/mirror lane must not write
+      // alongside a generation that is still being reconciled into its successor.
+      selectorStale(
+        `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
+      );
+    }
+  }
   const home = options.userHome ?? homedir();
   return {
     repoKey: identity.repoKey,

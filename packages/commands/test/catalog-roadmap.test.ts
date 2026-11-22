@@ -58,6 +58,12 @@ function checkout(name: string, originSlug = name): { cwd: string; harness: stri
   mkdirSync(cwd, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${cwd}.insteadOf`, `https://github.com/acme/${originSlug}.git`], {
+    cwd,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   writeFileSync(join(cwd, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(cwd, ".mstar");
   mkdirSync(harness, { recursive: true });

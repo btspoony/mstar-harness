@@ -44,14 +44,25 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function makeRepo(origin?: string | readonly string[], mstarc?: string): string {
+/**
+ * note: One shared empty bare origin. Identity fixtures name synthetic origins that would
+ * otherwise need a network transport now that every origin-backed checkout proves absence
+ * with a live selector lookup; Git config rewrites that URL to this local repository.
+ */
+const EMPTY_ORIGIN = join(ROOT, `empty-origin-${sequence++}.git`);
+git(ROOT, "init", "-q", "--bare", EMPTY_ORIGIN);
+
+function makeRepo(origin?: string | readonly string[], mstarc?: string, routed = true): string {
   const dir = join(ROOT, `repo-${sequence++}`);
   mkdirSync(dir, { recursive: true });
   git(dir, "init", "-q");
   git(dir, "config", "user.name", "Collaboration Identity Test");
   git(dir, "config", "user.email", "identity@example.test");
   if (origin !== undefined) {
-    for (const url of typeof origin === "string" ? [origin] : origin) git(dir, "config", "--add", "remote.origin.url", url);
+    for (const url of typeof origin === "string" ? [origin] : origin) {
+      git(dir, "config", "--add", "remote.origin.url", url);
+      if (routed) git(dir, "config", `url.${EMPTY_ORIGIN}.insteadOf`, url);
+    }
   }
   if (mstarc !== undefined) writeFileSync(join(dir, ".mstarc"), mstarc);
   return dir;
@@ -437,14 +448,17 @@ const SELECTED_PROJECT = {
 function makeSelectorOrigin(): { bare: string; publish(payload: unknown | string): string } {
   const bare = join(ROOT, `selector-origin-${sequence++}.git`);
   git(ROOT, "init", "-q", "--bare", bare);
+  let publisher: string | undefined;
   return {
     bare,
     publish(payload) {
-      const publisher = join(ROOT, `selector-publisher-${sequence++}`);
-      mkdirSync(publisher, { recursive: true });
-      git(publisher, "init", "-q");
-      git(publisher, "config", "user.name", "Selector Test");
-      git(publisher, "config", "user.email", "selector@example.test");
+      if (publisher === undefined) {
+        publisher = join(ROOT, `selector-publisher-${sequence++}`);
+        mkdirSync(publisher, { recursive: true });
+        git(publisher, "init", "-q");
+        git(publisher, "config", "user.name", "Selector Test");
+        git(publisher, "config", "user.email", "selector@example.test");
+      }
       writeFileSync(
         join(publisher, "authority.json"),
         typeof payload === "string" ? payload : `${JSON.stringify(payload, null, 2)}\n`,
@@ -476,7 +490,7 @@ function selectorPayload(overrides: Record<string, unknown> = {}): Record<string
 
 /** note: A checkout whose canonical origin is routed to the bare fixture. */
 function remoteRepo(bare: string, mode: "local" | "mirror" | "remote" = "remote"): string {
-  const repo = makeRepo(CANONICAL_ORIGIN, `[collaboration]\nmode=${mode}\n`);
+  const repo = makeRepo(CANONICAL_ORIGIN, `[collaboration]\nmode=${mode}\n`, false);
   git(repo, "config", `url.${bare}.insteadOf`, CANONICAL_ORIGIN);
   return repo;
 }
@@ -527,12 +541,14 @@ describe("remote selector resolution", () => {
       generation: 4,
       phase: "active",
       projects: [SELECTED_PROJECT],
+      previous: null,
+      cutover: null,
     });
   });
 
   test("an unavailable origin refuses remote selection, never reads it as absence", () => {
     const unreachable = refusal(() =>
-      resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=remote\n")),
+      resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=remote\n", false)),
     );
     expect(unreachable.code).toBe("remote.selector-unavailable");
     expect(unreachable.message).toContain("could not check");
@@ -563,6 +579,10 @@ describe("remote selector resolution", () => {
       selectorPayload({ generation: 0 }),
       selectorPayload({ projects: [] }),
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, projectId: "ENG-42" }] }),
+      // invariant: A label or a non-UUID provider spelling is not an immutable Linear ID.
+      selectorPayload({ projects: [{ ...SELECTED_PROJECT, teamId: "Engineering" }] }),
+      selectorPayload({ projects: [{ ...SELECTED_PROJECT, workspaceId: "eng-42" }] }),
+      selectorPayload({ projects: [{ ...SELECTED_PROJECT, writerId: "writer-one" }] }),
       selectorPayload({ projects: [SELECTED_PROJECT, SELECTED_PROJECT] }),
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, journalIssueId: "https://linear.app/issue" }] }),
       selectorPayload({ previous: { selectorCommit: "a".repeat(40), generation: 4, mode: "local" } }),
@@ -575,21 +595,25 @@ describe("remote selector resolution", () => {
     origin.publish("{not json");
     expect(refusal(() => resolveAt(repo)).code).toBe("remote.selector-unavailable");
 
-    // invariant: An active generation is published only with a source-fenced cutover.
-    origin.publish(
-      selectorPayload({
-        previous: { selectorCommit: "a".repeat(40), generation: 2, mode: "local" },
-        cutover: {
-          operator: "ops-engineer",
-          reviewedAt: "2026-11-21T00:00:00Z",
-          sourceFenced: false,
-          pendingOperationIds: [],
-          verifiedTargetDigest: "d".repeat(64),
-        },
-      }),
-    );
+    // invariant: An active generation is published only with a source-fenced cutover and
+    // a canonical SHA-256 target digest.
+    const transition = (digest: string, fenced = true) => ({
+      previous: { selectorCommit: "a".repeat(40), generation: 2, mode: "local" },
+      cutover: {
+        operator: "ops-engineer",
+        reviewedAt: "2026-11-21T00:00:00Z",
+        sourceFenced: fenced,
+        pendingOperationIds: [],
+        verifiedTargetDigest: digest,
+      },
+    });
+    for (const digest of ["x", "D".repeat(64), "d".repeat(63), "d".repeat(65)]) {
+      origin.publish(selectorPayload(transition(digest)));
+      expect(refusal(() => resolveAt(repo)).code).toBe("remote.selector-unavailable");
+    }
+    origin.publish(selectorPayload(transition("d".repeat(64), false)));
     expect(refusal(() => resolveAt(repo)).code).toBe("collaboration.stale-binding");
-  });
+  }, 30_000);
 
   test("a recorded remote binding makes selector absence a stale binding", () => {
     const origin = makeSelectorOrigin();
@@ -650,13 +674,83 @@ describe("remote selector resolution", () => {
     });
   });
 
-  test("local and mirror resolution never consults the selector", () => {
+  test("a failed fetch refuses even when the selector object is already present", () => {
+    const origin = makeSelectorOrigin();
+    const commit = origin.publish(selectorPayload({ generation: 2 }));
+    const repo = remoteRepo(origin.bare);
+    // note: A first resolution transfers the object, so the refusal below cannot be blamed
+    // on a missing local object.
+    expect(resolveAt(repo).selection?.commit).toBe(commit);
+    git(repo, "cat-file", "-e", `${commit}^{commit}`);
+    // note: `fetch.parallel` is read only by `git fetch`, so the lookup still answers and the
+    // transfer itself is the failure under test.
+    git(repo, "config", "fetch.parallel", "bogus");
+    const result = refusal(() => resolveAt(repo));
+    expect(result.code).toBe("remote.selector-unavailable");
+    expect(result.message).toContain("fetch");
+  });
+
+  test("a draining selection retains its validated predecessor and cutover", () => {
+    const origin = makeSelectorOrigin();
+    const previous = { selectorCommit: "a".repeat(40), generation: 6, mode: "remote" } as const;
+    const cutover = {
+      operator: "ops-engineer",
+      reviewedAt: "2026-11-21T00:00:00Z",
+      sourceFenced: false,
+      pendingOperationIds: ["operation-one"],
+      verifiedTargetDigest: "d".repeat(64),
+    } as const;
+    const commit = origin.publish(selectorPayload({ generation: 7, phase: "draining", previous, cutover }));
+    const location = resolveAt(remoteRepo(origin.bare));
+    expect(location.selection).toEqual({
+      commit,
+      generation: 7,
+      phase: "draining",
+      projects: [SELECTED_PROJECT],
+      previous,
+      cutover,
+    });
+  });
+
+  test("an origin-backed local or mirror checkout refuses a published remote or draining selector", () => {
     const origin = makeSelectorOrigin();
     origin.publish(selectorPayload({ generation: 7 }));
+    for (const mode of ["local", "mirror"] as const) {
+      expect(refusal(() => resolveAt(remoteRepo(origin.bare, mode))).code).toBe("collaboration.stale-binding");
+    }
+
+    // invariant: A draining generation stops old writers even when its mode matches the checkout.
+    origin.publish(
+      selectorPayload({
+        generation: 8,
+        mode: "local",
+        projects: [],
+        phase: "draining",
+        previous: { selectorCommit: "a".repeat(40), generation: 7, mode: "local" },
+        cutover: {
+          operator: "ops-engineer",
+          reviewedAt: "2026-11-21T00:00:00Z",
+          sourceFenced: false,
+          pendingOperationIds: ["operation-one"],
+          verifiedTargetDigest: "d".repeat(64),
+        },
+      }),
+    );
+    expect(refusal(() => resolveAt(remoteRepo(origin.bare, "local"))).code).toBe("collaboration.stale-binding");
+  });
+
+  test("an origin-backed local or mirror lane continues only after a live lookup confirms absence", () => {
+    const origin = makeSelectorOrigin();
     for (const mode of ["local", "mirror"] as const) {
       const location = resolveAt(remoteRepo(origin.bare, mode));
       expect(location.mode).toBe(mode);
       expect("selection" in location).toBe(false);
     }
+
+    // invariant: An unchecked origin is never read as absence, even for a local/mirror lane.
+    const unreachable = refusal(() =>
+      resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=local\n", false)),
+    );
+    expect(unreachable.code).toBe("remote.selector-unavailable");
   });
 });

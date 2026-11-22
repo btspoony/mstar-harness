@@ -116,6 +116,13 @@ async function workspace(name: string): Promise<Fixture> {
     cwd: dir,
     stdio: ["ignore", "ignore", "ignore"],
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: dir, stdio: ["ignore", "ignore", "ignore"] },
+  );
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
@@ -790,6 +797,10 @@ describe("read envelope and transaction", () => {
       cwd: dir,
       stdio: ["ignore", "ignore", "ignore"],
     });
+    execFileSync("git", ["config", `url.${dir}.insteadOf`, "https://github.com/acme/no-store.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
     writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
     mkdirSync(join(dir, ".mstar"), { recursive: true });
     const context: StoreContext = { harnessDir: join(dir, ".mstar") };
@@ -1023,6 +1034,10 @@ describe("collaboration rollup snapshot", () => {
     const dir = mkdtempSync(join(ROOT, "rollup-missing-"));
     execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
     execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/rollup-missing.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    execFileSync("git", ["config", `url.${dir}.insteadOf`, "https://github.com/acme/rollup-missing.git"], {
       cwd: dir,
       stdio: ["ignore", "ignore", "ignore"],
     });

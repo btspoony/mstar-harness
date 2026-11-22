@@ -240,6 +240,11 @@ describe("shared host-health helpers", () => {
     git("add", "README.md");
     git("commit", "--quiet", "-m", "fixture");
     git("remote", "add", "origin", "https://github.com/Acme/Repo.git");
+    // note: Every origin-backed checkout now proves selector absence with a live lookup;
+    // route the synthetic origin to an empty local bare instead of a network transport.
+    const emptyOrigin = path.join(root, "empty-origin.git");
+    execFileSync("git", ["init", "--quiet", "--bare", emptyOrigin], { stdio: ["ignore", "pipe", "pipe"] });
+    git("config", `url.${emptyOrigin}.insteadOf`, "https://github.com/Acme/Repo.git");
     mkdirSync(path.join(main, ".mstar"), { recursive: true });
     writeText(main, ".mstarc", "[collaboration]\nmode=local\n");
     git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
