@@ -561,10 +561,50 @@ function transitionEvidence(value: unknown, path: string): Record<string, unknow
   return evidence;
 }
 
+/**
+ * invariant: An imported terminal transition carries the reviewed legacy register
+ * row as its recorded evidence. Its portable form is that row's business identity
+ * and closure labels, with camelCase names matching the snapshot vocabulary. A
+ * credential, a raw error, a repository or checkout path, a detail/document
+ * reference, free-form closure evidence, a supersession pointer or any other key
+ * is excluded rather than persisted; the lossless row stays in the local
+ * provenance record, which the snapshot does not replace.
+ */
+const IMPORTED_EVIDENCE_FIELDS = [
+  ["legacyId", "id"],
+  ["title", "title"],
+  ["severity", "severity"],
+  ["scope", "scope"],
+  ["decision", "decision"],
+  ["owner", "owner"],
+  ["target", "target"],
+  ["tracking", "tracking"],
+  ["lifecycle", "lifecycle"],
+  ["closedAt", "closed_at"],
+  ["closureNote", "closure_note"],
+  ["sourcePlan", "source_plan"],
+  ["registeredAt", "registered_at"],
+] as const;
+
+function importedTransitionEvidence(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  const evidence: Record<string, unknown> = {};
+  for (const [portable, legacy] of IMPORTED_EVIDENCE_FIELDS) {
+    // note: The portable document is accepted again, so an export of a stored snapshot round-trips.
+    if (!(legacy in body) && !(portable in body)) continue;
+    evidence[portable] = nullableString(legacy in body ? body[legacy] : body[portable], `${path}.${portable}`);
+  }
+  if (Object.keys(evidence).length === 0) {
+    invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
+  }
+  return evidence;
+}
+
 function transition(value: unknown, path: string): Record<string, unknown> {
   const body = record(value, path);
   allowOnly(body, path, TRANSITION_KEYS);
   if (!("evidence" in body)) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
+  const imported = boolean(body.imported, `${path}.imported`);
   return {
     eventId: eventId(body.eventId, `${path}.eventId`),
     fromDisposition: oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`),
@@ -573,9 +613,11 @@ function transition(value: unknown, path: string): Record<string, unknown> {
     occurredAt: nullableInstant(body.occurredAt, `${path}.occurredAt`),
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
     reason: text(body.reason, `${path}.reason`),
-    evidence: transitionEvidence(body.evidence, `${path}.evidence`),
+    evidence: imported
+      ? importedTransitionEvidence(body.evidence, `${path}.evidence`)
+      : transitionEvidence(body.evidence, `${path}.evidence`),
     issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
-    imported: boolean(body.imported, `${path}.imported`),
+    imported,
   };
 }
 
@@ -1336,22 +1378,41 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
 }
 
 /**
- * invariant: A check never rewrites a binding's evidence at an older or tied host
- * time: only a strictly later check, or a byte-identical replay, is admitted. A
- * conflicting tie therefore can never replace the recorded one, so an equal
- * timestamp cannot reverse a revocation or resurrect a stale verification.
+ * invariant: A check never rewrites a binding's evidence at an older host time, and
+ * a conflicting tie cannot replace the recorded one. Two asymmetric ties are
+ * admitted: a byte-identical replay, and an addressed negative check tied with a
+ * recorded positive - a revocation invalidates serving even in the same
+ * millisecond. The reverse never holds: a tied positive cannot reverse a recorded
+ * negative and restore the binding.
  */
 function assertCheckAdvances(projectId: string, check: ScopeCheck, recorded: Record<string, unknown>): void {
   if (typeof recorded.verified_at !== "string") return;
   const prior = Date.parse(recorded.verified_at);
   const current = Date.parse(check.checkedAt);
-  const identical = recorded.verification_json === JSON.stringify(serializeCheck(check));
-  if (current < prior || (current === prior && !identical)) {
-    throw new StoreError(
-      "collaboration.observation-stale",
-      `The check for ${projectId} is dated ${check.checkedAt}, which does not advance the binding's recorded ` +
-        `verification (${recorded.verified_at}); only a later check or an identical replay is accepted. Nothing was written.`,
-    );
+  if (current > prior) return;
+  if (current === prior) {
+    if (recorded.verification_json === JSON.stringify(serializeCheck(check))) return;
+    if (check.outcome.kind !== "verified" && recordedOutcome(recorded) === "verified") return;
+  }
+  throw new StoreError(
+    "collaboration.observation-stale",
+    `The check for ${projectId} is dated ${check.checkedAt}, which does not advance the binding's recorded ` +
+      `verification (${recorded.verified_at}); only a later check, an identical replay, or a revocation at the ` +
+      `same instant is accepted. Nothing was written.`,
+  );
+}
+
+/** note: The recorded check's outcome kind; an unreadable document reads as no outcome. */
+function recordedOutcome(recorded: Record<string, unknown>): string | null {
+  const json = recorded.verification_json;
+  if (typeof json !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return isRecord(parsed) && isRecord(parsed.outcome) && typeof parsed.outcome.kind === "string"
+      ? parsed.outcome.kind
+      : null;
+  } catch {
+    return null;
   }
 }
 

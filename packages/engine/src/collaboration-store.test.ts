@@ -56,6 +56,7 @@ import {
   type ScopeCheck,
 } from "./collaboration-remote.js";
 import { MIGRATIONS, SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, openStore, type StoreContext } from "./store-db.js";
+import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
@@ -2256,21 +2257,42 @@ describe("remote observation cache", () => {
     });
     expect(verified.writer_id).toBe(SELECTED_PROJECT.writerId);
 
-    // invariant: A denial tied with the recorded positive check cannot replace it: only a later
-    // check advances the evidence, so the verification still serves.
+    // invariant: A revocation tied with the recorded positive check wins the tie: serving stops in
+    // the same millisecond and the binding's evidence becomes the negative check.
+    const tiedDenial = positiveCheck({ checkedAt: check.checkedAt, outcome: { kind: "denied" } });
     await expect(
       ingestRemoteObservation(context, {
-        ...observation(positiveCheck({ checkedAt: check.checkedAt, outcome: { kind: "denied" } }), {
-          expectRevision: 1,
-          snapshot: null,
-        }),
+        ...observation(tiedDenial, { expectRevision: 1, snapshot: null }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).rejects.toMatchObject({ code: "remote.denied" });
+    expect(bindingEvidence(location.dbPath)).toMatchObject({ verified_at: tiedDenial.checkedAt, writer_id: null });
+    expect(await readRemoteStatus(context)).toMatchObject({
+      available: false,
+      projects: [{ outcome: "denied", verifiedAt: tiedDenial.checkedAt, completeness: "unavailable" }],
+    });
+
+    // invariant: The reverse never holds - a positive tied with that denial restores nothing,
+    // through observe or a bind replay.
+    await expect(
+      ingestRemoteObservation(context, {
+        ...observation(positiveCheck({ checkedAt: tiedDenial.checkedAt }), { expectRevision: 2 }),
         selectorCommit: commit,
         generation: 3,
       }),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+    await expect(
+      bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation: 3,
+        checks: [positiveCheck({ checkedAt: tiedDenial.checkedAt })],
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
     expect(await readRemoteStatus(context)).toMatchObject({
-      available: true,
-      projects: [{ outcome: "verified", verifiedAt: check.checkedAt }],
+      available: false,
+      projects: [{ completeness: "unavailable", outcome: "denied" }],
     });
 
     // note: A revocation replaces the binding's evidence, so no reader sees the old verification.
@@ -2382,6 +2404,7 @@ describe("remote observation cache", () => {
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { token: "leak" } }] }),
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { references: ["x"], headers: {} } }] }),
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { references: [{}] } }] }),
+      withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence: { reason: "fixed" } }] }),
       withSubject({ relations: [{ relation: "related", target: "I-000001" }] }),
       withSubject({ provenance: [{}] }),
       withSubject({ projectMoves: [{ fromProject: "a", toProject: "b" }] }),
@@ -2413,8 +2436,9 @@ describe("remote observation cache", () => {
       transitions: [expect.objectContaining({ imported: false, evidence: { references: ["review-fixture"] } })],
     });
 
-    // invariant: Imported history is preserved through the allowlist on both collections, and the
-    // portable transition evidence is stored exactly as validated.
+    // invariant: Imported history keeps its flag on both collections, and its transition
+    // evidence is the reviewed legacy row's portable projection: the business fields survive,
+    // a credential or a checkout path never enters the cache.
     const importedSubject = {
       ...subject,
       occurrences: [{ ...subject.occurrences[0]!, imported: true }],
@@ -2423,11 +2447,13 @@ describe("remote observation cache", () => {
           ...subject.transitions[0]!,
           imported: true,
           evidence: {
-            reason: "fixed",
-            scope: "issue",
-            references: ["review-fixture"],
-            canonicalIssueId: null,
-            alignmentRef: null,
+            id: "R9",
+            title: "Imported finding",
+            lifecycle: "resolved",
+            closed_at: "2026-09-02",
+            closure_note: null,
+            token: "leak",
+            detail_doc: "/home/operator/notes.md",
           },
         },
       ],
@@ -2448,14 +2474,127 @@ describe("remote observation cache", () => {
         expect.objectContaining({
           imported: true,
           evidence: {
-            reason: "fixed",
-            scope: "issue",
-            references: ["review-fixture"],
-            canonicalIssueId: null,
-            alignmentRef: null,
+            legacyId: "R9",
+            title: "Imported finding",
+            lifecycle: "resolved",
+            closedAt: "2026-09-02",
+            closureNote: null,
           },
         }),
       ],
+    });
+  });
+
+  test("a real imported terminal transition round-trips as portable evidence", async () => {
+    const fixture = remoteFixture("imported-evidence");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+
+    // note: A real reviewed register import records the whole legacy row as the imported
+    // transition's evidence; the boundary must keep its business fields and drop the rest.
+    const source = makeRepo("https://example.test/fixture/imported-evidence.git");
+    const sourceContext = contextAt(source);
+    const register = join(sourceContext.harnessDir, "projects", "_default", "residuals.json");
+    mkdirSync(dirname(register), { recursive: true });
+    writeFileSync(
+      register,
+      JSON.stringify({
+        entries: {
+          "plan-import": [
+            {
+              id: "R1",
+              title: "Fix the flaky gate",
+              severity: "high",
+              source: "qc1.md",
+              scope: "plan-scope",
+              decision: "accept",
+              owner: "pm",
+              target: "next-iteration",
+              tracking: "issue",
+              source_plan: "plan-import",
+              registered_at: "2026-09-01",
+              lifecycle: "resolved",
+              closed_at: "2026-09-02",
+              closure_note: "fixed",
+              detail_doc: "/Users/operator/notes.md",
+              closure_evidence: { token: "leak" },
+            },
+          ],
+        },
+      }),
+    );
+    await applyStoreMigration(sourceContext, await planStoreMigration(sourceContext));
+    const sourceDb = new DatabaseSync(locationAt(source).dbPath);
+    let legacyEvidence: Record<string, unknown>;
+    try {
+      const row = sourceDb.prepare("select evidence_json from issue_transitions where imported = 1").get() as
+        | { evidence_json: string }
+        | null;
+      if (row === null) throw new Error("the imported lane recorded no terminal transition");
+      legacyEvidence = JSON.parse(row.evidence_json) as Record<string, unknown>;
+    } finally {
+      sourceDb.close();
+    }
+    // note: The imported row carries the reviewed record, including its non-portable content.
+    expect(legacyEvidence).toMatchObject({
+      id: "R1",
+      detail_doc: "/Users/operator/notes.md",
+      closure_evidence: { token: "leak" },
+    });
+
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const subject = base.issues[0]!.mstar!;
+    await ingestRemoteObservation(context, {
+      ...observation(check, {
+        snapshot: {
+          ...base,
+          issues: [
+            {
+              ...base.issues[0]!,
+              mstar: {
+                ...subject,
+                occurrences: [{ ...subject.occurrences[0]!, imported: true }],
+                transitions: [{ ...subject.transitions[0]!, imported: true, evidence: legacyEvidence }],
+              },
+            },
+            base.issues[1]!,
+          ],
+        },
+      }),
+      selectorCommit: commit,
+      generation: 3,
+    });
+
+    const db = new DatabaseSync(location.dbPath);
+    let evidence: unknown;
+    try {
+      const row = db.prepare("select snapshot_json from remote_observations").get() as { snapshot_json: string | null };
+      const snapshot = JSON.parse(String(row.snapshot_json)) as {
+        issues: Array<{ mstar: { transitions: Array<{ imported: boolean; evidence: unknown }> } | null }>;
+      };
+      evidence = snapshot.issues[0]!.mstar!.transitions[0]!.evidence;
+    } finally {
+      db.close();
+    }
+    // invariant: Exactly the portable business projection round-trips: no legacy key, credential
+    // or checkout path from the imported row reaches the cache.
+    expect(evidence).toEqual({
+      legacyId: "R1",
+      title: "Fix the flaky gate",
+      severity: "high",
+      scope: "plan-scope",
+      decision: "accept",
+      owner: "pm",
+      target: "next-iteration",
+      tracking: "issue",
+      lifecycle: "resolved",
+      closedAt: "2026-09-02",
+      closureNote: "fixed",
+      sourcePlan: "plan-import",
+      registeredAt: "2026-09-01",
     });
   });
 
