@@ -810,7 +810,15 @@ test("a remote milestone assignment refuses on a stale store revision", async ()
       { operationId, actor: "project-manager", expectedRevision: 1, expectedStoreRevision },
     );
   // note: The ingest left the observed store at revision 1; a stale base refuses.
-  expect((await refusalOf(() => assign("30000000-0000-4000-8000-000000000009", 0))).code).toBe("milestone.revision-conflict");
+  const stale = await refusalOf(() => assign("30000000-0000-4000-8000-000000000009", 0));
+  expect(stale.code).toBe("milestone.revision-conflict");
+  // invariant: The recovery names the command that reads this project's observation revision and
+  // the flag that carries it: a remote write's base is that revision, never a local listing.
+  const details = stale.details;
+  const recovery = details !== null && typeof details === "object" && "recovery" in details ? String(details.recovery) : "";
+  expect(recovery).toContain("mstar store collaboration remote status --harness <abs>");
+  expect(recovery).toContain(`--project ${REMOTE_IDS.projectId}`);
+  expect(recovery).toContain("--expect-store");
   expect((await refusalOf(() => assign("30000000-0000-4000-8000-00000000000a", 7))).code).toBe("milestone.revision-conflict");
   expect(outboxRows(fixture.context)).toHaveLength(0);
   // note: The observed base matches: the assignment enqueues.

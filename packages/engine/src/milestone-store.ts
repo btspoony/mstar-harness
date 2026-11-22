@@ -159,8 +159,9 @@ async function queueMilestoneWrite(
         "milestone.revision-conflict",
         `Project ${projectId}'s observed base is revision ${String(observationRevision)}, not the ` +
           `${String(expectedStoreRevision)} this write was planned against; another write or observation moved it. ` +
-          `Re-read the project revision with \`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, ` +
-          `then retry with a fresh --operation. Nothing was enqueued.`,
+          `Read this project's current observation revision with ` +
+          `\`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, pass it as ` +
+          `--expect-store, then retry with a fresh --operation. Nothing was enqueued.`,
       );
     },
   });

@@ -1078,7 +1078,7 @@ function abandonedRemoteCause(
   return {
     code: "remote.effect-abandoned",
     message:
-      `The provider intent ${named} was abandoned, so the composite can never complete as admitted — but the components ` +
+      `The provider intent ${named} was abandoned, so the composite can never complete as admitted \u2014 but the components ` +
       `${settled} ARE confirmed and durably recorded, and are never re-sent. The reservation is declined without an ` +
       `effect-free claim: inspect the abandonment with \`mstar store collaboration remote outbox-show --harness <abs> ` +
       `--operation ${first.operationId}\`, then recover ONLY the incomplete work.`,

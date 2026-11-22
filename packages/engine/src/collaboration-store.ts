@@ -1146,7 +1146,9 @@ function upgradeRequired(location: CollaborationLocation, found: number): StoreE
   const recovery =
     location.mode === "remote"
       ? `A remote cache is derived observation state and is never upgraded in place: run ` +
-        `"mstar store collaboration remote bind" for this scope, which replaces a pre-v${String(current)} cache ` +
+        `"mstar store collaboration remote bind --harness <abs> --input <file|->" with a verified batch that ` +
+        `proves the current provider scope (its document shape is published by ` +
+        `"mstar schema --command store.collaboration.remote.bind"), which replaces a pre-v${String(current)} cache ` +
         `under the checked selector`
       : `run "mstar store upgrade --operator <name>" once for this scope`;
   return new StoreError(

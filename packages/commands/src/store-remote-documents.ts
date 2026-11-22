@@ -1,14 +1,24 @@
 /**
  * note: The strict JSON document shapes the remote/outbox `--input` flags carry, declared
  * here so `mstar schema --command <id>` publishes them (`payloadSchemas`) and the option
- * help can name the document per verb. These are the TRANSPORT description: the engine's
- * DTO validators stay the runtime authority, and this module never enforces what only
- * the engine can judge (frozen-event equality, capability proof, scope freshness).
+ * help can name the document per verb. This module is the ONE owner of those shapes: the
+ * frozen event, its project/issue subject and every history row are typed members taken from
+ * the engine's own vocabularies, never loose maps, so discovery describes the document the
+ * engine actually accepts. The engine's DTO validators stay the runtime authority, and this
+ * module never enforces what only the engine can judge (frozen-event equality, capability
+ * proof, scope freshness, a semantic key's quality, portable-text fidelity).
  *
  * The descriptor key `inputDocument` deliberately names no input field: the CLI value of
  * `--input` stays a file path (or `-` for stdin), so composition and payload decoding
  * have nothing to reshape and only discovery sees the schema.
  */
+import {
+  ISSUE_DISPOSITIONS,
+  ISSUE_KINDS,
+  ISSUE_PROVENANCE_KINDS,
+  ISSUE_RELATIONS,
+  ISSUE_SEVERITIES,
+} from "@mstar-harness/engine";
 import { z } from "zod";
 
 const gitObjectId = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a Git object id");
@@ -52,23 +62,142 @@ const scopeCheck = z.object({
   outcome: scopeOutcome,
 }).strict();
 
-const subjectRecord = z
-  .record(z.string(), z.unknown())
-  .describe("one history row: its business fields plus a stable event UUID, validated field-by-field by the engine");
+/** `fields`: exactly the contract's domain fields, from the issue module's own vocabularies. */
+const mstarSubjectFields = z.object({
+  title: z.string(),
+  kind: z.enum(ISSUE_KINDS),
+  severity: z.enum(ISSUE_SEVERITIES),
+  disposition: z.enum(ISSUE_DISPOSITIONS),
+  impact: z.string(),
+  acceptance: z.string(),
+  owner: z.string().nullish(),
+  registeredAt: rfc3339.nullish(),
+  closedAt: rfc3339.nullish(),
+  closureNote: z.string().nullish(),
+  createdAt: rfc3339,
+  updatedAt: rfc3339,
+  revision: z.number().int().positive(),
+  milestoneId: z.string().nullish(),
+}).strict();
+
+/** note: One occurrence row: its business fields plus a stable event UUID, never a row id. */
+const occurrenceRecord = z.object({
+  eventId: providerId.describe("the history row's stable event UUID"),
+  occurrenceKey: z.string(),
+  sourceKind: z.string(),
+  sourceIdentity: z.string(),
+  rootCauseKey: z.string(),
+  acceptanceKey: z.string(),
+  location: z.string(),
+  observedBehavior: z.string(),
+  evidence: z.array(z.string()),
+  discoveredAt: rfc3339.nullish(),
+  recordedAt: rfc3339,
+  imported: z.boolean(),
+}).strict();
+
+/** note: The closure document a non-imported transition records; every member is optional. */
+const closureEvidence = z.object({
+  reason: z.string().nullish(),
+  scope: z.string().nullish(),
+  references: z.array(z.string()).optional(),
+  canonicalIssueId: z.string().nullish(),
+  alignmentRef: z.string().nullish(),
+}).strict();
+
+/** note: The reviewed portable legacy register row, under either spelling the engine accepts. */
+const importedRecordSpellings = [
+  "legacyId", "id",
+  "title",
+  "severity",
+  "source",
+  "scope",
+  "decision",
+  "owner",
+  "target",
+  "tracking",
+  "detailDoc", "detail_doc",
+  "lifecycle",
+  "closedAt", "closed_at",
+  "closureNote", "closure_note",
+  "closureEvidence", "closure_evidence",
+  "supersededBy", "superseded_by",
+  "sourcePlan", "source_plan",
+  "registeredAt", "registered_at",
+] as const;
+
+const importedRecord = z
+  .object(Object.fromEntries(importedRecordSpellings.map((key) => [key, z.string().nullish()])))
+  .strict()
+  .refine((record) => Object.keys(record).length > 0, "must carry the imported record's business fields")
+  .describe(
+    "the reviewed portable legacy register row: one spelling per field, and at least one field",
+  );
+
+const transitionRecord = z.object({
+  eventId: providerId.describe("the history row's stable event UUID"),
+  fromDisposition: z.enum(ISSUE_DISPOSITIONS),
+  toDisposition: z.enum(ISSUE_DISPOSITIONS),
+  actor: z.string().nullish(),
+  occurredAt: rfc3339.nullish(),
+  recordedAt: rfc3339,
+  reason: z.string(),
+  evidence: z
+    .union([closureEvidence, importedRecord])
+    .describe("the closure document normally; the reviewed legacy register row when imported is true"),
+  issueRevision: z.number().int().nonnegative(),
+  imported: z.boolean(),
+}).strict();
+
+/** note: A dangling target stays as the spellable reference; the read boundary renders it unresolved. */
+const relationRecord = z.object({
+  relation: z.enum(ISSUE_RELATIONS),
+  target: issueRef,
+}).strict();
+
+const provenanceKinds = [...ISSUE_PROVENANCE_KINDS, "capture", "migration"] as const;
+
+/** note: Provenance never carries the raw legacy JSON: `legacyJson` is parsed into `legacyRecord` by the engine. */
+const provenanceRecord = z.object({
+  eventId: providerId.describe("the history row's stable event UUID"),
+  kind: z.enum(provenanceKinds),
+  target: z.string(),
+  sourceHash: sha256Digest,
+  origin: z.enum(["scoped", "unscoped"]),
+  legacyProject: z.string().nullish(),
+  legacyBucket: z.string().nullish(),
+  legacyEntryId: z.string().nullish(),
+  legacyJson: z.string().nullish().describe("the legacy row's JSON text; mutually exclusive with legacyRecord"),
+  legacyRecord: importedRecord.nullish(),
+  importedAt: rfc3339.nullish(),
+}).strict();
+
+const projectMoveRecord = z.object({
+  eventId: providerId.describe("the history row's stable event UUID"),
+  fromProject: z.string(),
+  toProject: z.string(),
+  actor: z.string(),
+  reason: z.string(),
+  occurredAt: rfc3339,
+  issueRevision: z.number().int().nonnegative(),
+}).strict();
+
+/** note: The six members every complete subject carries; each list is that member's typed history. */
+const subjectHistory = {
+  occurrences: z.array(occurrenceRecord),
+  transitions: z.array(transitionRecord),
+  relations: z.array(relationRecord),
+  provenance: z.array(provenanceRecord),
+  projectMoves: z.array(projectMoveRecord),
+};
+
+/** note: The event's issue subject: the complete normalized document minus the derived `head`. */
+const issueSubject = z.object({ fields: mstarSubjectFields, ...subjectHistory }).strict();
 
 const portableSubject = z
-  .object({
-    issueRef,
-    head: z.array(sha256Digest),
-    fields: z.record(z.string(), z.unknown()).describe("the issue's domain fields (title, kind, severity, disposition, impact, acceptance, owner, registeredAt, closedAt, closureNote, createdAt, updatedAt, revision, milestoneId)"),
-    occurrences: z.array(subjectRecord),
-    transitions: z.array(subjectRecord),
-    relations: z.array(subjectRecord),
-    provenance: z.array(subjectRecord),
-    projectMoves: z.array(subjectRecord),
-  })
+  .object({ issueRef, head: z.array(sha256Digest), ...subjectHistory })
   .strict()
-  .describe("the complete portable subject the engine validates field-by-field");
+  .describe("the complete portable subject the snapshot carries");
 
 const remoteIssue = z
   .object({
@@ -79,6 +208,46 @@ const remoteIssue = z
     mstar: portableSubject.nullable(),
   })
   .strict();
+
+const milestoneDocument = z.object({
+  milestoneId: z.string(),
+  name: z.string(),
+  target: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a YYYY-MM-DD date").nullable(),
+  status: z.enum(["planned", "active", "delivered", "dropped"]),
+  ordinal: z.number().int().nonnegative(),
+  revision: z.number().int().positive(),
+  createdAt: rfc3339,
+  updatedAt: rfc3339,
+}).strict();
+
+const roadmapDocument = z.object({ contentMarkdown: z.string(), revision: z.number().int().positive(), updatedAt: rfc3339 }).strict();
+
+const catalogEntityDocument = z.object({
+  kind: z.enum(["project", "iteration", "plan", "document"]),
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  documentKind: z.string().nullable(),
+  lifecycle: z.enum(["active", "archived", "superseded"]),
+  revision: z.number().int().positive(),
+}).strict();
+
+const catalogLinkDocument = z.object({
+  fromKind: z.enum(["project", "iteration", "plan", "document"]),
+  fromId: z.string(),
+  relation: z.enum(["belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes"]),
+  toKind: z.enum(["project", "iteration", "plan", "document"]),
+  toId: z.string(),
+  ordinal: z.number().int().nonnegative().nullable(),
+}).strict();
+
+const projectDocument = z.object({
+  projectId: z.string(),
+  milestones: z.array(milestoneDocument),
+  roadmap: roadmapDocument.nullable(),
+  catalogEntities: z.array(catalogEntityDocument),
+  catalogLinks: z.array(catalogLinkDocument),
+}).strict();
 
 const remoteSnapshot = z
   .object({
@@ -92,55 +261,34 @@ const remoteSnapshot = z
         code: z.string(),
       }).strict(),
     ]),
-    project: z
-      .object({
-        projectId: z.string(),
-        head: z.array(sha256Digest).nullable(),
-        binding: providerScope,
-        milestones: z
-          .array(
-            z
-              .object({
-                milestoneId: z.string(),
-                name: z.string(),
-                target: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a YYYY-MM-DD date").nullable(),
-                status: z.enum(["planned", "active", "delivered", "dropped"]),
-                ordinal: z.number().int().nonnegative(),
-                revision: z.number().int().positive(),
-                createdAt: rfc3339,
-                updatedAt: rfc3339,
-              })
-              .strict(),
-          ),
-        roadmap: z.object({ contentMarkdown: z.string(), revision: z.number().int().positive(), updatedAt: rfc3339 }).strict().nullable(),
-        catalogEntities: z.array(
-          z
-            .object({
-              kind: z.enum(["project", "iteration", "plan", "document"]),
-              id: z.string(),
-              title: z.string(),
-              description: z.string().nullable(),
-              documentKind: z.string().nullable(),
-              lifecycle: z.enum(["active", "archived", "superseded"]),
-              revision: z.number().int().positive(),
-            })
-            .strict(),
-        ),
-        catalogLinks: z.array(
-          z
-            .object({
-              fromKind: z.enum(["project", "iteration", "plan", "document"]),
-              fromId: z.string(),
-              relation: z.enum(["belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes"]),
-              toKind: z.enum(["project", "iteration", "plan", "document"]),
-              toId: z.string(),
-              ordinal: z.number().int().nonnegative().nullable(),
-            })
-            .strict(),
-        ),
-      })
-      .strict(),
+    project: projectDocument.extend({ head: z.array(sha256Digest).nullable(), binding: providerScope }).strict(),
     issues: z.array(remoteIssue),
+  })
+  .strict();
+
+/**
+ * note: The frozen event the host appends. `change` closes both arms: a project replacement
+ * carries the project document (no derived `head`, no `binding`), and every issue change
+ * carries the complete typed subject. A replacement cites the heads it replaces; that
+ * minimum is the engine's judgement on the event it freezes.
+ */
+const frozenEvent = z
+  .object({
+    version: z.literal(1),
+    repoKey: z.string(),
+    projectId: z.string(),
+    operationId: providerId,
+    parents: z.array(sha256Digest).describe("sorted unique content digests of the heads this event replaces"),
+    change: z.union([
+      z.object({ kind: z.literal("project-replace"), project: projectDocument }).strict(),
+      z
+        .object({
+          kind: z.enum(["issue-create", "issue-adopt", "issue-replace"]),
+          issueRef,
+          mstar: issueSubject,
+        })
+        .strict(),
+    ]),
   })
   .strict();
 
@@ -175,8 +323,8 @@ export const remoteAdoptionDocumentSchema = z
         kind: z.literal("new"),
         capture: z
           .object({
-            kind: z.enum(["bug", "risk", "improvement", "request", "decision", "review-obligation"]),
-            severity: z.enum(["critical", "high", "medium", "low", "nit"]),
+            kind: z.enum(ISSUE_KINDS),
+            severity: z.enum(ISSUE_SEVERITIES),
             impact: z.string(),
             acceptance: z.string(),
             owner: z.string().optional(),
@@ -198,49 +346,60 @@ export const remoteAdoptionDocumentSchema = z
         version: z.literal(1),
         kind: z.literal("retain"),
         sourceIssue: z
-          .object({
-            issueRef,
-            fields: z.record(z.string(), z.unknown()),
-            occurrences: z.array(z.record(z.string(), z.unknown())),
-            transitions: z.array(z.record(z.string(), z.unknown())),
-            relations: z.array(z.record(z.string(), z.unknown())),
-            provenance: z.array(z.record(z.string(), z.unknown())),
-            projectMoves: z.array(z.record(z.string(), z.unknown())),
-          })
+          .object({ issueRef, fields: mstarSubjectFields, ...subjectHistory })
           .strict()
           .describe("the reviewed complete MStar subject (no head: that is an event-chain fact)"),
       })
       .strict(),
   ]);
 
-const frozenEvent = z
-  .record(z.string(), z.unknown())
-  .describe("the exact provider event the caller decoded back, in the frozen event's own shape (version, repoKey, projectId, operationId, parents, change)");
+const confirmedOutcome = z
+  .object({ kind: z.literal("confirmed"), identity: providerIssueIdentity, recordId: providerId, event: frozenEvent })
+  .strict();
 
-/** `outbox-receipt` / `outbox-reconcile --input`: the envelope plus one outcome arm. */
+const unconfirmedOutcome = z
+  .object({ kind: z.literal("unconfirmed"), reason: z.enum(["no-response", "not-found", "ambiguous", "provider-unavailable"]) })
+  .strict();
+
+const conflictOutcome = z
+  .object({
+    kind: z.literal("conflict"),
+    expectedHeads: z.array(sha256Digest),
+    observedHeads: z.array(sha256Digest),
+    observedRecords: z.array(z.object({ identity: providerIssueIdentity, recordId: providerId, event: frozenEvent }).strict()),
+  })
+  .strict();
+
+const notSentOutcome = z.object({ kind: z.literal("not-sent"), code: z.string() }).strict();
+
+const receiptEnvelopeFields = {
+  version: z.literal(1),
+  selectorCommit: gitObjectId,
+  generation: z.number().int().positive(),
+  projectId: z.string(),
+  operationId: providerId,
+  attemptId: providerId,
+  requestHash: sha256Digest,
+  observedAt: rfc3339,
+};
+
+/** `outbox-receipt --input`: the envelope plus one outcome arm, `not-sent` included. */
 export const remoteReceiptDocumentSchema = z
   .object({
-    version: z.literal(1),
-    selectorCommit: gitObjectId,
-    generation: z.number().int().positive(),
-    projectId: z.string(),
-    operationId: providerId,
-    attemptId: providerId,
-    requestHash: sha256Digest,
-    observedAt: rfc3339,
-    outcome: z.union([
-      z.object({ kind: z.literal("confirmed"), identity: providerIssueIdentity, recordId: providerId, event: frozenEvent }).strict(),
-      z.object({ kind: z.literal("unconfirmed"), reason: z.enum(["no-response", "not-found", "ambiguous", "provider-unavailable"]) }).strict(),
-      z
-        .object({
-          kind: z.literal("conflict"),
-          expectedHeads: z.array(sha256Digest),
-          observedHeads: z.array(sha256Digest),
-          observedRecords: z.array(z.object({ identity: providerIssueIdentity, recordId: providerId, event: frozenEvent }).strict()),
-        })
-        .strict(),
-      z.object({ kind: z.literal("not-sent"), code: z.string() }).strict(),
-    ]),
+    ...receiptEnvelopeFields,
+    outcome: z.union([confirmedOutcome, unconfirmedOutcome, conflictOutcome, notSentOutcome]),
+  })
+  .strict();
+
+/**
+ * `outbox-reconcile --input`: read-only recovery evidence under the attempt's original binding.
+ * A reconciliation reports what a lookup SAW, so its document has no `not-sent` arm at all:
+ * only the original host's own receipt can prove an attempt was never sent.
+ */
+export const remoteReconcileDocumentSchema = z
+  .object({
+    ...receiptEnvelopeFields,
+    outcome: z.union([confirmedOutcome, unconfirmedOutcome, conflictOutcome]),
   })
   .strict();
 
@@ -250,7 +409,9 @@ export const remoteResolutionDocumentSchema = z
     operationId: providerId,
     operator: z.string(),
     reason: z.string(),
-    event: z.record(z.string(), z.unknown()).describe("the replacement event in the frozen event's own shape, with a NEW operation id and parents citing every fork head"),
+    event: frozenEvent.describe(
+      "the replacement event in the frozen event's own shape, with a NEW operation id and parents citing every fork head",
+    ),
   })
   .strict();
 

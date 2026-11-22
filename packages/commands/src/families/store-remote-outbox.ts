@@ -31,6 +31,7 @@ import { commandEnvelopeSchema, refusalEnvelope } from "../envelope.js";
 import {
   remoteForkObservationDocumentSchema,
   remoteReceiptDocumentSchema,
+  remoteReconcileDocumentSchema,
   remoteResolutionDocumentSchema,
 } from "../store-remote-documents.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
@@ -217,7 +218,7 @@ async function execute(id: string, input: OutboxInput, invocation: InvocationCon
 const outboxInputDocuments: Partial<Record<OutboxVerb, z.ZodType>> = {
   "outbox-dispatch": remoteForkObservationDocumentSchema,
   "outbox-receipt": remoteReceiptDocumentSchema,
-  "outbox-reconcile": remoteReceiptDocumentSchema,
+  "outbox-reconcile": remoteReconcileDocumentSchema,
   "outbox-resolve": remoteResolutionDocumentSchema,
 };
 
@@ -248,10 +249,10 @@ function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unkn
     project: "the local project id whose current-binding intents this listing reports",
     operation: "the caller-owned operation UUID this verb addresses (never a display id)",
     input: verb === "outbox-dispatch"
-      ? "optional path (absolute, or relative to the working directory) to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.outbox-dispatch`"
+      ? `optional path (absolute, or relative to the working directory) to the host ForkObservation JSON, or - for stdin; required only to dispatch a reviewed resolution, and refused for an ordinary intent. The document shape publishes as payloadSchemas.inputDocument in \`mstar schema --command ${id}\``
       : verb === "outbox-resolve"
-        ? "path (absolute, or relative to the working directory) to the reviewed resolution JSON, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.outbox-resolve`"
-        : "path (absolute, or relative to the working directory) to the strict receipt JSON document, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.<verb>`",
+        ? `path (absolute, or relative to the working directory) to the reviewed resolution JSON, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in \`mstar schema --command ${id}\``
+        : `path (absolute, or relative to the working directory) to the strict ${verb === "outbox-reconcile" ? "reconciliation" : "receipt"} JSON document, or - for stdin. The document shape publishes as payloadSchemas.inputDocument in \`mstar schema --command ${id}\``,
     reason: "why this intent is abandoned; the reason is retained with the attempt history",
   };
   const descriptions: Record<OutboxVerb, string> = {

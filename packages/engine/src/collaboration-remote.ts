@@ -459,10 +459,40 @@ function oneOf<const T extends string>(value: unknown, allowed: readonly T[], pa
   return value as T;
 }
 
-/** note: Reject every member the contract does not name, so no unlisted material reaches the cache. */
-function allowOnly(body: Record<string, unknown>, path: string, allowed: readonly string[]): void {
+/**
+ * note: Reject every member the contract does not name, so no unlisted material reaches the cache.
+ * With `errors` supplied, the unknown members are collected instead of thrown, so one refusal can
+ * answer the whole submitted document.
+ */
+function allowOnly(
+  body: Record<string, unknown>,
+  path: string,
+  allowed: readonly string[],
+  errors?: string[],
+): void {
   for (const key of Object.keys(body)) {
-    if (!allowed.includes(key)) invalid(`${path}.${key}`, "is not a contract field");
+    if (allowed.includes(key)) continue;
+    if (errors === undefined) invalid(`${path}.${key}`, "is not a contract field");
+    errors.push(`${path}.${key}: is not a contract field`);
+  }
+}
+
+/** note: One collected diagnostic's text, without the refusal sentence the aggregate adds once. */
+function diagnosticOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.endsWith(NOTHING_WRITTEN) ? message.slice(0, -NOTHING_WRITTEN.length) : message;
+}
+
+const NOTHING_WRITTEN = ". Nothing was written.";
+
+/** note: Read one member, or collect its diagnostic and fall back while the aggregate is being built. */
+function collected<T>(errors: string[] | undefined, read: () => T, fallback: T): T {
+  if (errors === undefined) return read();
+  try {
+    return read();
+  } catch (error) {
+    errors.push(diagnosticOf(error));
+    return fallback;
   }
 }
 
@@ -3309,53 +3339,97 @@ function receiptOutcomeOf(raw: unknown, operationId: string): RemoteReceiptOutco
   }
 }
 
+/** note: The outcomes one dispatched attempt's receipt may report, and the subset a reconciliation may. */
+const RECEIPT_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict", "not-sent"] as const;
+const RECONCILE_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict"] as const;
+
 /**
  * invariant: One receipt outcome, exactly as the contract closes it. `confirmed` must name the
  * target's provider identity and the exact event the caller decoded back, so a receipt can
  * never be confused with a reviewer's summary. The frozen binding's scope is required.
+ *
+ * A reconciliation reports what a lookup SAW, so its document has no `not-sent` arm at all: only
+ * the original host's own receipt can prove an attempt was never sent.
+ *
+ * With `errors` supplied, every member is read through `collected`: the caller aggregates the
+ * whole submitted document's structural diagnostics into one refusal, and the placeholder this
+ * mode may return is discarded with those errors.
  */
-function receiptOutcome(raw: unknown, path: string): RemoteReceiptOutcome {
-  const body = record(raw, path);
-  const kind = oneOf(body.kind, ["confirmed", "unconfirmed", "conflict", "not-sent"] as const, `${path}.kind`);
+function receiptOutcome(
+  raw: unknown,
+  path: string,
+  errors?: string[],
+  source: "receipt" | "reconcile" = "receipt",
+): RemoteReceiptOutcome {
+  const kinds = source === "reconcile" ? RECONCILE_OUTCOME_KINDS : RECEIPT_OUTCOME_KINDS;
+  const body = collected(errors, () => record(raw, path), undefined);
+  if (body === undefined) return { kind: "unconfirmed", reason: "no-response" };
+  if (source === "reconcile" && body.kind === "not-sent") {
+    const message =
+      `${path}.kind: a reconciliation reports what a lookup saw, so its document has no not-sent arm; record the ` +
+      `pre-send refusal with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\``;
+    if (errors === undefined) throw new StoreError("remote.input-invalid", `${message}${NOTHING_WRITTEN}`);
+    errors.push(message);
+    return { kind: "unconfirmed", reason: "no-response" };
+  }
+  const kind = typeof body.kind === "string" && (kinds as readonly string[]).includes(body.kind)
+    ? (body.kind as RemoteReceiptOutcome["kind"])
+    : undefined;
+  if (kind === undefined) {
+    const message = `${path}.kind: must be one of ${kinds.join("|")}`;
+    if (errors === undefined) throw new StoreError("remote.input-invalid", `${message}${NOTHING_WRITTEN}`);
+    errors.push(message);
+    return { kind: "unconfirmed", reason: "no-response" };
+  }
   if (kind === "confirmed") {
-    allowOnly(body, path, ["kind", "identity", "recordId", "event"]);
+    allowOnly(body, path, ["kind", "identity", "recordId", "event"], errors);
     return {
       kind,
-      identity: issueIdentity(body.identity, `${path}.identity`),
-      recordId: linearId(body.recordId, `${path}.recordId`),
-      event: frozenEvent(body.event, `${path}.event`),
+      identity: collected(errors, () => issueIdentity(body.identity, `${path}.identity`), {} as ProviderIssueIdentity),
+      recordId: collected(errors, () => linearId(body.recordId, `${path}.recordId`), ""),
+      event: collected(errors, () => frozenEvent(body.event, `${path}.event`), undefined as unknown as RemoteEvent),
     };
   }
   if (kind === "unconfirmed") {
-    allowOnly(body, path, ["kind", "reason"]);
+    allowOnly(body, path, ["kind", "reason"], errors);
     return {
       kind,
-      reason: oneOf(
-        body.reason,
-        ["no-response", "not-found", "ambiguous", "provider-unavailable"] as const,
-        `${path}.reason`,
+      reason: collected(
+        errors,
+        () =>
+          oneOf(
+            body.reason,
+            ["no-response", "not-found", "ambiguous", "provider-unavailable"] as const,
+            `${path}.reason`,
+          ),
+        "no-response",
       ),
     };
   }
   if (kind === "conflict") {
-    allowOnly(body, path, ["kind", "expectedHeads", "observedHeads", "observedRecords"]);
+    allowOnly(body, path, ["kind", "expectedHeads", "observedHeads", "observedRecords"], errors);
     return {
       kind,
-      expectedHeads: digestHead(body.expectedHeads, `${path}.expectedHeads`),
-      observedHeads: digestHead(body.observedHeads, `${path}.observedHeads`),
-      observedRecords: list(body.observedRecords, `${path}.observedRecords`).map((entry, index) => {
-        const record_ = record(entry, `${path}.observedRecords[${index}]`);
-        allowOnly(record_, `${path}.observedRecords[${index}]`, ["identity", "recordId", "event"]);
-        return {
-          identity: issueIdentity(record_.identity, `${path}.observedRecords[${index}].identity`),
-          recordId: linearId(record_.recordId, `${path}.observedRecords[${index}].recordId`),
-          event: frozenEvent(record_.event, `${path}.observedRecords[${index}].event`),
-        };
-      }),
+      expectedHeads: collected(errors, () => digestHead(body.expectedHeads, `${path}.expectedHeads`), []),
+      observedHeads: collected(errors, () => digestHead(body.observedHeads, `${path}.observedHeads`), []),
+      observedRecords: collected(
+        errors,
+        () =>
+          list(body.observedRecords, `${path}.observedRecords`).map((entry, index) => {
+            const record_ = record(entry, `${path}.observedRecords[${index}]`);
+            allowOnly(record_, `${path}.observedRecords[${index}]`, ["identity", "recordId", "event"], errors);
+            return {
+              identity: issueIdentity(record_.identity, `${path}.observedRecords[${index}].identity`),
+              recordId: linearId(record_.recordId, `${path}.observedRecords[${index}].recordId`),
+              event: frozenEvent(record_.event, `${path}.observedRecords[${index}].event`),
+            };
+          }),
+        [],
+      ),
     };
   }
-  allowOnly(body, path, ["kind", "code"]);
-  return { kind, code: text(body.code, `${path}.code`) };
+  allowOnly(body, path, ["kind", "code"], errors);
+  return { kind, code: collected(errors, () => text(body.code, `${path}.code`), "") };
 }
 
 /**
@@ -3543,40 +3617,41 @@ type RemoteReceiptEnvelope = Readonly<{
   attemptId: string;
   requestHash: string;
   observedAt: string;
-  outcome: unknown;
+  outcome: RemoteReceiptOutcome;
 }>;
 
-function receiptEnvelope(raw: unknown): RemoteReceiptEnvelope {
-  const body = record(raw, "receipt");
+/**
+ * invariant: The submission's STRUCTURE is proved before any outbox access, and one refusal
+ * answers every structural defect the document carries - an unknown member at any level, a
+ * missing or unreadable member, an arm this verb's document does not define - so a caller
+ * corrects the whole document instead of discovering one defect per submission.
+ */
+function receiptEnvelope(raw: unknown, source: "receipt" | "reconcile"): RemoteReceiptEnvelope {
+  const command = `store.collaboration.remote.outbox-${source}`;
+  const errors: string[] = [];
+  const body = collected(errors, () => record(raw, "receipt"), {} as Record<string, unknown>);
   allowOnly(body, "receipt", [
     "version", "selectorCommit", "generation", "projectId", "operationId", "attemptId", "requestHash", "observedAt",
     "outcome",
-  ]);
-  // invariant: One submission answers EVERY invalid envelope field at once, so a caller
-  // fixes the whole document per attempt instead of discovering one refusal per field.
-  const errors: string[] = [];
-  const field = <T>(run: () => T, fallback: T): T => {
-    try {
-      return run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(message.endsWith(". Nothing was written.") ? message.slice(0, -". Nothing was written.".length) : message);
-      return fallback;
-    }
-  };
+  ], errors);
   if (body.version !== 1) errors.push("receipt.version: must be 1");
-  let selectorCommit = "";
-  if (typeof body.selectorCommit !== "string") errors.push("receipt.selectorCommit: must be a non-empty string");
-  else if (!GIT_OBJECT_ID.test(body.selectorCommit)) errors.push("receipt.selectorCommit: must be a Git object id");
-  else selectorCommit = body.selectorCommit;
-  const generation = field(() => positiveInteger(body.generation, "receipt.generation"), 0);
-  const projectId = field(() => text(body.projectId, "receipt.projectId"), "");
-  const operationId = field(() => linearId(body.operationId, "receipt.operationId"), "");
-  const attemptId = field(() => linearId(body.attemptId, "receipt.attemptId"), "");
-  const requestHash = field(() => digest(body.requestHash, "receipt.requestHash"), "");
-  const observedAt = field(() => instant(body.observedAt, "receipt.observedAt"), "");
+  const selectorCommit = collected(errors, () => text(body.selectorCommit, "receipt.selectorCommit"), "");
+  if (selectorCommit !== "" && !GIT_OBJECT_ID.test(selectorCommit)) {
+    errors.push("receipt.selectorCommit: must be a Git object id");
+  }
+  const generation = collected(errors, () => positiveInteger(body.generation, "receipt.generation"), 0);
+  const projectId = collected(errors, () => text(body.projectId, "receipt.projectId"), "");
+  const operationId = collected(errors, () => linearId(body.operationId, "receipt.operationId"), "");
+  const attemptId = collected(errors, () => linearId(body.attemptId, "receipt.attemptId"), "");
+  const requestHash = collected(errors, () => digest(body.requestHash, "receipt.requestHash"), "");
+  const observedAt = collected(errors, () => instant(body.observedAt, "receipt.observedAt"), "");
+  const outcome = receiptOutcome(body.outcome, "receipt.outcome", errors, source);
   if (errors.length > 0) {
-    throw new StoreError("remote.input-invalid", `${errors.join("; ")}. Nothing was written.`);
+    throw new StoreError(
+      "remote.input-invalid",
+      `${errors.join("; ")}. Nothing was written. Run \`mstar schema --command ${command}\` for this document's ` +
+        `shape, then resubmit the corrected --input document.`,
+    );
   }
   return {
     version: 1,
@@ -3587,7 +3662,7 @@ function receiptEnvelope(raw: unknown): RemoteReceiptEnvelope {
     attemptId,
     requestHash,
     observedAt,
-    outcome: body.outcome,
+    outcome,
   };
 }
 
@@ -3625,7 +3700,7 @@ async function recordReceiptEvidence(
   raw: unknown,
   source: "receipt" | "reconcile",
 ): Promise<RemoteIntentRead> {
-  const envelope = receiptEnvelope(raw);
+  const envelope = receiptEnvelope(raw, source);
   // note: Q1/Q2 recovery runs under the intent's ORIGINAL binding, including a draining
   // generation's pinned previous one; this never prepares or dispatches anything.
   return withRemoteCacheWrite(context, (handle) => {
@@ -3670,19 +3745,9 @@ async function recordReceiptEvidence(
         { operationId: envelope.operationId },
       );
     }
-    const outcome = receiptOutcome(envelope.outcome, "receipt.outcome");
-    if (source === "reconcile" && outcome.kind === "not-sent") {
-      // invariant: Q2: reconciliation proves what a lookup SAW, so it can never prove nothing was
-      // sent; that pre-send refusal is only ever the original host's own receipt.
-      throw new StoreError(
-        "remote.dispatch-refused",
-        `A reconciliation of operation ${envelope.operationId} reports not-sent, but only the original host's own ` +
-          `pre-send refusal can prove an attempt was never sent. Record that refusal with ` +
-          `\`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, or reconcile the ` +
-          `effect the provider actually holds. Nothing was changed.`,
-        { operationId: envelope.operationId },
-      );
-    }
+    // invariant: Q2: the reconciliation's own document has no not-sent arm, so the structural
+    // refusal already answered that submission before this attempt was read.
+    const outcome = envelope.outcome;
     assertReceiptTargets(outcome, stored, envelope.operationId);
     assertConflictEvidence(outcome, stored, envelope.operationId);
     const receiptHash = receiptHashOf(source, envelope, outcome);

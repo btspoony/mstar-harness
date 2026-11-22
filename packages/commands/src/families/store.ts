@@ -657,7 +657,7 @@ function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition
     project: "the local project id this cache binds; native issue detail and adoption require it, and it is never guessed",
     issue: "the exact immutable Linear provider issue id (a UUID, never a display id such as ENG-42)",
     operation: "caller-owned UUID for this adoption intent; unique across the repository",
-    input: "path to the strict JSON document, or - for stdin; the document shape publishes as payloadSchemas.inputDocument in `mstar schema --command store.collaboration.remote.<verb>`",
+    input: `path to the strict JSON document, or - for stdin; the document shape publishes as payloadSchemas.inputDocument in \`mstar schema --command ${id}\``,
   };
   const descriptions: Record<(typeof remoteVerbs)[number], string> = {
     status:

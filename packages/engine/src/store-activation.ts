@@ -1152,7 +1152,8 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
     if (maxVersion > COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
       throw incompletePair(
         `The collaboration image ${path} records schema version ${String(maxVersion)}, which this build does not have; ` +
-          `it is not a recovery point for this build.`,
+          `it is not a recovery point for this build. Restore it with a build that supports schema version ` +
+          `${String(maxVersion)}, or select another verified pair this build can admit.`,
       );
     }
     // invariant: An image is verified against the inventory ITS generation declared, so a verified
@@ -2148,6 +2149,10 @@ export async function restoreCollaborationBackup(
   try {
     copyFileSync(collaborationImagePath, stagingPath);
     chmodSync(stagingPath, 0o600);
+    // why: The receipt names the verified recovery image this request restores, so its identity is
+    // sampled from the private copy BEFORE any migration rewrites it and is never re-sampled from
+    // the source pathname, which another writer could replace in that gap.
+    const imageSha = sha256Bytes(readFileSync(stagingPath));
     const stagedInspection = await inspectCollaborationImage(stagingPath, location);
     if (canonicalJsonOf(stagedInspection.counts) !== canonicalJsonOf(collaborationInspection.counts)) {
       throw incompletePair(`The staged copy of ${collaborationImagePath} does not hold the verified rows.`);
@@ -2193,10 +2198,6 @@ export async function restoreCollaborationBackup(
         `The staged copy of ${collaborationImagePath} is not the generation the manifest records (identity, epoch or state changed).`,
       );
     }
-    // why: The receipt names the VERIFIED PAIR IMAGE this request restores (the same digest
-    // `repairOwnRestorePublication` re-reads), never the staged bytes, which an older image's
-    // migration legitimately rewrote.
-    const imageSha = sha256Bytes(readFileSync(collaborationImagePath));
     const restoredAt = nowRfc3339();
     // invariant: A recovery generation is NEVER reused: the epoch comes from a lineage
     // ledger that only ever advances, so a second restore of the same point

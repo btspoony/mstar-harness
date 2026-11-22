@@ -690,7 +690,15 @@ describe("catalog and roadmap command families", () => {
     );
     expect(blankReplaced.status).toBe("ok");
     const blankReexported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness: undated.harness }, invocation(undated.cwd));
-    expect(String(blankReexported.data)).not.toContain("created_at");
+    const blankReexportedMarkdown = String(blankReexported.data);
+    expect(blankReexportedMarkdown).not.toContain("created_at");
+    // invariant: The undated candidate round-trips unchanged - frontmatter and authored body
+    // alike - so the accepted omission is a stable document, not merely an export that parses.
+    // The store's own revision footer advances with the write and is not document content.
+    const documentBody = (markdown: string) =>
+      markdown.split("\n").filter((line) => !line.startsWith("Store revision: ")).join("\n");
+    expect(documentBody(blankReexportedMarkdown)).toBe(documentBody(blankMarkdown));
+    expect(blankReexportedMarkdown).toContain('project_id: "proj"');
   });
 
   test("roadmap JSON export returns the v2 envelope", async () => {

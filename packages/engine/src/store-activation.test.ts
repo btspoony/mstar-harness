@@ -2967,21 +2967,23 @@ describe("repository backup pair", () => {
     const receipt = await backupRepositoryStores(fixture.context, { out });
     const location = resolveCollaborationLocation(fixture.context);
     const generation = receipt.collaboration.authority;
+    const current = collaborationStore.COLLABORATION_MIGRATIONS[collaborationStore.COLLABORATION_MIGRATIONS.length - 1]!.version;
 
     // note: An earlier release verified this pair against the v1 inventory; its manifest is what
     // the operator holds, so the images and the manifest are replaced together.
     const imagePath = pairImage(receipt, "collaboration");
     rmSync(imagePath, { force: true });
     writeV1Image(imagePath, location.repoKey, generation);
-    const counts = v1Counts(imagePath);
     const earlier = {
       ...receipt,
-      collaboration: { ...receipt.collaboration, counts },
+      collaboration: { ...receipt.collaboration, counts: v1ImageCounts(imagePath) },
     };
     writeFileSync(receipt.manifestPath, `${JSON.stringify(earlier, null, 2)}\n`);
 
-    // note: The source image is a recovery point, never a staging area.
-    const sourceBytes = readFileSync(imagePath);
+    // note: The source image is a recovery point, never a staging area. These are reads of its own
+    // bytes: a restore that advanced the SOURCE in place would show another ledger, a backfilled
+    // column or a rewritten row here, which no byte dump could describe.
+    const source = readCollaborationSource(imagePath);
     for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
     const restored = await restoreCollaborationBackup(fixture.context, earlier, {
       operator: "ops-engineer",
@@ -2989,14 +2991,107 @@ describe("repository backup pair", () => {
     });
     // invariant: The published authority is THIS build's current schema, and the v1 history it
     // carried survived the ladder with one minted reference per issue.
-    expect(restored).toMatchObject({ state: "active", schemaVersion: 3 });
-    expect(readFileSync(imagePath)).toEqual(sourceBytes);
+    expect(restored).toMatchObject({ state: "active", schemaVersion: current });
+    expect(source.versions).toEqual([collaborationStore.COLLABORATION_MIGRATIONS[0]!.version]);
+    expect(source.columns).not.toContain("issue_ref");
+    expect(source.issues).toEqual([
+      { id: "I-000001", title: "Version one finding", disposition: "resolved" },
+    ]);
+    // invariant: After the restore the source still reads exactly as it did, so the advanced bytes
+    // were the private staged copy's alone.
+    expect(readCollaborationSource(imagePath)).toEqual(source);
     const handle = await openCollaborationStore(fixture.context, "read");
     try {
       expect(handle.db.prepare("select id, issue_ref from issues order by id").all()).toEqual([
         { id: "I-000001", issue_ref: expect.stringMatching(/^mstar:issue:/) },
       ]);
-      expect(handle.db.prepare("select count(*) as n from schema_version").get()).toEqual({ n: 3 });
+      expect(handle.db.prepare("select max(version) as n from schema_version").get()).toEqual({ n: current });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("an image from a newer schema names the build or another pair as its recovery", async () => {
+    const fixture = await pairedWorkspace("pair-newer-schema-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const current = collaborationStore.COLLABORATION_MIGRATIONS[collaborationStore.COLLABORATION_MIGRATIONS.length - 1]!.version;
+    const image = new DatabaseSync(pairImage(receipt, "collaboration"));
+    try {
+      // note: A contiguous ledger one version past this build: structurally readable, but written by
+      // a newer build whose shape this one cannot know.
+      image
+        .prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
+        .run(current + 1, "synthetic-future", "0".repeat(64), "2026-11-22T00:00:00.000Z");
+    } finally {
+      image.close();
+    }
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+    const refused = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    }).then(() => null, (error: unknown) => error);
+    expect(refused).toMatchObject({ code: "collaboration.backup-incomplete" });
+    const message = refused instanceof Error ? refused.message : String(refused);
+    // invariant: The refusal is not a dead end: it names the compatible build and the alternative
+    // verified pair, so the operator has a supported route from an unreadable generation.
+    expect(message).toContain(`build that supports schema version ${String(current + 1)}`);
+    expect(message).toContain("another verified pair");
+  });
+
+  test("a version-1 restore resumes across the publication gap from its own image", async () => {
+    const fixture = await pairedWorkspace("pair-v1-repair-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const location = resolveCollaborationLocation(fixture.context);
+    const generation = receipt.collaboration.authority;
+    const imagePath = pairImage(receipt, "collaboration");
+    rmSync(imagePath, { force: true });
+    writeV1Image(imagePath, location.repoKey, generation);
+    const earlier = {
+      ...receipt,
+      collaboration: { ...receipt.collaboration, counts: v1ImageCounts(imagePath) },
+    };
+    writeFileSync(receipt.manifestPath, `${JSON.stringify(earlier, null, 2)}\n`);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+
+    // note: The publication lands and the checkout-binding write fails, so the request must stay
+    // resumable instead of becoming an unrecoverable create-only conflict.
+    const realWrite = collaborationStore.writeCollaborationBinding;
+    let writes = 0;
+    const spy = spyOn(collaborationStore, "writeCollaborationBinding").mockImplementation((context, authority) => {
+      writes += 1;
+      if (writes === 1) throw new Error("simulated binding failure");
+      realWrite(context, authority);
+    });
+    let firstFailure: unknown;
+    try {
+      firstFailure = await restoreCollaborationBackup(fixture.context, earlier, {
+        operator: "ops-engineer",
+        attestation: attestation(),
+      }).then(() => null, (error: unknown) => error);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(firstFailure).toMatchObject({ code: "collaboration.operation-partial" });
+    expect(existsSync(location.dbPath)).toBe(true);
+
+    // invariant: The SAME request finishes because the committed receipt names the recovery image
+    // this request verified - the digest sampled from its private staged copy BEFORE the v1 ladder
+    // advanced it - so the retry recognises its own published generation instead of re-deriving an
+    // identity from the source pathname or publishing a second authority.
+    const repaired = await restoreCollaborationBackup(fixture.context, earlier, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    expect(repaired.state).toBe("active");
+    expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: repaired.storeId });
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(
+        handle.db.prepare("select count(*) as n from collaboration_operations where operation_id like 'restore:%'").get(),
+      ).toEqual({ n: 1 });
     } finally {
       handle.close();
     }
@@ -3047,16 +3142,43 @@ function writeV1Image(
   }
 }
 
-/** note: The row counts a v1 image was verified to hold: its own declared inventory. */
-function v1Counts(path: string): Record<string, number> {
-  const inventory = collaborationStore.collaborationInventoryOf(1);
-  const db = new DatabaseSync(path);
+/** note: The row counts a version-1 image holds, read from its OWN tables: an independent count of the shape that release verified. */
+function v1ImageCounts(path: string): Record<string, number> {
+  const db = new DatabaseSync(path, { readOnly: true });
   try {
+    const tables = (db
+      .prepare("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name")
+      .all() as Array<{ name: string }>).map((row) => row.name);
     const counts: Record<string, number> = {};
-    for (const table of Object.keys(inventory)) {
+    for (const table of tables) {
       counts[table] = (db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n;
     }
     return counts;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * note: One collaboration image read through immutable queries: its own schema ledger, its issue
+ * rows and its issue columns. Nothing here consults the current build's inventory, so a restore
+ * that advanced the SOURCE in place is visible as changed data rather than a byte difference.
+ */
+function readCollaborationSource(path: string): {
+  versions: number[];
+  columns: string[];
+  issues: Array<{ id: string; title: string; disposition: string }>;
+} {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const versions = (db.prepare("select version from schema_version order by version").all() as Array<{ version: number }>)
+      .map((row) => row.version);
+    const columns = (db.prepare("pragma table_info(issues)").all() as Array<{ name?: unknown }>)
+      .map((row) => String(row.name));
+    const issues = db
+      .prepare("select id, title, disposition from issues order by id")
+      .all() as Array<{ id: string; title: string; disposition: string }>;
+    return { versions, columns, issues };
   } finally {
     db.close();
   }

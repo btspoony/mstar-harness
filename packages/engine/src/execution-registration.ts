@@ -756,7 +756,7 @@ function remoteRegistrationFacts(
           `the confirmed provider effect publishes no ${entity.kind} ${JSON.stringify(entity.id)} row, so the reviewed ` +
             `registration's business outcome never landed; the execution binding is not written from a guessed identity. ` +
             `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, ` +
-            `then publish the reviewed delta with a NEW registration under a new operation id — it appends to the confirmed ` +
+            `then publish the reviewed delta with a NEW registration under a new operation id \u2014 it appends to the confirmed ` +
             `journal, and the settled effect is never re-sent.`,
           { missing_entity: { kind: entity.kind, id: entity.id } },
         );

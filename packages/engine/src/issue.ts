@@ -1495,7 +1495,7 @@ async function captureIssueRemote(
           throw new StoreError(
             "remote.scope-mismatch",
             `The observed authority already carries this identity on ${movedRef}; the observation moved under ` +
-              `the capture's read. Refresh it with \`remote observe\` and retry — the capture then answers append or the ` +
+              `the capture's read. Refresh it with \`remote observe\` and retry \u2014 the capture then answers append or the ` +
               `established receipt. Nothing was enqueued.`,
             { issueRef: movedRef },
           );
@@ -2947,11 +2947,21 @@ export async function assignIssueMilestone(
       // `withWrite` branch compares it: a stale `--expect-store` refuses before anything freezes.
       guard: ({ observationRevision }) => {
         if (observationRevision === mutation.expectedStoreRevision) return;
-        throw new IssueError(
+        const stale = new IssueError(
           "milestone.revision-conflict",
           `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the observed store revision ` +
             `${observationRevision}; nothing was enqueued.`,
         );
+        // note: A remote write's base IS the observation revision, so the recovery names the command
+        // that reads it instead of the local store's own listing.
+        stale.details = {
+          observationRevision,
+          recovery:
+            `Read this project's current observation revision with \`mstar store collaboration remote status ` +
+            `--harness <abs> --project ${projectId}\`, pass that revision in --expect-store, and rerun the same write ` +
+            `under a fresh --operation; nothing was enqueued by this attempt.`,
+        };
+        throw stale;
       },
       origin: {
         verb: "assignIssueMilestone",
