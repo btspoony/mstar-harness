@@ -5,8 +5,12 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { initializeCollaborationStore, mintIssueRef, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from "./milestone-store.js";
+import { queryMilestones } from "./milestone-store.js";
+import { withStoreRead } from "./store-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(nodeOs.tmpdir(), "tmp-milestone-store-"));
@@ -53,7 +57,7 @@ function activateLocation(context: StoreContext): string {
 
 const context = checkout("milestone-store");
 function issue(id: string, disposition: string, milestoneId: string | null): void {
-  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?,?)").run(id,projectId,id,milestoneId,disposition);
+  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition,issue_ref) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?,?,?)").run(id,projectId,id,milestoneId,disposition,mintIssueRef());
 }
 beforeAll(async () => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -191,5 +195,40 @@ describe("milestone store", () => {
     const missing=checkout("milestone-store-delivery-missing");
     mkdirSync(missing.harnessDir!,{recursive:true});
     await expect(updateMilestone(missing,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-initialized"});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote selection: milestone status is read from admitted evidence
+// ---------------------------------------------------------------------------
+
+describe("remote milestones", () => {
+  test("a remote checkout groups MStar subjects under the observed milestones", async () => {
+    const fixture = createRemoteScope(root, "remote-milestones");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const envelope = await withStoreRead(context, queryMilestones(REMOTE_IDS.projectId));
+    expect(envelope.data.milestones).toEqual([
+      expect.objectContaining({
+        milestoneId: "milestone-1",
+        name: "First delivery",
+        totalIssues: 1,
+        openIssues: 1,
+        resolvedIssues: 0,
+      }),
+    ]);
+    expect(envelope.data.issues).toEqual([
+      expect.objectContaining({ id: REMOTE_IDS.issueRef, disposition: "open", milestoneId: "milestone-1" }),
+    ]);
+    expect(envelope.data.unassignedIssues).toBe(0);
+    expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    await expect(
+      withStoreRead(context, queryMilestones(REMOTE_IDS.projectId, "milestone-absent")),
+    ).rejects.toMatchObject({ code: "milestone.not-found" });
   });
 });

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { withCollaborationWrite } from "./collaboration-store.js";
+import { remoteMilestones } from "./collaboration-remote-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
@@ -145,4 +146,4 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
 }
-export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true }, execution: "not-requested", run: sources => { if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }
+export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true }, execution: "not-requested", run: sources => { if (sources.remote !== null) return { data: remoteMilestones(sources.remote, projectId, milestoneId) }; if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }

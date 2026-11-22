@@ -43,7 +43,8 @@ import {
   type CollaborationScope,
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
-import { type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -1195,6 +1196,23 @@ function catalogPageScope(filter: CatalogFilter, limit: number, offset: number):
 }
 
 /**
+ * invariant: A remote snapshot carries portable catalog IDENTITY only - no checkout-relative
+ * path, no resolved absolute path and no live file probe. The catalog's row
+ * contract requires those location facts, so this read refuses by name instead
+ * of inventing them; the dashboard's catalog identity (and its remote-aware
+ * project/iteration/milestone views) is the supported remote route.
+ */
+function assertLocalCatalogRead(context: StoreContext): void {
+  if (resolveCollaborationLocation(context).mode !== "remote") return;
+  throw new StoreError(
+    "remote.unavailable",
+    "The catalog's registered rows carry a checkout-relative location that a remote observation does not have, so this " +
+      "read cannot answer them. Read the portable catalog identity through the dashboard views (projects, iterations, " +
+      "roadmap) or the remote issue/roadmap reads; nothing was read.",
+  );
+}
+
+/**
  * List catalog rows with their incident links. `lifecycle` is unfiltered
  * unless asked (retention is explicit: archived/superseded rows stay
  * registered), ordering is the contract §6 deterministic kind/title/id.
@@ -1203,6 +1221,7 @@ export async function listCatalog(
   context: StoreContext,
   filter: CatalogFilter = {},
 ): Promise<CatalogPage & { collaboration: CompleteCollaborationObservation }> {
+  assertLocalCatalogRead(context);
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
@@ -1254,6 +1273,7 @@ export async function getCatalog(
   context: StoreContext,
   key: CatalogKey,
 ): Promise<CatalogDetail & { collaboration: CompleteCollaborationObservation }> {
+  assertLocalCatalogRead(context);
   const target = requireKey("key", key);
   const roots = catalogRoots(context);
   const handle = await openCollaborationStore(context, "read");

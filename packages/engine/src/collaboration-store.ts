@@ -864,10 +864,28 @@ export type CollaborationScope = Readonly<{
 }>;
 
 /**
+ * note: One selected project's provider scope and the evidence a remote read
+ * disclosed for it. Only a remote observation carries these: a local/mirror
+ * lane is one database, not a set of verified provider projects.
+ */
+export type CollaborationProviderScope = Readonly<{
+  projectId: string;
+  scope: Readonly<{ provider: "linear"; workspaceId: string; teamId: string; projectId: string }>;
+  completeness: "complete" | "partial" | "unavailable";
+  asOf: string | null;
+  revision: number;
+}>;
+
+/**
  * One scoped read of the collaboration authority. `complete` is the only
  * observation a gate may decide on; `partial`/`unavailable` are declared so a
  * consumer can disclose a gap instead of reading it as an empty result.
  * `asOf` is when the local snapshot was established, never a file mtime.
+ *
+ * A remote observation additionally names its checked selector generation and,
+ * per selected project, the provider scope plus that project's own coverage and
+ * instant. Its `asOf` is the OLDEST contributing observation, and its
+ * `authority` is the private cache identity, never the provider.
  */
 export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
   (
@@ -877,6 +895,10 @@ export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
         authority: CollaborationStamp;
         revision: number;
         catalogRevision: number;
+        source?: "local" | "remote";
+        selectorCommit?: string;
+        generation?: number;
+        providerScopes?: readonly CollaborationProviderScope[];
       }
     | {
         completeness: "partial";
@@ -885,8 +907,21 @@ export type CollaborationObservation = Readonly<{ scope: CollaborationScope }> &
         revision: number;
         catalogRevision: number;
         code: string;
+        source?: "local" | "remote";
+        selectorCommit?: string;
+        generation?: number;
+        providerScopes?: readonly CollaborationProviderScope[];
       }
-    | { completeness: "unavailable"; asOf: null; authority: null; code: string }
+    | {
+        completeness: "unavailable";
+        asOf: null;
+        authority: null;
+        code: string;
+        source?: "remote";
+        selectorCommit?: string;
+        generation?: number;
+        providerScopes?: readonly CollaborationProviderScope[];
+      }
   );
 
 /** The complete arm of a collaboration observation: the only arm an in-domain read builds. */

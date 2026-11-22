@@ -21,6 +21,8 @@ import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITI
 import { addMilestone } from "./milestone-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
@@ -968,5 +970,39 @@ describe("overview read model", () => {
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote selection: the dashboard transport never collapses to an empty page
+// ---------------------------------------------------------------------------
+
+describe("remote dashboard transport", () => {
+  test("a complete remote scope serves the issue page and discloses its source", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const envelope = await readDashboardView({ context, view: "issues" });
+    const page = envelope.data as IssuePage;
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ issueRef: REMOTE_IDS.issueRef, severity: "high" });
+    expect(page.providerIssues).toEqual([expect.objectContaining({ kind: "provider-only", nativeStatus: "Done" })]);
+    expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    const detail = await readDashboardView({ context, view: "issue-detail", id: REMOTE_IDS.providerOnlyIssueId, params: { project: REMOTE_IDS.projectId } });
+    expect(detail.data).toMatchObject({ kind: "provider-only", nativeStatus: "Done" });
+  });
+
+  test("an unobserved remote scope refuses instead of answering an empty dashboard", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard-empty");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "remote.unavailable" });
   });
 });

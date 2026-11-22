@@ -12,14 +12,18 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import {
+  ISSUE_REF_PATTERN,
   mintIssueRef,
   openCollaborationStore,
   readCollaborationObservation,
   withCollaborationWrite,
+  type CollaborationObservation,
   type CollaborationScope,
   type CollaborationStoreHandle,
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import type { ProviderIssueIdentity } from "./collaboration-remote.js";
 import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 
 
@@ -292,6 +296,25 @@ export type IssueSummary = {
   lastActivity: string | null;
   revision: number;
   milestoneId: string | null;
+  /** note: The stable portable key, present on a remote subject read. */
+  issueRef?: string;
+  /** note: The provider's own status; a display field, never an MStar disposition. */
+  nativeStatus?: string;
+};
+
+/**
+ * note: An observed provider issue that carries no MStar marker. It is VISIBLE
+ * (never hidden by the issue list/detail), and it is never given a disposition,
+ * severity, count or closure: its native status is a separate display fact.
+ */
+export type ProviderOnlyIssue = {
+  kind: "provider-only";
+  issueRef: null;
+  projectId: string;
+  title: string;
+  nativeStatus: string;
+  providerUpdatedAt: string;
+  identity: ProviderIssueIdentity;
 };
 
 export type IssuePage = {
@@ -300,10 +323,18 @@ export type IssuePage = {
   /** How many projects the whole result set spans — the page's own span is not it. */
   projectCount: number;
   storeRevision: number;
+  /**
+   * note: Unmarked native issues of the same observed projects. They are visible but
+   * excluded from `items`/`total`/`projectCount` (and from every disposition,
+   * severity and findings count), so a consumer never reads one as a finding.
+   */
+  providerIssues?: ProviderOnlyIssue[];
 };
 
 export type IssueOccurrence = {
   id: number;
+  /** note: The portable event id a remote subject carries (absent on a local row). */
+  eventId?: string;
   occurrenceKey: string;
   sourceKind: string;
   sourceIdentity: string;
@@ -319,6 +350,8 @@ export type IssueOccurrence = {
 
 export type IssueTransition = {
   id: number;
+  /** note: The portable event id a remote subject carries (absent on a local row). */
+  eventId?: string;
   fromDisposition: string;
   toDisposition: string;
   actor: string | null;
@@ -340,6 +373,8 @@ export type IssueRelation = {
 
 export type IssueProvenance = {
   id: number;
+  /** note: The portable event id a remote subject carries (absent on a local row). */
+  eventId?: string;
   kind: string;
   target: string;
   sourceHash: string;
@@ -388,6 +423,11 @@ export type IssueDetail = {
   provenance: IssueProvenance[];
   /** Oldest first; empty on a store older than the project-move migration. */
   projectMoves: IssueProjectMove[];
+  /** note: The stable portable key and the provider's own title/status, present on a remote subject read. */
+  issueRef?: string;
+  nativeTitle?: string;
+  nativeStatus?: string;
+  providerIdentity?: ProviderIssueIdentity;
 };
 
 export type IssueTriage = {
@@ -1120,6 +1160,19 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
+/** note: A required remote read's complete proof; the observation codes map onto the store's own refusal. */
+function requiredObservation(observation: CollaborationObservation, detail: string): CompleteCollaborationObservation {
+  if (observation.completeness === "complete") return observation;
+  throw new StoreError(
+    observation.completeness === "partial"
+      ? "collaboration.observation-incomplete"
+      : observation.code === "collaboration.observation-stale"
+        ? "collaboration.observation-stale"
+        : "remote.unavailable",
+    `${detail} is ${observation.completeness}; a required read answers only a complete, current scope.`,
+  );
+}
+
 /** note: The canonical scope key of one issue page: the filters with the applied bounds. */
 function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
   return {
@@ -1179,6 +1232,24 @@ export async function listIssues(
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
     throw new IssueError("issue.scope-refused", "limit must be 1..200 and offset must be nonnegative");
+  }
+  // invariant: A remote selection never reads local issue rows: the page over admitted
+  // snapshots refuses unless every project it needs is complete and current.
+  // note: Dynamic on purpose — a static import would close the cycle
+  // collaboration-remote.ts -> issue.ts -> collaboration-remote-read.ts ->
+  // collaboration-remote.ts and read its vocabularies before they initialize.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const { openRemoteReadView, remoteCollaborationObservation, remoteIssuePage, requireRemoteProjects } = await import(
+      "./collaboration-remote-read.js"
+    );
+    const view = await openRemoteReadView(context);
+    const projects = filter.projectId === undefined ? view.projectIds : [filter.projectId];
+    requireRemoteProjects(view, projects);
+    const collaboration = requiredObservation(
+      remoteCollaborationObservation(view, issuePageScope(filter, limit, offset), projects),
+      "The remote observation for this issue page",
+    );
+    return { ...remoteIssuePage(view, filter), collaboration };
   }
   const { where, params } = bindFilter(filter);
   const handle = await openCollaborationStore(context, "read");
@@ -1256,6 +1327,24 @@ export async function getIssue(
   context: StoreContext,
   id: string,
 ): Promise<IssueDetail & { collaboration: CompleteCollaborationObservation }> {
+  // note: Dynamic import: same cycle reason as `listIssues` (remote-read imports this module).
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
+    const view = await openRemoteReadView(context);
+    const read = remoteIssueRead(view, id);
+    if (read.kind === "native") {
+      throw new IssueError(
+        "issue.scope-refused",
+        `Issue ${id} is an unmarked native provider issue, so it has no MStar detail. Read it by its exact provider id ` +
+          "with `mstar issue show --id <provider-issue-id> --project <local-project-id>`.",
+      );
+    }
+    const collaboration = requiredObservation(
+      remoteCollaborationObservation(view, { kind: "query", key: `issue:${id}` }, view.projectIds),
+      `The remote observation for issue ${id}`,
+    );
+    return { ...read.detail, collaboration };
+  }
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
@@ -1463,6 +1552,38 @@ export async function getIssue(
 }
 
 const TERMINAL: Record<TerminalDisposition, true> = vocabularyMap(TERMINAL_DISPOSITIONS);
+
+/** The answer of `mstar issue show`: an MStar subject, or a visible unmarked native issue. */
+export type IssueShow = (IssueDetail & { collaboration: CollaborationObservation }) | (ProviderOnlyIssue & { collaboration: CollaborationObservation });
+
+/**
+ * `mstar issue show`. Local/mirror keeps the existing display-id lookup.
+ *
+ * A remote selection resolves the stable `mstar:issue:<uuid>` reference, or —
+ * ONLY with `--project <local-project-id>` — the exact immutable provider issue
+ * id. An unmarked provider issue answers its own visible DTO; its title and
+ * native `Done` are display facts that never adopt, close or count it.
+ */
+export async function showIssue(context: StoreContext, id: string, projectId?: string): Promise<IssueShow> {
+  const target = requireNonblank("id", id);
+  if (resolveCollaborationLocation(context).mode !== "remote") {
+    return getIssue(context, target);
+  }
+  if (!ISSUE_REF_PATTERN.test(target) && projectId === undefined) {
+    throw new IssueError(
+      "issue.scope-refused",
+      `Issue ${JSON.stringify(target)} must be the stable mstar:issue:<uuid> reference, or an exact provider issue id with ` +
+        "`--project <local-project-id>`. A project is never guessed in remote mode.",
+    );
+  }
+  const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
+  const view = await openRemoteReadView(context);
+  const read = remoteIssueRead(view, target, projectId);
+  // note: A stable reference reads every selected project; a native id reads the one it names.
+  const projects = ISSUE_REF_PATTERN.test(target) ? view.projectIds : projectId === undefined ? view.projectIds : [projectId];
+  const collaboration = remoteCollaborationObservation(view, { kind: "query", key: `issue:${target}` }, projects);
+  return { ...read.detail, collaboration };
+}
 
 /** The terminal disposition vocabulary, validated once for both transports. */
 export function assertTerminalDisposition(disposition: TerminalDisposition): void {

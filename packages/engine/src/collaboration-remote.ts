@@ -29,7 +29,7 @@ import {
   type CollaborationBinding,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
-import { ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES } from "./issue.js";
+import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, type CaptureInput } from "./issue.js";
 import {
   resolveCollaborationLocation,
   type CollaborationLocation,
@@ -207,7 +207,7 @@ const UUID = LINEAR_ID;
 const CAPABILITY_KEYS = ["fullRead", "appendOnly", "exactLookup", "fieldFidelity", "privateAudience"] as const;
 
 /** note: A positive access check expires 60 seconds after `checkedAt`. */
-const SCOPE_CHECK_TTL_MS = 60_000;
+export const REMOTE_SCOPE_TTL_MS = 60_000;
 
 function invalid(path: string, detail: string): never {
   throw new StoreError("remote.input-invalid", `${path}: ${detail}. Nothing was written.`);
@@ -759,8 +759,15 @@ function relation(value: unknown, path: string): Record<string, unknown> {
   };
 }
 
-/** note: Every provenance kind the store records: the domain links plus the capture and migration rows. */
-const PROVENANCE_KINDS = [...ISSUE_PROVENANCE_KINDS, "capture", "migration"] as const;
+/**
+ * note: Every provenance kind the store records: the domain links plus the capture and
+ * migration rows. Resolved at CALL time because this module is reachable
+ * through a module cycle (project -> collaboration-remote-read -> here) before
+ * the issue domain's vocabulary has initialized.
+ */
+function provenanceKinds(): readonly string[] {
+  return [...ISSUE_PROVENANCE_KINDS, "capture", "migration"];
+}
 
 const PROVENANCE_KEYS = [
   "eventId", "kind", "target", "sourceHash", "origin", "legacyProject", "legacyBucket", "legacyEntryId",
@@ -808,7 +815,7 @@ function provenanceLink(value: unknown, path: string): Record<string, unknown> {
   if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
   return {
     eventId: eventId(body.eventId, `${path}.eventId`),
-    kind: oneOf(body.kind, PROVENANCE_KINDS, `${path}.kind`),
+    kind: oneOf(body.kind, provenanceKinds(), `${path}.kind`),
     target,
     sourceHash,
     origin: oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`),
@@ -1040,11 +1047,11 @@ function assertCheckAddresses(check: ScopeCheck, selected: CollaborationSelector
  */
 function assertCheckCurrent(check: ScopeCheck, now: number): void {
   const checkedAt = Date.parse(check.checkedAt);
-  if (checkedAt > now || now - checkedAt > SCOPE_CHECK_TTL_MS) {
+  if (checkedAt > now || now - checkedAt > REMOTE_SCOPE_TTL_MS) {
     throw new StoreError(
       "collaboration.observation-stale",
       `The check for ${check.projectId} at ${check.checkedAt} is not current: a positive access check must be dated ` +
-        `within ${String(SCOPE_CHECK_TTL_MS / 1000)} seconds of this process and never in the future. Reverify with the ` +
+        `within ${String(REMOTE_SCOPE_TTL_MS / 1000)} seconds of this process and never in the future. Reverify with the ` +
         `host; nothing was written.`,
     );
   }
@@ -1203,7 +1210,7 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
       // invariant: Serving needs a current positive access check AND a complete snapshot. The
       // freshness clock starts at the latest check, so a revocation or a refused check can
       // never be reported fresh off the binding's original bind time.
-      const current = outcome === "verified" && Math.abs(now - Date.parse(row.verified_at)) <= SCOPE_CHECK_TTL_MS;
+      const current = outcome === "verified" && Math.abs(now - Date.parse(row.verified_at)) <= REMOTE_SCOPE_TTL_MS;
       return {
         projectId: row.project_key,
         scope: {
@@ -1665,10 +1672,10 @@ export async function ingestRemoteObservation(
         `never recorded as a current result. Nothing was written.`,
     );
   }
-  if (negative === null && now - checkedAt > SCOPE_CHECK_TTL_MS) {
+  if (negative === null && now - checkedAt > REMOTE_SCOPE_TTL_MS) {
     throw new StoreError(
       "collaboration.observation-stale",
-      `The verified check for ${submission.check.projectId} is older than ${String(SCOPE_CHECK_TTL_MS / 1000)} seconds, so ` +
+      `The verified check for ${submission.check.projectId} is older than ${String(REMOTE_SCOPE_TTL_MS / 1000)} seconds, so ` +
         `it cannot serve a current observation. Reverify with the host and resubmit; nothing was written.`,
     );
   }
@@ -1804,4 +1811,158 @@ function recordObservation(
       code,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// note: prepareRemoteAdoption
+// ---------------------------------------------------------------------------
+
+/** note: `adopt-issue` addresses one observed, unmarked native issue by immutable identity. */
+export type RemoteAdoptionRequest = Readonly<{
+  projectId: string;
+  issueId: string;
+  operationId: string;
+  adoption: unknown;
+}>;
+
+const ADOPTION_CAPTURE_KEYS = [
+  "kind", "severity", "impact", "acceptance", "owner", "sourceIdentity", "rootCauseKey", "acceptanceKey",
+  "occurrenceKey", "sourceKind", "location", "observedBehavior", "evidence", "discoveredAt",
+] as const;
+const ADOPTION_RETAIN_KEYS = ["issueRef", "fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"] as const;
+
+/**
+ * note: The strict adoption DTO. `new` reuses normal capture validation with the project
+ * from the binding and the title from the verified native issue; neither is
+ * accepted from the caller. `retain` carries the reviewed complete MStar subject
+ * (no `head`, which is an event-chain fact).
+ */
+function adoptionDocument(raw: unknown): { kind: "new"; capture: Omit<CaptureInput, "projectId" | "title"> } | { kind: "retain"; issueRef: string } {
+  const body = record(raw, "adoption");
+  allowOnly(body, "adoption", ["version", "kind", "capture", "sourceIssue"]);
+  if (body.version !== 1) invalid("adoption.version", "must be 1");
+  const kind = oneOf(body.kind, ["new", "retain"] as const, "adoption.kind");
+  if (kind === "new") {
+    const capture = record(body.capture, "adoption.capture");
+    allowOnly(capture, "adoption.capture", ADOPTION_CAPTURE_KEYS);
+    return { kind, capture: capture as unknown as Omit<CaptureInput, "projectId" | "title"> };
+  }
+  const source = record(body.sourceIssue, "adoption.sourceIssue");
+  allowOnly(source, "adoption.sourceIssue", ADOPTION_RETAIN_KEYS);
+  assertIssueRef(source.issueRef);
+  for (const key of ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"] as const) {
+    if (key === "fields") {
+      record(source.fields, "adoption.sourceIssue.fields");
+      continue;
+    }
+    list(source[key], `adoption.sourceIssue.${key}`).forEach((entry, index) => record(entry, `adoption.sourceIssue.${key}[${String(index)}]`));
+  }
+  return { kind, issueRef: source.issueRef as string };
+}
+
+/**
+ * `remote adopt-issue`: validate the strict adoption DTO against the exact
+ * observed, unmarked native issue, then REFUSE `remote.outbox-unavailable`.
+ *
+ * This v2 cache has no durable outbox, so an admission cannot be recorded: the
+ * verb never creates an issue, never marks the native issue, never appends to a
+ * cache snapshot, and never performs a "cache-only adoption". Plan 2
+ * (`20261122-remote-outbox`) replaces only the final refusal with normal outbox
+ * preparation; every refusal below is already final.
+ */
+export async function prepareRemoteAdoption(context: StoreContext, request: RemoteAdoptionRequest): Promise<never> {
+  const projectId = text(request?.projectId, "projectId");
+  const issueId = linearId(request?.issueId, "issueId");
+  const operationId = linearId(request?.operationId, "operationId");
+  const adoption = adoptionDocument(request?.adoption);
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  const selected = selectedProject(selection, projectId);
+  const binding = readCollaborationBinding(context);
+  if (binding === null || binding.version !== 3 || binding.state !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      "This checkout holds no finalized remote binding, so an adoption cannot address its observed scope. " +
+        "Run the reviewed remote bind first; nothing was written.",
+    );
+  }
+
+  let snapshot: RemoteSnapshot | null = null;
+  const handle = await openRemoteCache(context, "read");
+  try {
+    const row = handle.db
+      .prepare(
+        "select o.completeness, o.snapshot_json, b.verified_at, b.verification_json " +
+          "from remote_bindings b left join remote_observations o on o.generation = b.generation and o.project_key = b.project_key " +
+          "where b.generation = ? and b.project_key = ?",
+      )
+      .get(binding.generation, projectId) as
+      | { completeness?: unknown; snapshot_json?: unknown; verified_at?: unknown; verification_json?: unknown }
+      | undefined;
+    if (row === undefined) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `Project ${projectId} is not bound at generation ${String(binding.generation)} in this cache; nothing was written.`,
+      );
+    }
+    const verifiedAt = typeof row.verified_at === "string" ? row.verified_at : "";
+    const outcome = outcomeLabel(typeof row.verification_json === "string" ? row.verification_json : "{}");
+    if (row.completeness !== "complete" || typeof row.snapshot_json !== "string" || row.snapshot_json === "") {
+      throw new StoreError(
+        "remote.unavailable",
+        `No complete observation is stored for project ${projectId}; an adoption needs the exact observed native issue. Nothing was written.`,
+      );
+    }
+    if (outcome !== "verified" || Math.abs(Date.now() - Date.parse(verifiedAt)) > REMOTE_SCOPE_TTL_MS) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The access check for project ${projectId} is no longer current, so an adoption cannot address its observed issue. ` +
+          "Reverify the scope and resubmit the observation; nothing was written.",
+      );
+    }
+    const parsed: unknown = JSON.parse(row.snapshot_json);
+    if (parsed === null || typeof parsed !== "object" || !("issues" in parsed) || !Array.isArray(parsed.issues)) {
+      throw new StoreError("collaboration.unreadable", `The stored observation for project ${projectId} carries no issue list; nothing was written.`);
+    }
+    snapshot = parsed as RemoteSnapshot;
+  } finally {
+    handle.close();
+  }
+
+  const observed = snapshot.issues;
+  const native = observed.find((issue) => issue.identity.issueId === issueId);
+  if (native === undefined) {
+    throw new IssueError("issue.not-found", `Provider issue ${issueId} is not observed in project ${projectId}; nothing was written.`);
+  }
+  if (native.mstar !== null) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `Provider issue ${issueId} already carries an MStar marker (${native.mstar.issueRef}); adoption addresses only an ` +
+        "observed unmarked native issue, and a differing marker is never replaced. Nothing was written.",
+      { projectId, issueId },
+    );
+  }
+  if (adoption.kind === "retain") {
+    const bound = observed.find((issue) => issue.mstar !== null && issue.mstar.issueRef === adoption.issueRef);
+    if (bound !== undefined) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `Issue reference ${adoption.issueRef} is already bound to provider issue ${bound.identity.issueId}; a retain never ` +
+          "re-adopts a bound reference. Nothing was written.",
+        { projectId, issueRef: adoption.issueRef },
+      );
+    }
+  } else {
+    // note: Reuse normal capture validation with the binding's project and the VERIFIED
+    // native title. A caller-supplied project or title is not part of the DTO.
+    assertCaptureRequest({ ...adoption.capture, projectId, title: native.nativeTitle });
+  }
+
+  throw new StoreError(
+    "remote.outbox-unavailable",
+    `Adoption of provider issue ${issueId} was admitted against the observed unmarked native issue, but this v2 cache has ` +
+      "no durable outbox, so the intent cannot be recorded. Nothing was written \u2014 there is no cache-only adoption. " +
+      "The durable adoption intent arrives with the remote outbox plan.",
+    { projectId, issueId, operationId, kind: adoption.kind, selectedWriterId: selected.writerId },
+  );
 }
