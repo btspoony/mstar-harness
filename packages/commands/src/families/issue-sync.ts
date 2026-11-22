@@ -467,14 +467,16 @@ function requireRunBinding(run: RunLease, target: Target, authority: Collaborati
 
 /**
  * note: Only a `mirror` repository delivers to Linear. `local` holds the same
- * authority over the same rows and never pushes or ingests remote data, so the
- * two modes stay distinguishable at the verb that would have sent something.
+ * authority over the same rows and never pushes or ingests remote data, and a
+ * `remote` repository's collaboration authority is the provider itself: this
+ * mirror lane must never become its delivery route.
  */
 function requireMirror(authority: CollaborationAuthority): void {
   if (authority.mode !== "mirror") {
     throw refused(
       "collaboration.mode-unavailable",
-      "this repository's collaboration mode is " + JSON.stringify(authority.mode) + ", which holds local authority only: it never pushes to or ingests from Linear",
+      "this repository's collaboration mode is " + JSON.stringify(authority.mode) + ", and issue-sync is the one-way mirror " +
+        "delivery lane only: it never pushes to or ingests from Linear for local or remote authority",
     );
   }
 }

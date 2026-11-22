@@ -77,6 +77,12 @@ function ctx(name: string): StoreContext {
     cwd: root,
     stdio: "ignore",
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`], {
+    cwd: root,
+    stdio: "ignore",
+  });
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });

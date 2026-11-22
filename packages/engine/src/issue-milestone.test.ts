@@ -18,6 +18,9 @@ const repo = join(root, "repo");
 mkdirSync(repo, { recursive: true });
 execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+// note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+// own repository, which never publishes the selector ref.
+execFileSync("git", ["config", `url.${repo}.insteadOf`, "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
 writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
 const harness = join(repo, ".mstar");
 const context: StoreContext = { harnessDir: harness };

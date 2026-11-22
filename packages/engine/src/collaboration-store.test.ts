@@ -28,12 +28,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import {
+  resolveCollaborationLocation,
+  type CollaborationLocation,
+  type CollaborationMode,
+} from "./collaboration-identity.js";
+import {
+  assertControlCheckoutScope,
   initializeCollaborationStore,
   openCollaborationStore,
   probeCollaborationAuthority,
   readCollaborationAuthority,
+  readCollaborationBinding,
   withCollaborationWrite,
   writeCollaborationBinding,
   type CollaborationStamp,
@@ -114,6 +120,9 @@ function makeRepo(origin: string): string {
   git(dir, "config", "user.name", "Collaboration Store Test");
   git(dir, "config", "user.email", "store@example.test");
   git(dir, "config", "remote.origin.url", origin);
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  git(dir, "config", `url.${dir}.insteadOf`, origin);
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   return dir;
 }
@@ -271,7 +280,7 @@ function stagingLeftovers(dir: string): string[] {
 /** note: The stamp a caller holds for one admitted authority. */
 function stampOf(authority: {
   repoKey: string;
-  mode: "local" | "mirror";
+  mode: CollaborationMode;
   storeId: string;
   epoch: number;
 }): CollaborationStamp {
@@ -1235,7 +1244,7 @@ describe("collaboration host authority", () => {
     expect(probe.message).toContain("storage component is a symbolic link");
   });
 
-  test("an unresolved identity or unsupported mode is unavailable, never absent", async () => {
+  test("an unresolved identity or refused remote selection is unavailable, never absent", async () => {
     const originless = join(ROOT, `repo-host-originless-${sequence++}`);
     mkdirSync(originless, { recursive: true });
     git(originless, "init", "-q");
@@ -1245,11 +1254,56 @@ describe("collaboration host authority", () => {
       code: "collaboration.repo-identity-unresolved",
     });
 
-    const remote = makeRepo("https://github.com/acme/host-remote.git");
+    // invariant: An unreachable origin never selects the remote authority, and the probe
+    // discloses that as unavailable rather than as a missing lane.
+    const remote = makeRepo("ssh://git@127.0.0.1:1/acme/host-remote.git");
     writeFileSync(join(remote, ".mstarc"), "[collaboration]\nmode=remote\n");
     expect(await probeCollaborationAuthority(contextAt(remote))).toMatchObject({
       kind: "unavailable",
-      code: "collaboration.mode-unavailable",
+      code: "remote.selector-unavailable",
+    });
+  });
+
+  test("a remote checkout binding is validated strictly and never authorizes a local lane", async () => {
+    const repo = makeRepo("https://github.com/acme/widgets.git");
+    const context = contextAt(repo);
+    const bindingFile = join(context.harnessDir, "collaboration-binding.json");
+    const remoteBinding = (overrides: Record<string, unknown> = {}): string =>
+      JSON.stringify({
+        version: 3,
+        state: "active",
+        repoKey: "github.com/acme/widgets",
+        mode: "remote",
+        selectorCommit: "a".repeat(40),
+        generation: 2,
+        storeId: "fixture-remote-store",
+        epoch: 1,
+        boundAt: "2026-11-22T00:00:00.000Z",
+        ...overrides,
+      });
+
+    // note: The positive shape parses; every deviation below refuses as stale, not as fresh.
+    writeFileSync(bindingFile, remoteBinding());
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 2 });
+    for (const overrides of [
+      { state: "claimed" },
+      { generation: 0 },
+      { generation: "2" },
+      { selectorCommit: "not-an-object-id" },
+      { mode: "local" },
+      { storeId: undefined },
+    ]) {
+      writeFileSync(bindingFile, remoteBinding(overrides));
+      expect(() => readCollaborationBinding(context)).toThrow("collaboration.stale-binding");
+    }
+
+    // invariant: A checkout recorded against a remote selector never drifts onto the local
+    // rows: a live-confirmed absence of that recorded selector refuses the resolution before
+    // any admission can open them.
+    writeFileSync(bindingFile, remoteBinding());
+    expect(() => locationAt(repo)).toThrow("collaboration.stale-binding");
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
     });
   });
 });

@@ -101,6 +101,13 @@ async function fixture(name: string, root = ROOT): Promise<Fixture> {
     cwd: workspace,
     stdio: ["ignore", "ignore", "ignore"],
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${workspace}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: workspace, stdio: ["ignore", "ignore", "ignore"] },
+  );
   writeFileSync(join(workspace, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });

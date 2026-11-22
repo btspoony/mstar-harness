@@ -34,6 +34,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  AUTHORITY_REF,
+  COLLABORATION_BINDING_FILE,
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationMode,
@@ -1134,6 +1136,7 @@ function discardStaging(stagingDir: string, stagingPath: string): void {
  */
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
+  if (location.mode === "remote") remoteLaneRefusal();
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
@@ -1275,6 +1278,7 @@ export async function admitCollaborationImage(
  */
 export function assertCollaborationTargetAdmission(location: CollaborationLocation): void {
   assertStoreRuntimeSupported();
+  if (location.mode === "remote") remoteLaneRefusal();
   assertAdmittedTarget(location.dbPath);
 }
 
@@ -1289,25 +1293,56 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
  * counterpart of the lane's `collaboration_meta`, persisted beside the harness
  * so a checkout cannot be silently re-routed to another repository by an origin
  * change, and an unfenced legacy owner is refused before any I/O.
+ *
+ * A `remote` scope records v3 instead: the checked selector commit and
+ * generation it is bound to, never provider tuples (those live in the trusted
+ * selector). `storeId`/`epoch` stay the private cache identity.
  */
-export type CollaborationBinding = Readonly<{
-  version: 2;
-  /**
-   * why: `claimed` while an activation holds the authority publication open: the
-   * checkout is already committed to that generation, so a crash leaves evidence
-   * instead of an unbound checkout that looks fresh. `active` once the authority
-   * is published (or a supported adoption recorded it).
-   */
-  state: "claimed" | "active";
-  repoKey: string;
-  mode: CollaborationMode;
-  storeId: string;
-  epoch: number;
-  boundAt: string;
-}>;
+export type CollaborationBinding =
+  | Readonly<{
+      version: 2;
+      /**
+       * why: `claimed` while an activation holds the authority publication open: the
+       * checkout is already committed to that generation, so a crash leaves evidence
+       * instead of an unbound checkout that looks fresh. `active` once the authority
+       * is published (or a supported adoption recorded it).
+       */
+      state: "claimed" | "active";
+      repoKey: string;
+      mode: "local" | "mirror";
+      storeId: string;
+      epoch: number;
+      boundAt: string;
+    }>
+  | Readonly<{
+      version: 3;
+      state: "active";
+      repoKey: string;
+      mode: "remote";
+      /** note: The checked Git object ID the selector was read from. */
+      selectorCommit: string;
+      /** note: The selector generation this checkout is bound to. */
+      generation: number;
+      storeId: string;
+      epoch: number;
+      boundAt: string;
+    }>;
 
 function bindingPath(context: StoreContext): string {
-  return join(context.harnessDir, "collaboration-binding.json");
+  return join(context.harnessDir, COLLABORATION_BINDING_FILE);
+}
+
+/** note: A Git object ID: SHA-1 or SHA-256 spelling, lowercase hex. */
+const SELECTOR_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** note: The binding file's shape refusal: never treated as a fresh or foreign checkout's record. */
+function malformedBinding(context: StoreContext): never {
+  throw new StoreError(
+    "collaboration.stale-binding",
+    `The collaboration binding at ${bindingPath(context)} is malformed, so this checkout cannot be proven to belong to the ` +
+      `authority it would use. Re-record it deliberately with the supported authority verb (store init / store activate) ` +
+      `or restore the recorded binding; nothing was read or modified.`,
+  );
 }
 
 /** The recorded binding, or `null` for a checkout that has never been bound (a replacement clone). */
@@ -1338,28 +1373,33 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
         `with the supported authority verb. Nothing was modified.`,
     );
   }
-  if (
-    parsed === null ||
-    typeof parsed !== "object" ||
-    (parsed as { version?: unknown }).version !== 2 ||
-    ((parsed as { state?: unknown }).state !== "claimed" && (parsed as { state?: unknown }).state !== "active") ||
-    typeof (parsed as { repoKey?: unknown }).repoKey !== "string" ||
-    ((parsed as { mode?: unknown }).mode !== "local" && (parsed as { mode?: unknown }).mode !== "mirror") ||
-    typeof (parsed as { storeId?: unknown }).storeId !== "string" ||
-    typeof (parsed as { epoch?: unknown }).epoch !== "number"
-  ) {
-    // invariant: An unreadable binding is never treated as "fresh": the checkout cannot be
-    // proven to belong to the authority it would use, and the supported route is
-    // to re-bind it deliberately.
-    throw new StoreError(
-      "collaboration.stale-binding",
-      `The collaboration binding at ${bindingPath(context)} is malformed, so this checkout cannot be proven to belong to the ` +
-        `authority it would use. Re-record it deliberately with the supported authority verb (store init / store activate) ` +
-        `or restore the recorded binding; nothing was read or modified.`,
-    );
-  }
-  const binding = parsed as CollaborationBinding;
-  return { ...binding, boundAt: typeof binding.boundAt === "string" ? binding.boundAt : "" };
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) malformedBinding(context);
+  const body = parsed as Record<string, unknown>;
+  // invariant: v2 binds a local/mirror checkout; v3 binds a remote one to the exact checked
+  // selector commit and generation. Nothing else is a binding.
+  const common =
+    typeof body.repoKey === "string" &&
+    typeof body.storeId === "string" &&
+    typeof body.epoch === "number" &&
+    Number.isSafeInteger(body.epoch) &&
+    body.epoch > 0;
+  const validV2 =
+    body.version === 2 &&
+    (body.state === "claimed" || body.state === "active") &&
+    (body.mode === "local" || body.mode === "mirror") &&
+    common;
+  const validV3 =
+    body.version === 3 &&
+    body.state === "active" &&
+    body.mode === "remote" &&
+    typeof body.selectorCommit === "string" &&
+    SELECTOR_COMMIT.test(body.selectorCommit) &&
+    typeof body.generation === "number" &&
+    Number.isSafeInteger(body.generation) &&
+    body.generation > 0 &&
+    common;
+  if (!validV2 && !validV3) malformedBinding(context);
+  return { ...(body as CollaborationBinding), boundAt: typeof body.boundAt === "string" ? body.boundAt : "" };
 }
 
 /** Persist this checkout's binding. Atomic replace; the file carries no authority bytes. */
@@ -1367,13 +1407,16 @@ export function writeCollaborationBinding(
   context: StoreContext,
   authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch"> & { binding?: "claimed" | "active" },
 ): void {
+  // invariant: A remote checkout's v3 binding records the checked selector commit and generation,
+  // so only the reviewed remote bind may write it; the local authority verbs never fake one.
+  const mode = localBindingMode(authority.mode);
   const path = bindingPath(context);
   mkdirSync(dirname(path), { recursive: true });
   const body: CollaborationBinding = {
     version: 2,
     state: authority.binding ?? "active",
     repoKey: authority.repoKey,
-    mode: authority.mode,
+    mode,
     storeId: authority.storeId,
     epoch: authority.epoch,
     boundAt: nowRfc3339(),
@@ -1665,7 +1708,15 @@ export async function adoptCollaborationBinding(
     version: 1,
     adopted: true,
     authority,
-    binding: { version: 2, state: "active", repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, boundAt: "" },
+    binding: {
+      version: 2,
+      state: "active",
+      repoKey: location.repoKey,
+      mode: localBindingMode(location.mode),
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      boundAt: "",
+    },
     lineage: proven,
   };
 }
@@ -1791,6 +1842,79 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
   }
 }
 
+/** note: The one refusal for a resolved remote selection: no local domain in this build stands in for its lane. */
+function remoteLaneRefusal(): never {
+  throw new StoreError(
+    "collaboration.mode-unavailable",
+    `This repository selects remote collaboration from the checked selector, but this build has no remote collaboration ` +
+      `lane: its persisted cache and bind verb ship with the v2 schema. Nothing was read or created; use the local or ` +
+      `mirror authority in its own checkout until then.`,
+  );
+}
+
+/** note: A v2 binding names a local/mirror authority only; a remote scope records v3 through the reviewed bind. */
+function localBindingMode(mode: CollaborationMode): "local" | "mirror" {
+  if (mode === "remote") remoteLaneRefusal();
+  return mode;
+}
+
+/**
+ * invariant: A finalized binding must name this scope, and a remote one the exact checked
+ * selector commit and generation. Anything else is a foreign or superseded record.
+ */
+function assertBindingMatches(binding: CollaborationBinding, location: CollaborationLocation): void {
+  if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` +
+        `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` +
+        `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`,
+    );
+  }
+  if (binding.version !== 3) return;
+  const selection = location.selection;
+  if (selection === undefined || binding.selectorCommit !== selection.commit || binding.generation !== selection.generation) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout is bound to the remote selector commit ${binding.selectorCommit} generation ` +
+        `${String(binding.generation)}, but the origin's checked selector is ` +
+        `${selection === undefined ? "not part of this resolution" : `${selection.commit} generation ${String(selection.generation)}`}. ` +
+        `A moved or replaced selector is adopted only by the reviewed remote bind; inspect it with mstar path resolve. ` +
+        `Nothing was modified.`,
+    );
+  }
+}
+
+/**
+ * invariant: The domain gate a `remote` selection passes before ANY collaboration I/O: its
+ * checkout binding is proven against the checked selector first, so a stale, absent or foreign
+ * record keeps its own code, and only then is the missing remote lane refused. A local/mirror
+ * checkout holding a remote (v3) binding is a foreign record and never drifts onto local rows.
+ */
+function assertSelectedLane(context: StoreContext, location: CollaborationLocation): void {
+  const binding = readCollaborationBinding(context);
+  if (location.mode === "remote") {
+    if (binding === null || binding.state !== "active") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This control checkout resolves remote collaboration from ${AUTHORITY_REF} but holds no finalized remote binding, ` +
+          `so it cannot be proven to belong to that selector generation. Record it with the reviewed remote bind; nothing ` +
+          `was read or created.`,
+      );
+    }
+    assertBindingMatches(binding, location);
+    remoteLaneRefusal();
+  }
+  if (binding !== null && binding.version === 3) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout is recorded as bound to the remote selector commit ${binding.selectorCommit} generation ` +
+        `${String(binding.generation)}, but it resolves ${location.mode} collaboration. A remote-bound checkout never falls ` +
+        `back to local rows; complete the reviewed remote bind or start a fresh local/mirror checkout. Nothing was read or modified.`,
+    );
+  }
+}
+
 /**
  * invariant: Refuse a retargeted checkout: an origin or `.mstarc` change never re-points a
  * binding. Returns the checkout's finalized binding (or `null`), so an admission
@@ -1800,14 +1924,7 @@ function assertBoundScope(context: StoreContext, location: CollaborationLocation
   const binding = readCollaborationBinding(context);
   // note: A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
   if (binding === null || binding.state !== "active") return null;
-  if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
-    throw new StoreError(
-      "collaboration.stale-binding",
-      `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` +
-        `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` +
-        `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`,
-    );
-  }
+  assertBindingMatches(binding, location);
   return binding;
 }
 
@@ -1891,6 +2008,9 @@ export async function openCollaborationStore(
 ): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
   const location = resolveCollaborationLocation(context);
+  // invariant: A remote selection never opens a local-authority lane: its binding is proven
+  // first, then the missing remote lane refuses with its own code.
+  assertSelectedLane(context, location);
   if (mode === "write" && existsSync(location.dbPath)) {
     try {
       accessSync(location.dbPath, constants.W_OK);
@@ -1991,6 +2111,7 @@ export async function readCollaborationStage<T>(
   apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
 ): Promise<T> {
   assertStoreRuntimeSupported();
+  if (location.mode === "remote") remoteLaneRefusal();
   const handle = await openAdmission(location, "any", undefined, busyTimeoutMs());
   try {
     return apply({ db: handle.db, authority: handle.authority });
@@ -2011,6 +2132,7 @@ export async function writeCollaborationStage<T>(
   apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
 ): Promise<T> {
   assertStoreRuntimeSupported();
+  if (location.mode === "remote") remoteLaneRefusal();
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);

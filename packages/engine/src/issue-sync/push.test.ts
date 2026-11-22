@@ -69,6 +69,13 @@ async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: str
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
     cwd: checkoutRoot,
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(harnessDir)}.git`],
+    { cwd: checkoutRoot },
+  );
   writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=mirror\n");
   const location = resolveCollaborationLocation({ harnessDir, checkoutRoot });
   await initializeCollaborationStore(location);
