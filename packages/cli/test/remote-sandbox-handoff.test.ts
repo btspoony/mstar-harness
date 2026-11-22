@@ -40,7 +40,10 @@ const OBSERVED_NATIVE_TITLE = "Observed native issue";
 
 /** note: The handoff's two durable sources; `unknown` is a check that could not decide. */
 type SourceState = "present" | "absent" | "unknown";
+/** note: Git's extra state — the result survives on a ref B's clone path never reads. */
+type GitState = SourceState | "surviving";
 type HandoffComponent = "provider" | "git";
+type HandoffSources = Readonly<{ provider: SourceState; git: GitState }>;
 type HandoffReport = Readonly<{
   code: "remote.handoff-unavailable";
   missing: readonly HandoffComponent[];
@@ -84,12 +87,13 @@ function seedWorkflow(storePath: string): void {
 }
 
 /**
- * The Git component: A's pushed commit must still survive in the origin. A commit any ref
- * still reaches is present; an unreferenced copy is not a durable result (Git may prune it)
+ * The Git component: B's handoff succeeds only when the tracked branch it clones still
+ * carries A's pushed commit. A copy any other ref reaches keeps the result recoverable but
+ * is not a successful handoff, an unreferenced copy may be pruned and so proves no survival,
  * and an object that is gone is a proven loss. A probe that cannot read the origin decides
  * nothing — a deleted branch and an unreachable server look the same from here.
  */
-function gitSource(bare: string, commit: string): SourceState {
+function gitSource(bare: string, commit: string): GitState {
   try {
     git(process.cwd(), ["-C", bare, "rev-parse", "--git-dir"]);
   } catch {
@@ -102,8 +106,11 @@ function gitSource(bare: string, commit: string): SourceState {
     // note: `cat-file -e` answers 1 for an absent object; any other failure is not proof.
     return status === 1 ? "absent" : "unknown";
   }
-  const refs = git(process.cwd(), ["-C", bare, "for-each-ref", "--contains", commit, "--format=%(refname)"]);
-  return refs === "" ? "unknown" : "present";
+  const refs = git(process.cwd(), ["-C", bare, "for-each-ref", "--contains", commit, "--format=%(refname)"])
+    .split("\n")
+    .filter((ref) => ref !== "");
+  if (refs.includes(`refs/heads/${TRACKED_BRANCH}`)) return "present";
+  return refs.length > 0 ? "surviving" : "unknown";
 }
 
 /**
@@ -126,20 +133,20 @@ function providerSource(fixture: RemoteCollaborationFixture, expected: ProviderI
 
 /**
  * The host handoff report. `missing` is every component the handoff lacks, `recovered`
- * the ones it independently confirmed, and `recoverable` is `false` once a missing
- * component is proven gone with no surviving copy and `null` while any missing
- * component's survival is undecided. `true` would need proof of a surviving copy; the
- * fixture is the only copy of either source, so this suite cannot produce it.
+ * the ones it independently confirmed, and `recoverable` says whether a missing component
+ * still has a surviving copy: `true` when Git keeps A's result on a ref outside the tracked
+ * branch, `false` once every copy is proven gone, and `null` while any survival is undecided.
  */
-function handoffReport(sources: Readonly<Record<HandoffComponent, SourceState>>): HandoffReport | null {
+function handoffReport(sources: HandoffSources): HandoffReport | null {
   const components: readonly HandoffComponent[] = ["provider", "git"];
   const recovered = components.filter((name) => sources[name] === "present");
   if (recovered.length === components.length) return null;
+  const undecided = sources.provider === "unknown" || sources.git === "unknown";
   return {
     code: "remote.handoff-unavailable",
     missing: components.filter((name) => sources[name] !== "present"),
     recovered,
-    recoverable: components.some((name) => sources[name] === "unknown") ? null : false,
+    recoverable: undecided ? null : sources.git === "surviving",
   };
 }
 
@@ -341,8 +348,8 @@ describe("remote handoff", () => {
       handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toBeNull();
 
-    // invariant: A later descendant push still contains A's result, so survival follows the
-    // history rather than the branch tip.
+    // invariant: A later descendant push still reaches A's result from the tracked branch, so
+    // survival follows that history rather than the branch tip.
     writeFileSync(join(b.repo, "later-work.md"), "later\n");
     git(b.repo, ["add", "later-work.md"]);
     git(b.repo, ["commit", "-q", "-m", "later work on the tracked branch"]);
@@ -410,6 +417,23 @@ describe("remote handoff", () => {
     expect(
       handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
     ).toEqual({ code: "remote.handoff-unavailable", missing: ["git"], recovered: ["provider"], recoverable: null });
+  }, 90_000);
+
+  test("remote handoff: a result kept only on another ref is not a tracked-branch handoff", () => {
+    const fixture = host("git-unrelated-ref");
+    const source = handoffFromA(fixture);
+    // note: Another branch keeps the commit alive after the tracked branch is gone, so the
+    // result is recoverable by an operator - but B clones the tracked branch and cannot obtain
+    // it. The old any-ref probe called this a successful handoff.
+    git(source.bare, ["update-ref", "refs/heads/kept-result", source.commit]);
+    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    expect(providerSource(fixture, source.record)).toBe("present");
+    expect(gitSource(source.bare, source.commit)).toBe("surviving");
+    expect(
+      handoffReport({ provider: providerSource(fixture, source.record), git: gitSource(source.bare, source.commit) }),
+    ).toEqual({ code: "remote.handoff-unavailable", missing: ["git"], recovered: ["provider"], recoverable: true });
+    // invariant: the tracked branch is the only bootstrap path; a surviving side branch is not it.
+    expect(() => fixture.sandbox("b")).toThrow();
   }, 90_000);
 
   test("remote handoff: losing both durable copies is irrecoverable", () => {
