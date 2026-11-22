@@ -227,22 +227,29 @@ function unsafeFidelity(path: string, detail: string): never {
 const PORTABLE_FIELD_LIMIT = 512;
 
 /**
- * note: A path leaks the same machine detail embedded in a sentence as it does at
- * the start, so only a plain relative reference or a URL stays portable. A home,
- * Windows or file URL root refuses wherever it appears, because a sentence that
- * glues one behind another word still names the machine; the remaining
- * leading-slash rule needs a boundary so `https://host/path` is not a match.
+ * note: A complete URL stays portable whatever its path says, so mask it before
+ * the path check; its `/<segment>` tail would otherwise read as an absolute path.
  */
-const EMBEDDED_PATH =
-  /\/Users\/|\/home\/|\b[A-Za-z]:[\\/]|\\\\|~\/|file:\/\/|(?:^|[\s"'`(\[<{=,;:])\/(?!\/)\S/i;
+const URL_TOKEN = /https?:\/\/[^\s"'`<>()[\]{}]+/gi;
+
+/**
+ * note: A path leaks the same machine detail embedded in a sentence as it does at
+ * the start, so only a plain relative reference or a URL stays portable. An
+ * absolute path after any boundary - whitespace or punctuation, under any root -
+ * is refused, because a sentence that glues one behind another word still names
+ * the machine. The slash must be followed by a non-space, so prose separation
+ * such as `PR #42 / commit` stays readable.
+ */
+const EMBEDDED_PATH = /(?:^|[^\w])\/(?!\/)\S|\b[A-Za-z]:[\\/]|\\\\|~\/|file:\/\//i;
 
 /**
  * note: A reviewed conservative shape rule, not a credential scanner: the header,
- * credential label and common key shapes this boundary refuses wherever they
- * appear, in any spelling and with or without a separator.
+ * a credential label only when an assignment follows it, and the common key
+ * shapes. A bare word such as `Token expiration` is business prose, so the label
+ * alone is not refused.
  */
 const CREDENTIAL_SHAPE =
-  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:authorization|token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
+  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:authorization|token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b\s*[:=]\s*\S|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
 
 function portableValue(value: unknown, path: string): string | null {
   if (value === undefined || value === null) return null;
@@ -253,10 +260,11 @@ function portableValue(value: unknown, path: string): string | null {
     unsafeFidelity(path, `is longer than ${String(PORTABLE_FIELD_LIMIT)} characters`);
   }
   if (/[\u0000-\u001f\u007f]/.test(value)) unsafeFidelity(path, "carries a control character");
+  const withoutUrls = value.replace(URL_TOKEN, " ");
   if (
     /^(?:[A-Za-z]:[\\/]|[\\/~])/.test(value) ||
     value.split(/[\\/]/).includes("..") ||
-    EMBEDDED_PATH.test(value) ||
+    EMBEDDED_PATH.test(withoutUrls) ||
     CREDENTIAL_SHAPE.test(value)
   ) {
     unsafeFidelity(path, "carries a filesystem location or credential material, which the snapshot cannot represent");

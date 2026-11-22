@@ -2503,6 +2503,8 @@ describe("remote observation cache", () => {
       { id: "R9", title: "Imported finding", closure_evidence: "api_key=sk-live-12345678" },
       { id: "R9", title: "Imported finding", closure_evidence: "token=example-secret" },
       { id: "R9", title: "Imported finding", detail_doc: "path)/Users/alice/private.txt" },
+      { id: "R9", title: "Imported finding", detail_doc: "note /opt/home/alice/x" },
+      { id: "R9", title: "Imported finding", detail_doc: "path)/Volumes/Work/alice/private.txt" },
     ]) {
       await expect(
         submit(withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] })),
@@ -2586,6 +2588,32 @@ describe("remote observation cache", () => {
         generation: 3,
       }),
     ).toMatchObject({ revision: 4, completeness: "complete" });
+
+    // note: Control - a bare credential word in prose and a URL whose path looks like a
+    // filesystem root stay portable; only an assigned credential or a real path refuses.
+    expect(
+      await ingestRemoteObservation(context, {
+        ...observation(check, {
+          expectRevision: 4,
+          snapshot: withSubject({
+            transitions: [
+              {
+                ...subject.transitions[0]!,
+                imported: true,
+                evidence: {
+                  id: "R12",
+                  title: "Token expiration and refresh window",
+                  detail_doc: "plans/projects/_default/residuals/R12-finding.md",
+                  closure_evidence: "See https://example.test/home/7 for the follow-up",
+                },
+              },
+            ],
+          }),
+        }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).toMatchObject({ revision: 5, completeness: "complete" });
   });
 
   /** note: Apply one reviewed legacy register import and return the source lane it wrote. */
