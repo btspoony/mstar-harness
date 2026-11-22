@@ -246,6 +246,36 @@ async function withWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Prom
 }
 
 /**
+ * The remote branch of every roadmap write: freeze the new project journal document (the
+ * reviewed content plus the next roadmap revision) as one durable outbox intent. Roadmap
+ * content is portable text, so no checkout path or source hash enters the frozen subject.
+ */
+async function queueRoadmapWrite(
+  context: StoreContext,
+  projectId: string,
+  operationId: string,
+  contentMarkdown: string,
+): Promise<never> {
+  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
+  // would close the cycle before the roadmap contract initializes.
+  const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
+  const at = new Date().toISOString();
+  throw pendingRemoteEffect(
+    await prepareRemoteProjectWrite(context, {
+      projectId,
+      operationId,
+      next: (current) => {
+        const roadmap = current.roadmap as { revision: number } | null;
+        return {
+          ...current,
+          roadmap: { contentMarkdown, revision: (roadmap?.revision ?? 0) + 1, updatedAt: at },
+        };
+      },
+    }),
+  );
+}
+
+/**
  * The one roadmap write (contract §6). `expected` carries the caller's
  * comparison claims; both are REQUIRED, because a claim derived from the same
  * read the write is built on can never disagree with it — the guard would be
@@ -335,6 +365,10 @@ export async function replaceRoadmapAuthority(
   },
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    validateContent(input.projectId, input.contentMarkdown);
+    return queueRoadmapWrite(context, input.projectId, operation.operationId, input.contentMarkdown);
+  }
   return withWrite(context, (db) =>
     writeAuthority(
       db,
@@ -352,6 +386,13 @@ export async function importRoadmapAuthority(
   review: RoadmapImportReview,
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    // note: The reviewed preview's content is the portable document; its checkout path and source
+    // hash pin what the operator read and never enter the frozen subject.
+    const source = sourceBytes(review.sourcePath);
+    validateContent(review.projectId, source.content);
+    return queueRoadmapWrite(context, review.projectId, operation.operationId, source.content);
+  }
   return withWrite(context, (db) => {
     requireActive(db);
     const requestHash = sha256(JSON.stringify({

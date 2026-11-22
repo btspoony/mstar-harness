@@ -15,13 +15,15 @@
  * recorded as an invalidation (the cache stops serving) and returned as its
  * named refusal - never as an empty or zero result.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   readCollaborationBinding,
   initializeRemoteCacheStore,
+  ISSUE_REF_PATTERN,
   localPredecessorRetiredPath,
+  mintIssueRef,
   openRemoteCache,
   readLocalPredecessorLane,
   retireLocalPredecessorLane,
@@ -34,7 +36,7 @@ import {
   type CollaborationBinding,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
-import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, requireSemanticKey, type CaptureInput } from "./issue.js";
+import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, occurrenceColumns, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
   assertSelectionUnchanged,
   CollaborationIdentityError,
@@ -2090,7 +2092,12 @@ const ADOPTION_RETAIN_KEYS = ["issueRef", "fields", "occurrences", "transitions"
  * accepted from the caller. `retain` carries the reviewed complete MStar subject
  * (no `head`, which is an event-chain fact).
  */
-function adoptionDocument(raw: unknown): { kind: "new"; capture: Omit<CaptureInput, "projectId" | "title"> } | { kind: "retain"; issueRef: string } {
+/** note: The validated adoption input: a capture for `new`, or the reviewed complete subject for `retain`. */
+type AdoptionDocument =
+  | Readonly<{ kind: "new"; capture: Omit<CaptureInput, "projectId" | "title"> }>
+  | Readonly<{ kind: "retain"; issueRef: string; source: Record<string, unknown> }>;
+
+function adoptionDocument(raw: unknown): AdoptionDocument {
   const body = record(raw, "adoption");
   allowOnly(body, "adoption", ["version", "kind", "capture", "sourceIssue"]);
   if (body.version !== 1) invalid("adoption.version", "must be 1");
@@ -2110,82 +2117,99 @@ function adoptionDocument(raw: unknown): { kind: "new"; capture: Omit<CaptureInp
     }
     list(source[key], `adoption.sourceIssue.${key}`).forEach((entry, index) => record(entry, `adoption.sourceIssue.${key}[${String(index)}]`));
   }
-  return { kind, issueRef: source.issueRef as string };
+  return { kind, issueRef: source.issueRef as string, source };
 }
 
 /**
- * `remote adopt-issue`: validate the strict adoption DTO against the exact
- * observed, unmarked native issue, then REFUSE `remote.outbox-unavailable`.
- *
- * This v2 cache has no durable outbox, so an admission cannot be recorded: the
- * verb never creates an issue, never marks the native issue, never appends to a
- * cache snapshot, and never performs a "cache-only adoption". Plan 2
- * (`20261122-remote-outbox`) replaces only the final refusal with normal outbox
- * preparation; every refusal below is already final.
+ * The genesis subject an adoption appends: the reviewed complete MStar subject for `retain`,
+ * or the capture's own fields and first occurrence for `new`. It is validated by the same
+ * freeze an ordinary replacement takes, so an incomplete genesis never reaches the outbox.
  */
-export async function prepareRemoteAdoption(context: StoreContext, request: RemoteAdoptionRequest): Promise<never> {
+function adoptionSubject(adoption: AdoptionDocument, nativeTitle: string, projectId: string): Record<string, unknown> {
+  if (adoption.kind === "retain") {
+    const source = adoption.source;
+    return {
+      fields: source.fields,
+      occurrences: source.occurrences,
+      transitions: source.transitions,
+      relations: source.relations,
+      provenance: source.provenance,
+      projectMoves: source.projectMoves,
+    };
+  }
+  const cols = occurrenceColumns(adoption.capture);
+  const at = nowRfc3339();
+  return {
+    fields: {
+      title: nativeTitle,
+      kind: adoption.capture.kind,
+      severity: adoption.capture.severity,
+      disposition: "open",
+      impact: adoption.capture.impact,
+      acceptance: adoption.capture.acceptance,
+      owner: adoption.capture.owner ?? null,
+      registeredAt: at,
+      closedAt: null,
+      closureNote: null,
+      createdAt: at,
+      updatedAt: at,
+      revision: 1,
+      milestoneId: null,
+    },
+    occurrences: [
+      {
+        eventId: randomUUID(),
+        occurrenceKey: cols.occurrenceKey,
+        sourceKind: cols.sourceKind,
+        sourceIdentity: cols.sourceIdentity,
+        rootCauseKey: cols.rootCauseKey,
+        acceptanceKey: cols.acceptanceKey,
+        location: cols.location,
+        observedBehavior: cols.observedBehavior,
+        evidence: adoption.capture.evidence,
+        discoveredAt: cols.discoveredAt,
+        recordedAt: at,
+        imported: false,
+      },
+    ],
+    transitions: [],
+    relations: [],
+    // note: The capture's own provenance row, exactly as local capture records it.
+    provenance: [
+      {
+        eventId: randomUUID(),
+        kind: "capture",
+        target: cols.sourceIdentity,
+        sourceHash: createHash("sha256").update(cols.occurrenceKey, "utf8").digest("hex"),
+        origin: "unscoped",
+        legacyProject: null,
+        legacyBucket: null,
+        legacyEntryId: null,
+        legacyRecord: null,
+        importedAt: null,
+      },
+    ],
+    projectMoves: [],
+  };
+}
+
+/**
+ * `remote adopt-issue`: validate the strict adoption DTO against the exact observed, unmarked
+ * native issue, then freeze it as one durable `issue-adopt` intent. The verb never creates an
+ * issue, never marks the native issue, never appends to a cache snapshot, and never performs a
+ * "cache-only adoption": the effect exists only once the provider has appended it and the
+ * receipt has confirmed the exact event.
+ */
+export async function prepareRemoteAdoption(context: StoreContext, request: RemoteAdoptionRequest): Promise<RemoteIntent> {
   const projectId = text(request?.projectId, "projectId");
   const issueId = linearId(request?.issueId, "issueId");
   const operationId = linearId(request?.operationId, "operationId");
   const adoption = adoptionDocument(request?.adoption);
-  const location = resolveCollaborationLocation(context);
-  const selection = remoteSelection(location);
-  const selected = selectedProject(selection, projectId);
-  const binding = readCollaborationBinding(context);
-  if (binding === null || binding.version !== 3 || binding.state !== "active") {
-    throw new StoreError(
-      "collaboration.stale-binding",
-      "This checkout holds no finalized remote binding, so an adoption cannot address its observed scope. " +
-        "Run the reviewed remote bind first; nothing was written.",
-    );
-  }
-
-  let snapshot: RemoteSnapshot | null = null;
   // note: The cache is admitted for the same selector and binding the adoption document was
   // validated against, so a rebind in between never mixes two generations.
-  const handle = await openRemoteCache(context, "read", { location, binding });
-  try {
-    const row = handle.db
-      .prepare(
-        "select o.completeness, o.snapshot_json, b.verified_at, b.verification_json " +
-          "from remote_bindings b left join remote_observations o on o.generation = b.generation and o.project_key = b.project_key " +
-          "where b.generation = ? and b.project_key = ?",
-      )
-      .get(binding.generation, projectId) as
-      | { completeness?: unknown; snapshot_json?: unknown; verified_at?: unknown; verification_json?: unknown }
-      | undefined;
-    if (row === undefined) {
-      throw new StoreError(
-        "remote.scope-mismatch",
-        `Project ${projectId} is not bound at generation ${String(binding.generation)} in this cache; nothing was written.`,
-      );
-    }
-    const verifiedAt = typeof row.verified_at === "string" ? row.verified_at : "";
-    const outcome = outcomeLabel(typeof row.verification_json === "string" ? row.verification_json : "{}");
-    if (row.completeness !== "complete" || typeof row.snapshot_json !== "string" || row.snapshot_json === "") {
-      throw new StoreError(
-        "remote.unavailable",
-        `No complete observation is stored for project ${projectId}; an adoption needs the exact observed native issue. Nothing was written.`,
-      );
-    }
-    if (outcome !== "verified" || Math.abs(Date.now() - Date.parse(verifiedAt)) > REMOTE_SCOPE_TTL_MS) {
-      throw new StoreError(
-        "collaboration.observation-stale",
-        `The access check for project ${projectId} is no longer current, so an adoption cannot address its observed issue. ` +
-          "Reverify the scope and resubmit the observation; nothing was written.",
-      );
-    }
-    const parsed: unknown = JSON.parse(row.snapshot_json);
-    if (parsed === null || typeof parsed !== "object" || !("issues" in parsed) || !Array.isArray(parsed.issues)) {
-      throw new StoreError("collaboration.unreadable", `The stored observation for project ${projectId} carries no issue list; nothing was written.`);
-    }
-    snapshot = parsed as RemoteSnapshot;
-  } finally {
-    handle.close();
-  }
-
-  const observed = snapshot.issues;
-  const native = observed.find((issue) => issue.identity.issueId === issueId);
+  const scope = await readWriteScope(context, projectId);
+  selectedProject(scope.selection, projectId);
+  const native = scope.snapshot.issues.find((issue) => issue.identity.issueId === issueId);
   if (native === undefined) {
     throw new IssueError("issue.not-found", `Provider issue ${issueId} is not observed in project ${projectId}; nothing was written.`);
   }
@@ -2198,7 +2222,7 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
     );
   }
   if (adoption.kind === "retain") {
-    const bound = observed.find((issue) => issue.mstar !== null && issue.mstar.issueRef === adoption.issueRef);
+    const bound = scope.snapshot.issues.find((issue) => issue.mstar !== null && issue.mstar.issueRef === adoption.issueRef);
     if (bound !== undefined) {
       throw new StoreError(
         "remote.scope-mismatch",
@@ -2212,14 +2236,15 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
     // native title. A caller-supplied project or title is not part of the DTO.
     assertCaptureRequest({ ...adoption.capture, projectId, title: native.nativeTitle });
   }
-
-  throw new StoreError(
-    "remote.outbox-unavailable",
-    `Adoption of provider issue ${issueId} was admitted against the observed unmarked native issue, but this v2 cache has ` +
-      "no durable outbox, so the intent cannot be recorded. Nothing was written \u2014 there is no cache-only adoption. " +
-      "The durable adoption intent arrives with the remote outbox plan.",
-    { projectId, issueId, operationId, kind: adoption.kind, selectedWriterId: selected.writerId },
-  );
+  const subject = adoptionSubject(adoption, native.nativeTitle, projectId);
+  return prepareRemoteIssueWrite(context, {
+    projectId,
+    operationId,
+    ...(adoption.kind === "retain" ? { issueRef: adoption.issueRef } : {}),
+    issueId,
+    kind: "issue-adopt",
+    next: () => subject,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2695,4 +2720,1463 @@ function pendingIntentOf(row: Record<string, unknown>, project: string): RemoteP
     kind: kind as RemoteEventChange["kind"],
     createdAt: row.created_at,
   };
+}
+
+// ---------------------------------------------------------------------------
+// note: Q2 outbox lifecycle: inspection, one send permit, receipts and recovery
+// ---------------------------------------------------------------------------
+
+/** note: The closed receipt outcomes the Host Agent may submit for one attempt. */
+export type RemoteReceiptOutcome =
+  | Readonly<{ kind: "confirmed"; identity: ProviderIssueIdentity; recordId: string; event: RemoteEvent }>
+  | Readonly<{ kind: "unconfirmed"; reason: "no-response" | "not-found" | "ambiguous" | "provider-unavailable" }>
+  | Readonly<{
+      kind: "conflict";
+      expectedHeads: readonly string[];
+      observedHeads: readonly string[];
+      observedRecords: readonly Readonly<{ identity: ProviderIssueIdentity; recordId: string; event: RemoteEvent }>[];
+    }>
+  | Readonly<{ kind: "not-sent"; code: string }>;
+
+/** note: One recorded receipt or reconciliation; the evidence behind a durable state. */
+export type RemoteReceiptRecord = Readonly<{
+  source: "receipt" | "reconcile";
+  receiptHash: string;
+  outcome: RemoteReceiptOutcome;
+  recordedAt: string;
+}>;
+
+/** note: `outbox-show`: the frozen request and its durable state, never a send permit. */
+export type RemoteIntentRead = Readonly<{
+  version: 1;
+  operationId: string;
+  projectId: string;
+  generation: number;
+  state: RemoteIntentState;
+  attemptId: string | null;
+  requestHash: string;
+  binding: RemoteIntentBinding;
+  event: RemoteEvent;
+  target: string | null;
+  expectedHeads: readonly string[];
+  executionKey: RemoteIntentExecutionKey | null;
+  operator: string | null;
+  reason: string | null;
+  resolves: string | null;
+  resolvedBy: string | null;
+  abandonReason: string | null;
+  receipts: readonly RemoteReceiptRecord[];
+  createdAt: string;
+  updatedAt: string;
+}>;
+
+/** note: The one permit one dispatch issues: the frozen request, one attempt id. */
+export type RemoteDispatchPermit = Readonly<{
+  version: 1;
+  attemptId: string;
+  binding: RemoteIntentBinding;
+  operationId: string;
+  requestHash: string;
+  frozenRequest: RemoteIntentRequest;
+}>;
+
+export type RemoteDispatchResult =
+  | Readonly<{ kind: "permit"; permit: RemoteDispatchPermit }>
+  | Readonly<{ kind: "state"; operationId: string; state: RemoteIntentState; requestHash: string }>;
+
+/** note: `outbox-resolve`: the reviewed replacement event for one conflicted intent. */
+export type RemoteResolution = Readonly<{
+  operationId: string;
+  operator: string;
+  reason: string;
+  event: unknown;
+}>;
+
+/** note: One frozen request together with the stored facts the lifecycle dispatches on. */
+type StoredRequest = Readonly<{
+  request: RemoteIntentRequest;
+  operator: string | null;
+  reason: string | null;
+}>;
+
+type OutboxIntentRow = Readonly<{
+  operationId: string;
+  generation: number;
+  projectKey: string;
+  requestHash: string;
+  requestJson: string;
+  executionKeyJson: string | null;
+  state: RemoteIntentState;
+  attemptId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  abandonReason: string | null;
+  resolves: string | null;
+  resolvedBy: string | null;
+}>;
+
+const INTENT_STATES: readonly RemoteIntentState[] = ["enqueued", "unconfirmed", "confirmed", "conflict", "abandoned"];
+
+function malformedIntent(operationId: string, detail: string): StoreError {
+  return new StoreError(
+    "collaboration.unreadable",
+    `The stored outbox row for operation ${operationId} ${detail}; nothing was read or changed.`,
+  );
+}
+
+function intentRow(db: StoreDb, operationId: string): OutboxIntentRow {
+  const row = db
+    .prepare(
+      "select operation_id, generation, project_key, request_hash, request_json, execution_key_json, state, attempt_id, " +
+        "created_at, updated_at, abandon_reason, resolves, resolved_by from remote_outbox where operation_id = ?",
+    )
+    .get(operationId) as Record<string, unknown> | undefined;
+  if (row === undefined) {
+    throw new StoreError(
+      "remote.intent-not-found",
+      `No outbox intent is recorded for operation ${operationId}; an unknown id names nothing to inspect, dispatch or ` +
+        `reconcile. Read the pending intents for the project first. Nothing was changed.`,
+      { operationId },
+    );
+  }
+  if (
+    typeof row.operation_id !== "string" ||
+    typeof row.generation !== "number" ||
+    typeof row.project_key !== "string" ||
+    typeof row.request_hash !== "string" ||
+    typeof row.request_json !== "string" ||
+    typeof row.created_at !== "string" ||
+    typeof row.updated_at !== "string" ||
+    !INTENT_STATES.includes(row.state as RemoteIntentState)
+  ) {
+    throw malformedIntent(operationId, "is structurally incomplete");
+  }
+  return {
+    operationId: row.operation_id,
+    generation: row.generation,
+    projectKey: row.project_key,
+    requestHash: row.request_hash,
+    requestJson: row.request_json,
+    executionKeyJson: typeof row.execution_key_json === "string" ? row.execution_key_json : null,
+    state: row.state as RemoteIntentState,
+    attemptId: typeof row.attempt_id === "string" ? row.attempt_id : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    abandonReason: typeof row.abandon_reason === "string" ? row.abandon_reason : null,
+    resolves: typeof row.resolves === "string" ? row.resolves : null,
+    resolvedBy: typeof row.resolved_by === "string" ? row.resolved_by : null,
+  };
+}
+
+/**
+ * invariant: A stored request is re-validated against the current contract before any lifecycle
+ * reads it, so a hand-edited or partially written row refuses as unreadable instead of
+ * driving a send. The reviewed resolution additionally carries its operator and reason.
+ */
+function storedRequest(row: OutboxIntentRow): StoredRequest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.requestJson);
+  } catch {
+    throw malformedIntent(row.operationId, "carries no readable frozen request");
+  }
+  try {
+    const body = record(parsed, "request");
+    allowOnly(body, "request", ["binding", "event", "target", "expectedHeads", "executionKey", "operator", "reason"]);
+    const binding = intentBinding(body.binding);
+    const event = remoteEvent(body.event, binding);
+    const target = intentTarget(body.target, event.change, binding);
+    const expectedHeads = digestHead(body.expectedHeads, "request.expectedHeads");
+    const executionKey =
+      body.executionKey === undefined || body.executionKey === null
+        ? null
+        : intentExecutionKey(body.executionKey, event.operationId);
+    return {
+      request: { binding, event, target, expectedHeads, executionKey },
+      operator: typeof body.operator === "string" ? body.operator : null,
+      reason: typeof body.reason === "string" ? body.reason : null,
+    };
+  } catch {
+    throw malformedIntent(row.operationId, "carries a frozen request the contract cannot read");
+  }
+}
+
+/** note: The cache's materialized binding must equal the frozen one before any lifecycle act. */
+function assertFrozenBinding(db: StoreDb, binding: RemoteIntentBinding, operationId: string): void {
+  const stored = db
+    .prepare(
+      "select selector_commit, provider, workspace_id, team_id, provider_project_id, journal_issue_id, writer_id " +
+        "from remote_bindings where generation = ? and project_key = ?",
+    )
+    .get(binding.generation, binding.projectKey) as Record<string, unknown> | undefined;
+  if (
+    stored === undefined ||
+    stored.selector_commit !== binding.selectorCommit ||
+    stored.provider !== binding.provider ||
+    stored.workspace_id !== binding.workspaceId ||
+    stored.team_id !== binding.teamId ||
+    stored.provider_project_id !== binding.projectId ||
+    stored.journal_issue_id !== binding.journalIssueId ||
+    (typeof stored.writer_id === "string" ? stored.writer_id : null) !== binding.writerId
+  ) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `Operation ${operationId} was frozen under a binding the cache no longer records at generation ` +
+        `${String(binding.generation)} for ${binding.projectKey}; it is read only under its original binding. ` +
+        `Nothing was changed.`,
+      { operationId, generation: binding.generation },
+    );
+  }
+}
+
+function receiptRows(db: StoreDb, operationId: string): RemoteReceiptRecord[] {
+  const rows = db
+    .prepare(
+      "select receipt_hash, source, evidence_json, recorded_at from remote_outbox_receipts " +
+        "where operation_id = ? order by recorded_at, receipt_hash",
+    )
+    .all(operationId) as Array<Record<string, unknown>>;
+  return rows.map((row) => {
+    if (
+      typeof row.receipt_hash !== "string" ||
+      (row.source !== "receipt" && row.source !== "reconcile") ||
+      typeof row.evidence_json !== "string" ||
+      typeof row.recorded_at !== "string"
+    ) {
+      throw malformedIntent(operationId, "holds an unreadable receipt row");
+    }
+    let evidence: unknown;
+    try {
+      evidence = JSON.parse(row.evidence_json);
+    } catch {
+      throw malformedIntent(operationId, "holds a receipt the contract cannot read");
+    }
+    const body = record(evidence, "receipt");
+    return {
+      source: row.source as "receipt" | "reconcile",
+      receiptHash: row.receipt_hash,
+      recordedAt: row.recorded_at,
+      outcome: receiptOutcomeOf(body.outcome, operationId),
+    };
+  });
+}
+
+/** note: A stored outcome is re-read for the disclosure only: its shape is validated, not re-judged. */
+function receiptOutcomeOf(raw: unknown, operationId: string): RemoteReceiptOutcome {
+  try {
+    return receiptOutcome(raw, "receipt.outcome");
+  } catch {
+    throw malformedIntent(operationId, "holds a receipt outcome the contract cannot read");
+  }
+}
+
+/**
+ * invariant: One receipt outcome, exactly as the contract closes it. `confirmed` must name the
+ * target's provider identity and the exact event the caller decoded back, so a receipt can
+ * never be confused with a reviewer's summary. The frozen binding's scope is required.
+ */
+function receiptOutcome(raw: unknown, path: string): RemoteReceiptOutcome {
+  const body = record(raw, path);
+  const kind = oneOf(body.kind, ["confirmed", "unconfirmed", "conflict", "not-sent"] as const, `${path}.kind`);
+  if (kind === "confirmed") {
+    allowOnly(body, path, ["kind", "identity", "recordId", "event"]);
+    return {
+      kind,
+      identity: issueIdentity(body.identity, `${path}.identity`),
+      recordId: linearId(body.recordId, `${path}.recordId`),
+      event: frozenEvent(body.event, `${path}.event`),
+    };
+  }
+  if (kind === "unconfirmed") {
+    allowOnly(body, path, ["kind", "reason"]);
+    return {
+      kind,
+      reason: oneOf(
+        body.reason,
+        ["no-response", "not-found", "ambiguous", "provider-unavailable"] as const,
+        `${path}.reason`,
+      ),
+    };
+  }
+  if (kind === "conflict") {
+    allowOnly(body, path, ["kind", "expectedHeads", "observedHeads", "observedRecords"]);
+    return {
+      kind,
+      expectedHeads: digestHead(body.expectedHeads, `${path}.expectedHeads`),
+      observedHeads: digestHead(body.observedHeads, `${path}.observedHeads`),
+      observedRecords: list(body.observedRecords, `${path}.observedRecords`).map((entry, index) => {
+        const record_ = record(entry, `${path}.observedRecords[${index}]`);
+        allowOnly(record_, `${path}.observedRecords[${index}]`, ["identity", "recordId", "event"]);
+        return {
+          identity: issueIdentity(record_.identity, `${path}.observedRecords[${index}].identity`),
+          recordId: linearId(record_.recordId, `${path}.observedRecords[${index}].recordId`),
+          event: frozenEvent(record_.event, `${path}.observedRecords[${index}].event`),
+        };
+      }),
+    };
+  }
+  allowOnly(body, path, ["kind", "code"]);
+  return { kind, code: text(body.code, `${path}.code`) };
+}
+
+/**
+ * note: A receipt's event is validated against the contract's own event shape with a
+ * placeholder binding; the exact equality with the frozen event is the caller's check.
+ */
+function frozenEvent(raw: unknown, path: string): RemoteEvent {
+  const body = record(raw, path);
+  const binding = intentBinding({
+    generation: 1,
+    projectKey: text(body.projectId, `${path}.projectId`),
+    selectorCommit: "0".repeat(40),
+    provider: "linear",
+    workspaceId: "00000000-0000-4000-8000-000000000000",
+    teamId: "00000000-0000-4000-8000-000000000000",
+    projectId: "00000000-0000-4000-8000-000000000000",
+    journalIssueId: "00000000-0000-4000-8000-000000000000",
+    writerId: null,
+  });
+  return remoteEvent(body, binding);
+}
+
+function assertReceiptTargets(outcome: RemoteReceiptOutcome, request: StoredRequest, operationId: string): void {
+  if (outcome.kind !== "confirmed") return;
+  const expectedIssue = request.request.target ?? request.request.binding.journalIssueId;
+  const scope = request.request.binding;
+  if (
+    outcome.identity.workspaceId !== scope.workspaceId ||
+    outcome.identity.teamId !== scope.teamId ||
+    outcome.identity.projectId !== scope.projectId ||
+    outcome.identity.issueId !== expectedIssue
+  ) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `The confirmed record of operation ${operationId} is not the immutable provider record this intent addresses ` +
+        `(${expectedIssue} in the bound project); a receipt from another scope never confirms it. Nothing was changed.`,
+      { operationId, expectedIssue, observedIssue: outcome.identity.issueId },
+    );
+  }
+  if (canonicalJson(outcome.event) !== canonicalJson(request.request.event)) {
+    throw new StoreError(
+      "remote.operation-conflict",
+      `The confirmed record of operation ${operationId} carries another event than the frozen request; a differing ` +
+        `effect is a conflict to review, never a confirmation. Nothing was changed.`,
+      { operationId },
+    );
+  }
+}
+
+/** note: The receipt's own durable identity: a replay of the same submission never doubles the evidence. */
+function receiptHashOf(source: "receipt" | "reconcile", receipt: RemoteReceiptEnvelope, outcome: RemoteReceiptOutcome): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        source,
+        attemptId: receipt.attemptId,
+        generation: receipt.generation,
+        observedAt: receipt.observedAt,
+        operationId: receipt.operationId,
+        outcome,
+        projectId: receipt.projectId,
+        requestHash: receipt.requestHash,
+        selectorCommit: receipt.selectorCommit,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+type RemoteReceiptEnvelope = Readonly<{
+  version: 1;
+  selectorCommit: string;
+  generation: number;
+  projectId: string;
+  operationId: string;
+  attemptId: string;
+  requestHash: string;
+  observedAt: string;
+  outcome: unknown;
+}>;
+
+function receiptEnvelope(raw: unknown): RemoteReceiptEnvelope {
+  const body = record(raw, "receipt");
+  allowOnly(body, "receipt", [
+    "version", "selectorCommit", "generation", "projectId", "operationId", "attemptId", "requestHash", "observedAt",
+    "outcome",
+  ]);
+  if (body.version !== 1) invalid("receipt.version", "must be 1");
+  const selectorCommit = text(body.selectorCommit, "receipt.selectorCommit");
+  if (!GIT_OBJECT_ID.test(selectorCommit)) invalid("receipt.selectorCommit", "must be a Git object id");
+  return {
+    version: 1,
+    selectorCommit,
+    generation: positiveInteger(body.generation, "receipt.generation"),
+    projectId: text(body.projectId, "receipt.projectId"),
+    operationId: linearId(body.operationId, "receipt.operationId"),
+    attemptId: linearId(body.attemptId, "receipt.attemptId"),
+    requestHash: digest(body.requestHash, "receipt.requestHash"),
+    observedAt: instant(body.observedAt, "receipt.observedAt"),
+    outcome: body.outcome,
+  };
+}
+
+/** note: A confirmed effect invalidates the snapshot it moved: the cache stops serving a stale base. */
+function invalidateConfirmedBase(db: StoreDb, generation: number, projectKey: string): void {
+  const at = nowRfc3339();
+  db.prepare(
+    "update remote_observations set revision = revision + 1, as_of = null, completeness = 'unavailable', " +
+      "code = 'remote.effect-confirmed', snapshot_json = null, received_at = ? where generation = ? and project_key = ?",
+  ).run(at, generation, projectKey);
+  db.prepare("delete from remote_issue_identities where generation = ? and project_key = ?").run(generation, projectKey);
+}
+
+/**
+ * `recordRemoteReceipt` / `outbox-receipt`: record what one dispatched attempt observed.
+ * The receipt must address the intent's own attempt, request and binding; a confirmed effect
+ * must be the exact frozen event on the exact addressed record. The evidence row and the
+ * resulting state commit together, so a lost response is never reported as either outcome.
+ */
+export async function recordRemoteReceipt(context: StoreContext, receipt: unknown): Promise<RemoteIntentRead> {
+  return recordReceiptEvidence(context, receipt, "receipt");
+}
+
+/**
+ * `reconcileRemoteIntent` / `outbox-reconcile`: read-only recovery of one uncertain attempt
+ * under its ORIGINAL binding (including a draining generation). It never issues a permit and
+ * never sends; only a unique exact match advances the intent to `confirmed`.
+ */
+export async function reconcileRemoteIntent(context: StoreContext, receipt: unknown): Promise<RemoteIntentRead> {
+  return recordReceiptEvidence(context, receipt, "reconcile");
+}
+
+async function recordReceiptEvidence(
+  context: StoreContext,
+  raw: unknown,
+  source: "receipt" | "reconcile",
+): Promise<RemoteIntentRead> {
+  const envelope = receiptEnvelope(raw);
+  return withRemoteCacheWrite(context, (handle) => {
+    const db = handle.db;
+    const row = intentRow(db, envelope.operationId);
+    if (row.generation !== envelope.generation || row.projectKey !== envelope.projectId) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `Operation ${envelope.operationId} was frozen for project ${row.projectKey} at generation ` +
+          `${String(row.generation)}, not the receipt's ${envelope.projectId} at generation ` +
+          `${String(envelope.generation)}; recovery runs under the original binding. Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
+    const stored = storedRequest(row);
+    if (envelope.selectorCommit !== stored.request.binding.selectorCommit) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `Operation ${envelope.operationId} was frozen under selector commit ${stored.request.binding.selectorCommit}, ` +
+          `not the receipt's ${envelope.selectorCommit}; an attempt is only ever settled under the binding it was sent ` +
+          `under. Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
+    if (envelope.requestHash !== row.requestHash) {
+      throw new StoreError(
+        "remote.operation-conflict",
+        `The receipt names request hash ${envelope.requestHash}, but operation ${envelope.operationId} is frozen under ` +
+          `${row.requestHash}; evidence of another request never settles this intent. Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
+    if (row.attemptId === null || row.attemptId !== envelope.attemptId) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        row.attemptId === null
+          ? `Operation ${envelope.operationId} was never dispatched, so no attempt exists to ${source}; prepare and ` +
+            `dispatch it, or abandon it. Nothing was changed.`
+          : `The receipt names attempt ${envelope.attemptId}, but operation ${envelope.operationId} has attempt ` +
+            `${row.attemptId}; evidence of another send never settles this attempt. Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
+    const outcome = receiptOutcome(envelope.outcome, "receipt.outcome");
+    assertReceiptTargets(outcome, stored, envelope.operationId);
+    const receiptHash = receiptHashOf(source, envelope, outcome);
+    const recorded = db
+      .prepare("select 1 as found from remote_outbox_receipts where operation_id = ? and receipt_hash = ?")
+      .get(envelope.operationId, receiptHash) as { found?: number } | undefined;
+    if (recorded !== undefined) {
+      // invariant: The same submission replays its recorded evidence and never re-applies a state change.
+      return intentRead(db, row, stored);
+    }
+    if (row.state !== "unconfirmed" && row.state !== "conflict") {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${envelope.operationId} is ${row.state}; only an unconfirmed or conflicted send accepts a new receipt ` +
+          `or reconciliation. Nothing was changed.`,
+        { operationId: envelope.operationId, state: row.state },
+      );
+    }
+    const at = nowRfc3339();
+    db.prepare(
+      "insert into remote_outbox_receipts(operation_id, receipt_hash, source, outcome, evidence_json, recorded_at) " +
+        "values (?, ?, ?, ?, ?, ?)",
+    ).run(
+      envelope.operationId,
+      receiptHash,
+      source,
+      outcome.kind,
+      JSON.stringify({
+        attemptId: envelope.attemptId,
+        generation: envelope.generation,
+        observedAt: envelope.observedAt,
+        operationId: envelope.operationId,
+        outcome,
+        projectId: envelope.projectId,
+        requestHash: envelope.requestHash,
+        selectorCommit: envelope.selectorCommit,
+        source,
+      }),
+      at,
+    );
+    // invariant: A not-sent refusal leaves the state unconfirmed until explicit abandonment;
+    // only exact evidence of the frozen effect or of a fork advances it.
+    if (outcome.kind === "confirmed") {
+      db.prepare("update remote_outbox set state = 'confirmed', updated_at = ? where operation_id = ? and state = ?").run(
+        at,
+        envelope.operationId,
+        row.state,
+      );
+      invalidateConfirmedBase(db, row.generation, row.projectKey);
+    } else if (outcome.kind === "conflict") {
+      db.prepare("update remote_outbox set state = 'conflict', updated_at = ? where operation_id = ? and state = ?").run(
+        at,
+        envelope.operationId,
+        row.state,
+      );
+    }
+    return intentRead(db, intentRow(db, envelope.operationId), stored);
+  });
+}
+
+function intentRead(db: StoreDb, row: OutboxIntentRow, stored: StoredRequest): RemoteIntentRead {
+  return {
+    version: 1,
+    operationId: row.operationId,
+    projectId: row.projectKey,
+    generation: row.generation,
+    state: row.state,
+    attemptId: row.attemptId,
+    requestHash: row.requestHash,
+    binding: stored.request.binding,
+    event: stored.request.event,
+    target: stored.request.target,
+    expectedHeads: stored.request.expectedHeads,
+    executionKey: stored.request.executionKey ?? null,
+    operator: stored.operator,
+    reason: stored.reason,
+    resolves: row.resolves,
+    resolvedBy: row.resolvedBy,
+    abandonReason: row.abandonReason,
+    receipts: receiptRows(db, row.operationId),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** note: `outbox-show`: one intent under the binding it was frozen under, never a send permit. */
+export async function readRemoteIntent(context: StoreContext, operationId: string): Promise<RemoteIntentRead> {
+  const target = linearId(operationId, "operationId");
+  const handle = await openRemoteCache(context, "read");
+  try {
+    const row = intentRow(handle.db, target);
+    const stored = storedRequest(row);
+    assertFrozenBinding(handle.db, stored.request.binding, target);
+    return intentRead(handle.db, row, stored);
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The joined binding and observation one project's dispatch reads, as the cache holds it. */
+function scopeRow(db: StoreDb, generation: number, projectKey: string): Record<string, unknown> | undefined {
+  return (db
+    .prepare(
+      "select b.selector_commit, b.provider, b.workspace_id, b.team_id, b.provider_project_id, b.journal_issue_id, " +
+        "b.writer_id, b.verified_at, b.verification_json, o.completeness, o.snapshot_json " +
+        "from remote_bindings b left join remote_observations o " +
+        "on o.generation = b.generation and o.project_key = b.project_key " +
+        "where b.generation = ? and b.project_key = ?",
+    )
+    .get(generation, projectKey)) as Record<string, unknown> | undefined;
+}
+
+/** note: The observed heads of the target the frozen event replaces, from one complete snapshot. */
+function observedHeads(snapshot: RemoteSnapshot, event: RemoteEvent, target: string | null): readonly string[] {
+  if (event.change.kind === "project-replace") return snapshot.project.head ?? [];
+  const native = snapshot.issues.find((issue) => issue.identity.issueId === target);
+  if (native === undefined || native.mstar === null) return [];
+  return native.mstar.head;
+}
+
+/**
+ * invariant: A dispatch only issues its one permit against the CURRENT persisted head the frozen
+ * event names. A create must still be unobserved; an adoption must still address an unmarked
+ * issue; a replacement must cite exactly the head the snapshot observes.
+ */
+function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredRequest): void {
+  const scope = scopeRow(db, row.generation, row.projectKey);
+  const refuse = (detail: string): never => {
+    throw new StoreError(
+      "remote.dispatch-refused",
+      `${detail} Operation ${row.operationId} is not dispatched; re-observe the scope and prepare a fresh base, or ` +
+        `abandon the intent while it is provably unsent.`,
+      { operationId: row.operationId },
+    );
+  };
+  if (scope === undefined || scope.completeness !== "complete" || typeof scope.snapshot_json !== "string") {
+    return refuse(`The current observation of ${row.projectKey} is not complete, so no base can be proven for it.`);
+  }
+  let snapshot: RemoteSnapshot;
+  try {
+    snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+  } catch {
+    return refuse(`The stored observation of ${row.projectKey} is unreadable.`);
+  }
+  const event = stored.request.event;
+  const target = stored.request.target;
+  const expected = stored.request.expectedHeads;
+  if (canonicalJson(expected) !== canonicalJson(event.parents)) {
+    return refuse(`The frozen base and the frozen parents of ${row.operationId} disagree.`);
+  }
+  if (row.resolves !== null) {
+    // invariant: A reviewed resolution's base is the fresh FULL fork evidence, not a complete snapshot head.
+    const conflict = db
+      .prepare(
+        "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+          "order by recorded_at desc limit 1",
+      )
+      .get(row.resolves) as { evidence_json?: unknown } | undefined;
+    if (typeof conflict?.evidence_json !== "string") {
+      return refuse(`The resolution of ${row.resolves} has no recorded fork evidence to prove its base against.`);
+    }
+    let fork: readonly string[];
+    try {
+      const parsed: unknown = JSON.parse(conflict.evidence_json);
+      const body = record(parsed, "conflict");
+      fork = digestHead(record(body, "conflict").outcome === undefined ? [] : (record(body.outcome, "conflict.outcome").observedHeads), "fork");
+    } catch {
+      return refuse(`The recorded fork evidence of ${row.resolves} is unreadable.`);
+    }
+    if (canonicalJson(fork) !== canonicalJson(stored.request.event.parents)) {
+      return refuse(`The resolution's parents are not the fork heads ${row.resolves} recorded.`);
+    }
+    if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(fork)) {
+      return refuse(
+        `The scope observed for ${row.projectKey} no longer carries the fork ${row.resolves} recorded; a changed provider ` +
+          `base is never permission to send a resolution.`,
+      );
+    }
+    return;
+  }
+  if (event.change.kind === "issue-create") {
+    const created = event.change.issueRef;
+    if (snapshot.issues.some((issue) => issue.mstar !== null && issue.mstar.issueRef === created)) {
+      return refuse(`The reference of the create is already bound in the observed project, so it would duplicate a record.`);
+    }
+    if (expected.length !== 0) return refuse("A create starts from an empty base.");
+    return;
+  }
+  if (event.change.kind === "issue-adopt") {
+    const native = snapshot.issues.find((issue) => issue.identity.issueId === target);
+    if (native === undefined) return refuse(`Provider issue ${String(target)} is not observed in ${row.projectKey}.`);
+    if (native.mstar !== null) return refuse(`Provider issue ${String(target)} already carries the MStar marker ${native.mstar.issueRef}.`);
+    if (expected.length !== 0) return refuse("An adoption starts from an empty base.");
+    return;
+  }
+  if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(expected)) {
+    return refuse(
+      `The observed head of the addressed record is not the frozen base of ${row.operationId}; the provider base moved ` +
+        `since the intent was prepared.`,
+    );
+  }
+}
+
+/** note: The verified-writer and freshness facts a dispatch requires. */
+function assertDispatchScope(scope: Record<string, unknown>, stored: StoredRequest, operationId: string): void {
+  const refuse = (detail: string): never => {
+    throw new StoreError(
+      "remote.dispatch-refused",
+      `${detail} Operation ${operationId} is not dispatched and no send permit was issued.`,
+      { operationId },
+    );
+  };
+  const writerId = typeof scope.writer_id === "string" ? scope.writer_id : null;
+  if (stored.request.binding.writerId === null || writerId !== stored.request.binding.writerId) {
+    return refuse(
+      `The binding records no verified writer equal to ${String(stored.request.binding.writerId)}, so there is no sender ` +
+        `this generation authorizes.`,
+    );
+  }
+  if (typeof scope.verification_json !== "string" || outcomeLabel(scope.verification_json) !== "verified") {
+    return refuse(`The latest access check of ${stored.request.binding.projectKey} is not a verified scope.`);
+  }
+  const verifiedAt = typeof scope.verified_at === "string" ? scope.verified_at : "";
+  if (Math.abs(Date.now() - Date.parse(verifiedAt)) > REMOTE_SCOPE_TTL_MS) {
+    return refuse(`The verified access check of ${stored.request.binding.projectKey} is no longer current.`);
+  }
+  if (typeof scope.snapshot_json !== "string") {
+    return refuse(`No complete observation exists to prove the base for ${stored.request.binding.projectKey}.`);
+  }
+}
+
+/**
+ * `dispatchRemoteIntent` / `outbox-dispatch`: issue the ONE send permit for the oldest enqueued
+ * intent of its binding, atomically marking it `unconfirmed` before returning it. The frozen
+ * base is re-checked against the persisted current head; a lost permit response is never a
+ * second permit, and an unresolved send, conflict or foreign older intent refuses first.
+ */
+export async function dispatchRemoteIntent(context: StoreContext, operationId: string): Promise<RemoteDispatchResult> {
+  const target = linearId(operationId, "operationId");
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  if (selection.phase !== "active") {
+    throw new StoreError(
+      "remote.dispatch-refused",
+      `The checked selector generation ${String(selection.generation)} is draining, so no dispatch is admitted. ` +
+        `Reconcile the outstanding intents under the previous binding and complete the reviewed transition; nothing was sent.`,
+    );
+  }
+  const binding = readCollaborationBinding(context);
+  if (binding === null || binding.version !== 3 || binding.state !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      "This checkout holds no finalized remote binding, so no intent of it can be dispatched. Run the reviewed remote " +
+        "bind first; nothing was sent.",
+    );
+  }
+  return withRemoteCacheWrite(context, (handle) => {
+    const db = handle.db;
+    const row = intentRow(db, target);
+    const stored = storedRequest(row);
+    assertFrozenBinding(db, stored.request.binding, target);
+    if (row.generation !== selection.generation || row.projectKey !== stored.request.binding.projectKey) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `Operation ${target} belongs to generation ${String(row.generation)}, not the checked generation ` +
+          `${String(selection.generation)}; a dispatch of another generation is never admitted. Nothing was sent.`,
+        { operationId: target },
+      );
+    }
+    if (row.state === "unconfirmed") {
+      // invariant: A lost permit response never issues another permit: the attempt id stays
+      // with the outbox and only the durable state is returned.
+      return { kind: "state", operationId: target, state: row.state, requestHash: row.requestHash } satisfies RemoteDispatchResult;
+    }
+    if (row.state !== "enqueued") {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${target} is ${row.state}; only an enqueued intent is dispatched. Inspect it with outbox-show and ` +
+          `reconcile an uncertain attempt with outbox-reconcile. Nothing was sent.`,
+        { operationId: target, state: row.state },
+      );
+    }
+    const unresolved = db
+      .prepare(
+        "select operation_id, state from remote_outbox where generation = ? and project_key = ? and operation_id <> ? " +
+          "and state in ('unconfirmed','conflict') order by created_at, operation_id limit 1",
+      )
+      .get(row.generation, row.projectKey, target) as { operation_id?: unknown; state?: unknown } | undefined;
+    if (unresolved !== undefined) {
+      const aheadId = typeof unresolved.operation_id === "string" ? unresolved.operation_id : "?";
+      const aheadState = typeof unresolved.state === "string" ? unresolved.state : "?";
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${aheadId} is ${aheadState}, so no further send is admitted until it is reconciled or resolved. ` +
+          `Nothing was sent.`,
+        { operationId: target, ahead: aheadId, aheadState },
+      );
+    }
+    const oldest = db
+      .prepare(
+        "select operation_id from remote_outbox where generation = ? and project_key = ? and state = 'enqueued' " +
+          "order by created_at, operation_id limit 1",
+      )
+      .get(row.generation, row.projectKey) as { operation_id?: unknown } | undefined;
+    if (typeof oldest?.operation_id === "string" && oldest.operation_id !== target) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${oldest.operation_id} was enqueued before ${target} and is still pending; sends are serialized in ` +
+          `FIFO order per binding, so this intent waits. Nothing was sent.`,
+        { operationId: target, ahead: oldest.operation_id, aheadState: "enqueued" },
+      );
+    }
+    const scope = scopeRow(db, row.generation, row.projectKey);
+    if (scope === undefined) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The cache records no binding for ${row.projectKey} at generation ${String(row.generation)}; nothing was sent.`,
+        { operationId: target },
+      );
+    }
+    assertDispatchScope(scope, stored, target);
+    assertDispatchBase(db, row, stored);
+    const attemptId = randomUUID();
+    const at = nowRfc3339();
+    const changed = db
+      .prepare(
+        "update remote_outbox set state = 'unconfirmed', attempt_id = ?, updated_at = ? " +
+          "where operation_id = ? and state = 'enqueued'",
+      )
+      .run(attemptId, at, target) as { changes?: number };
+    if (changed.changes !== 1) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${target} changed state while its permit was issued; no permit was returned. Inspect it with ` +
+          `outbox-show before retrying. Nothing was sent.`,
+        { operationId: target },
+      );
+    }
+    return {
+      kind: "permit",
+      permit: {
+        version: 1,
+        attemptId,
+        binding: stored.request.binding,
+        operationId: target,
+        requestHash: row.requestHash,
+        frozenRequest: stored.request,
+      },
+    } satisfies RemoteDispatchResult;
+  });
+}
+
+/**
+ * `prepareRemoteResolution` / `outbox-resolve`: freeze a reviewed replacement event for one
+ * conflicted intent. The replacement carries its own operation id, the SAME target and binding,
+ * and the freshly observed complete fork-head set as parents; the original event is never
+ * rewritten and its conflict proof is retained.
+ */
+export async function prepareRemoteResolution(
+  context: StoreContext,
+  conflictedOperationId: string,
+  resolution: RemoteResolution,
+): Promise<RemoteIntent> {
+  const conflicted = linearId(conflictedOperationId, "conflictedOperationId");
+  const operationId = linearId(resolution?.operationId, "operationId");
+  const operator = text(resolution?.operator, "operator");
+  const reason = text(resolution?.reason, "reason");
+  if (operationId === conflicted) {
+    throw new StoreError(
+      "remote.operation-conflict",
+      `A resolution is a new operation id; ${operationId} names the conflicted intent itself. Nothing was enqueued.`,
+    );
+  }
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  if (selection.phase !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The checked selector generation ${String(selection.generation)} is draining, so no resolution is prepared. ` +
+        `Nothing was enqueued.`,
+    );
+  }
+  return withRemoteCacheWrite(context, (handle) => {
+    const db = handle.db;
+    const original = intentRow(db, conflicted);
+    const stored = storedRequest(original);
+    assertFrozenBinding(db, stored.request.binding, conflicted);
+    const binding = stored.request.binding;
+    const event = remoteEvent(resolution.event, binding);
+    if (event.operationId !== operationId) {
+      invalid("resolution.event.operationId", "must name the resolution's own operation id");
+    }
+    if (event.projectId !== stored.request.event.projectId) {
+      invalid("resolution.event.projectId", "must be the conflicted intent's project");
+    }
+    if (event.repoKey !== stored.request.event.repoKey) {
+      invalid("resolution.event.repoKey", "must be the conflicted intent's repository");
+    }
+    const target = intentTarget(stored.request.target, event.change, binding);
+    if (target !== stored.request.target) {
+      invalid("resolution.event.change.kind", "a resolution keeps the conflicted intent's target");
+    }
+    const parents = event.parents;
+    const existing = db
+      .prepare("select generation, project_key, request_hash, state, created_at, updated_at from remote_outbox where operation_id = ?")
+      .get(operationId) as Record<string, unknown> | undefined;
+    if (existing !== undefined) {
+      // note: An identical replay returns the same resolution intent; a different one is a new conflicting id.
+      const recorded = intentRow(db, operationId);
+      const recordedRequest = storedRequest(recorded);
+      if (
+        recorded.resolves === conflicted &&
+        recordedRequest.operator === operator &&
+        recordedRequest.reason === reason &&
+        canonicalJson(recordedRequest.request.event) === canonicalJson(event)
+      ) {
+        return {
+          version: 1,
+          operationId,
+          projectId: recorded.projectKey,
+          generation: recorded.generation,
+          state: recorded.state,
+          requestHash: recorded.requestHash,
+          target: recordedRequest.request.target,
+          executionKey: recordedRequest.request.executionKey ?? null,
+          replayed: true,
+          createdAt: recorded.createdAt,
+          updatedAt: recorded.updatedAt,
+        } satisfies RemoteIntent;
+      }
+      throw new StoreError(
+        "remote.operation-conflict",
+        `Operation ${operationId} is already recorded under another request; a resolution is a new, unused operation id. ` +
+          `Nothing was enqueued.`,
+        { operationId },
+      );
+    }
+    if (original.state !== "conflict") {
+      throw new StoreError(
+        "remote.operation-conflict",
+        `Operation ${conflicted} is ${original.state}, not conflicted, so there is no fork a resolution may replace. ` +
+          `Nothing was enqueued.`,
+        { operationId: conflicted, state: original.state },
+      );
+    }
+    const conflict = db
+      .prepare(
+        "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+          "order by recorded_at desc limit 1",
+      )
+      .get(conflicted) as { evidence_json?: unknown } | undefined;
+    if (typeof conflict?.evidence_json !== "string") {
+      throw new StoreError(
+        "remote.operation-conflict",
+        `Operation ${conflicted} is conflicted but holds no recorded fork evidence, so a resolution cannot cite the ` +
+          `observed heads it replaces. Reconcile the fork first. Nothing was enqueued.`,
+        { operationId: conflicted },
+      );
+    }
+    let fork: readonly string[];
+    try {
+      const parsed: unknown = JSON.parse(conflict.evidence_json);
+      const outcome = record(record(parsed, "evidence").outcome, "evidence.outcome");
+      fork = digestHead(outcome.observedHeads, "evidence.outcome.observedHeads");
+    } catch {
+      throw new StoreError(
+        "collaboration.unreadable",
+        `The recorded fork evidence of ${conflicted} is unreadable; nothing was enqueued.`,
+        { operationId: conflicted },
+      );
+    }
+    if (canonicalJson(parents) !== canonicalJson(fork)) {
+      throw new StoreError(
+        "remote.operation-conflict",
+        `The resolution's parents must be the complete fork-head set ${conflicted} recorded; a partial fork never ` +
+          `authorizes a replacement. Nothing was enqueued.`,
+        { operationId: conflicted, fork },
+      );
+    }
+    const requestJson = canonicalJson({
+      binding,
+      event,
+      target,
+      expectedHeads: parents,
+      operator,
+      reason,
+    });
+    const requestHash = createHash("sha256").update(requestJson, "utf8").digest("hex");
+    const at = nowRfc3339();
+    db.prepare(
+      "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+        "state, created_at, updated_at, resolves) values (?, ?, ?, ?, ?, null, 'enqueued', ?, ?, ?)",
+    ).run(operationId, original.generation, original.projectKey, requestHash, requestJson, at, at, conflicted);
+    db.prepare("update remote_outbox set resolved_by = ?, updated_at = ? where operation_id = ?").run(
+      operationId,
+      at,
+      conflicted,
+    );
+    return {
+      version: 1,
+      operationId,
+      projectId: original.projectKey,
+      generation: original.generation,
+      state: "enqueued",
+      requestHash,
+      target,
+      executionKey: null,
+      replayed: false,
+      createdAt: at,
+      updatedAt: at,
+    } satisfies RemoteIntent;
+  });
+}
+
+/**
+ * `abandonRemoteIntent` / `outbox-abandon`: explicit abandonment, only before dispatch, or after
+ * durable evidence that nothing was sent. An ambiguous effect is never abandoned as absent; the
+ * reason and the attempt history are retained.
+ */
+export async function abandonRemoteIntent(
+  context: StoreContext,
+  input: Readonly<{ operationId: string; reason: string }>,
+): Promise<RemoteIntent> {
+  const operationId = linearId(input?.operationId, "operationId");
+  const reason = text(input?.reason, "reason");
+  return withRemoteCacheWrite(context, (handle) => {
+    const db = handle.db;
+    const row = intentRow(db, operationId);
+    if (row.state === "abandoned") {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${operationId} is already abandoned (${String(row.abandonReason)}); an abandonment replays through ` +
+          `outbox-show and is never rewritten.`,
+        { operationId, state: row.state },
+      );
+    }
+    if (row.state === "confirmed" || row.state === "conflict") {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${operationId} is ${row.state}; a confirmed or conflicted effect is resolved under its original ` +
+          `binding, never abandoned. Nothing was changed.`,
+        { operationId, state: row.state },
+      );
+    }
+    if (row.state === "unconfirmed") {
+      const notSent = db
+        .prepare(
+          "select 1 as found from remote_outbox_receipts where operation_id = ? and outcome = 'not-sent' limit 1",
+        )
+        .get(operationId) as { found?: number } | undefined;
+      if (notSent === undefined) {
+        throw new StoreError(
+          "remote.dispatch-refused",
+          `Operation ${operationId} was dispatched and holds no proof that nothing was sent; an ambiguous effect is never ` +
+            `abandoned as absent. Reconcile it under its original binding, then resolve or abandon it with evidence. ` +
+            `Nothing was changed.`,
+          { operationId, state: row.state },
+        );
+      }
+    }
+    const at = nowRfc3339();
+    db.prepare("update remote_outbox set state = 'abandoned', abandon_reason = ?, updated_at = ? where operation_id = ?").run(
+      reason,
+      at,
+      operationId,
+    );
+    const stored = storedRequest(row);
+    return {
+      version: 1,
+      operationId,
+      projectId: row.projectKey,
+      generation: row.generation,
+      state: "abandoned",
+      requestHash: row.requestHash,
+      target: stored.request.target,
+      executionKey: stored.request.executionKey ?? null,
+      replayed: false,
+      createdAt: row.createdAt,
+      updatedAt: at,
+    } satisfies RemoteIntent;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// note: ordinary remote writers: a normalized intent instead of a local row
+// ---------------------------------------------------------------------------
+
+/** note: The observed scope one ordinary write freezes its base from. */
+type ObservedScope = Readonly<{
+  location: CollaborationLocation;
+  selection: CollaborationSelection;
+  binding: RemoteIntentBinding;
+  snapshot: RemoteSnapshot;
+}>;
+
+/** note: The cache's materialized binding of one project, as the outbox freezes it. */
+function materializedIntentBinding(scope: Record<string, unknown>, projectKey: string): RemoteIntentBinding {
+  const text_ = (value: unknown, what: string): string => {
+    if (typeof value !== "string" || value === "") {
+      throw new StoreError("collaboration.unreadable", `The cache's binding for ${projectKey} has no readable ${what}; nothing was enqueued.`);
+    }
+    return value;
+  };
+  return {
+    generation: 0,
+    projectKey,
+    selectorCommit: text_(scope.selector_commit, "selector commit"),
+    provider: "linear",
+    workspaceId: text_(scope.workspace_id, "workspace id"),
+    teamId: text_(scope.team_id, "team id"),
+    projectId: text_(scope.provider_project_id, "provider project id"),
+    journalIssueId: text_(scope.journal_issue_id, "journal issue id"),
+    writerId: typeof scope.writer_id === "string" ? scope.writer_id : null,
+  };
+}
+
+/**
+ * Read the project's current complete observation together with the binding it was frozen
+ * under. An ordinary remote write needs an exact base: a partial, absent or stale observation
+ * refuses instead of freezing a guessed parent set.
+ */
+async function readWriteScope(context: StoreContext, projectId: string): Promise<ObservedScope> {
+  const location = resolveCollaborationLocation(context);
+  const selection = remoteSelection(location);
+  if (selection.phase !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The checked selector generation ${String(selection.generation)} is draining, so no new remote intent is prepared. ` +
+        `Nothing was enqueued.`,
+    );
+  }
+  selectedProject(selection, projectId);
+  const binding = readCollaborationBinding(context);
+  if (binding === null || binding.version !== 3 || binding.state !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      "This checkout holds no finalized remote binding, so a remote write cannot address its observed scope. Run the " +
+        "reviewed remote bind first; nothing was enqueued.",
+    );
+  }
+  const handle = await openRemoteCache(context, "read", { location, binding });
+  try {
+    const scope = scopeRow(handle.db, binding.generation, projectId);
+    if (scope === undefined) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `Project ${projectId} is not bound at generation ${String(binding.generation)} in this cache; nothing was enqueued.`,
+      );
+    }
+    if (scope.completeness !== "complete" || typeof scope.snapshot_json !== "string") {
+      throw new StoreError(
+        "remote.unavailable",
+        `A remote write to project ${projectId} requires a complete, current observation. Run \`remote observe\` with the ` +
+          `whole scope, then retry; nothing was enqueued.`,
+      );
+    }
+    const verifiedAt = typeof scope.verified_at === "string" ? scope.verified_at : "";
+    if (outcomeLabel(typeof scope.verification_json === "string" ? scope.verification_json : "{}") !== "verified") {
+      throw new StoreError(
+        "remote.unavailable",
+        `A remote write to project ${projectId} requires a verified access check. Reverify the scope and resubmit the ` +
+          `observation; nothing was enqueued.`,
+      );
+    }
+    if (Math.abs(Date.now() - Date.parse(verifiedAt)) > REMOTE_SCOPE_TTL_MS) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The access check of project ${projectId} is no longer current, so no base can be frozen for it. Reverify the ` +
+          `scope and resubmit the observation; nothing was enqueued.`,
+      );
+    }
+    let snapshot: RemoteSnapshot;
+    try {
+      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+    } catch {
+      throw new StoreError(
+        "collaboration.unreadable",
+        `The stored observation of project ${projectId} is unreadable; nothing was enqueued.`,
+      );
+    }
+    return {
+      location,
+      selection,
+      binding: { ...materializedIntentBinding(scope, projectId), generation: binding.generation },
+      snapshot,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The observed issue one remote write addresses, with the project scope it was found in. */
+type ObservedIssue = Readonly<{
+  scope: ObservedScope;
+  native: RemoteIssue;
+  /** note: The bound project when the caller named none: the write still addresses exactly one. */
+  projectId: string;
+}>;
+
+/**
+ * Resolve the project one addressed issue lives in. A remote write addresses one project; a
+ * caller that names none is answered by scanning the SELECTED projects only, and an issue the
+ * caches do not observe is never guessed into an unbound project.
+ */
+async function resolveObservedIssue(
+  context: StoreContext,
+  addressed: string,
+  projectId: string | undefined,
+): Promise<ObservedIssue> {
+  const byRef = ISSUE_REF_PATTERN.test(addressed);
+  const candidates = projectId === undefined
+    ? remoteSelection(resolveCollaborationLocation(context)).projects.map((project) => project.localProjectId)
+    : [projectId];
+  for (const candidate of candidates) {
+    let scope: ObservedScope;
+    try {
+      scope = await readWriteScope(context, candidate);
+    } catch (error) {
+      // note: A project with no usable observation is skipped by the scan, never read as an absence.
+      if (projectId !== undefined) throw error;
+      if (
+        error instanceof StoreError &&
+        (error.code === "remote.unavailable" || error.code === "collaboration.observation-stale")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    const native = byRef
+      ? scope.snapshot.issues.find((issue) => issue.mstar !== null && issue.mstar.issueRef === addressed)
+      : scope.snapshot.issues.find((issue) => issue.identity.issueId === addressed);
+    if (native !== undefined) return { scope, native, projectId: candidate };
+  }
+  throw new IssueError(
+    "issue.not-found",
+    `Issue ${addressed} is not observed in ${projectId === undefined ? "any selected project" : `project ${projectId}`}; ` +
+      `nothing was enqueued.`,
+  );
+}
+
+export type RemoteIssueWrite = Readonly<{
+  projectId?: string;
+  operationId: string;
+  /** note: The change kind: a create writes the native description, adoption and replacement append a comment. */
+  kind: "issue-create" | "issue-adopt" | "issue-replace";
+  /** note: The stable reference a create mints and a change keeps. */
+  issueRef?: string;
+  /** note: The addressed issue, by stable reference or immutable provider id; absent for a create. */
+  issueId?: string;
+  /** note: The complete normalized subject, derived from the observed one (null for a create/adoption). */
+  next(current: Record<string, unknown> | null): Record<string, unknown>;
+  /** note: A composite's execution reservation, so the provider effect settles it. */
+  executionKey?: RemoteIntentExecutionKey | null;
+}>;
+
+/**
+ * note: A create's stable reference, derived from its operation id: one operation mints exactly
+ * one reference, and a replay of that operation freezes the identical event instead of minting a
+ * second identity for the same write.
+ */
+export function issueRefForOperation(operationId: string): string {
+  const bytes = createHash("sha256").update(`issue-ref:${operationId}`, "utf8").digest();
+  return `mstar:issue:${derivedUuid(bytes)}`;
+}
+
+/** note: A well-formed v4-shaped UUID from a digest, so a derived id satisfies the contract's id shape. */
+function derivedUuid(bytes: Buffer): string {
+  const hex = Buffer.from(bytes.subarray(0, 16)).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * The replay of one ordinary write: an operation id that already holds a frozen intent returns
+ * THAT intent, so a retried verb never re-derives a different subject (a minted reference, a
+ * milestone id, a recorded time) and never rewrites the accepted request. The outbox remains the
+ * authority for the identity: only the same id, kind and stable reference replay.
+ */
+async function replayedIntent(
+  context: StoreContext,
+  operationId: string,
+  kind: RemoteEventChange["kind"],
+  issueRef: string | null,
+): Promise<RemoteIntent | null> {
+  let read: RemoteIntentRead;
+  try {
+    read = await readRemoteIntent(context, operationId);
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "remote.intent-not-found") return null;
+    throw error;
+  }
+  if (read.event.change.kind !== kind || (issueRef !== null && read.event.change.kind !== "project-replace" && read.event.change.issueRef !== issueRef)) {
+    throw new StoreError(
+      "remote.operation-conflict",
+      `Operation ${operationId} is already frozen as a ${read.event.change.kind} intent; a different write never replays ` +
+        `under the same operation id. Submit a new id for the corrected request. Nothing was enqueued.`,
+      { operationId, state: read.state },
+    );
+  }
+  return {
+    version: 1,
+    operationId: read.operationId,
+    projectId: read.projectId,
+    generation: read.generation,
+    state: read.state,
+    requestHash: read.requestHash,
+    target: read.target,
+    executionKey: read.executionKey,
+    replayed: true,
+    createdAt: read.createdAt,
+    updatedAt: read.updatedAt,
+  };
+}
+
+/**
+ * Freeze one ordinary ISSUE change as a durable remote intent: the caller supplies the
+ * normalized subject it derived from the observed one, and this boundary proves the base,
+ * the project and the binding before anything is enqueued. The caller then refuses with
+ * `remote.effect-pending`: a durable enqueue is never business success.
+ */
+export async function prepareRemoteIssueWrite(context: StoreContext, write: RemoteIssueWrite): Promise<RemoteIntent> {
+  const operationId = linearId(write?.operationId, "operationId");
+  const kind = oneOf(write?.kind, ["issue-create", "issue-adopt", "issue-replace"] as const, "kind");
+  const executionKey = write?.executionKey ?? null;
+  const declaredRef = write?.issueRef === undefined ? null : assertIssueRef(write.issueRef);
+  const replay = await replayedIntent(
+    context,
+    operationId,
+    kind,
+    // invariant: A create/adoption reference is derived from its operation id, so a replay repeats it.
+    declaredRef ?? (kind === "issue-replace" ? null : issueRefForOperation(operationId)),
+  );
+  if (replay !== null) return replay;
+  if (kind === "issue-create") {
+    const issueRef = declaredRef ?? issueRefForOperation(operationId);
+    if (write?.issueId !== undefined && write.issueId !== null) invalid("issueId", "must be absent for a create");
+    const projectId = text(write?.projectId, "projectId");
+    const scope = await readWriteScope(context, projectId);
+    if (scope.snapshot.issues.some((issue) => issue.mstar !== null && issue.mstar.issueRef === issueRef)) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `Reference ${issueRef} is already bound in project ${projectId}; a create never duplicates an observed subject. ` +
+          `Nothing was enqueued.`,
+        { projectId, issueRef },
+      );
+    }
+    return prepareRemoteIntent(context, {
+      binding: scope.binding,
+      event: {
+        version: 1,
+        repoKey: scope.location.repoKey,
+        projectId,
+        operationId,
+        parents: [],
+        change: { kind, issueRef, mstar: write.next(null) },
+      },
+      target: null,
+      expectedHeads: [],
+      executionKey,
+    });
+  }
+  const addressed = text(write?.issueId, "issueId");
+  const { scope, native, projectId } = await resolveObservedIssue(context, addressed, write.projectId);
+  if (kind === "issue-adopt" && native.mstar !== null) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `Provider issue ${native.identity.issueId} already carries the MStar marker ${native.mstar.issueRef}; an adoption ` +
+        `addresses only an observed unmarked native issue. Nothing was enqueued.`,
+      { projectId, issueId: native.identity.issueId },
+    );
+  }
+  if (kind === "issue-replace" && native.mstar === null) {
+    throw new IssueError(
+      "issue.not-found",
+      `Provider issue ${native.identity.issueId} carries no MStar subject, so no replacement addresses it; nothing was enqueued.`,
+    );
+  }
+  const issueRef = assertIssueRef(write?.issueRef ?? native.mstar?.issueRef);
+  if (native.mstar !== null && native.mstar.issueRef !== issueRef) {
+    throw new StoreError(
+      "remote.scope-mismatch",
+      `Provider issue ${native.identity.issueId} carries reference ${native.mstar.issueRef}, not ${issueRef}; ` +
+        `nothing was enqueued.`,
+      { projectId, issueId: native.identity.issueId },
+    );
+  }
+  const parents = native.mstar === null ? [] : native.mstar.head;
+  return prepareRemoteIntent(context, {
+    binding: scope.binding,
+    event: {
+      version: 1,
+      repoKey: scope.location.repoKey,
+      projectId,
+      operationId,
+      parents,
+      change: { kind, issueRef, mstar: write.next(native.mstar === null ? null : currentIssueSubject(native.mstar)) },
+    },
+    target: native.identity.issueId,
+    expectedHeads: parents,
+    executionKey,
+  });
+}
+
+/** note: The frozen issue subject is the stored one minus its derived members. */
+function currentIssueSubject(mstar: RemoteMstarIssue): Record<string, unknown> {
+  return {
+    fields: mstar.fields,
+    occurrences: mstar.occurrences,
+    transitions: mstar.transitions,
+    relations: mstar.relations,
+    provenance: mstar.provenance,
+    projectMoves: mstar.projectMoves,
+  };
+}
+
+export type RemoteProjectWrite = Readonly<{
+  projectId: string;
+  operationId: string;
+  /** note: The complete normalized project document, derived from the observed one and its project's issues. */
+  next(current: Record<string, unknown>, issues: readonly RemoteIssue[]): Record<string, unknown>;
+  executionKey?: RemoteIntentExecutionKey | null;
+}>;
+
+/**
+ * Freeze one ordinary PROJECT-JOURNAL change (milestones, roadmap, portable catalog) as a
+ * durable remote intent against the observed journal head. Never a local SQL effect.
+ */
+export async function prepareRemoteProjectWrite(context: StoreContext, write: RemoteProjectWrite): Promise<RemoteIntent> {
+  const projectId = text(write?.projectId, "projectId");
+  const operationId = linearId(write?.operationId, "operationId");
+  const replay = await replayedIntent(context, operationId, "project-replace", null);
+  if (replay !== null) return replay;
+  const scope = await readWriteScope(context, projectId);
+  const parents = scope.snapshot.project.head ?? [];
+  const subject = write.next(
+    {
+      projectId,
+      milestones: scope.snapshot.project.milestones,
+      roadmap: scope.snapshot.project.roadmap,
+      catalogEntities: scope.snapshot.project.catalogEntities,
+      catalogLinks: scope.snapshot.project.catalogLinks,
+    },
+    scope.snapshot.issues,
+  );
+  return prepareRemoteIntent(context, {
+    binding: scope.binding,
+    event: {
+      version: 1,
+      repoKey: scope.location.repoKey,
+      projectId,
+      operationId,
+      parents,
+      change: { kind: "project-replace", project: subject },
+    },
+    target: scope.binding.journalIssueId,
+    expectedHeads: parents,
+    executionKey: write.executionKey ?? null,
+  });
+}
+
+/**
+ * invariant: The ordinary business verbs' outcome of a remote write. A durable enqueue is never
+ * mapped to business success: the caller returns this refusal with the actual outbox state, and
+ * only the recorded receipt (outbox-show) is the confirmed outcome.
+ */
+export function pendingRemoteEffect(intent: RemoteIntent): StoreError {
+  const confirmed = intent.state === "confirmed";
+  return new StoreError(
+    "remote.effect-pending",
+    confirmed
+      ? `Operation ${intent.operationId} is recorded and its provider effect is confirmed. Read the recorded outcome with ` +
+        `\`outbox-show\`; this route never reports a local business receipt for a remote write.`
+      : `The write is durably enqueued as operation ${intent.operationId} in state ${intent.state}. It is not a business ` +
+        `success yet: dispatch it with \`outbox-dispatch\`, then record the provider result with \`outbox-receipt\`. ` +
+        `Inspect it with \`outbox-show\`.`,
+    {
+      operationId: intent.operationId,
+      state: intent.state,
+      confirmedComponents: confirmed ? ["provider:confirmed"] : [],
+      recovery: confirmed
+        ? "Read `outbox-show --operation <id>` for the recorded receipt."
+        : "`outbox-show` for the state, `outbox-dispatch` for the one send permit, `outbox-receipt` for the result.",
+    },
+  );
 }

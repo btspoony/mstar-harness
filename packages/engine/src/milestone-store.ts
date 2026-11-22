@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import type { RemoteIssue } from "./collaboration-remote.js";
 import { withCollaborationWrite } from "./collaboration-store.js";
 import { remoteMilestones } from "./collaboration-remote-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
@@ -41,8 +43,50 @@ function validTarget(target: unknown): target is string | null {
 }
 function validName(name: unknown): name is string { return typeof name === "string" && name.trim().length > 0; }
 function validOrdinal(ordinal: unknown): ordinal is number { return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal >= 0; }
+/** note: The status transitions one milestone update admits, shared by both transports. */
+const MILESTONE_TRANSITIONS: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
 function write<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   return withCollaborationWrite(context, (handle) => fn(handle.db));
+}
+
+/**
+ * The remote branch of every milestone write: freeze the new project journal document as one
+ * durable outbox intent and report its state. A milestone row is never written locally in
+ * `remote` mode, and a durable enqueue is never business success.
+ */
+async function queueMilestoneWrite(
+  context: StoreContext,
+  projectId: string,
+  operationId: string,
+  next: (current: Record<string, unknown>, issues: readonly RemoteIssue[]) => Record<string, unknown>,
+): Promise<never> {
+  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
+  // would close the cycle before the milestone contract initializes.
+  const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
+  throw pendingRemoteEffect(await prepareRemoteProjectWrite(context, { projectId, operationId, next }));
+}
+
+/** note: The observed milestone rows of one project document, as the projection reads them. */
+function observedMilestones(current: Record<string, unknown>): Array<Record<string, unknown>> {
+  return current.milestones as Array<Record<string, unknown>>;
+}
+
+/** note: The open issues assigned to one milestone, from the observed project's own issue list. */
+function openIssuesOf(issues: readonly RemoteIssue[], projectId: string, milestoneId: string): number {
+  return issues.filter(
+    (issue) =>
+      issue.identity.projectId === projectId &&
+      issue.mstar !== null &&
+      issue.mstar.fields.milestoneId === milestoneId &&
+      issue.mstar.fields.disposition === "open",
+  ).length;
+}
+
+/** note: Every issue assigned to one milestone — settled rows included, exactly as the local rule counts. */
+function assignedIssuesOf(issues: readonly RemoteIssue[], projectId: string, milestoneId: string): number {
+  return issues.filter(
+    (issue) => issue.identity.projectId === projectId && issue.mstar !== null && issue.mstar.fields.milestoneId === milestoneId,
+  ).length;
 }
 function requestHash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
@@ -71,7 +115,7 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     const nextStatus = update.status ?? row.status;
     const statuses: ProjectMilestoneStatus[] = ["planned","active","delivered","dropped"];
     if (!statuses.includes(nextStatus)) fail("milestone.invalid-input", "Milestone status is invalid.");
-    const transitions: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
+    const transitions = MILESTONE_TRANSITIONS;
     if (!transitions[row.status].includes(nextStatus)) fail("milestone.invalid-transition", `Cannot transition ${row.status} to ${nextStatus}.`);
     if (nextStatus === "delivered") {
       // Contract §Gates: a complete observation that proves zero open issues
@@ -93,13 +137,74 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
   db.prepare("insert into collaboration_operations(key_space,operation_id,request_hash,result_json,committed_at) values('standalone',?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
   return receipt;
 }
-export function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> { return write(context, db => mutate(db,input.projectId,"",input,mutation,true)); }
-export function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+export async function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    if (!validName(input.name) || !validOrdinal(input.ordinal) || !validTarget(input.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    const at = new Date().toISOString();
+    const milestoneId = randomUUID();
+    return queueMilestoneWrite(context, input.projectId, mutation.operationId, (current) => ({
+      ...current,
+      milestones: [
+        ...observedMilestones(current),
+        { milestoneId, name: input.name.trim(), target: input.target, status: "planned", ordinal: input.ordinal, revision: 1, createdAt: at, updatedAt: at },
+      ],
+    }));
+  }
+  return write(context, db => mutate(db,input.projectId,"",input,mutation,true));
+}
+export async function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
   if (!patch || !Object.keys(patch).length || Object.keys(patch).some(key => !["name","target","ordinal","status"].includes(key))) return Promise.reject(new MilestoneError("milestone.invalid-input", "A non-empty milestone patch is required."));
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (patch.target !== undefined && !validTarget(patch.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (patch.ordinal !== undefined && !validOrdinal(patch.ordinal)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    const at = new Date().toISOString();
+    return queueMilestoneWrite(context, projectId, mutation.operationId, (current, issues) => {
+      const rows = observedMilestones(current);
+      const row = rows.find((entry) => entry.milestoneId === milestoneId);
+      if (row === undefined) throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} is not observed in project ${projectId}.`);
+      const nextStatus = (patch.status ?? row.status) as ProjectMilestoneStatus;
+      if (!Object.hasOwn(MILESTONE_TRANSITIONS, nextStatus)) fail("milestone.invalid-input", "Milestone status is invalid.");
+      if (!MILESTONE_TRANSITIONS[row.status as ProjectMilestoneStatus].includes(nextStatus)) {
+        fail("milestone.invalid-transition", `Cannot transition ${String(row.status)} to ${nextStatus}.`);
+      }
+      if (nextStatus === "delivered" && openIssuesOf(issues, projectId, milestoneId) > 0) {
+        fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
+      }
+      const name = patch.name === undefined ? String(row.name) : patch.name.trim();
+      const target = patch.target === undefined ? (row.target as string | null) : patch.target;
+      const ordinal = patch.ordinal === undefined ? (row.ordinal as number) : patch.ordinal;
+      const changed = name !== row.name || target !== row.target || ordinal !== row.ordinal || nextStatus !== row.status;
+      return {
+        ...current,
+        milestones: rows.map((entry) =>
+          entry.milestoneId === milestoneId
+            ? { ...entry, name, target, ordinal, status: nextStatus, revision: (entry.revision as number) + (changed ? 1 : 0), updatedAt: changed ? at : entry.updatedAt }
+            : entry,
+        ),
+      };
+    });
+  }
   return write(context, db => mutate(db,projectId,milestoneId,patch,mutation,false));
 }
 /** Remove an empty milestone (idempotent via the shared operation ledger; refuses `milestone.not-empty` while issues remain). */
-export function removeMilestone(context: StoreContext, projectId: string, milestoneId: string, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+export async function removeMilestone(context: StoreContext, projectId: string, milestoneId: string, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    return queueMilestoneWrite(context, projectId, mutation.operationId, (current, issues) => {
+      const rows = observedMilestones(current);
+      if (!rows.some((entry) => entry.milestoneId === milestoneId)) {
+        throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} is not observed in project ${projectId}.`);
+      }
+      const held = assignedIssuesOf(issues, projectId, milestoneId);
+      if (held > 0) {
+        fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held} issue(s); settled rows count too, so reassign or clear them before the removal. Nothing was enqueued.`);
+      }
+      return { ...current, milestones: rows.filter((entry) => entry.milestoneId !== milestoneId) };
+    });
+  }
   return write(context, db => {
     guard(db);
     if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");

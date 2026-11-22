@@ -35,7 +35,10 @@
  * Nothing here is public: only the admitted owning verb calls it, and only the
  * package index publishes the contract types (never a generic executor).
  */
+import { createHash } from "node:crypto";
 import { withCollaborationWrite, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
+import type { RemoteIntent } from "./collaboration-remote.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { isPlainObject } from "./coordination-write.js";
 import {
   ExecutionError,
@@ -933,7 +936,94 @@ export type CollaborationCompositeEffects<T> = Readonly<{
   apply(handle: CollaborationStoreHandle): string;
   /** note: The execution delta; runs inside one execution transaction AFTER the effect committed. */
   finalize(tx: ExecutionTransaction, receipt: CollaborationEffectReceipt): T;
+  /**
+   * note: In `remote` mode the collaboration half is a provider event: this freezes (or replays)
+   * its durable outbox intent and returns its state. Absent means the kind has no admitted remote
+   * rewrite, and the frame refuses instead of writing the local lane.
+   */
+  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent>;
 }>;
+
+/**
+ * note: The stable outbox operation id of one composite. An execution operation id is not a
+ * provider UUID, so the composite's single provider intent is addressed by a UUID derived from
+ * the reservation key: the same reservation always finds the same intent.
+ */
+export function remoteCompositeOperationId(key: CompositeKey): string {
+  const bytes = createHash("sha256")
+    .update(`remote-composite:${key.executionStoreId}:${String(key.executionEpoch)}:${key.operationId}`, "utf8")
+    .digest();
+  const hex = Buffer.from(bytes.subarray(0, 16)).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * why: A `remote` checkout's composite has no local collaboration effect to apply: the provider
+ * event is the effect. The frame finalizes ONLY the execution delta of a reservation whose
+ * outbox intent is confirmed, and reports the durable state otherwise — never a business success
+ * for a queued provider write, and never a second application of a confirmed one.
+ */
+async function runRemoteComposite<T>(
+  context: ExecutionContext | StoreContext,
+  intent: CompositeIntent,
+  effects: CollaborationCompositeEffects<T>,
+): Promise<T> {
+  if (effects.remote === undefined) {
+    throw partialRefusal({
+      intent,
+      phase: "prepared",
+      confirmed: [],
+      cause: new StoreError(
+        "remote.effect-pending",
+        `${intent.kind} has no admitted remote rewrite: its collaboration half is a local lane artifact`,
+      ),
+      recovery:
+        `Prepare the equivalent remote intent through its own verb, or run this composite against a local/mirror ` +
+        `checkout. The reservation is retained; nothing was applied.`,
+    });
+  }
+  let remoteIntent: RemoteIntent;
+  try {
+    remoteIntent = await effects.remote(context, intent);
+  } catch (error) {
+    if (codeOf(error) === "collaboration.operation-partial") throw error;
+    throw partialRefusal({
+      intent,
+      phase: "prepared",
+      confirmed: [],
+      cause: error,
+      recovery:
+        `The provider intent was not frozen (${messageOf(error)}). Reissue the same verb with the same --operation id ` +
+        `once the named cause is corrected; nothing was applied.`,
+    });
+  }
+  if (remoteIntent.state !== "confirmed") {
+    throw partialRefusal({
+      intent,
+      phase: "prepared",
+      confirmed: [],
+      cause: new StoreError(
+        "remote.effect-pending",
+        `the provider intent ${remoteIntent.operationId} is ${remoteIntent.state}, not confirmed`,
+      ),
+      recovery:
+        `Inspect it with \`outbox-show --operation ${remoteIntent.operationId}\`, send it with \`outbox-dispatch\`, record ` +
+        `the result with \`outbox-receipt\`, then reissue this SAME verb with the SAME --operation id: only the execution ` +
+        `delta is committed, and the confirmed effect is never re-applied.`,
+    });
+  }
+  // invariant: A remote composite owns no local collaboration revision; the confirmed provider
+  // event IS its effect receipt, and only the separate execution acknowledgement is left.
+  const receipt: CollaborationEffectReceipt = {
+    key: intent.key,
+    requestHash: intent.requestHash,
+    collaborationRevision: 0,
+    catalogRevision: 0,
+    committedAt: remoteIntent.updatedAt,
+    facts: JSON.stringify({ remote: { operationId: remoteIntent.operationId, requestHash: remoteIntent.requestHash } }),
+  };
+  return finalizeComposite(context, intent, receipt, effects.finalize);
+}
 
 /**
  * why: Phase 3: commit the execution delta and its receipt, then mark the reservation
@@ -1007,6 +1097,9 @@ export async function runCollaborationComposite<T>(
   intent: CompositeIntent,
   effects: CollaborationCompositeEffects<T>,
 ): Promise<T> {
+  // invariant: A `remote` checkout has no local collaboration authority to write, so the frame
+  // takes its remote branch: the provider event is the effect and only the execution delta is local.
+  if (resolveCollaborationLocation(context).mode === "remote") return runRemoteComposite(context, intent, effects);
   let effect: EffectOutcome;
   try {
     effect = await applyCollaborationEffect(context, intent, effects.apply);
