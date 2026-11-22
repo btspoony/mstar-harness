@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { RemoteCollaborationFixture, REMOTE_PROJECT } from "./support/remote-collaboration-fixture";
+import { RemoteCollaborationFixture, REMOTE_PROJECT, TRACKED_BRANCH } from "./support/remote-collaboration-fixture";
 import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getCatalog, getIssue, initializeCollaborationStore, initializeStore, listCatalog, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
@@ -575,6 +575,35 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
       expect(value.includes(sandboxA.home)).toBe(false);
     }
     expect(fixture.cachePath(sandboxB)).not.toBe(fixture.cachePath(sandboxA));
+  });
+
+  test("remote bootstrap: each sandbox is a fresh clone of the tracked branch", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("clone");
+    const git = (args: readonly string[]): string =>
+      execFileSync("git", [...args], { cwd: sandbox.repo, encoding: "utf8" }).trim();
+
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe(TRACKED_BRANCH);
+    // note: `remote get-url` expands the fixture's insteadOf mapping; the tracked
+    // origin identity the clone records is the canonical synthetic URL.
+    expect(git(["config", "--get", "remote.origin.url"])).toBe(`https://${fixture.repoKey}.git`);
+    // invariant: the collaboration declaration is tracked content obtained from Git,
+    // not a file the fixture wrote into the checkout.
+    expect(git(["ls-files", "--error-unmatch", ".mstarc"])).toBe(".mstarc");
+  });
+
+  test("remote bootstrap: children run the locally built CLI", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("built");
+
+    expect(sandbox.entry.endsWith(join("cli", "dist", "mstar-harness.js"))).toBe(true);
+    expect(existsSync(sandbox.entry)).toBe(true);
+    // invariant: the entry the sequence spawns answers from the built artifact itself.
+    const help = sandbox.run(["--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("mstar");
   });
 
   test("remote bootstrap: a moved selector refuses before execution state exists", () => {

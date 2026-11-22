@@ -2,23 +2,28 @@
  * The controlled host and sandbox fixture for the remote collaboration suites.
  *
  * The fixture owns the provider state in memory in the TEST RUNNER and a local
- * bare Git origin that publishes the protected authority ref. A sandbox is a
- * checkout with its OWN workspace and `HOME`, spawned with an allowlisted child
- * environment: only public JSON DTOs (written under that sandbox's own
- * directory) cross into the CLI, and no prior store, filesystem path or
- * provider credential is ever handed to another sandbox.
+ * bare Git origin that publishes the protected authority ref plus a tracked
+ * checkout branch. A sandbox is a fresh clone of that branch, with its OWN
+ * workspace and `HOME`, spawned with an allowlisted child environment: only
+ * public JSON DTOs (written under that sandbox's own directory) cross into the
+ * CLI, and no prior store, filesystem path or provider credential is ever
+ * handed to another sandbox. Children run the locally built CLI entry.
  *
  * `verify` and `observe` are test-runner operations: they build the documents
  * the Host Agent would submit, and the CLI receives them as files. No provider
  * client, callback, token or in-process object is passed into the CLI.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SRC_ENTRY, type RunResult } from "../harness";
+import { CLI_ROOT, type RunResult } from "../harness";
 
 export const AUTHORITY_REF = "refs/heads/mstar-collaboration-authority";
+/** note: The tracked branch a sandbox clones; its `.mstarc` is Git content, never fixture-written checkout state. */
+export const TRACKED_BRANCH = "fixture-main";
+/** note: The verification subject is the built artifact; the TS source entry would not prove it. */
+export const BUILT_CLI_ENTRY: string = join(CLI_ROOT, "dist/mstar-harness.js");
 
 /** note: One selected project: the local id plus the exact provider tuple it binds. */
 export type FixtureProject = Readonly<{
@@ -89,6 +94,8 @@ export type RemoteSandbox = Readonly<{
   repo: string;
   harness: string;
   home: string;
+  /** note: The CLI entry this sandbox's children run; it is the built artifact. */
+  entry: string;
   /** note: The exact allowlisted environment this sandbox's children receive. */
   environment: Readonly<Record<string, string>>;
   run(args: readonly string[]): RunResult;
@@ -155,37 +162,54 @@ export class RemoteCollaborationFixture {
     mkdirSync(this.bare, { recursive: true });
     realGit(this.root, ["init", "-q", "--bare", this.bare]);
     mkdirSync(this.publisher, { recursive: true });
-    realGit(this.publisher, ["init", "-q"]);
+    realGit(this.publisher, ["init", "-q", "-b", TRACKED_BRANCH]);
     realGit(this.publisher, ["config", "user.name", "Remote Selector"]);
     realGit(this.publisher, ["config", "user.email", "selector@example.test"]);
+    // invariant: the collaboration declaration is TRACKED; a sandbox obtains it from Git.
+    writeFileSync(join(this.publisher, ".mstarc"), "[collaboration]\nmode=remote\n");
+    realGit(this.publisher, ["add", ".mstarc"]);
+    realGit(this.publisher, ["commit", "-q", "-m", "declare remote collaboration"]);
+    realGit(this.publisher, ["push", "-q", this.bare, `HEAD:refs/heads/${TRACKED_BRANCH}`]);
   }
 
   dispose(): void {
     rmSync(this.root, { recursive: true, force: true });
   }
 
-  /** note: One fresh checkout with its own workspace, `HOME` and host inputs. */
+  /** note: One fresh clone of the tracked branch, with its own workspace, `HOME` and host inputs. */
   sandbox(name: string): RemoteSandbox {
     const dir = join(this.root, `sandbox-${name}-${String(this.sandboxSequence++)}`);
     const repo = join(dir, "repo");
     const home = join(dir, "home");
-    mkdirSync(repo, { recursive: true });
+    mkdirSync(dir, { recursive: true });
+    // invariant: a genuine clone through the synthetic canonical URL; the checkout,
+    // its origin and `.mstarc` are all canonical Git state, never fixture-written files.
+    realGit(this.root, [
+      "clone",
+      "-q",
+      "--branch",
+      TRACKED_BRANCH,
+      "-c",
+      `url.${this.bare}.insteadOf=${this.origin}`,
+      this.origin,
+      repo,
+    ]);
     mkdirSync(home, { recursive: true });
-    realGit(repo, ["init", "-q"]);
     realGit(repo, ["config", "user.name", `Sandbox ${name}`]);
     realGit(repo, ["config", "user.email", `sandbox-${name}@example.test`]);
-    realGit(repo, ["config", "remote.origin.url", this.origin]);
-    realGit(repo, ["config", `url.${this.bare}.insteadOf`, this.origin]);
-    writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=remote\n");
     const harness = join(repo, ".mstar");
     mkdirSync(harness, { recursive: true });
     const hosts = join(dir, "host");
     mkdirSync(hosts, { recursive: true });
+    const entry = process.env.MSTAR_CLI_ENTRY ?? BUILT_CLI_ENTRY;
+    if (!existsSync(entry)) {
+      throw new Error(`fixture: the locally built CLI is missing at ${entry}; run bun run --cwd packages/cli build`);
+    }
     const environment = childEnvironment(home);
     let hostSequence = 0;
 
     const run = (args: readonly string[]): RunResult => {
-      const proc = Bun.spawnSync([process.execPath, "run", process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY, ...args], {
+      const proc = Bun.spawnSync([process.execPath, "run", entry, ...args], {
         cwd: repo,
         env: { ...environment },
         stdout: "pipe",
@@ -224,6 +248,7 @@ export class RemoteCollaborationFixture {
       repo,
       harness,
       home,
+      entry,
       environment,
       run,
       runJson,
