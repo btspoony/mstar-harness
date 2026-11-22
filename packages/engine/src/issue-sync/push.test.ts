@@ -105,14 +105,19 @@ async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: str
   };
 }
 
+/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
+function fixtureIssueRef(id: string): string {
+  return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
+}
+
 function addIssue(
   db: StoreDb,
   id: string,
   overrides: Partial<{ kind: IssueKind; severity: Severity; disposition: string; title: string }> = {},
 ): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, ?, ?, ?, ?, ?, 'impact body', 'acceptance body', 'now', 'now', ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, ?, ?, ?, ?, ?, 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
   ).run(
     id,
     PROJECT,
@@ -121,6 +126,7 @@ function addIssue(
     overrides.severity ?? "high",
     overrides.disposition ?? "open",
     "sync-issue-" + id,
+    fixtureIssueRef(id),
   );
 }
 

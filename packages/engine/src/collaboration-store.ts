@@ -1491,6 +1491,7 @@ function validateCollaborationMigrations(applied: AppliedMigration[]): number {
   const version = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
   for (const row of applied) {
     const compiled = COLLABORATION_MIGRATIONS.find((migration) => migration.version === row.version)!;
+    // hash-gate: authorized — Identify the lane's executed DDL as this build's compiled migration: a differing checksum means another build wrote the schema, so refusing is the only safe verdict.
     if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
       throw new StoreError(
         "store.corrupt",

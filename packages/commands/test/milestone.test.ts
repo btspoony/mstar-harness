@@ -145,7 +145,7 @@ test("milestone assignment authorizes by the actor seat and the revision CAS wit
  await laneFixture(cwd,harness);
  await registerCatalogEntity({harnessDir:harness},{kind:"project",id:"proj-active",title:"Project",rootKind:"projects",relativePath:"proj-active"},{operationId:"project-active",actor:"test"});
  await withCollaborationWrite({harnessDir:harness},(handle)=>{
-  handle.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-000506','proj-active','Smoke issue','bug','high','impact','acceptance','now','now','I-000506')").run();
+  handle.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,issue_ref) values('I-000506','proj-active','Smoke issue','bug','high','impact','acceptance','now','now','I-000506','mstar:issue:00000000-0000-4000-8000-000000000506')").run();
  });
  const added=await executeCommand("milestone.add",{project:"proj-active",name:"Active milestone",ordinal:0,expectStore:1,operation:"add-active",harness},invocation(cwd));
  expect(added.status,JSON.stringify(added)).toBe("ok");

@@ -281,10 +281,10 @@ async function insertForeignIssue(context: StoreContext, issueId: string, planId
   await withCollaborationWrite(context, (handle) => {
     handle.db
       .prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, provider, external_id, identity_key) " +
-          "values (?, 'proj-a', 'mirrored row', 'bug', 'critical', 'open', 'imported', 'unchanged', ?, ?, 'linear', ?, ?)",
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, provider, external_id, identity_key, issue_ref) " +
+          "values (?, 'proj-a', 'mirrored row', 'bug', 'critical', 'open', 'imported', 'unchanged', ?, ?, 'linear', ?, ?, ?)",
       )
-      .run(issueId, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z", `EXT-${issueId}`, `mirror:${issueId}`);
+      .run(issueId, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z", `EXT-${issueId}`, `mirror:${issueId}`, `mstar:issue:${crypto.randomUUID()}`);
     handle.db
       .prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)")
       .run(issueId, planId, `fixture:${planId}`);

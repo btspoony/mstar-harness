@@ -1636,7 +1636,8 @@ describe("remote issue reads", () => {
     await expect(showIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(showIssue(context, "I-000001", REMOTE_IDS.projectId)).rejects.toMatchObject({ code: "issue.scope-refused" });
 
-    // invariant: A native `Done` is not an MStar transition, and remote writes are not this cache's.
+    // invariant: A remote closure is never a local write: it freezes one outbox intent and reports
+    // the pending effect. The CAS baseline is mandatory, and a missing one writes nothing.
     await expect(
       closeIssue(
         context,
@@ -1645,7 +1646,16 @@ describe("remote issue reads", () => {
         { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
         { operationId: crypto.randomUUID(), actor: "project-manager" },
       ),
-    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: crypto.randomUUID(), actor: "project-manager", expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
   });
 
   test("provider-only issues answer the requested bounded, stably ordered page", async () => {

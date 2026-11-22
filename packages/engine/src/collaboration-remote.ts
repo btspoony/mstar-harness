@@ -2450,6 +2450,11 @@ export function remoteEventHead(event: RemoteEvent): string {
   return createHash("sha256").update(canonicalJson(event), "utf8").digest("hex");
 }
 
+/** note: Two head lists name the same records exactly when the same head sits at every index. */
+function sameHeads(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((head, index) => head === right[index]);
+}
+
 /** note: Plain JSON, normalized: what a frozen business request or result may carry, nothing else. */
 function plainJson(value: unknown, path: string): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -3383,7 +3388,7 @@ function assertReceiptTargets(outcome: RemoteReceiptOutcome, request: StoredRequ
       { operationId, expectedIssue, observedIssue: outcome.identity.issueId },
     );
   }
-  if (canonicalJson(outcome.event) !== canonicalJson(request.request.event)) {
+  if (remoteEventHead(outcome.event) !== remoteEventHead(request.request.event)) {
     throw new StoreError(
       "remote.operation-conflict",
       `The confirmed record of operation ${operationId} carries another event than the frozen request; a differing ` +
@@ -3433,7 +3438,7 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
   if (frozen.event.change.kind === "issue-create") {
     return conflict("names a create, which has no forked record to observe");
   }
-  if (canonicalJson(outcome.expectedHeads) !== canonicalJson(frozen.expectedHeads)) {
+  if (!sameHeads(outcome.expectedHeads, frozen.expectedHeads)) {
     return conflict("does not cite the frozen base as its expected heads", { expectedHeads: frozen.expectedHeads });
   }
   if (outcome.observedHeads.length === 0) return conflict("names no observed fork head");
@@ -3443,7 +3448,7 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
       observedRecords: outcome.observedRecords.length,
     });
   }
-  const frozenEvent = canonicalJson(frozen.event);
+  const frozenHead = remoteEventHead(frozen.event);
   const seen = new Set<string>();
   const recordIds = new Set<string>();
   const heads: string[] = [];
@@ -3476,16 +3481,16 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
         return foreign("carries a record of another portable issue", { observedIssueRef: event.change.issueRef });
       }
     }
-    const rendered = canonicalJson(event);
-    if (rendered === frozenEvent) return conflict("names the frozen effect itself as a competing head");
-    if (seen.has(rendered)) return conflict("repeats one observed record for two heads");
-    seen.add(rendered);
-    heads.push(remoteEventHead(event));
+    const head = remoteEventHead(event);
+    if (head === frozenHead) return conflict("names the frozen effect itself as a competing head");
+    if (seen.has(head)) return conflict("repeats one observed record for two heads");
+    seen.add(head);
+    heads.push(head);
   }
   // invariant: A named head IS the canonical content digest of the record it claims to name, so
   // arbitrary digests can never be paired with unrelated records and cited as a complete fork.
   heads.sort();
-  if (canonicalJson(heads) !== canonicalJson(outcome.observedHeads)) {
+  if (!sameHeads(heads, outcome.observedHeads)) {
     return conflict("does not cite the content digest of each observed record", {
       observedHeads: outcome.observedHeads,
       recordHeads: heads,
@@ -3607,7 +3612,7 @@ async function recordReceiptEvidence(
         { operationId: envelope.operationId },
       );
     }
-    if (envelope.requestHash !== row.requestHash) {
+    if (row.requestHash !== envelope.requestHash) {
       throw new StoreError(
         "remote.operation-conflict",
         `The receipt names request hash ${envelope.requestHash}, but operation ${envelope.operationId} is frozen under ` +
@@ -3919,9 +3924,8 @@ function forkObservationOf(raw: unknown): ForkObservation {
     return refuse("names one immutable record id for two heads");
   }
   const digests = heads.map((entry) => entry.head);
-  const sorted = [...digests].sort();
   if (new Set(digests).size !== digests.length) return refuse("repeats one fork head");
-  if (digests.some((digest, index) => digest !== sorted[index])) return refuse("is not sorted by head");
+  if (digests.some((digest, index) => index > 0 && digests[index - 1]! > digest)) return refuse("is not sorted by head");
   return {
     version: 1,
     selectorCommit: raw.selectorCommit,
@@ -3959,7 +3963,7 @@ function assertDispatchBase(
   const event = stored.request.event;
   const target = stored.request.target;
   const expected = stored.request.expectedHeads;
-  if (canonicalJson(expected) !== canonicalJson(event.parents)) {
+  if (!sameHeads(expected, event.parents)) {
     return refuse(`The frozen base and the frozen parents of ${row.operationId} disagree.`);
   }
   if (row.resolves !== null) {
@@ -3973,7 +3977,7 @@ function assertDispatchBase(
     } catch {
       return refuse(`The resolution of ${row.resolves} has no readable fork evidence to prove its base against.`);
     }
-    if (canonicalJson(recorded.observedHeads) !== canonicalJson(event.parents)) {
+    if (!sameHeads(recorded.observedHeads, event.parents)) {
       return refuse(`The resolution's parents are not the fork heads ${row.resolves} recorded.`);
     }
     if (observation === null) {
@@ -4011,7 +4015,7 @@ function assertDispatchBase(
     if (expected.length !== 0) return refuse("An adoption starts from an empty base.");
     return;
   }
-  if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(expected)) {
+  if (!sameHeads(observedHeads(snapshot, event, target), expected)) {
     return refuse(
       `The observed head of the addressed record is not the frozen base of ${row.operationId}; the provider base moved ` +
         `since the intent was prepared.`,
@@ -4054,7 +4058,7 @@ function assertForkObservation(
   }
   const fork = recorded.observedHeads;
   const heads = observation.heads.map((entry) => entry.head);
-  if (canonicalJson(heads) !== canonicalJson(fork)) {
+  if (!sameHeads(heads, fork)) {
     return refuse(
       `The fork observation of ${row.operationId} does not carry exactly the fork heads ${String(row.resolves)} recorded; ` +
         `a changed provider base is never permission to send a resolution.`,
@@ -4514,7 +4518,7 @@ export async function prepareRemoteResolution(
         recorded.resolves === conflicted &&
         recordedRequest.operator === operator &&
         recordedRequest.reason === reason &&
-        canonicalJson(recordedRequest.request.event) === canonicalJson(event)
+        remoteEventHead(recordedRequest.request.event) === remoteEventHead(event)
       ) {
         return {
           version: 1,
@@ -4562,7 +4566,7 @@ export async function prepareRemoteResolution(
       // receipts stay for audit, while a new reviewed replacement takes over the same fork.
     }
     const recorded = recordedFork(db, conflicted);
-    if (canonicalJson(parents) !== canonicalJson(recorded.observedHeads)) {
+    if (!sameHeads(parents, recorded.observedHeads)) {
       throw new StoreError(
         "remote.operation-conflict",
         `The resolution's parents must be the complete fork-head set ${conflicted} recorded; a partial fork never ` +

@@ -1935,7 +1935,8 @@ describe("remote read boundary", () => {
       kind: "provider-only",
       nativeStatus: "Done",
     });
-    // invariant: A native `Done` never closes anything: remote writes are not this cache's.
+    // invariant: A remote closure is never a local write: it freezes one outbox intent and reports
+    // the pending effect. The CAS baseline is mandatory, and a missing one writes nothing.
     await expect(
       closeIssue(
         context,
@@ -1944,7 +1945,16 @@ describe("remote read boundary", () => {
         { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
         { operationId: randomUUID(), actor: "project-manager" },
       ),
-    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: randomUUID(), actor: "project-manager", expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
   });
 
   test("a partial, negative or stale scope refuses required views instead of answering zero", async () => {
@@ -2039,7 +2049,7 @@ describe("remote read boundary", () => {
     expect(flow.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
   });
 
-  test("adoption validates the exact unmarked issue and refuses outbox-unavailable without mutation", async () => {
+  test("adoption validates the exact unmarked issue into the outbox without a cache write", async () => {
     const { context } = await boundScope("remote-read-adopt");
     const dbPath = resolveCollaborationLocation(context).dbPath;
     const before = cacheState(dbPath);
@@ -2060,14 +2070,14 @@ describe("remote read boundary", () => {
     };
     const adoption = { version: 1, kind: "new", capture };
 
-    await expect(
-      prepareRemoteAdoption(context, {
+    expect(
+      await prepareRemoteAdoption(context, {
         projectId: REMOTE_IDS.projectId,
         issueId: REMOTE_IDS.providerOnlyIssueId,
         operationId: randomUUID(),
         adoption,
       }),
-    ).rejects.toMatchObject({ code: "remote.outbox-unavailable" });
+    ).toMatchObject({ state: "enqueued", target: REMOTE_IDS.providerOnlyIssueId });
 
     // invariant: An already marked issue refuses; a title is never accepted from the caller.
     await expect(
