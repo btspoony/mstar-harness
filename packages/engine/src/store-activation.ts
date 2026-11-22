@@ -58,7 +58,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { resolveCollaborationLocation, type CollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
 import {
-  COLLABORATION_COLUMNS,
+  COLLABORATION_CURRENT_COLUMNS,
   admitCollaborationImage,
   beginBindingClaim,
   clearBindingClaim,
@@ -1143,7 +1143,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       throw incompletePair(`The collaboration image ${path} holds ${violations.length} row(s) violating its foreign keys.`);
     }
     const tables = tableNamesOn(db);
-    for (const [table, columns] of Object.entries(COLLABORATION_COLUMNS)) {
+    for (const [table, columns] of Object.entries(COLLABORATION_CURRENT_COLUMNS)) {
       if (!tables.has(table)) {
         throw incompletePair(`The collaboration image ${path} is missing the collaboration table ${table}.`);
       }
@@ -1189,7 +1189,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       );
     }
     const counts: Record<string, number> = {};
-    for (const table of Object.keys(COLLABORATION_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
+    for (const table of Object.keys(COLLABORATION_CURRENT_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
     const operations = (
       db
         .prepare(`select ${LANE_OPERATION_COLUMNS} from collaboration_operations order by operation_id`)

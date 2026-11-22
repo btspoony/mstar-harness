@@ -570,8 +570,54 @@ const COLLABORATION_REMOTE_SCHEMA: Migration = {
   sql: `${COLLABORATION_META_V2_SQL}\n${COLLABORATION_ISSUES_V2_STAGE_SQL}\n${COLLABORATION_ISSUES_V2_RESTORE_SQL}`,
 };
 
-/** note: The lane's ordered migrations: v1 is immutable, v2 is appended. */
-export const COLLABORATION_MIGRATIONS: readonly Migration[] = [COLLABORATION_SCHEMA, COLLABORATION_REMOTE_SCHEMA];
+/**
+ * invariant: v3 `collaboration-remote-outbox` - the durable intent ledger over the v2 cache.
+ * A prepared intent is one operation id with its frozen request and hash; receipts are the
+ * separate, append-only evidence that a send was attempted, with its own closed vocabulary.
+ * The two self-references keep a reviewed resolution attributable to the intent it replaces.
+ */
+const COLLABORATION_OUTBOX_V3_SQL = `
+create table remote_outbox(
+  operation_id text not null primary key,
+  generation integer not null check (typeof(generation) = 'integer' and generation > 0),
+  project_key text not null,
+  request_hash text not null,
+  request_json text not null,
+  execution_key_json text,
+  state text not null check (state in ('enqueued','unconfirmed','confirmed','conflict','abandoned')),
+  attempt_id text unique,
+  created_at text not null,
+  updated_at text not null,
+  abandon_reason text,
+  resolves text references remote_outbox(operation_id),
+  resolved_by text references remote_outbox(operation_id),
+  foreign key (generation, project_key) references remote_bindings(generation, project_key)
+);
+create index remote_outbox_pending on remote_outbox(generation, project_key, state, created_at, operation_id);
+create table remote_outbox_receipts(
+  operation_id text not null,
+  receipt_hash text not null,
+  source text not null check (source in ('receipt','reconcile')),
+  outcome text not null check (outcome in ('confirmed','unconfirmed','conflict','not-sent')),
+  evidence_json text not null,
+  recorded_at text not null,
+  primary key (operation_id, receipt_hash),
+  foreign key (operation_id) references remote_outbox(operation_id)
+);
+`;
+
+const COLLABORATION_OUTBOX_SCHEMA: Migration = {
+  version: 3,
+  name: "collaboration-remote-outbox",
+  sql: COLLABORATION_OUTBOX_V3_SQL,
+};
+
+/** note: The lane's ordered migrations: v1 is immutable, v2 and the v3 outbox are appended. */
+export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
+  COLLABORATION_SCHEMA,
+  COLLABORATION_REMOTE_SCHEMA,
+  COLLABORATION_OUTBOX_SCHEMA,
+];
 
 /** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
 const COLLABORATION_REMOTE_TABLES: readonly string[] = [
@@ -579,6 +625,9 @@ const COLLABORATION_REMOTE_TABLES: readonly string[] = [
   "remote_issue_identities",
   "remote_observations",
 ];
+
+/** note: The v3-only intent tables. They exist in every lane; only a remote lane writes them. */
+const COLLABORATION_OUTBOX_TABLES: readonly string[] = ["remote_outbox", "remote_outbox_receipts"];
 
 /**
  * note: Apply the v2 delta inside the caller's open transaction and return the number of
@@ -625,6 +674,8 @@ const COLLABORATION_TABLES: readonly string[] = [
   "remote_bindings",
   "remote_issue_identities",
   "remote_observations",
+  "remote_outbox",
+  "remote_outbox_receipts",
   "schema_version",
   "sync_cursor",
   "sync_runs",
@@ -698,12 +749,11 @@ export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> 
 };
 
 /**
- * The required current-schema columns, taken from the v2 DDL (plus the shared
- * ledger table). A table that kept its name but lost a required column is a
- * damaged store, not a current one, and must refuse at admission instead of
- * failing a later domain query.
+ * The v2 current-schema columns (plus the shared ledger table). A table that kept its
+ * name but lost a required column is a damaged store, not a current one, and
+ * must refuse at admission instead of failing a later domain query.
  */
-const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+const COLLABORATION_V2_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_COLUMNS,
   issues: [...COLLABORATION_COLUMNS.issues!, "issue_ref"],
   remote_bindings: [
@@ -716,8 +766,23 @@ const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>>
   ],
 };
 
+/** note: The v3 intent tables' exact columns. */
+const COLLABORATION_OUTBOX_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  remote_outbox: [
+    "operation_id", "generation", "project_key", "request_hash", "request_json", "execution_key_json", "state",
+    "attempt_id", "created_at", "updated_at", "abandon_reason", "resolves", "resolved_by",
+  ],
+  remote_outbox_receipts: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
+};
+
+/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
+export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ...COLLABORATION_V2_COLUMNS,
+  ...COLLABORATION_OUTBOX_COLUMNS,
+};
+
 /**
- * invariant: The v2 delta's enforced layout: the columns that must reject null, the
+ * invariant: The declared layout's enforced keys: the columns that must reject null, the
  * primary and foreign keys, the unique indexes and the state vocabulary. The
  * declared DDL is canonical, so admission proves what SQLite actually built
  * instead of trusting table and column names; a lane that kept its names but
@@ -736,7 +801,7 @@ type KeyLayout = Readonly<{
   checks: readonly string[];
 }>;
 
-const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
+const COLLABORATION_KEY_LAYOUT_V2: readonly KeyLayout[] = [
   {
     table: "collaboration_meta",
     notNull: [],
@@ -798,9 +863,53 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
   },
 ];
 
+const COLLABORATION_KEY_LAYOUT_OUTBOX: readonly KeyLayout[] = [
+  {
+    table: "remote_outbox",
+    notNull: [
+      "operation_id", "generation", "project_key", "request_hash", "request_json", "state", "created_at", "updated_at",
+    ],
+    primaryKey: ["operation_id"],
+    foreignKeys: [
+      [
+        ["generation", "remote_bindings", "generation"],
+        ["project_key", "remote_bindings", "project_key"],
+      ],
+      [["resolved_by", "remote_outbox", "operation_id"]],
+      [["resolves", "remote_outbox", "operation_id"]],
+    ],
+    uniqueIndexes: [{ columns: ["attempt_id"], where: null }],
+    checks: [
+      "check (typeof(generation) = 'integer' and generation > 0)",
+      "check (state in ('enqueued','unconfirmed','confirmed','conflict','abandoned'))",
+    ],
+  },
+  {
+    table: "remote_outbox_receipts",
+    notNull: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
+    primaryKey: ["operation_id", "receipt_hash"],
+    foreignKeys: [[["operation_id", "remote_outbox", "operation_id"]]],
+    uniqueIndexes: [],
+    checks: [
+      "check (source in ('receipt','reconcile'))",
+      "check (outcome in ('confirmed','unconfirmed','conflict','not-sent'))",
+    ],
+  },
+];
+
+const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
+  ...COLLABORATION_KEY_LAYOUT_V2,
+  ...COLLABORATION_KEY_LAYOUT_OUTBOX,
+];
+
+/** note: The v2 inventory an explicit upgrade from v2 proves before the outbox DDL runs. */
+const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+  (table) => !COLLABORATION_OUTBOX_TABLES.includes(table),
+);
+
 /** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
 const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
-  (table) => !COLLABORATION_REMOTE_TABLES.includes(table),
+  (table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table),
 );
 
 /**
@@ -1144,13 +1253,19 @@ function assertAdmittedTarget(dbPath: string): void {
 }
 
 /**
- * invariant: The closed table inventory, the exact columns, and the v2 delta's keys
+ * invariant: The closed table inventory, the exact columns, and the v3 intent tables' keys
  * and CHECKs. A dropped domain table, a foreign/combined database, an extra or
  * missing column, or a lost key refuses before admission.
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
   assertKeyLayout(db, dbPath);
+}
+
+/** note: The exact v2 shape an upgrade from v2 proves before the v3 delta: a partial v3 refuses. */
+function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_V2_TABLES, COLLABORATION_V2_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
 }
 
 /** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
@@ -1265,11 +1380,15 @@ function uniqueIndexLayouts(db: StoreDb, table: string): UniqueIndexLayout[] {
  * declared SQL's CHECK clauses. A lane with a retained name and checksum but a
  * lost constraint is damaged, not current.
  */
-function assertKeyLayout(db: StoreDb, dbPath: string): void {
+function assertKeyLayout(
+  db: StoreDb,
+  dbPath: string,
+  layouts: readonly KeyLayout[] = COLLABORATION_KEY_LAYOUT,
+): void {
   const refusal = (table: string, detail: string): never => {
     throw unreadable(dbPath, `its ${table} ${detail}`);
   };
-  for (const layout of COLLABORATION_KEY_LAYOUT) {
+  for (const layout of layouts) {
     const columns = db.prepare(`pragma table_info(${layout.table})`).all() as Array<{
       name?: unknown;
       notnull?: unknown;
@@ -1792,16 +1911,17 @@ export type CollaborationUpgradeReceipt = Readonly<{
 
 /**
  * `mstar store upgrade --operator <name>` for the collaboration lane: the ONLY
- * way an admitted v1 lane advances to v2. Ordinary reads never migrate.
+ * way an admitted older lane advances to the current schema. Ordinary reads
+ * never migrate.
  *
- * The whole delta runs in one `BEGIN IMMEDIATE`: the applied set is re-read
- * inside the transaction, the recorded v1 checksum must equal this build's
- * immutable `collaboration-core`, the v1 layout must be exactly the declared
- * one (a partial or damaged lane refuses instead of being "repaired"), the v2
- * DDL and the per-row `IssueRef` backfill run together, the resulting layout is
- * verified, and only then is the ledger row appended and the batch committed.
- * A crash therefore leaves v1 bytes: replaying the same verb revalidates and
- * commits, while a half-applied schema refuses.
+ * The whole ladder runs in one `BEGIN IMMEDIATE`: the applied set is re-read
+ * inside the transaction, each recorded predecessor checksum must equal this
+ * build's own immutable migration body, the lane's current layout must be
+ * exactly the declared one (a partial or damaged lane refuses instead of being
+ * "repaired"), the next DDL and the per-row `IssueRef` backfill run together,
+ * the resulting layout is verified, and only then is the ledger row appended.
+ * A crash therefore leaves the predecessor's bytes: replaying the same verb
+ * revalidates and commits, while a half-applied schema refuses.
  */
 export async function upgradeCollaborationStore(
   context: StoreContext,
@@ -1838,7 +1958,7 @@ export async function upgradeCollaborationStore(
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
         throw staleBinding(dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
       }
-      // invariant: The v1 ladder is mutated only for the generation THIS checkout is bound to.
+      // invariant: The ladder is mutated only for the generation THIS checkout is bound to.
       // Repository and mode alone admit a replaced same-repository lane, so a stale or unbound
       // checkout must refuse here - under the migration lock, before any DDL or backfill -
       // instead of writing another generation's bytes and leaving bootstrap to refuse after.
@@ -1872,39 +1992,56 @@ export async function upgradeCollaborationStore(
         db.exec("commit");
         return receipt(current, 0);
       }
-      if (appliedMax !== COLLABORATION_SCHEMA.version) {
-        throw new StoreError(
-          "store.schema-drift",
-          `The collaboration store at ${dbPath} records schema version ${String(appliedMax)}; this build upgrades ` +
-            `version ${String(COLLABORATION_SCHEMA.version)} only. Inspect the lane with mstar path resolve; nothing was modified.`,
-        );
-      }
-      const recorded = applied[0];
-      if (recorded === undefined || recorded.checksum !== migrationChecksum(COLLABORATION_SCHEMA)) {
+      const recordedV1 = applied[0];
+      if (recordedV1 === undefined || recordedV1.checksum !== migrationChecksum(COLLABORATION_SCHEMA)) {
         throw new StoreError(
           "store.corrupt",
           `The collaboration store at ${dbPath} records a v1 checksum that is not this build's immutable ` +
             `"collaboration-core" migration; the lane is refused rather than rebuilt on unknown bytes. Nothing was modified.`,
         );
       }
-      assertLegacySchema(db, dbPath);
-      const present = db
-        .prepare("pragma table_info(issues)")
-        .all()
-        .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
-      if (present.includes("issue_ref")) {
-        throw new StoreError(
-          "store.corrupt",
-          `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
-            `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
-            `verified backup pair; nothing was modified.`,
+      const fromVersion = appliedMax;
+      let issuesBackfilled = 0;
+      if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
+        assertLegacySchema(db, dbPath);
+        const present = db
+          .prepare("pragma table_info(issues)")
+          .all()
+          .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
+        if (present.includes("issue_ref")) {
+          throw new StoreError(
+            "store.corrupt",
+            `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
+              `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
+              `verified backup pair; nothing was modified.`,
+          );
+        }
+        issuesBackfilled = applyRemoteCacheSchema(db);
+        db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+          COLLABORATION_REMOTE_SCHEMA.version,
+          COLLABORATION_REMOTE_SCHEMA.name,
+          migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+          nowRfc3339(),
         );
+      } else {
+        const recordedV2 = applied[1];
+        if (recordedV2 === undefined || recordedV2.checksum !== migrationChecksum(COLLABORATION_REMOTE_SCHEMA)) {
+          throw new StoreError(
+            "store.corrupt",
+            `The collaboration store at ${dbPath} records a v2 checksum that is not this build's ` +
+              `"collaboration-remote-cache" migration; the lane is refused rather than advanced on unknown bytes. ` +
+              `Nothing was modified.`,
+          );
+        }
       }
-      const issuesBackfilled = applyRemoteCacheSchema(db);
+      // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
+      // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
+      assertRemoteCacheSchema(db, dbPath);
+      db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
       db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-        COLLABORATION_REMOTE_SCHEMA.version,
-        COLLABORATION_REMOTE_SCHEMA.name,
-        migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+        COLLABORATION_OUTBOX_SCHEMA.version,
+        COLLABORATION_OUTBOX_SCHEMA.name,
+        migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
         nowRfc3339(),
       );
       assertCurrentSchema(db, dbPath);
@@ -1912,13 +2049,13 @@ export async function upgradeCollaborationStore(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
           "values ('standalone', ?, ?, ?, ?)",
       ).run(
-        `upgrade:collaboration:${String(COLLABORATION_REMOTE_SCHEMA.version)}:${meta.storeId}:${String(meta.epoch)}`,
-        migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+        `upgrade:collaboration:${String(current)}:${meta.storeId}:${String(meta.epoch)}`,
+        migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
         JSON.stringify({
           version: 1,
           operator: operator.trim(),
-          fromVersion: COLLABORATION_SCHEMA.version,
-          toVersion: COLLABORATION_REMOTE_SCHEMA.version,
+          fromVersion,
+          toVersion: current,
           storeId: meta.storeId,
           epoch: meta.epoch,
           issuesBackfilled,
@@ -1926,10 +2063,10 @@ export async function upgradeCollaborationStore(
         nowRfc3339(),
       );
       // invariant: A selector that moved while the migration held the write lock refuses
-      // under it: the v1 ladder is never advanced under a selection this process lost.
+      // under it: the ladder is never advanced under a selection this process lost.
       assertSelectionUnchanged(context, location);
       db.exec("commit");
-      return receipt(COLLABORATION_SCHEMA.version, issuesBackfilled);
+      return receipt(fromVersion, issuesBackfilled);
     } catch (error) {
       try {
         db.exec("rollback");
