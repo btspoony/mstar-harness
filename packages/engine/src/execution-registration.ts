@@ -548,6 +548,7 @@ export async function commitExecutionRegistration(
         projectId: journalProject as string,
         operationId,
         executionKey: { ...prepared.intent.key, operationId },
+        reservation: prepared.intent.key,
         next: (current) => {
           const entities = current.catalogEntities as Array<Record<string, unknown>>;
           const nextEntities = [...entities];
@@ -565,9 +566,10 @@ export async function commitExecutionRegistration(
                   "catalog.duplicate",
                   `${entity.kind} ${entity.id} is already registered in the observed project with different content; ` +
                     `nothing was enqueued. Settle the reviewed field first with its own remote catalog write ` +
-                    `(\`mstar catalog update ${entity.kind} ${entity.id} --expect <observed-revision> --operation-id ` +
-                    `<uuid> --actor <role>\`), dispatch and confirm that journal write, re-observe, then reissue this ` +
-                    `SAME registration: the settled row is adopted identically instead of rewritten.`,
+                    `(\`mstar catalog update ${entity.kind} ${entity.id} --project ${journalProject as string} ` +
+                    `--expect <observed-revision> --operation-id <uuid> --actor <role>\`), dispatch and confirm that ` +
+                    `journal write, re-observe, then reissue this SAME registration: the settled row is adopted ` +
+                    `identically instead of rewritten.`,
                 );
               }
               continue;
@@ -598,7 +600,7 @@ export async function commitExecutionRegistration(
     },
     finalize(tx, receipt) {
       const facts = remote
-        ? remoteRegistrationFacts(receipt.facts, plan.request.delta)
+        ? remoteRegistrationFacts(receipt.facts, plan.request.delta, journalProject as string)
         : registrationEffectFacts(receipt.facts);
       const binding = plan.request.delta.binding;
       const bound = facts.entities.find(
@@ -754,27 +756,38 @@ function samePortableCatalogLink(row: Record<string, unknown>, desired: Record<s
  * same-outcome correction: a re-observed, NEW registration of the SAME workflow adopts the rows
  * the settlement already carries identically and publishes only what is missing, so settled work
  * is never re-sent or overwritten. A settlement that CHANGED a reviewed field is not corrected by
- * reissuing alone — that reissue meets `catalog.duplicate` — so `correction` names the field's own
- * reviewed settlement before it.
+ * reissuing alone — that reissue meets `catalog.duplicate` — so the caller supplies that field's
+ * own reviewed settlement as the ONE ordered route, addressed at the SAME project journal.
  */
 function remoteEffectMismatch(
   settled: ReadonlyArray<{ operationId: string; recordId: string | null }>,
   what: string,
   details: Record<string, unknown>,
-  correction = "",
+  recovery?: string,
 ): StoreError {
   const operations = settled.map((entry) => entry.operationId).join(", ") || "(unrecorded)";
   const records = settled.map((entry) => entry.recordId).filter((id): id is string => id !== null);
+  const route =
+    recovery ??
+    `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${settled[0]?.operationId ?? "<uuid>"}\`, then re-observe the project with ` +
+      `\`mstar store collaboration remote observe --harness <abs> --input <file|->\` and reissue this SAME registration ` +
+      `for the SAME workflow under a NEW operation id: rows the settlement already carries identically are adopted, only ` +
+      `the missing work is published, and the settled effect is never re-sent.`;
   return new StoreError(
     "remote.effect-mismatch",
     `the confirmed provider effect ${operations}${records.length === 0 ? "" : ` (record ${records.join(", ")})`} ${what}, ` +
       `so the reviewed registration's business outcome never fully landed and the execution binding is not written from ` +
-      `a guessed identity. Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> ` +
-      `--operation ${settled[0]?.operationId ?? "<uuid>"}\`; then re-observe the project with ` +
-      `\`mstar store collaboration remote observe --harness <abs> --input <file|->\` and reissue this SAME registration ` +
-      `for the SAME workflow under a NEW operation id: rows the settlement already carries identically are adopted, only ` +
-      `the missing work is published, and the settled effect is never re-sent. ${correction}`,
-    { settled_operations: settled.map((entry) => entry.operationId), settled_records: records, ...details },
+      `a guessed identity. ${route}`,
+    {
+      settled_operations: settled.map((entry) => entry.operationId),
+      settled_records: records,
+      // invariant: The settled provider work is DURABLE; a replayed decline names it so the
+      // operator never re-sends it while the execution acknowledgement stays unapplied.
+      confirmed_components: settled.map((entry) => `provider:${entry.operationId}`),
+      recovery: route,
+      ...details,
+    },
   );
 }
 
@@ -791,6 +804,7 @@ function remoteEffectMismatch(
 function remoteRegistrationFacts(
   facts: string,
   delta: CatalogExecutionCatalogDelta,
+  projectId: string,
 ): { catalogRevision: number; entities: PublishedRegistrationEntity[] } {
   let parsed: unknown;
   try {
@@ -850,11 +864,15 @@ function remoteRegistrationFacts(
         settled,
         `publishes ${entity.kind} ${JSON.stringify(entity.id)} with different portable content than the reviewed delta`,
         { mismatched_entity: { kind: entity.kind, id: entity.id } },
-        `A changed field is not corrected by reissuing alone — the re-observed row would refuse ` +
-          `\`catalog.duplicate\`. Settle its reviewed value first in the project journal with its own remote catalog ` +
-          `write (\`mstar catalog update ${entity.kind} ${entity.id} --expect <observed-revision> --operation-id <uuid> ` +
-          `--actor <role>\`, passing the reviewed --title/--description/--document-kind/--lifecycle), dispatch and ` +
-          `confirm that write, then re-observe and reissue as above: the settled row is adopted, never rewritten.`,
+        `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+          `${settled[0]?.operationId ?? "<uuid>"}\`; re-observe the settled project with ` +
+          `\`mstar store collaboration remote observe --harness <abs> --input <file|->\`; settle the reviewed field in ` +
+          `that journal with \`mstar catalog update ${entity.kind} ${entity.id} --project ${projectId} ` +
+          `--expect <observed-revision> --operation-id <uuid> --actor <role>\` plus the reviewed ` +
+          `--title/--description/--document-kind/--lifecycle; dispatch and confirm that write with ` +
+          `\`mstar store collaboration remote outbox-dispatch\` and \`outbox-receipt\`; re-observe the confirmed journal ` +
+          `again; then reissue this SAME registration for the SAME workflow under a NEW operation id: the settled row ` +
+          `is adopted identically and is never rewritten.`,
       );
     }
   }

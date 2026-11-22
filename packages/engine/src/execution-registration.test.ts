@@ -2337,11 +2337,23 @@ describe("remotely bound shipped registration", () => {
     expect(detailsOf(refused)).toMatchObject({
       settled_operations: [resolutionId],
       mismatched_entity: { kind: "plan", id: planId },
+      // invariant: The settled provider work is durable and the decline names it, so the replay
+      // never claims an effect-free operation.
+      confirmed_components: [`provider:${resolutionId}`],
     });
     expect(detailsOf(refused).settled_records).toHaveLength(1);
-    // invariant: The advertised correction for CHANGED content is not a bare reissue — that meets
-    // `catalog.duplicate` — so the refusal names the reviewed field's own catalog settlement.
-    expect(refused instanceof Error ? refused.message : "").toContain("mstar catalog update");
+    // invariant: The advertised correction is ONE ordered, runnable route — the CLI forwards the
+    // project only when it is given, so the printed form must carry the journal's own --project or
+    // a remote catalog write refuses `catalog.invalid-entity`. The structured recovery field names
+    // the same route the message does.
+    const advertised = String(detailsOf(refused).recovery);
+    const correction = `mstar catalog update plan ${planId}`;
+    expect(refused instanceof Error ? refused.message : "").toContain(correction);
+    expect(advertised).toContain(correction);
+    for (const text of [refused instanceof Error ? refused.message : "", advertised]) {
+      expect(text).toContain(`--project ${REMOTE_IDS.projectId}`);
+      expect(text.indexOf("mstar catalog update")).toBeLessThan(text.indexOf("reissue this SAME registration"));
+    }
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toBeUndefined();
     expect(await reservationRow(fixture.context, "op-remote-changed-field")).toMatchObject({
       phase: "declined",

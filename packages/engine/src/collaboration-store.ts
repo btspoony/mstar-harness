@@ -3669,12 +3669,29 @@ export async function withRemoteCacheWrite<T>(
   return withWriteLane(context, apply, undefined, "remote-cache", admission);
 }
 
+/**
+ * invariant: The remote-cache write lane HELD across an awaited effect. The composite decline and
+ * the provider freeze are one pair of decisions over the same outbox: a decline must observe every
+ * intent that froze before it, and a freeze must observe a decline that committed before it. Both
+ * therefore take this one lane, and the decline commits its durable phase while holding it, so
+ * neither ordering can leave a durable intent under a released reservation. Every other effect
+ * stays synchronous — the synchronous-effect refusal of `withRemoteCacheWrite` is unchanged.
+ */
+export async function withRemoteCacheWriteHeld<T>(
+  context: StoreContext,
+  apply: (handle: CollaborationStoreHandle) => Promise<T>,
+  admission: RemoteCacheAdmission = {},
+): Promise<T> {
+  return withWriteLane(context, apply, undefined, "remote-cache", admission, true);
+}
+
 async function withWriteLane<T>(
   context: StoreContext,
-  apply: (handle: CollaborationStoreHandle) => T,
+  apply: (handle: CollaborationStoreHandle) => T | Promise<T>,
   expected: CollaborationStamp | undefined,
   lane: "domain" | "remote-cache",
   admission: RemoteCacheAdmission = {},
+  holdAsync = false,
 ): Promise<T> {
   assertStoreRuntimeSupported();
   let location: CollaborationLocation;
@@ -3722,23 +3739,29 @@ async function withWriteLane<T>(
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
-      const result = apply({
+      const effect = apply({
         db: guardedWriteDb(db),
         authority,
         close(): never {
           throw transactionOwnershipRefusal();
         },
       });
-      if (isThenable(result)) {
-        // invariant: Consume the abandoned result before refusing: an async effect's
-        // rejection must not surface as an unhandled rejection after this call
-        // has already reported the synchronous-effect refusal.
-        void Promise.resolve(result).catch(() => undefined);
-        throw new StoreError(
-          "store.corrupt",
-          "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +
-            "nothing was written.",
-        );
+      let result: T;
+      if (isThenable(effect)) {
+        if (!holdAsync) {
+          // invariant: Consume the abandoned result before refusing: an async effect's
+          // rejection must not surface as an unhandled rejection after this call
+          // has already reported the synchronous-effect refusal.
+          void Promise.resolve(effect).catch(() => undefined);
+          throw new StoreError(
+            "store.corrupt",
+            "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +
+              "nothing was written.",
+          );
+        }
+        result = (await effect) as T;
+      } else {
+        result = effect as T;
       }
       // invariant: The checked selection (and, for a remote lane, the private cache stamp) is
       // re-proved immediately before commit: a selector that moved to a draining or successor

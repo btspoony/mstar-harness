@@ -30,6 +30,7 @@ import {
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
   withRemoteCacheWrite,
+  withRemoteCacheWriteHeld,
   assertIssueRef,
   assertRemoteCacheIdentity,
   type CollaborationAuthority,
@@ -47,6 +48,7 @@ import {
   type CollaborationSelection,
 } from "./collaboration-identity.js";
 import { withCollaborationLockFile } from "./collaboration-cutover.js";
+import { declinedReservationCause } from "./execution-store.js";
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -704,7 +706,7 @@ const MSTAR_FIELD_KEYS = [
 ] as const;
 
 function mstarFields(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
-  const body = record(value, path);
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   allowOnly(body, path, MSTAR_FIELD_KEYS, errors);
   return {
     title: collected(errors, () => text(body.title, `${path}.title`), ""),
@@ -2461,6 +2463,17 @@ export type RemoteIntentExecutionKey = Readonly<{
 }>;
 
 /**
+ * note: The composite RESERVATION a provider intent belongs to. It is not persisted: the freeze
+ * honors it only to prove that reservation is still `prepared`, so a decline that committed while
+ * the attempt was already admitted cannot be followed by a durable intent under it.
+ */
+export type RemoteReservationKey = Readonly<{
+  executionStoreId: string;
+  executionEpoch: number;
+  operationId: string;
+}>;
+
+/**
  * note: The business verb and its COMPLETE normalized request, as the ordinary writer that froze
  * the intent received them. Two different verbs (or payloads) never replay as one operation, and
  * neither does a changed request: the final document they produced is not their identity.
@@ -2588,26 +2601,29 @@ function writeOrigin(value: unknown, path: string): RemoteWriteOrigin {
  * and the outer duplicate `issueRef`. An empty or partial subject never freezes.
  */
 function frozenIssueSubject(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
-  const body = record(value, path);
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("issueRef" in body) invalid(`${path}.issueRef`, "duplicates the event's reference");
   allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"], errors);
+  // invariant: Each history ENTRY is its own collection boundary: a malformed entry (a null row, a
+  // bad field) names its own diagnostic and the sibling entries after it are still read, so one
+  // refusal answers every history defect of the subject.
   return {
     fields: mstarFields(body.fields, `${path}.fields`, errors),
     occurrences: collected(errors, () => list(body.occurrences, `${path}.occurrences`), []).map((entry, index) =>
-      frozenOccurrence(entry, `${path}.occurrences[${index}]`, errors),
+      collected(errors, () => frozenOccurrence(entry, `${path}.occurrences[${index}]`, errors), {}),
     ),
     transitions: collected(errors, () => list(body.transitions, `${path}.transitions`), []).map((entry, index) =>
-      transition(entry, `${path}.transitions[${index}]`, errors),
+      collected(errors, () => transition(entry, `${path}.transitions[${index}]`, errors), {}),
     ),
     relations: collected(errors, () => list(body.relations, `${path}.relations`), []).map((entry, index) =>
-      relation(entry, `${path}.relations[${index}]`, errors),
+      collected(errors, () => relation(entry, `${path}.relations[${index}]`, errors), {}),
     ),
     provenance: collected(errors, () => list(body.provenance, `${path}.provenance`), []).map((entry, index) =>
-      provenanceLink(entry, `${path}.provenance[${index}]`, errors),
+      collected(errors, () => provenanceLink(entry, `${path}.provenance[${index}]`, errors), {}),
     ),
     projectMoves: collected(errors, () => list(body.projectMoves, `${path}.projectMoves`), []).map((entry, index) =>
-      projectMove(entry, `${path}.projectMoves[${index}]`, errors),
+      collected(errors, () => projectMove(entry, `${path}.projectMoves[${index}]`, errors), {}),
     ),
   };
 }
@@ -2617,7 +2633,7 @@ function frozenIssueSubject(value: unknown, path: string, errors?: string[]): Re
  * document - every member present, no derived `head`, no `binding` (the
  * selected transport scope supplies it) and nothing outside the allowlist.
  */
-function frozenProjectSubject(value: unknown, path: string, projectKey: string): Record<string, unknown> {
+function frozenProjectSubject(value: unknown, path: string, projectKey: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
@@ -2625,13 +2641,13 @@ function frozenProjectSubject(value: unknown, path: string, projectKey: string):
   const projectId = text(body.projectId, `${path}.projectId`);
   if (projectId !== projectKey) invalid(`${path}.projectId`, "must be the event's project");
   const milestones = list(body.milestones, `${path}.milestones`).map((entry, index) =>
-    milestone(entry, `${path}.milestones[${index}]`),
+    collected(errors, () => milestone(entry, `${path}.milestones[${index}]`), {} as unknown as RemoteMilestone),
   );
   if (new Set(milestones.map((entry) => entry.milestoneId)).size !== milestones.length) {
     invalid(`${path}.milestones`, "must not repeat a milestone id");
   }
   const catalogEntities = list(body.catalogEntities, `${path}.catalogEntities`).map((entry, index) =>
-    catalogEntity(entry, `${path}.catalogEntities[${index}]`),
+    collected(errors, () => catalogEntity(entry, `${path}.catalogEntities[${index}]`), {} as unknown as RemoteCatalogEntity),
   );
   if (new Set(catalogEntities.map((entry) => `${entry.kind}:${entry.id}`)).size !== catalogEntities.length) {
     invalid(`${path}.catalogEntities`, "must not repeat a (kind, id) pair");
@@ -2709,7 +2725,7 @@ function remoteEvent(raw: unknown, binding: RemoteIntentBinding, errors?: string
   let frozen: RemoteEventChange;
   if (kind === "project-replace") {
     allowOnly(change, `${path}.change`, ["kind", "project"], errors);
-    frozen = { kind, project: frozenProjectSubject(change.project, `${path}.change.project`, projectId) };
+    frozen = { kind, project: frozenProjectSubject(change.project, `${path}.change.project`, projectId, errors) };
   } else {
     allowOnly(change, `${path}.change`, ["kind", "issueRef", "mstar"], errors);
     frozen = {
@@ -2754,11 +2770,17 @@ function intentTarget(raw: unknown, change: RemoteEventChange, binding: RemoteIn
  *
  * `guard` runs INSIDE the freeze transaction, after an identical replay has answered, so a caller
  * holding an observed revision proves it against the lane the intent is actually written to.
+ *
+ * `reservation` names the composite reservation this intent belongs to. It is proved INSIDE the
+ * same write lane, before the row is written: a decline holds that lane across its own durable
+ * phase, so a reservation declined while this attempt was already admitted refuses here instead of
+ * freezing an intent the decline's replay could never finalize.
  */
 export async function prepareRemoteIntent(
   context: StoreContext,
   request: unknown,
   guard?: (observed: { observationRevision: number }) => void,
+  reservation?: RemoteReservationKey | null,
 ): Promise<RemoteIntent> {
   const body = record(request, "request");
   allowOnly(body, "request", [
@@ -2814,7 +2836,7 @@ export async function prepareRemoteIntent(
       : canonicalJson({ ...frozenRequest, origin, result });
   const executionJson = executionKey === null ? null : canonicalJson(executionKey);
 
-  return withRemoteCacheWrite(context, (handle) => {
+  const insert = (handle: CollaborationStoreHandle): RemoteIntent => {
     const db = handle.db;
     const stored = db
       .prepare(
@@ -2895,7 +2917,38 @@ export async function prepareRemoteIntent(
       createdAt: at,
       updatedAt: at,
     } satisfies RemoteIntent;
+  };
+  if (reservation === undefined || reservation === null) return withRemoteCacheWrite(context, insert);
+  // invariant: A composite's freeze takes the SAME lane the decline holds across its durable
+  // phase, and proves the reservation's phase inside it: a decline that committed while this
+  // attempt was already admitted refuses the freeze instead of leaving a durable intent under a
+  // reservation whose same-id replay only raises the decline.
+  return withRemoteCacheWriteHeld(context, async (handle) => {
+    const declined = await declinedReservationCause(context, reservation);
+    if (declined !== null) throw declinedReservationRefusal(reservation, declined);
+    return insert(handle);
   });
+}
+
+/** note: The freeze's refusal of a reservation that was declined while this attempt was admitted. */
+function declinedReservationRefusal(
+  reservation: RemoteReservationKey,
+  cause: Readonly<{ code: string; message: string; details: Record<string, unknown> | null }>,
+): StoreError {
+  return new StoreError(
+    "collaboration.operation-partial",
+    `The composite reservation ${JSON.stringify(reservation.operationId)} was declined durably before this provider ` +
+      `intent was frozen (${cause.code}: ${cause.message}), so nothing was enqueued and no provider state is claimed. ` +
+      `The next same-id attempt replays that recorded decline; issue the corrected request under a NEW operation id.`,
+    {
+      operation_id: reservation.operationId,
+      phase: "declined",
+      cause: { code: cause.code, message: cause.message, ...(cause.details === null ? {} : { details: cause.details }) },
+      recovery:
+        `Reissue the SAME verb with the SAME --operation id to replay the recorded decline, or issue the corrected ` +
+        `request under a NEW operation id.`,
+    },
+  );
 }
 
 const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
@@ -2906,22 +2959,47 @@ const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
   "abandoned",
 ];
 
+/** note: The outcome of one composite decline the frame decides under the freeze's own lane. */
+export type FreezeDeclineDecision =
+  | { kind: "declined" }
+  | { kind: "durable"; operationIds: readonly string[] }
+  | { kind: "unproven"; error: unknown }
+  | { kind: "unsettled"; error: unknown };
+
 /**
- * why: The decline decision's serialization point: the remote-cache write lane, the same lock
- * `prepareRemoteIntent` freezes under. A row committed before this call is always visible here,
- * so a composite can prove absence against the freeze order instead of against its own sample,
- * and a durable intent frozen by a concurrent same-id attempt is never declined away.
+ * invariant: The composite decline and the provider freeze are ONE pair of decisions over the
+ * remote outbox, so both take the remote-cache write lane and neither leaves the lane while its
+ * decision is undecided:
+ * - a durable intent found here retains the reservation, so a winner that froze before this
+ *   decision is never declined away (the absence check is INSIDE the decline's own lane, not a
+ *   sample taken beside it);
+ * - the durable execution decline is committed WHILE the lane is held, so a freeze that begins
+ *   afterwards meets `prepareRemoteIntent`'s own declined-reservation proof inside the same lane
+ *   and refuses instead of enqueuing.
+ * A lane that cannot be read proves nothing either way (`unproven`): the reservation is retained.
  */
-export async function durableRemoteIntentIds(
+export async function declineUnderFreezeLane(
   context: StoreContext,
   operationIds: readonly string[],
-): Promise<readonly string[]> {
-  return withRemoteCacheWrite(context, (handle) =>
-    operationIds.filter(
-      (operationId) =>
-        handle.db.prepare("select 1 as found from remote_outbox where operation_id = ?").get(operationId) !== undefined,
-    ),
-  );
+  decline: () => Promise<{ settled: true } | { settled: false; error: unknown }>,
+): Promise<FreezeDeclineDecision> {
+  if (operationIds.length === 0) {
+    const settlement = await decline();
+    return settlement.settled ? { kind: "declined" } : { kind: "unsettled", error: settlement.error };
+  }
+  try {
+    return await withRemoteCacheWriteHeld(context, async (handle) => {
+      const durable = operationIds.filter(
+        (operationId) =>
+          handle.db.prepare("select 1 as found from remote_outbox where operation_id = ?").get(operationId) !== undefined,
+      );
+      if (durable.length > 0) return { kind: "durable" as const, operationIds: durable };
+      const settlement = await decline();
+      return settlement.settled ? { kind: "declined" as const } : { kind: "unsettled" as const, error: settlement.error };
+    });
+  } catch (error) {
+    return { kind: "unproven", error };
+  }
 }
 
 /**
@@ -5188,6 +5266,8 @@ export type RemoteIssueWrite = Readonly<{
   guard?: (observed: { observationRevision: number }) => void;
   /** note: A composite's execution reservation, so the provider effect settles it. */
   executionKey?: RemoteIntentExecutionKey | null;
+  /** note: The composite reservation this intent belongs to; its durable decline refuses the freeze. */
+  reservation?: RemoteReservationKey | null;
 }>;
 
 /**
@@ -5389,7 +5469,7 @@ export async function prepareRemoteIssueWrite(
       expectedHeads: [],
       executionKey,
       origin,
-    }, proveSampledBase(projectId, scope.observationRevision, write.guard));
+    }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
   }
   const addressed = text(write?.issueId, "issueId");
   const { scope, native, projectId } = await resolveObservedIssue(context, addressed, write.projectId);
@@ -5462,7 +5542,7 @@ export async function prepareRemoteIssueWrite(
     expectedHeads: parents,
     executionKey,
     origin,
-  }, proveSampledBase(projectId, scope.observationRevision, write.guard));
+  }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
 }
 
 /**
@@ -5509,6 +5589,8 @@ export type RemoteProjectWrite = Readonly<{
    */
   result?(current: Record<string, unknown>, subject: Record<string, unknown>): unknown;
   executionKey?: RemoteIntentExecutionKey | null;
+  /** note: The composite reservation this intent belongs to; its durable decline refuses the freeze. */
+  reservation?: RemoteReservationKey | null;
   /** note: A caller-observed base proved inside the freeze transaction; a moved base refuses the write. */
   guard?: (observed: { observationRevision: number }) => void;
 }>;
@@ -5557,7 +5639,7 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     executionKey: write.executionKey ?? null,
     origin,
     ...(write.result === undefined ? {} : { result: write.result(current, subject) }),
-  }, write.guard);
+  }, write.guard, write.reservation ?? null);
 }
 
 /**

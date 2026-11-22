@@ -1288,6 +1288,45 @@ export function withExecutionTransaction<T>(
 // ---------------------------------------------------------------------------
 
 /**
+ * note: The durable DECLINE of one composite reservation, read outside every transaction. The
+ * composite decline commits its execution phase while HOLDING the remote-cache write lane, and a
+ * provider freeze honors that same lane: a freeze that begins after a decline committed reads this
+ * fact inside the lane and refuses, instead of inserting a durable intent under a released
+ * reservation. `null` means this store holds no declined reservation for the key.
+ */
+export async function declinedReservationCause(
+  context: StoreContext,
+  key: Readonly<{ executionStoreId: string; executionEpoch: number; operationId: string }>,
+): Promise<Readonly<{ code: string; message: string; details: Record<string, unknown> | null }> | null> {
+  const handle = await openStore(context, "read");
+  try {
+    const row = handle.db
+      .prepare(
+        "select cause_code, cause_message, cause_details_json from execution_collaboration_intents " +
+          "where execution_store_id = ? and execution_epoch = ? and operation_id = ? and phase = 'declined'",
+      )
+      .get(key.executionStoreId, key.executionEpoch, key.operationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return null;
+    let details: Record<string, unknown> | null = null;
+    if (typeof row.cause_details_json === "string") {
+      try {
+        const parsed: unknown = JSON.parse(row.cause_details_json);
+        if (isPlainObject(parsed)) details = parsed;
+      } catch {
+        // note: an unreadable cause still proves the decline; its detail block is simply absent.
+      }
+    }
+    return {
+      code: typeof row.cause_code === "string" ? row.cause_code : "collaboration.operation-partial",
+      message: typeof row.cause_message === "string" ? row.cause_message : "the reservation was declined durably",
+      details,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * §3 one consistent READ of the execution authority: a read-intent handle, a
  * read transaction and the metadata singleton re-read inside it, so the body
  * sees the SAME snapshot. Same fail-closed order as `withExecutionTransaction`

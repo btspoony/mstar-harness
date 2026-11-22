@@ -1567,6 +1567,7 @@ export async function residualAddExecutionPlan(
               operationId,
               kind: "issue-create",
               executionKey: { ...intent.key, operationId },
+              reservation: intent.key,
               next: () => residualGenesisSubject(input, planId, at),
               origin: { verb: "residual-add", request: { planId, input } },
             }),
@@ -1664,6 +1665,7 @@ export async function residualCloseExecutionPlan(
           kind: "issue-replace",
           issueId: operation.issueId,
           executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
+          reservation: intent.key,
           next: (current, observed) => {
             const subject = current as Record<string, unknown>;
             const fields = subject.fields as Record<string, unknown>;

@@ -650,6 +650,31 @@ describe("remote outbox commands", () => {
     expect(Array.isArray(intents) ? intents.length : -1).toBe(cases.length);
   });
 
+  test("the advertised catalog correction runs through the command surface with its project", async () => {
+    const fixture = remoteFixture("catalog-correction");
+    await fixture.bind();
+    await fixture.observe(0);
+    const correction = {
+      harness: fixture.harness,
+      kind: "project",
+      id: IDS.projectId,
+      title: "Fixture renamed",
+      expect: 1,
+      operationId: "00000000-0000-4000-8000-0000000000c1",
+      actor: "project-manager",
+    };
+    // invariant: A remote catalog write appends to ONE project journal. The execution
+    // registration's advertised correction therefore carries --project; without it the CLI
+    // forwards no project and the engine refuses before enqueuing anything.
+    expect(await invoke("catalog.update", correction, fixture.repo)).toMatchObject({
+      status: "refused",
+      code: "catalog.invalid-entity",
+    });
+    const corrected = await invoke("catalog.update", { ...correction, project: IDS.projectId }, fixture.repo);
+    expect(corrected).toMatchObject({ status: "refused", code: "remote.effect-pending" });
+    expect(corrected.details).toMatchObject({ operationId: correction.operationId, state: "enqueued" });
+  });
+
   test("each remote/outbox verb publishes its --input document through the real schema command", async () => {
     const byId = new Map(getCommandDefinitions().map((entry) => [entry.id, entry]));
     const publish = async (command: string) => {
@@ -993,6 +1018,7 @@ describe("remote outbox commands", () => {
                 milestoneId: null,
               },
               occurrences: [
+                null,
                 {
                   eventId: "not-a-uuid",
                   occurrenceKey: "k",
@@ -1040,7 +1066,8 @@ describe("remote outbox commands", () => {
       for (const defect of [
         "mstar.fields.title",
         "mstar.fields.revision",
-        "mstar.occurrences.0.eventId",
+        "mstar.occurrences.0",
+        "mstar.occurrences.1.eventId",
       ]) {
         expect(joined).toContain(defect);
       }
@@ -1052,11 +1079,13 @@ describe("remote outbox commands", () => {
     expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
     const message = String(result.message);
     // invariant: ONE runtime refusal answers the whole known event arm — both bad subject fields
-    // and the malformed history row — so the caller corrects the document in one pass.
+    // and BOTH malformed history entries, the second after the first — so the caller corrects the
+    // document in one pass instead of discovering one sibling per submission.
     for (const diagnostic of [
       "receipt.outcome.event.change.mstar.fields.title",
       "receipt.outcome.event.change.mstar.fields.revision",
-      "receipt.outcome.event.change.mstar.occurrences[0].eventId",
+      "receipt.outcome.event.change.mstar.occurrences[0]: must be an object",
+      "receipt.outcome.event.change.mstar.occurrences[1].eventId",
     ]) {
       expect(message).toContain(diagnostic);
     }
