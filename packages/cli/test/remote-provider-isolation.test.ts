@@ -22,6 +22,7 @@ import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
   RemoteCollaborationFixture,
+  boundedRun,
   parseSandboxCommand,
   type OutboxIntent,
   type OutboxPermit,
@@ -275,13 +276,7 @@ function guardEnvironment(sandbox: RemoteSandbox, guard: Guard, overrides: Recor
 function guardedRun(sandbox: RemoteSandbox, guard: Guard, args: readonly string[]): RunResult {
   const node = Bun.which("node");
   if (node === null) throw new Error("the runtime provider guard needs a `node` binary for the built CLI");
-  const proc = Bun.spawnSync([node, sandbox.entry, ...args], {
-    cwd: sandbox.repo,
-    env: guardEnvironment(sandbox, guard),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return boundedRun([node, sandbox.entry, ...args], { cwd: sandbox.repo, env: guardEnvironment(sandbox, guard) });
 }
 
 function guardedJson(sandbox: RemoteSandbox, guard: Guard, args: readonly string[]): SandboxCommand {
@@ -556,6 +551,9 @@ describe("provider isolation: the built CLI under the deny-and-record guard", ()
 
   test("the bootstrap loop and one confirmed outbox effect run with zero provider attempts", () => {
     const credential = "fixture-host-credential-never-serialized";
+    // invariant: The process-global credential is restored to its exact prior state, so a later
+    // case in this worker never inherits or loses a caller-supplied key.
+    const ambientCredential = process.env.LINEAR_API_KEY;
     process.env.LINEAR_API_KEY = credential;
     try {
       fixture = new RemoteCollaborationFixture("remote-provider-isolation");
@@ -625,7 +623,8 @@ describe("provider isolation: the built CLI under the deny-and-record guard", ()
       assertCredentialAbsent(credential, sandbox, answers, guard);
       assertGuardClean(guard);
     } finally {
-      delete process.env.LINEAR_API_KEY;
+      if (ambientCredential === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = ambientCredential;
     }
   }, 60_000);
 });
@@ -807,6 +806,12 @@ describe("remote refusals at the CLI boundary", () => {
     expect(blockedRead.exitCode).toBe(1);
     expect(blockedRead.code).toBe("remote.unavailable");
     expect(blockedRead.data.total).toBeUndefined();
+    // invariant: The decoder-detected unsafe snapshot revokes the verified writer in the same
+    // transaction as the invalidation, so the outbox discloses state only, without the frozen
+    // event it cannot prove is faithful.
+    const blockedShow = sandbox.runJson([...REMOTE, "outbox-show", "--harness", harness, "--operation", operation]);
+    expect(blockedShow.exitCode).toBe(0);
+    expect(blockedShow.data).toMatchObject({ state: "enqueued", disclosure: "metadata", event: null });
     const blockedDispatch = sandbox.runJson([...REMOTE, "outbox-dispatch", "--harness", harness, "--operation", operation]);
     expect(blockedDispatch.exitCode).toBe(1);
     expect(blockedDispatch.code).toBe("remote.dispatch-refused");
