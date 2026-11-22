@@ -504,10 +504,14 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     const refused = sandbox.init();
     expect(refused.exitCode).toBe(1);
     expect(refused.code).toBe("collaboration.stale-binding");
-    // invariant: The recovery names the bootstrap order, never the verb that just failed.
-    expect(refused.recovery).toContain("remote bind");
-    expect(refused.recovery).toContain("mstar store init");
+    // invariant: The recovery is the exact bind the parser accepts — target and input — in
+    // bootstrap order, never the verb that just failed.
+    expect(refused.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
+    expect(refused.recovery).toContain("mstar store init --harness <abs>");
     expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
+    // invariant: The named route is accepted and is what restores the checkout.
+    expect(sandbox.bind(fixture.verify()).exitCode).toBe(0);
+    expect(sandbox.init().exitCode).toBe(0);
   });
 
   test("remote observation: a fresh sandbox bootstraps from Git and a host snapshot, then reads it", () => {
@@ -618,7 +622,7 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     const refused = sandbox.init();
     expect(refused.exitCode).toBe(1);
     expect(refused.code).toBe("collaboration.stale-binding");
-    expect(refused.recovery).toContain("remote bind");
+    expect(refused.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
     expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
   });
 
@@ -638,7 +642,7 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     // nothing, so the operator re-runs the reviewed bind instead of initializing around it.
     expect(refused.code).toBe("remote.unavailable");
     expect(refused.message).toContain("absent");
-    expect(refused.recovery).toContain("remote bind");
+    expect(refused.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
     expect(existsSync(cache)).toBe(false);
     expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
   });

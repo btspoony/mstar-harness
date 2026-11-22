@@ -121,8 +121,12 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       // Literal branches only: the repository's refusal-quality lint proves the
       // text statically, so every code the engine can emit carries the family's
       // own words for the exact route instead of a composed variable.
-      recovery: (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable" || code === "collaboration.stale-binding")
-        ? "Store init never binds an authority: inspect the checkout with mstar path resolve and correct its origin or .mstarc mode. A remote checkout restores access to the canonical origin and protected selector ref, then runs mstar store collaboration remote status --harness <abs> and the Host Agent's remote bind --input <file|-> before retrying mstar store init --harness <abs>; a local or mirror checkout starts a new checkout for the other repository."
+      recovery: (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable")
+        ? "Store init never creates a remote cache: access to the canonical origin and the protected selector ref is the prerequisite, and the checkout is inspected with mstar path resolve. Then check mstar store collaboration remote status --harness <abs>, have the Host Agent verify the selected scope, complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->, and retry mstar store init --harness <abs>."
+        // invariant: A stale binding is mode-specific, so the recovery names both modes instead of
+        // replacing the local/mirror adoption route with instructions for another checkout.
+        : id === "store.init" && code === "collaboration.stale-binding"
+        ? "Store init never creates or adopts an authority this checkout is not bound to: inspect the checkout with mstar path resolve and correct its origin or .mstarc mode. A remote checkout whose selector moved or whose binding is stale re-establishes its cache with mstar store collaboration remote bind --harness <abs> --input <file|->, then retries mstar store init --harness <abs>. A local or mirror checkout that holds no finalized binding for its own published authority adopts it with mstar store collaboration adopt --harness <abs> --expect-store <store-id>; a checkout that now resolves to another repository starts a new checkout instead."
         : code === "store.attestation-invalid"
         // The generated-attestation refusal: Bun is never an admissible attested
         // consumer, and the supported route is the installed Node CLI (or an

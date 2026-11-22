@@ -2442,8 +2442,8 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
             `${error.code === "collaboration.not-initialized" ? "absent" : "not published"}. A remote checkout initializes ` +
             `execution only, after the reviewed remote bind has created that lane for the checked selector generation: ` +
             `run mstar store collaboration remote status --harness ${context.harnessDir}, have the Host Agent verify the ` +
-            `selected scope, then run mstar store collaboration remote bind --input <file|-> and retry this verb. ` +
-            `Nothing was created.`,
+            `selected scope, then run mstar store collaboration remote bind --harness ${context.harnessDir} ` +
+            `--input <file|-> and retry this verb. Nothing was created.`,
         );
       }
       throw error;
