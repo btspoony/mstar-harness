@@ -1085,9 +1085,11 @@ async function runRemoteComposite<T>(
         `the provider intent ${pending.operationId} is ${pending.state}, not confirmed`,
       ),
       recovery:
-        `Inspect it with \`outbox-show --operation ${pending.operationId}\`, send it with \`outbox-dispatch\`, record ` +
-        `the result with \`outbox-receipt\`, then reissue this SAME verb with the SAME --operation id: only the execution ` +
-        `delta is committed, and the confirmed effect is never re-applied.`,
+        `Inspect it with \`mstar store collaboration remote outbox-show --harness <abs> --operation ${pending.operationId}\`, ` +
+        `send it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ${pending.operationId}\`, ` +
+        `record the result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, then ` +
+        `reissue this SAME verb with the SAME --operation id: only the execution delta is committed, and the confirmed ` +
+        `effect is never re-applied.`,
     });
   }
   // invariant: A remote composite owns no local collaboration revision; the confirmed provider
