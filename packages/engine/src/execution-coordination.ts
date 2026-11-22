@@ -2195,7 +2195,7 @@ function completeInTransaction(
   if (prepared.findings_cleanup !== witnesses.findings.mode) {
     throw new CoordinationError(
       "coordination.version-conflict",
-      "The plan's findings-cleanup mode changed before the completion transaction; repeat the same completion with the same semantic id so it is judged against the current policy.",
+      "The plan's findings-cleanup mode changed before the completion transaction; repeat the same completion with the same semantic id so it is judged against the current policy: mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --operation <operation-id>.",
       {
         plan_id: planId,
         observed: witnesses.findings.mode,

@@ -92,6 +92,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
+    // reachability: manual — the repo-identity, cutover-not-quiescent, cutover-unconfirmed and not-initialized branches recover through runtime-selected store verbs, persisted-evidence inspection, or the collaboration-restore route whose required flags directly follow the registered verb name, so the action-word candidate scan cannot parse them; no single statically provable command covers these branches
     : refusalEnvelope({
       command: id,
       status: "refused",
@@ -111,19 +112,19 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
           ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
           : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
             // A combined source or a competing target is settled by the reviewed cutover, never by a guessed merge.
-            ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then mstar store collaboration apply and activate with that exact manifest. A source or target another activation owns is preserved, never overwritten."
+            ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then apply and activate it with mstar store collaboration apply --harness <abs> --manifest <abs-manifest> and mstar store collaboration activate --harness <abs> --manifest <abs-manifest>. A source or target another activation owns is preserved, never overwritten."
             : code === "collaboration.cutover-not-quiescent"
               ? "Settle the pending mirror batches or catalog registrations the refusal names with their own verbs, stop the remaining writers, then retry the same reviewed manifest."
               : code === "collaboration.cutover-unconfirmed"
                 ? "Do not retry blindly and do not treat the source as unchanged: inspect the persisted fence record, the retained pre-fence image and the source's schema and tables, then recover from that verified evidence."
                 : code === "collaboration.backup-incomplete"
-                  ? "Take or supply a new verified pair with mstar store backup --out <abs-manifest>; settle any pending composite operation with its own verb first, because one surviving image is not a repository backup."
+                  ? "Take a new verified pair with mstar store backup --out <abs-manifest>; settle any pending composite operation with its own verb first, because one surviving image is not a repository backup."
                   : code === "collaboration.not-active"
-                    ? "The collaboration authority is staged, not published: run mstar store collaboration activate --manifest <abs> --operator <name> --attestation <abs-json> for its reviewed activation."
+                    ? "The collaboration authority is staged, not published: run mstar store collaboration activate --harness <abs> --manifest <abs> --operator <name> --attestation <abs-json> for its reviewed activation."
                     : code === "collaboration.not-initialized"
                       ? "This checkout has no collaboration authority yet: run mstar store init for a fresh scope, mstar store upgrade --operator <name> for file-era execution state, or mstar store collaboration restore --backup <abs-manifest> for a verified pair."
                       : code === "collaboration.unreadable" || code === "collaboration.stale-binding"
-                        ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id> (never store init), and a bound checkout is never retargeted by editing its mode."
+                        ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id>, and store init is never the binding route; a bound checkout is never retargeted by editing its mode."
                         : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
