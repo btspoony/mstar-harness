@@ -38,6 +38,7 @@ import {
   assertIssueRef,
   COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  localPredecessorRetiredPath,
   openCollaborationStore,
   probeCollaborationAuthority,
   readCollaborationAuthority,
@@ -46,6 +47,7 @@ import {
   withCollaborationWrite,
   writeCollaborationBinding,
   writeRemoteCacheStage,
+  writeRemoteCollaborationBinding,
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
@@ -53,6 +55,7 @@ import {
   bindRemoteAuthority,
   ingestRemoteObservation,
   readRemoteStatus,
+  setRemoteBindTransitionGapForTest,
   type RemoteSnapshot,
   type ScopeCheck,
 } from "./collaboration-remote.js";
@@ -1382,6 +1385,17 @@ function issueRefs(dbPath: string): Array<{ id: string; issue_ref: string }> {
   }
 }
 
+/** note: The lane's retained issue rows, for a refusal that must leave history untouched. */
+function issueCount(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as n from issues").get() as { n?: unknown } | undefined;
+    return typeof row?.n === "number" ? row.n : 0;
+  } finally {
+    db.close();
+  }
+}
+
 function ledgerVersions(dbPath: string): number[] {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1463,6 +1477,7 @@ describe("collaboration v2 remote cache schema", () => {
     const wrongChecksumRepo = makeRepo("https://github.com/v2-upgrade/wrong-checksum.git");
     const wrongChecksum = locationAt(wrongChecksumRepo);
     writeV1Lane(wrongChecksum, (db) => db.prepare("update schema_version set checksum = ? where version = 1").run("f".repeat(64)));
+    activate(wrongChecksum.dbPath);
     await expect(upgradeCollaborationStore(contextAt(wrongChecksumRepo), "ops-engineer")).rejects.toMatchObject({
       code: "store.corrupt",
     });
@@ -1472,6 +1487,7 @@ describe("collaboration v2 remote cache schema", () => {
     const partialRepo = makeRepo("https://github.com/v2-upgrade/partial.git");
     const partial = locationAt(partialRepo);
     writeV1Lane(partial, (db) => db.exec("create table remote_bindings(generation integer)"));
+    activate(partial.dbPath);
     await expect(upgradeCollaborationStore(contextAt(partialRepo), "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
@@ -1482,6 +1498,7 @@ describe("collaboration v2 remote cache schema", () => {
     const halfRepo = makeRepo("https://github.com/v2-upgrade/half.git");
     const half = locationAt(halfRepo);
     writeV1Lane(half, (db) => db.exec("alter table issues add column issue_ref text"));
+    activate(half.dbPath);
     await expect(upgradeCollaborationStore(contextAt(halfRepo), "ops-engineer")).rejects.toMatchObject({
       code: "store.corrupt",
       message: expect.stringContaining("partially applied v2"),
@@ -1491,6 +1508,7 @@ describe("collaboration v2 remote cache schema", () => {
     // invariant: The upgrade records the operator it attests.
     const anonymous = makeRepo("https://github.com/v2-upgrade/anonymous.git");
     writeV1Lane(locationAt(anonymous));
+    activate(locationAt(anonymous).dbPath);
     await expect(upgradeCollaborationStore(contextAt(anonymous), "  ")).rejects.toMatchObject({
       code: "store.attestation-invalid",
     });
@@ -1515,6 +1533,51 @@ describe("collaboration v2 remote cache schema", () => {
       code: "collaboration.unreadable",
     });
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+  });
+
+  test("a stale or unbound checkout never migrates a v1 lane it does not own", async () => {
+    // note: A same-repository v1 lane replaced by another generation while this checkout still
+    // records the superseded store: repository and mode alone must not admit the mutation.
+    const staleRepo = makeRepo("https://github.com/v2-upgrade/stale-generation.git");
+    const staleContext = contextAt(staleRepo);
+    const stale = locationAt(staleRepo);
+    writeV1Lane(stale, seedV1History);
+    activate(stale.dbPath);
+    writeCollaborationBinding(staleContext, {
+      repoKey: stale.repoKey,
+      mode: "local",
+      storeId: "superseded-store",
+      epoch: 3,
+    });
+
+    await expect(upgradeCollaborationStore(staleContext, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    // invariant: No DDL, no backfill and no receipt landed on the lane this checkout does not own.
+    expect(ledgerVersions(stale.dbPath)).toEqual([1]);
+    expect(hasColumn(stale.dbPath, "issues", "issue_ref")).toBe(false);
+    expect(issueCount(stale.dbPath)).toBe(2);
+
+    // note: An unbound checkout (a replacement clone) reads the lane but never upgrades it.
+    const unboundRepo = makeRepo("https://github.com/v2-upgrade/unbound-generation.git");
+    const unbound = locationAt(unboundRepo);
+    writeV1Lane(unbound, seedV1History);
+    await expect(upgradeCollaborationStore(contextAt(unboundRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    expect(ledgerVersions(unbound.dbPath)).toEqual([1]);
+    expect(hasColumn(unbound.dbPath, "issues", "issue_ref")).toBe(false);
+    expect(issueCount(unbound.dbPath)).toBe(2);
+
+    // invariant: The refusal was ownership, not bytes: the owning checkout still migrates the lane.
+    activate(stale.dbPath);
+    expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
+      fromVersion: 1,
+      toVersion: 2,
+      storeId: "v1-store",
+      issuesBackfilled: 2,
+    });
+    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2]);
   });
 });
 
@@ -3475,5 +3538,120 @@ describe("reviewed authority transition", () => {
     });
     expect(bound.retiredPredecessor).toMatchObject({ mode: "local", storeId: predecessor.store_id });
     expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote" });
+  });
+
+  test("a selector that moves before the retirement decision never retires the predecessor", async () => {
+    const fixture = transitionFixture("retirement-drift");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+
+    // note: A competing publication lands AFTER the bind's reviewed proof and BEFORE its
+    // retirement decision, so the successor the bind checked is no longer the live selection.
+    setRemoteBindTransitionGapForTest(() => {
+      fixture.publish(
+        selectorPayload(fixture.repoKey, {
+          generation: 3,
+          mode: "remote",
+          projects: [SELECTED_PROJECT],
+          previous: { selectorCommit: successor, generation: 2, mode: "remote" },
+          cutover: FENCED,
+        }),
+      );
+    });
+    try {
+      await expect(
+        bindRemoteAuthority(context, {
+          version: 1,
+          selectorCommit: successor,
+          generation: 2,
+          checks: [positiveCheck()],
+        }),
+      ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    } finally {
+      setRemoteBindTransitionGapForTest(undefined);
+    }
+
+    // invariant: Drift is observed before the rename, so nothing moved: the canonical path is
+    // still the local predecessor, no retired image exists and no v3 binding was published.
+    expect(metaRecord(location.dbPath)).toMatchObject({
+      mode: "local",
+      store_id: predecessor.store_id,
+      authority_epoch: predecessor.authority_epoch,
+    });
+    expect(issueCount(location.dbPath)).toBe(1);
+    expect(
+      existsSync(localPredecessorRetiredPath(location, { storeId: predecessor.store_id, epoch: predecessor.authority_epoch })),
+    ).toBe(false);
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 2, mode: "local" });
+  });
+
+  test("a late bind publication never replaces a recorded newer generation", async () => {
+    const fixture = remoteFixture("publication-fence");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: first,
+      generation: 1,
+      checks: [positiveCheck()],
+    });
+    // invariant: The published stamp is the lane the transaction actually wrote.
+    const lane = metaRecord(location.dbPath);
+    expect(bound.binding).toMatchObject({ version: 3, storeId: lane.store_id, epoch: lane.authority_epoch });
+
+    const second = fixture.publish(
+      fixture.payload({
+        generation: 2,
+        previous: { selectorCommit: first, generation: 1, mode: "remote" },
+        cutover: FENCED,
+      }),
+    );
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: second, generation: 2, checks: [positiveCheck()] });
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 2, selectorCommit: second });
+
+    // note: A slower bind that staged the predecessor publishes nothing over the successor.
+    expect(() =>
+      writeRemoteCollaborationBinding(context, {
+        repoKey: location.repoKey,
+        selectorCommit: first,
+        generation: 1,
+        storeId: bound.binding.storeId,
+        epoch: bound.binding.epoch,
+      }),
+    ).toThrow(expect.objectContaining({ code: "collaboration.stale-binding" }));
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 2, selectorCommit: second });
+  });
+
+  test("a missing cache never adopts a different selector at the recorded generation", async () => {
+    const fixture = remoteFixture("equal-generation");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 1, checks: [positiveCheck()] });
+    // note: The private cache is disposable bytes; its loss never licenses reusing the number.
+    rmSync(location.dbPath, { force: true });
+    // note: The same generation republished with a different payload (the marker only makes the
+    // commit distinct); the origin's ref now names a commit this checkout never recorded.
+    const other = fixture.publish(fixture.payload({ generation: 1, publishedNote: "same generation, different payload" }));
+    expect(other).not.toBe(first);
+
+    await expect(
+      bindRemoteAuthority(context, { version: 1, selectorCommit: other, generation: 1, checks: [positiveCheck()] }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // invariant: The refused bind created no lane and left the recorded generation alone.
+    expect(existsSync(location.dbPath)).toBe(false);
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 1, selectorCommit: first });
   });
 });

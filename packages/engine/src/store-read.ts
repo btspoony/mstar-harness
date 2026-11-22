@@ -72,7 +72,7 @@ import {
   type RemoteCatalogRow,
   type RemoteReadView,
 } from "./collaboration-remote-read.js";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
@@ -651,9 +651,12 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
       // unavailable source, not a view failure: an optional collaboration dependency never
       // blocks the execution data the view owns, and no local fallback is opened instead.
       let remote: boolean | null = null;
+      /** note: The location this request already resolved, so the nested cache open never re-resolves. */
+      let remoteLocation: CollaborationLocation | undefined;
       try {
         const location = resolveCollaborationLocation(context);
         remote = location.mode === "remote";
+        if (remote) remoteLocation = location;
         if (location.selection !== undefined) {
           remoteSelection = {
             selectorCommit: location.selection.commit,
@@ -669,7 +672,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
       // selection opens neither.
       if (remote === true) {
         try {
-          remoteView = await openRemoteReadView(context, query.collaboration?.projectIds);
+          remoteView = await openRemoteReadView(context, query.collaboration?.projectIds, remoteLocation);
         } catch (error) {
           if (query.collaboration?.required !== false) throw error;
           collaborationCode = errorCode(error);

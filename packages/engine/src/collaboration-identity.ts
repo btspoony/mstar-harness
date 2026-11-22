@@ -732,7 +732,21 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
     }
     return;
   }
-  if (live === null) return;
+  if (live === null) {
+    // invariant: A local/mirror admission proved an ABSENCE; a ref this checkout already
+    // recorded is evidence the origin published one, so its deletion is drift, not absence.
+    const seen = observedSelector(context);
+    if (seen !== null && seen.repoKey === location.repoKey) {
+      selectorStale(
+        `This checkout observed selector ${seen.selectorCommit}` +
+          `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+      );
+    }
+    if (remoteBindingRecorded(context)) {
+      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+    }
+    return;
+  }
   // note: A selector published during a local/mirror mutation decides this scope's phase:
   // re-resolve fully so a draining selector refuses and an active one keeps its verdict.
   resolveCollaborationLocation(context);

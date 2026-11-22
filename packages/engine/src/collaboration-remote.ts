@@ -34,16 +34,28 @@ import {
 } from "./collaboration-store.js";
 import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, type CaptureInput } from "./issue.js";
 import {
+  assertSelectionUnchanged,
+  CollaborationIdentityError,
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationSelectorProject,
   type CollaborationSelection,
 } from "./collaboration-identity.js";
+import { withCollaborationCutoverLock } from "./collaboration-cutover.js";
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // note: Contract DTOs (Q1 - identity, scope checks and normalized snapshots)
 // ---------------------------------------------------------------------------
+
+/**
+ * note: The retirement gap seam: a regression publishes a competing selector between the
+ * bind's reviewed proof and its retirement decision. Production runs without a callback.
+ */
+let remoteBindTransitionGapForTest: (() => void) | undefined;
+export function setRemoteBindTransitionGapForTest(callback: (() => void) | undefined): void {
+  remoteBindTransitionGapForTest = callback;
+}
 
 /** note: The bound provider record an MStar issue is anchored to. */
 export type ProviderIssueIdentity = Readonly<{
@@ -1164,14 +1176,15 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
   const selection = remoteSelection(location);
   if (projectId !== undefined) selectedProject(selection, projectId);
   const recorded = readCollaborationBinding(context);
+  const bound = recorded !== null && recorded.version === 3 && recorded.repoKey === location.repoKey ? recorded : null;
   const binding =
-    recorded !== null && recorded.version === 3 && recorded.repoKey === location.repoKey
+    bound !== null
       ? {
           state: "bound" as const,
-          selectorCommit: recorded.selectorCommit,
-          generation: recorded.generation,
-          storeId: recorded.storeId,
-          epoch: recorded.epoch,
+          selectorCommit: bound.selectorCommit,
+          generation: bound.generation,
+          storeId: bound.storeId,
+          epoch: bound.epoch,
         }
       : {
           state: "unbound" as const,
@@ -1189,10 +1202,11 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
     projects: projectId === undefined ? projects : projects.filter((entry) => entry.projectId === projectId),
   });
   // invariant: An unbound, missing or interrupted lane is reported, never created here.
-  if (binding.state !== "bound") return status(false, "collaboration.stale-binding", []);
+  if (bound === null) return status(false, "collaboration.stale-binding", []);
   let handle: CollaborationStoreHandle;
   try {
-    handle = await openRemoteCache(context, "read");
+    // note: The cache is admitted for the SAME selector and binding this status reports.
+    handle = await openRemoteCache(context, "read", { location, binding: bound });
   } catch (error) {
     if (
       error instanceof StoreError &&
@@ -1203,8 +1217,8 @@ export async function readRemoteStatus(context: StoreContext, projectId?: string
     throw error;
   }
   try {
-    const rows = bindingRows(handle.db, binding.generation);
-    const observations = new Map(observationRows(handle.db, binding.generation).map((row) => [row.project_key, row]));
+    const rows = bindingRows(handle.db, bound.generation);
+    const observations = new Map(observationRows(handle.db, bound.generation).map((row) => [row.project_key, row]));
     const now = Date.now();
     const projects = rows.map((row): RemoteProjectStatus => {
       const observation = observations.get(row.project_key);
@@ -1479,6 +1493,22 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
         `older generation ${String(batch.generation)}; a bind never downgrades a generation. Nothing was changed.`,
     );
   }
+  // invariant: A generation is only replayed by its OWN commit. A different selector never
+  // reuses a recorded generation - least of all when the cache bytes are gone and the
+  // later per-generation row checks have nothing left to compare against.
+  if (
+    recorded !== null &&
+    recorded.version === 3 &&
+    recorded.generation === batch.generation &&
+    recorded.selectorCommit !== batch.selectorCommit
+  ) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout recorded selector commit ${recorded.selectorCommit} at generation ${String(batch.generation)}, and ` +
+        `the bind names ${batch.selectorCommit} at that same generation; a different selector never reuses a recorded ` +
+        `generation. Publish a successor generation with its reviewed lineage. Nothing was changed.`,
+    );
+  }
 
   // invariant: A local/mirror lane at this scope's canonical path - recorded by this checkout or
   // not - is the PREDECESSOR a reviewed transition retires, never a lane a bind re-keys in place.
@@ -1538,9 +1568,19 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     });
   }
 
-  // note: The reviewed transition retires the matched local/mirror lane under write exclusion
-  // BEFORE the cache exists; its rows survive as inaccessible history beside the lane.
-  const retiredPath = predecessor === null ? null : await retireLocalPredecessorLane(location, predecessor);
+  // note: The reviewed transition's proof is re-taken at the retirement boundary; this seam
+  // observes the gap a competing selector publication lands in.
+  remoteBindTransitionGapForTest?.();
+  // invariant: The reviewed transition retires the matched local/mirror lane under the shared
+  // operator exclusion BEFORE the cache exists: the lane proof, the live selector recheck and
+  // the rename are one critical section, so a selector that moves while this bind waits
+  // leaves the canonical predecessor untouched. Its rows survive as inaccessible history.
+  const retiredPath =
+    predecessor === null
+      ? null
+      : await withCollaborationCutoverLock(context, () =>
+          retireLocalPredecessorLane(context, location, predecessor),
+        );
   // invariant: A rebind continues the cache this checkout is bound to. A lane that is
   // present under another store id or epoch is a replacement and is refused; only a
   // vanished cache (Data Model: bind initializes a missing lane) may adopt a new identity.
@@ -1548,6 +1588,15 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
   const staged = await initializeRemoteCacheStore(location);
   if (cachePresent && recorded !== null && recorded.version === 3) assertRemoteCacheIdentity(staged, recorded);
   const outcome = await writeRemoteCacheStage(location, ({ db, authority }) => {
+    // invariant: The transaction's own lane identity is the stamp that gets published: a lane
+    // replaced between admission and the write lock is never recorded in the v3 binding.
+    if (authority.storeId !== staged.storeId || authority.epoch !== staged.epoch) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The remote cache lane at ${location.dbPath} is store ${authority.storeId} epoch ${String(authority.epoch)}, not the ` +
+          `store ${staged.storeId} epoch ${String(staged.epoch)} this bind admitted. Re-run the reviewed bind; nothing was written.`,
+      );
+    }
     assertFreshLane(authority, db);
     const latest = db
       .prepare("select generation, selector_commit from remote_bindings order by generation desc limit 1")
@@ -1640,15 +1689,33 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     return {
       replayed: recordedGeneration === batch.generation,
       availability: availabilityOf(db, batch.generation, [...checks.keys()]),
+      stamp: { storeId: authority.storeId, epoch: authority.epoch },
     };
   }, context);
 
+  // invariant: Publication is the transition's last fence. A selector that moved after the
+  // cache transaction committed leaves no checkout binding; the refusal discloses the
+  // committed cache instead of claiming a rollback, and the same bind republishes it.
+  try {
+    assertSelectionUnchanged(context, location);
+  } catch (error) {
+    if (error instanceof CollaborationIdentityError && error.code === "collaboration.stale-binding") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The checked selector moved before this checkout's binding was published. The verified cache transaction already ` +
+          `committed at store ${outcome.stamp.storeId} epoch ${String(outcome.stamp.epoch)} for selector commit ` +
+          `${batch.selectorCommit} generation ${String(batch.generation)}, and no checkout binding was published. ` +
+          `Re-run the same reviewed bind to publish it; the cache rows stand.`,
+      );
+    }
+    throw error;
+  }
   const binding = writeRemoteCollaborationBinding(context, {
     repoKey: location.repoKey,
     selectorCommit: batch.selectorCommit,
     generation: batch.generation,
-    storeId: staged.storeId,
-    epoch: staged.epoch,
+    storeId: outcome.stamp.storeId,
+    epoch: outcome.stamp.epoch,
   });
   return {
     version: 1,
@@ -2003,7 +2070,9 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
   }
 
   let snapshot: RemoteSnapshot | null = null;
-  const handle = await openRemoteCache(context, "read");
+  // note: The cache is admitted for the same selector and binding the adoption document was
+  // validated against, so a rebind in between never mixes two generations.
+  const handle = await openRemoteCache(context, "read", { location, binding });
   try {
     const row = handle.db
       .prepare(

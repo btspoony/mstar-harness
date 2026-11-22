@@ -24,7 +24,7 @@ import {
   type CollaborationProviderScope,
   type CollaborationScope,
 } from "./collaboration-store.js";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import {
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
@@ -115,12 +115,17 @@ type StoredEvidenceRow = {
  * A missing/unbound checkout keeps the store's own refusal
  * (`collaboration.stale-binding`); the returned view is only built from the
  * exact generation the checkout is bound to.
+ *
+ * A caller that has already resolved this checkout's location passes it in, so
+ * one request resolves the published selector ONCE and the cache lane is opened
+ * for that same checked location and binding.
  */
 export async function openRemoteReadView(
   context: StoreContext,
   projectIds?: readonly string[],
+  resolvedLocation?: CollaborationLocation,
 ): Promise<RemoteReadView> {
-  const location = resolveCollaborationLocation(context);
+  const location = resolvedLocation ?? resolveCollaborationLocation(context);
   if (location.mode !== "remote" || location.selection === undefined) {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -145,7 +150,9 @@ export async function openRemoteReadView(
       );
     }
   }
-  const handle = await openRemoteCache(context, "read");
+  // note: ONE sample: the lane is admitted for the location and binding this view reads and
+  // stamps itself with, so a concurrent rebind never labels rows with another generation.
+  const handle = await openRemoteCache(context, "read", { location, binding });
   try {
     handle.db.exec("begin");
     const rows = handle.db
@@ -527,7 +534,9 @@ function queryMatches(issue: RemoteIssue, query: string): boolean {
 /**
  * The issue page over admitted snapshots. `items`/`total`/`projectCount` are MStar
  * findings only; `providerIssues` makes an unmarked native issue visible without
- * giving it a disposition, severity or count.
+ * giving it a disposition, severity or count. Both lists answer the SAME stable
+ * `limit`/`offset` page: the provider list is ordered by provider update, project
+ * and provider id, so output size is bounded by the requested page.
  */
 export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): IssuePage {
   const { limit, offset } = pageBounds(filter);
@@ -573,12 +582,26 @@ export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): Issu
   }));
   const providerIssues: ProviderOnlyIssue[] =
     disposition === "open"
-      ? evidence.flatMap((entry) =>
-          (entry.snapshot?.issues ?? [])
-            .filter((issue) => issue.mstar === null)
-            .filter((issue) => filter.query === undefined || filter.query === "" || queryMatches(issue, filter.query))
-            .map((issue) => providerOnly(entry.projectId, issue)),
-        )
+      ? evidence
+          .flatMap((entry) =>
+            (entry.snapshot?.issues ?? [])
+              .filter((issue) => issue.mstar === null)
+              .filter((issue) => filter.query === undefined || filter.query === "" || queryMatches(issue, filter.query))
+              .map((issue) => ({ projectId: entry.projectId, issue })),
+          )
+          // note: The page contract needs a TOTAL order: newest provider update first, then
+          // project and the immutable provider id, so `offset` names the same rows on a re-read.
+          .sort((left, right) => {
+            if (left.issue.providerUpdatedAt !== right.issue.providerUpdatedAt) {
+              return left.issue.providerUpdatedAt < right.issue.providerUpdatedAt ? 1 : -1;
+            }
+            if (left.projectId !== right.projectId) return left.projectId < right.projectId ? -1 : 1;
+            const leftId = left.issue.identity.issueId;
+            const rightId = right.issue.identity.issueId;
+            return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+          })
+          .slice(offset, offset + limit)
+          .map(({ projectId, issue }) => providerOnly(projectId, issue))
       : [];
   return {
     items,

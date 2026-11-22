@@ -1819,6 +1819,7 @@ export async function upgradeCollaborationStore(
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
   await assertControlCheckoutScope(context, location);
+  const binding = readCollaborationBinding(context);
 
   const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
     (error: unknown) => {
@@ -1835,6 +1836,26 @@ export async function upgradeCollaborationStore(
       const meta = readMeta(db);
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
         throw staleBinding(dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+      }
+      // invariant: The v1 ladder is mutated only for the generation THIS checkout is bound to.
+      // Repository and mode alone admit a replaced same-repository lane, so a stale or unbound
+      // checkout must refuse here - under the migration lock, before any DDL or backfill -
+      // instead of writing another generation's bytes and leaving bootstrap to refuse after.
+      const owned =
+        binding !== null &&
+        binding.state === "active" &&
+        binding.repoKey === meta.repoKey &&
+        binding.mode === meta.mode &&
+        binding.storeId === meta.storeId &&
+        binding.epoch === meta.epoch;
+      if (!owned) {
+        throw staleBinding(
+          dbPath,
+          meta,
+          binding === null || binding.state !== "active"
+            ? "a finalized binding this checkout does not hold"
+            : `${binding.repoKey} (${binding.mode}) store ${binding.storeId} epoch ${String(binding.epoch)}`,
+        );
       }
       const receipt = (fromVersion: number, issuesBackfilled: number): CollaborationUpgradeReceipt => ({
         version: 1,
@@ -1903,6 +1924,9 @@ export async function upgradeCollaborationStore(
         }),
         nowRfc3339(),
       );
+      // invariant: A selector that moved while the migration held the write lock refuses
+      // under it: the v1 ladder is never advanced under a selection this process lost.
+      assertSelectionUnchanged(context, location);
       db.exec("commit");
       return receipt(COLLABORATION_SCHEMA.version, issuesBackfilled);
     } catch (error) {
@@ -2608,14 +2632,20 @@ export function localPredecessorRetiredPath(
 /**
  * invariant: Retire the matched predecessor under write exclusion. The lane is proved to
  * be exactly this record (repository key, mode, store id, epoch) inside a
- * `BEGIN IMMEDIATE`, then renamed beside itself: its rows survive as
+ * `BEGIN IMMEDIATE`, then renames beside itself: its rows survive as
  * inaccessible history and the canonical name is free for the verified cache.
+ *
+ * The checked selector is re-proved immediately before the rename, inside the
+ * caller's transition exclusion: a selector that moved (or was deleted) while
+ * this verb waited leaves the canonical predecessor untouched, so the later
+ * cache transaction can never be the first step that notices the drift.
  *
  * A replay after a crash between the rename and the cache publication finds the
  * already-retired image and continues; a vanished predecessor with no retired
  * image refuses, so a lost authority is never re-created from nothing.
  */
 export async function retireLocalPredecessorLane(
+  context: StoreContext,
   location: CollaborationLocation,
   predecessor: LocalPredecessorLane,
 ): Promise<string> {
@@ -2687,6 +2717,16 @@ export async function retireLocalPredecessorLane(
       `the predecessor lane this transition proved`,
     );
   }
+  // invariant: The reviewed successor is still the live selection: a selector that moved or
+  // was deleted while this transition waited never moves the predecessor's bytes.
+  assertSelectionUnchanged(context, location);
+  if (statSync(location.dbPath).ino !== after.ino) {
+    throw staleBinding(
+      location.dbPath,
+      { repoKey: location.repoKey, mode: predecessor.mode, storeId: predecessor.storeId, epoch: predecessor.epoch },
+      `the predecessor lane this transition proved`,
+    );
+  }
   renameSync(location.dbPath, retiredPath);
   try {
     syncDirectoryEntry(dirname(location.dbPath));
@@ -2699,10 +2739,15 @@ export async function retireLocalPredecessorLane(
 /**
  * invariant: A remote-cache entry's scope: the checkout resolves remote, its recorded v3 binding
  * is active and names the exact checked commit and generation, and the checked
- * selection exists. Anything else refuses before a lane is opened.
+ * selection exists. Anything else refuses before a lane is opened. A caller that
+ * already resolved this pair passes it, so one request reads the selector and the
+ * binding ONCE and the lane it opens is admitted for exactly that sample.
  */
-function remoteCacheScope(context: StoreContext): { location: CollaborationLocation; binding: CollaborationBinding } {
-  const location = resolveCollaborationLocation(context);
+function remoteCacheScope(
+  context: StoreContext,
+  resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
+): { location: CollaborationLocation; binding: CollaborationBinding } {
+  const location = resolved?.location ?? resolveCollaborationLocation(context);
   if (location.mode !== "remote") {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -2710,7 +2755,7 @@ function remoteCacheScope(context: StoreContext): { location: CollaborationLocat
         `Use the local domain verbs for this scope; nothing was modified.`,
     );
   }
-  const binding = readCollaborationBinding(context);
+  const binding = resolved?.binding ?? readCollaborationBinding(context);
   if (binding === null || binding.state !== "active") {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -3223,9 +3268,10 @@ async function withWriteLane<T>(
 export async function openRemoteCache(
   context: StoreContext,
   mode: "read" | "write",
+  resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
 ): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
-  const { location, binding } = remoteCacheScope(context);
+  const { location, binding } = remoteCacheScope(context, resolved);
   if (mode === "write" && existsSync(location.dbPath)) {
     try {
       accessSync(location.dbPath, constants.W_OK);
@@ -3265,6 +3311,25 @@ export function writeRemoteCollaborationBinding(
     epoch: number;
   }>,
 ): CollaborationBinding {
+  // invariant: A publication never replaces a newer or foreign record. A slower bind that
+  // lost the race leaves the checkout's current binding and its cache rows in place, so it
+  // is never re-pointed onto a generation it did not record.
+  const existing = readCollaborationBinding(context);
+  if (
+    existing !== null &&
+    existing.version === 3 &&
+    (existing.repoKey !== binding.repoKey ||
+      existing.generation > binding.generation ||
+      (existing.generation === binding.generation && existing.selectorCommit !== binding.selectorCommit))
+  ) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout already records remote selector commit ${existing.selectorCommit} generation ` +
+        `${String(existing.generation)}, so the bind's commit ${binding.selectorCommit} generation ` +
+        `${String(binding.generation)} is never published over it. The cache transaction committed; ` +
+        `re-run the reviewed bind for the current selector to publish a matching checkout binding.`,
+    );
+  }
   const path = bindingPath(context);
   mkdirSync(dirname(path), { recursive: true });
   const body: CollaborationBinding = {

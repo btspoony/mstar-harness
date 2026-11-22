@@ -37,6 +37,7 @@ import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity,
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteSnapshot } from "./collaboration-remote.js";
+import { openRemoteReadView } from "./collaboration-remote-read.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
@@ -2412,6 +2413,37 @@ describe("remote read boundary", () => {
     // invariant: The refused bind created no lane and kept the checkout's recorded generation.
     expect(existsSync(dbPath)).toBe(false);
     expect(resolveCollaborationLocation(context).selection).toMatchObject({ commit: commit4, generation: 4 });
+  });
+
+  test("a read sample from a previous generation never opens the successor's cache", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-read-single-sample");
+    const commit3 = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit3));
+    // note: The sample one request took before the reviewed successor was bound.
+    const stale = resolveCollaborationLocation(context);
+    expect(stale.selection).toMatchObject({ commit: commit3, generation: 3 });
+
+    const commit4 = fixture.publish({
+      generation: 4,
+      previous: { selectorCommit: commit3, generation: 3, mode: "remote" },
+      cutover: {
+        operator: "fixture-operator",
+        reviewedAt: FIXTURE_AT,
+        sourceFenced: true,
+        pendingOperationIds: [],
+        verifiedTargetDigest: "d".repeat(64),
+      },
+    });
+    await bindRemoteAuthority(context, fixture.batch(commit4, 4));
+
+    // invariant: The predecessor's selection and the successor's cache are never one read: the
+    // sample is re-proved against the checkout binding before a row is queried.
+    await expect(openRemoteReadView(context, undefined, stale)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    const current = await openRemoteReadView(context);
+    expect(current).toMatchObject({ selectorCommit: commit4, generation: 4 });
   });
 
   test("a project-scoped overview never carries another project's catalog identity", async () => {

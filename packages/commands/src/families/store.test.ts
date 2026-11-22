@@ -543,3 +543,67 @@ test("store.upgrade advances an admitted v1 collaboration lane and replays witho
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** note: The v1 lane's schema and data facts a refusal must leave untouched. */
+function v1LaneState(dbPath: string): { versions: number[]; issueRef: boolean; issues: number } {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const versions = (db.prepare("select version from schema_version order by version").all() as Array<{ version?: unknown }>)
+      .map((row) => (typeof row.version === "number" ? row.version : -1));
+    const columns = (db.prepare("pragma table_info(issues)").all() as Array<{ name?: unknown }>)
+      .map((row) => row.name);
+    const count = db.prepare("select count(*) as n from issues").get() as { n?: unknown } | undefined;
+    return { versions, issueRef: columns.includes("issue_ref"), issues: typeof count?.n === "number" ? count.n : -1 };
+  } finally {
+    db.close();
+  }
+}
+
+test("store.upgrade refuses a v1 lane this checkout is not bound to and leaves it untouched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-stale-binding-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const dbPath = writeV1Lane(root);
+    const context = { harnessDir: harness, checkoutRoot: root };
+    const location = resolveCollaborationLocation(context);
+    const untouched = { versions: [1], issueRef: false, issues: 1 };
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // note: The canonical lane is a same-repository generation this checkout does not record.
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: "local",
+      storeId: "superseded-store",
+      epoch: 4,
+    });
+
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = () =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
+
+    const stale = await upgrade();
+    expect(stale).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    // invariant: No DDL, backfill or receipt landed on another generation's bytes.
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // note: An unbound checkout (a replacement clone) reads the lane but never upgrades it.
+    rmSync(join(harness, "collaboration-binding.json"), { force: true });
+    const unbound = await upgrade();
+    expect(unbound).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // invariant: The owning checkout still advances exactly that lane.
+    writeCollaborationBinding(context, { repoKey: location.repoKey, mode: "local", storeId: "v1-store", epoch: 1 });
+    const owned = await upgrade();
+    expect(owned.status).toBe("ok");
+    if (owned.status !== "ok") throw new Error(`expected the owned upgrade to succeed: ${owned.message}`);
+    expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 2, issuesBackfilled: 1 } });
+    expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2], issueRef: true, issues: 1 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

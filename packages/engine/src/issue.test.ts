@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
-import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { bindRemoteAuthority, ingestRemoteObservation, type RemoteSnapshot } from "./collaboration-remote.js";
 import {
   completeSnapshot,
   createRemoteScope,
@@ -1646,5 +1646,43 @@ describe("remote issue reads", () => {
         { operationId: crypto.randomUUID(), actor: "project-manager" },
       ),
     ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+  });
+
+  test("provider-only issues answer the requested bounded, stably ordered page", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote-page");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const native = (issueId: string, title: string, providerUpdatedAt: string) => ({
+      identity: { ...check.scope, issueId },
+      nativeTitle: title,
+      nativeStatus: "Todo",
+      providerUpdatedAt,
+      mstar: null,
+    });
+    const snapshot: RemoteSnapshot = {
+      ...base,
+      issues: [
+        ...base.issues,
+        native("aaaaaaaa-0000-4000-8000-000000000001", "Native newest", "2026-11-20T00:00:01.000Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000002", "Native middle", "2026-11-20T00:00:00.500Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000003", "Native oldest", "2026-11-19T00:00:00.000Z"),
+      ],
+    };
+    await ingestRemoteObservation(context, submission(commit, check, snapshot, 0));
+
+    // invariant: The MStar total stays its own; the provider list honours the same page, ordered
+    // by provider update so an offset names the same rows on a re-read.
+    const first = await listIssues(context, { limit: 2 });
+    expect(first.total).toBe(1);
+    expect(first.providerIssues?.map((issue) => issue.title)).toEqual(["Native newest", "Native middle"]);
+
+    const second = await listIssues(context, { limit: 2, offset: 2 });
+    expect(second.providerIssues?.map((issue) => issue.title)).toEqual(["Unmarked native issue", "Native oldest"]);
+
+    const last = await listIssues(context, { limit: 1, offset: 3 });
+    expect(last.providerIssues?.map((issue) => issue.title)).toEqual(["Native oldest"]);
   });
 });
