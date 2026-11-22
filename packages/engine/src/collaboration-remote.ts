@@ -2907,6 +2907,22 @@ export type RemoteIntentRead = Readonly<{
   updatedAt: string;
 }>;
 
+/**
+ * note: `outbox-dispatch` evidence for a reviewed resolution: one host-attested traversal of the
+ * fork's stream that began after the conflict evidence and terminated, carrying the complete,
+ * sorted fork-head set. The engine validates it; the provider traversal itself is the host's.
+ */
+export type ForkObservation = Readonly<{
+  version: 1;
+  selectorCommit: string;
+  generation: number;
+  projectId: string;
+  conflictOperationId: string;
+  asOf: string;
+  coverage: "complete";
+  heads: readonly Readonly<{ recordId: string; issueRef: string; head: string }>[];
+}>;
+
 /** note: The one permit one dispatch issues: the frozen request, one attempt id. */
 export type RemoteDispatchPermit = Readonly<{
   version: 1;
@@ -2915,8 +2931,8 @@ export type RemoteDispatchPermit = Readonly<{
   operationId: string;
   requestHash: string;
   frozenRequest: RemoteIntentRequest;
-  /** note: The cached observation the base was proven against, bound to the permit. */
-  observation: Readonly<{ revision: number; asOf: string | null }>;
+  /** note: The observation the base was proven against: its generation, cache revision and traversal start. */
+  observation: Readonly<{ generation: number; revision: number; asOf: string | null }>;
 }>;
 
 export type RemoteDispatchResult =
@@ -3496,9 +3512,6 @@ async function recordReceiptEvidence(
         generation: envelope.generation,
         observedAt: envelope.observedAt,
         operationId: envelope.operationId,
-        // note: A conflict is bound to the cache revision it was recorded against, so a later
-        // resolution must be proven by an observation ingested after this evidence.
-        observationRevision: observationRevisionOf(db, row.generation, row.projectKey),
         outcome,
         projectId: envelope.projectId,
         requestHash: envelope.requestHash,
@@ -3652,37 +3665,95 @@ function observationRevisionOf(db: StoreDb, generation: number, projectKey: stri
 }
 
 /**
- * note: The observation revision the intent's recorded fork evidence was judged against. A later
- * observation increments the cache's revision, so anything at or below this number predates the
- * conflict and can never prove that the fork still stands.
+ * note: The durable time of the last recorded conflict evidence. A resolution's fork observation
+ * must have STARTED strictly after it, so a traversal that could have begun before the conflict
+ * is never proof that the fork still stands.
  */
-function conflictObservationRevision(db: StoreDb, conflicted: string): number {
-  const rows = db
+function conflictEvidenceRecordedAt(db: StoreDb, conflicted: string): string | null {
+  const row = db
     .prepare(
-      "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
-        "order by recorded_at, receipt_hash",
+      "select recorded_at from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+        "order by recorded_at desc, receipt_hash desc limit 1",
     )
-    .all(conflicted) as Array<{ evidence_json?: unknown }>;
-  const last = rows.at(-1);
-  if (last === undefined || typeof last.evidence_json !== "string") return 0;
-  try {
-    const body = JSON.parse(last.evidence_json) as Record<string, unknown>;
-    return typeof body.observationRevision === "number" && Number.isSafeInteger(body.observationRevision)
-      ? body.observationRevision
-      : 0;
-  } catch {
-    return 0;
+    .get(conflicted) as { recorded_at?: unknown } | undefined;
+  return typeof row?.recorded_at === "string" ? row.recorded_at : null;
+}
+
+/**
+ * note: Validate the closed `ForkObservation` shape. Every refusal is a dispatch refusal, never an
+ * input error: evidence that cannot prove the fork simply never issues a send permit.
+ */
+function forkObservationOf(raw: unknown): ForkObservation {
+  const refuse = (detail: string, details: Record<string, unknown> = {}): never => {
+    throw new StoreError(
+      "remote.dispatch-refused",
+      `The fork observation ${detail}; a reviewed resolution needs a complete host-attested traversal that began ` +
+        `after the conflict evidence. Nothing was sent.`,
+      details,
+    );
+  };
+  if (!isRecord(raw)) return refuse("is missing or not an object");
+  if (raw.version !== 1) return refuse("names an unsupported version");
+  if (typeof raw.selectorCommit !== "string" || !GIT_OBJECT_ID.test(raw.selectorCommit)) {
+    return refuse("does not name a selector commit");
   }
+  if (typeof raw.generation !== "number" || !Number.isSafeInteger(raw.generation) || raw.generation <= 0) {
+    return refuse("does not name a generation");
+  }
+  if (typeof raw.projectId !== "string" || raw.projectId.length === 0) return refuse("does not name a project");
+  if (typeof raw.conflictOperationId !== "string" || !LINEAR_ID.test(raw.conflictOperationId)) {
+    return refuse("does not name the conflicted operation");
+  }
+  if (typeof raw.asOf !== "string" || !RCF3339.test(raw.asOf) || !Number.isFinite(Date.parse(raw.asOf))) {
+    return refuse("carries no provider traversal start (asOf)");
+  }
+  if (raw.coverage !== "complete") return refuse("is not a complete traversal");
+  if (!Array.isArray(raw.heads) || raw.heads.length === 0) return refuse("names no fork head");
+  const heads = raw.heads.map((entry, index) => {
+    if (!isRecord(entry)) return refuse(`has an unreadable head at index ${String(index)}`);
+    if (typeof entry.recordId !== "string" || !LINEAR_ID.test(entry.recordId)) {
+      return refuse(`has no provider record id at index ${String(index)}`);
+    }
+    if (typeof entry.issueRef !== "string" || !ISSUE_REF_PATTERN.test(entry.issueRef)) {
+      return refuse(`has no portable issue reference at index ${String(index)}`);
+    }
+    if (typeof entry.head !== "string" || !SHA256.test(entry.head)) {
+      return refuse(`has no canonical content digest at index ${String(index)}`);
+    }
+    return { recordId: entry.recordId, issueRef: entry.issueRef, head: entry.head };
+  });
+  if (new Set(heads.map((entry) => entry.recordId)).size !== heads.length) {
+    return refuse("names one immutable record id for two heads");
+  }
+  const digests = heads.map((entry) => entry.head);
+  const sorted = [...digests].sort();
+  if (new Set(digests).size !== digests.length) return refuse("repeats one fork head");
+  if (digests.some((digest, index) => digest !== sorted[index])) return refuse("is not sorted by head");
+  return {
+    version: 1,
+    selectorCommit: raw.selectorCommit,
+    generation: raw.generation,
+    projectId: raw.projectId,
+    conflictOperationId: raw.conflictOperationId,
+    asOf: raw.asOf,
+    coverage: "complete",
+    heads,
+  };
 }
 
 /**
  * invariant: A dispatch only issues its one permit against the CURRENT persisted head the frozen
  * event names. A create must still be unobserved; an adoption must still address an unmarked
  * issue; a replacement must cite exactly the head the snapshot observes. The one exception is a
- * reviewed resolution of a named fork: its base is the fork evidence that conflict recorded, and
- * a fork that cannot yield a complete observation is not asked for one.
+ * reviewed resolution of a named fork: its base is the recorded fork evidence, proven by the
+ * host-attested `ForkObservation` that dispatch carries.
  */
-function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredRequest): void {
+function assertDispatchBase(
+  db: StoreDb,
+  row: OutboxIntentRow,
+  stored: StoredRequest,
+  observation: ForkObservation | null,
+): void {
   const scope = scopeRow(db, row.generation, row.projectKey);
   const refuse = (detail: string): never => {
     throw new StoreError(
@@ -3692,14 +3763,6 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
       { operationId: row.operationId },
     );
   };
-  let snapshot: RemoteSnapshot | null = null;
-  if (scope !== undefined && typeof scope.snapshot_json === "string") {
-    try {
-      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
-    } catch {
-      return refuse(`The stored observation of ${row.projectKey} is unreadable.`);
-    }
-  }
   const event = stored.request.event;
   const target = stored.request.target;
   const expected = stored.request.expectedHeads;
@@ -3707,12 +3770,10 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     return refuse(`The frozen base and the frozen parents of ${row.operationId} disagree.`);
   }
   if (row.resolves !== null) {
-    // invariant: A reviewed resolution's base is the fork evidence that conflict recorded, and that
-    // evidence must be FRESHLY observed: the records it names are proved against an observation
-    // recorded AFTER the conflict, so an obsolete or rewritten fork never receives a permit.
-    // Completeness is not required - a forked chain does not yield a complete observation - but an
-    // absent one proves nothing, and a matching cached set recorded at or before the conflict is
-    // exactly the stale snapshot that must not send.
+    // invariant: A reviewed resolution's base is the fork evidence that conflict recorded, and
+    // that evidence is proved by a host-attested traversal which began AFTER the conflict and
+    // terminated over the whole fork: a partial, pre-conflict or mismatched observation never
+    // issues the permit. The cached snapshot is not fork evidence.
     let fork: readonly string[];
     try {
       fork = recordedFork(db, row.resolves).observedHeads;
@@ -3722,27 +3783,22 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     if (canonicalJson(fork) !== canonicalJson(event.parents)) {
       return refuse(`The resolution's parents are not the fork heads ${row.resolves} recorded.`);
     }
-    if (snapshot === null) {
+    if (observation === null) {
       return refuse(
-        `The fork ${row.resolves} recorded is not observed in the current state of ${row.projectKey}; a resolution is ` +
-          `never sent against an unobserved base.`,
+        `The reviewed resolution of ${row.resolves} carries no ForkObservation; a complete traversal that began ` +
+          `after the conflict evidence is the only proof of its base.`,
       );
     }
-    const observedRevision = typeof scope?.revision === "number" ? scope.revision : 0;
-    if (observedRevision <= conflictObservationRevision(db, row.resolves)) {
-      return refuse(
-        `The fork ${row.resolves} recorded is proven only by an observation at or before the conflict ` +
-          `(revision ${String(observedRevision)}); a resolution needs a full fork observation recorded after it, ` +
-          `however well an older cached snapshot matches.`,
-      );
-    }
-    if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(fork)) {
-      return refuse(
-        `The scope observed for ${row.projectKey} no longer carries the fork ${row.resolves} recorded; a changed provider ` +
-          `base is never permission to send a resolution.`,
-      );
-    }
+    assertForkObservation(db, row, stored, observation, fork);
     return;
+  }
+  let snapshot: RemoteSnapshot | null = null;
+  if (scope !== undefined && typeof scope.snapshot_json === "string") {
+    try {
+      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+    } catch {
+      return refuse(`The stored observation of ${row.projectKey} is unreadable.`);
+    }
   }
   if (snapshot === null || scope?.completeness !== "complete") {
     return refuse(`The current observation of ${row.projectKey} is not complete, so no base can be proven for it.`);
@@ -3766,6 +3822,58 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     return refuse(
       `The observed head of the addressed record is not the frozen base of ${row.operationId}; the provider base moved ` +
         `since the intent was prepared.`,
+    );
+  }
+}
+
+/**
+ * invariant: A reviewed resolution's permit is bound to the observation that proves it: the same
+ * binding, generation, project and conflict; the exact recorded fork-head digests under complete
+ * coverage; and a traversal that BEGAN strictly after the conflict evidence was recorded.
+ */
+function assertForkObservation(
+  db: StoreDb,
+  row: OutboxIntentRow,
+  stored: StoredRequest,
+  observation: ForkObservation,
+  fork: readonly string[],
+): void {
+  const refuse = (detail: string, details: Record<string, unknown> = {}): never => {
+    throw new StoreError(
+      "remote.dispatch-refused",
+      `${detail} The reviewed resolution ${row.operationId} is not dispatched and no send permit was issued.`,
+      { operationId: row.operationId, ...details },
+    );
+  };
+  const binding = stored.request.binding;
+  if (
+    observation.selectorCommit !== binding.selectorCommit ||
+    observation.generation !== row.generation ||
+    observation.projectId !== binding.projectKey ||
+    observation.conflictOperationId !== row.resolves
+  ) {
+    return refuse(
+      `The fork observation of ${row.operationId} does not name its binding, generation, project and conflict; evidence of ` +
+        `another scope proves nothing.`,
+      { observedConflict: observation.conflictOperationId, conflict: row.resolves },
+    );
+  }
+  const heads = observation.heads.map((entry) => entry.head);
+  if (canonicalJson(heads) !== canonicalJson(fork)) {
+    return refuse(
+      `The fork observation of ${row.operationId} does not carry exactly the fork heads ${String(row.resolves)} recorded; ` +
+        `a changed provider base is never permission to send a resolution.`,
+      { observedHeads: heads, fork },
+    );
+  }
+  const conflictAt = conflictEvidenceRecordedAt(db, row.resolves!);
+  if (conflictAt === null) {
+    return refuse(`The conflict of ${row.operationId} carries no recorded evidence time to prove the observation is newer.`);
+  }
+  if (Date.parse(observation.asOf) <= Date.parse(conflictAt)) {
+    return refuse(
+      `The fork observation of ${row.operationId} began at ${observation.asOf}, at or before the conflict evidence ` +
+        `(${conflictAt}); a traversal that may have started before the conflict proves nothing.`,
     );
   }
 }
@@ -3809,9 +3917,15 @@ function assertDispatchScope(
  * `dispatchRemoteIntent` / `outbox-dispatch`: issue the ONE send permit for the oldest enqueued
  * intent of its binding, atomically marking it `unconfirmed` before returning it. The frozen
  * base is re-checked against the persisted current head; a lost permit response is never a
- * second permit, and an unresolved send, conflict or foreign older intent refuses first.
+ * second permit, and an unresolved send, conflict or foreign older intent refuses first. A
+ * reviewed resolution must carry the `ForkObservation` that proves its fork, and the permit
+ * binds that observation's generation, traversal start and cache revision.
  */
-export async function dispatchRemoteIntent(context: StoreContext, operationId: string): Promise<RemoteDispatchResult> {
+export async function dispatchRemoteIntent(
+  context: StoreContext,
+  operationId: string,
+  forkObservation?: unknown,
+): Promise<RemoteDispatchResult> {
   const target = linearId(operationId, "operationId");
   const location = resolveCollaborationLocation(context);
   const selection = remoteSelection(location);
@@ -3856,6 +3970,18 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         { operationId: target, state: row.state },
       );
     }
+    const resolution = row.resolves !== null;
+    if (!resolution && forkObservation !== undefined && forkObservation !== null) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${target} is not a reviewed resolution, so a fork observation is not its dispatch evidence; only an ` +
+          `ordinary base re-check admits it. Nothing was sent.`,
+        { operationId: target },
+      );
+    }
+    // note: The observation is the reviewed resolution's whole base proof; ordinary sends never carry one.
+    const observation =
+      resolution && forkObservation !== undefined && forkObservation !== null ? forkObservationOf(forkObservation) : null;
     // invariant: An in-flight attempt or an unresolved conflict serializes sends. A conflict is
     // exempt only for the dispatch of its OWN reviewed resolution; every other send stays blocked
     // until that resolution is confirmed, so an enqueued, unconfirmed or conflicted repair never
@@ -3907,7 +4033,7 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
       );
     }
     assertDispatchScope(scope, stored, target, row.resolves !== null);
-    assertDispatchBase(db, row, stored);
+    assertDispatchBase(db, row, stored, observation);
     const attemptId = randomUUID();
     const at = nowRfc3339();
     const changed = db
@@ -3934,8 +4060,9 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         requestHash: row.requestHash,
         frozenRequest: stored.request,
         observation: {
+          generation: observation === null ? row.generation : observation.generation,
           revision: typeof scope.revision === "number" ? scope.revision : 0,
-          asOf: typeof scope.as_of === "string" ? scope.as_of : null,
+          asOf: observation === null ? (typeof scope.as_of === "string" ? scope.as_of : null) : observation.asOf,
         },
       },
     } satisfies RemoteDispatchResult;

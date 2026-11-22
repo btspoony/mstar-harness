@@ -152,6 +152,7 @@ export type {
   RemoteAdoptionRequest,
   RemoteDispatchPermit,
   RemoteDispatchResult,
+  ForkObservation,
   RemoteIntentRead,
   RemoteIssueWrite,
   RemoteNoChange,

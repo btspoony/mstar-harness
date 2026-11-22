@@ -68,6 +68,7 @@ import {
   remoteEventHead,
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
+  type ForkObservation,
   type RemoteEvent,
   type RemoteIntentState,
   type RemoteReceiptOutcome,
@@ -4827,24 +4828,17 @@ describe("remote outbox lifecycle", () => {
     });
     expect(replayed).toMatchObject({ state: "enqueued", replayed: true });
     expect(outboxRows(forked.dbPath)).toHaveLength(2);
-    // invariant: A resolution whose fresh base is not the recorded fork is never sent.
-    await expect(dispatchRemoteIntent(forked.context, resolution)).rejects.toMatchObject({
+    // invariant: A fork observation whose heads are not the recorded fork is never sent.
+    await expect(
+      dispatchRemoteIntent(forked.context, resolution, forkObservationFor(forked, conflicted, [OBSERVED_PROJECT_HEAD])),
+    ).rejects.toMatchObject({
       code: "remote.dispatch-refused",
+      message: expect.stringContaining("exactly the fork heads"),
     });
 
-    // invariant: An unresolved fork cannot yield a COMPLETE observation, yet the reviewed
-    // resolution still dispatches: its base is the complete fork evidence it cites.
-    const forkCheck = positiveCheck();
-    await ingestRemoteObservation(
-      forked.context,
-      observation(forkCheck, {
-        selectorCommit: forked.commit,
-        generation: 3,
-        expectRevision: 1,
-        snapshot: { ...completeSnapshot(forkCheck), project: { ...completeSnapshot(forkCheck).project, head: fork } },
-      }),
-    );
-    const dispatched = await dispatchRemoteIntent(forked.context, resolution);
+    // invariant: A complete host observation that began after the conflict dispatches the reviewed
+    // resolution; the cached snapshot is not its base proof.
+    const dispatched = await dispatchRemoteIntent(forked.context, resolution, forkObservationFor(forked, conflicted, fork));
     expect(dispatched.kind).toBe("permit");
     // invariant: The original conflict stays conflicted; only the resolution advances.
     expect((await readRemoteIntent(forked.context, conflicted)).state).toBe("conflict");
@@ -5566,9 +5560,10 @@ describe("remote outbox review fixes", () => {
     } finally {
       db.close();
     }
-    // note: The fork is freshly observed, so only the unrelated conflict can refuse the repair.
-    await observeHead(cache, heads);
-    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
+    // note: The fork observation is complete and newer, so only the unrelated conflict can refuse the repair.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, heads)),
+    ).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: otherId }),
     });
@@ -6035,34 +6030,46 @@ function observationRevision(dbPath: string): number {
   }
 }
 
-/** note: Drop the served snapshot without touching the binding, as an unavailable observation leaves it. */
-function withdrawSnapshot(dbPath: string): void {
+/** note: The durable time the fixture's conflict evidence was recorded. */
+function conflictRecordedAt(dbPath: string, operationId: string): string {
   const db = new DatabaseSync(dbPath);
   try {
-    db.prepare(
-      "update remote_observations set completeness = 'unavailable', code = 'remote.unavailable', " +
-        "snapshot_json = null, as_of = null",
-    ).run();
+    const row = db
+      .prepare(
+        "select recorded_at from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+          "order by recorded_at desc, receipt_hash desc limit 1",
+      )
+      .get(operationId) as { recorded_at?: unknown } | undefined;
+    if (typeof row?.recorded_at !== "string") throw new Error("the fixture conflict evidence carries no recorded time");
+    return row.recorded_at;
   } finally {
     db.close();
   }
 }
 
-/** note: Rewrite the cached snapshot's project head at its current revision, as a stale matching snapshot would. */
-function rewriteSnapshotHead(dbPath: string, head: readonly string[]): void {
-  const db = new DatabaseSync(dbPath);
-  try {
-    const row = db
-      .prepare("select snapshot_json from remote_observations order by project_key limit 1")
-      .get() as { snapshot_json?: unknown } | undefined;
-    if (typeof row?.snapshot_json !== "string") throw new Error("the fixture observation row carries no snapshot");
-    const snapshot = JSON.parse(row.snapshot_json) as { project: Record<string, unknown> };
-    db.prepare("update remote_observations set snapshot_json = ?").run(
-      JSON.stringify({ ...snapshot, project: { ...snapshot.project, head } }),
-    );
-  } finally {
-    db.close();
-  }
+/** note: The host-attested fork observation a reviewed resolution is dispatched with. */
+function forkObservationFor(
+  cache: { commit: string; dbPath: string },
+  conflictOperationId: string,
+  heads: readonly string[],
+  overrides: Record<string, unknown> = {},
+): ForkObservation {
+  return {
+    version: 1,
+    selectorCommit: cache.commit,
+    generation: 3,
+    projectId: SELECTED_PROJECT.localProjectId,
+    conflictOperationId,
+    // note: Strictly after the conflict evidence, as a traversal started after it would be.
+    asOf: new Date(Date.parse(conflictRecordedAt(cache.dbPath, conflictOperationId)) + 1_000).toISOString(),
+    coverage: "complete",
+    heads: [...heads].sort().map((head, index) => ({
+      recordId: `bbbbbbbb-cccc-4ddd-8eee-${String(index + 1).padStart(12, "0")}`,
+      issueRef: FORGED_ISSUE_REF,
+      head,
+    })),
+    ...overrides,
+  } as ForkObservation;
 }
 
 /** note: The competing journal records behind one fork, with the digest each one's head carries. */
@@ -6131,12 +6138,13 @@ describe("remote outbox re-review", () => {
     });
     // invariant: The intent ahead of the repair is stale, which is never a reason to hold the repair;
     // until that repair is confirmed, the recorded conflict keeps blocking ordinary sends.
-    await observeHead(cache, fork.heads);
     await expect(dispatchRemoteIntent(cache.context, queuedId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    expect((await dispatchRemoteIntent(cache.context, resolutionId)).kind).toBe("permit");
+    expect(
+      (await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads))).kind,
+    ).toBe("permit");
     const read = await readRemoteIntent(cache.context, resolutionId);
     await recordRemoteReceipt(
       cache.context,
@@ -6167,7 +6175,7 @@ describe("remote outbox re-review", () => {
     expect((await dispatchRemoteIntent(cache.context, nextId)).kind).toBe("permit");
   }, 30_000);
 
-  test("a resolution is proven against a fresh observation of its fork", async () => {
+  test("a resolution refuses missing, stale, partial, duplicated or mismatched fork evidence", async () => {
     const cache = await outboxCache("outbox-resolve-evidence");
     const conflictedId = "00000000-0000-4000-8000-000000000721";
     const fork = await conflictedJournal(cache, conflictedId);
@@ -6178,36 +6186,65 @@ describe("remote outbox re-review", () => {
       reason: "merge the fork",
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
-    const partial: RemoteSnapshot["coverage"] = {
-      kind: "partial",
-      stream: "journal",
-      nextCursor: null,
-      code: "remote.partial-journal",
-    };
-    // invariant: A PARTIAL observation is compared, never skipped: a differing head refuses.
-    await observeHead(cache, ["9".repeat(64)], partial);
+    const complete = forkObservationFor(cache, conflictedId, fork.heads);
+    // invariant: The recorded fork evidence alone never sends: the host must observe it.
     await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
-      message: expect.stringContaining("no longer carries the fork"),
+      message: expect.stringContaining("no ForkObservation"),
     });
-    // invariant: An absent observation proves nothing, so the recorded receipt alone never sends.
-    withdrawSnapshot(cache.dbPath);
-    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
+    // invariant: A traversal that began at or before the conflict evidence proves nothing, however
+    // exactly its heads match. This is the stale matching snapshot the old cache rule admitted.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...complete,
+        asOf: conflictRecordedAt(cache.dbPath, conflictedId),
+      }),
+    ).rejects.toMatchObject({
       code: "remote.dispatch-refused",
-      message: expect.stringContaining("not observed"),
+      message: expect.stringContaining("at or before the conflict evidence"),
     });
-    // invariant: A partial observation that DOES carry the fork proves the base; completeness is
-    // not required, because a forked chain does not yield a complete observation.
-    await observeHead(cache, fork.heads, partial);
-    expect((await dispatchRemoteIntent(cache.context, resolutionId)).kind).toBe("permit");
+    // invariant: A partial traversal is not fork evidence, even when its heads match.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, { ...complete, coverage: "partial" }),
+    ).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("complete traversal"),
+    });
+    // invariant: One immutable record id never stands for two heads.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...complete,
+        heads: [
+          { ...complete.heads[0]!, recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffffff1" },
+          { ...complete.heads[1]!, recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffffff1" },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("record id"),
+    });
+    // invariant: Heads that are not the recorded fork digests never issue a permit.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...complete,
+        heads: [{ ...complete.heads[0]!, head: "9".repeat(64) }],
+      }),
+    ).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("exactly the fork heads"),
+    });
+    // invariant: None of those refusals consumed the intent, and complete fresh evidence sends once.
+    expect(outboxStateOf(cache.dbPath, resolutionId)).toBe("enqueued");
+    expect(await dispatchRemoteIntent(cache.context, resolutionId, complete)).toMatchObject({
+      kind: "permit",
+      permit: { observation: { generation: 3, revision: observationRevision(cache.dbPath), asOf: complete.asOf } },
+    });
   }, 30_000);
 
   test("an enqueued or unconfirmed resolution never unblocks ordinary sends", async () => {
     const cache = await outboxCache("outbox-resolution-block");
     const conflictedId = "00000000-0000-4000-8000-000000000715";
     const fork = await conflictedJournal(cache, conflictedId);
-    // note: A later observation proves the fork, so the ordinary intent behind it is otherwise current.
-    await observeHead(cache, fork.heads);
     const ordinaryId = "00000000-0000-4000-8000-000000000716";
     await prepareRemoteIntent(
       cache.context,
@@ -6229,7 +6266,9 @@ describe("remote outbox re-review", () => {
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
     // invariant: Only the repair's own dispatch is exempt from that conflict.
-    expect((await dispatchRemoteIntent(cache.context, resolutionId)).kind).toBe("permit");
+    expect(
+      (await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads))).kind,
+    ).toBe("permit");
     // invariant: While the repair is in flight, the recorded conflict still blocks ordinary sends.
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
@@ -6277,7 +6316,7 @@ describe("remote outbox re-review", () => {
     });
   }, 30_000);
 
-  test("a matching fork observation must postdate the conflict", async () => {
+  test("a complete fork observation that began after the conflict permits and binds the send", async () => {
     const cache = await outboxCache("outbox-resolution-fresh");
     const conflictedId = "00000000-0000-4000-8000-000000000728";
     const fork = await conflictedJournal(cache, conflictedId);
@@ -6288,18 +6327,25 @@ describe("remote outbox re-review", () => {
       reason: "merge the fork",
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
-    // note: The cached snapshot now carries exactly the fork heads at the PRE-conflict revision:
-    // matching evidence that was observed before the conflict must never send.
-    rewriteSnapshotHead(cache.dbPath, fork.heads);
-    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
-      code: "remote.dispatch-refused",
-      message: expect.stringContaining("recorded after it"),
-    });
-    // invariant: A real re-observation increments the revision, and the permit binds that observation.
-    await observeHead(cache, fork.heads);
-    expect(await dispatchRemoteIntent(cache.context, resolutionId)).toMatchObject({
+    const evidence = forkObservationFor(cache, conflictedId, fork.heads);
+    // invariant: Matching fork heads at the pre-conflict time are exactly the stale snapshot that
+    // must not send; the same heads observed after the conflict are what admit it.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...evidence,
+        asOf: new Date(Date.parse(conflictRecordedAt(cache.dbPath, conflictedId)) - 1_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
+    // invariant: The permit binds the observation's generation, revision and traversal start.
+    expect(await dispatchRemoteIntent(cache.context, resolutionId, evidence)).toMatchObject({
       kind: "permit",
-      permit: { observation: { revision: 2, asOf: expect.any(String) } },
+      permit: {
+        observation: {
+          generation: evidence.generation,
+          revision: observationRevision(cache.dbPath),
+          asOf: evidence.asOf,
+        },
+      },
     });
   }, 30_000);
 
