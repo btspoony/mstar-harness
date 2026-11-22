@@ -2513,6 +2513,62 @@ describe("remotely bound shipped registration", () => {
     });
   }, 30_000);
 
+  test("a journal carrying the reviewed relation at another ordinal is settled as ONE edge", async () => {
+    const fixture = await remoteFixture("remote-register-link-ordinal");
+    const iterationId = "20260921-remote-link-ordinal";
+    const planId = "20260921-link-ordinal-plan";
+    const options = remoteIterationWorkflow(fixture.context, {
+      iterationId,
+      rows: [{ planId, title: "Ordered plan" }],
+    });
+    const context = registrationContext(fixture, iterationId);
+    // note: The observed journal already carries the reviewed membership at ordinal 2 (an earlier
+    // settled write), while the reviewed delta asks for ordinal 0.
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(
+        fixture.commit,
+        check,
+        {
+          ...base,
+          project: {
+            ...base.project,
+            catalogLinks: [
+              { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 2 },
+            ],
+          },
+        },
+        observedRevision(fixture.context),
+      ),
+    );
+    const pending = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-link-ordinal",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    const providerIntent = frozenProviderIntent(pending);
+    const row = outboxRows(fixture.context).find((entry) => entry.operation_id === providerIntent);
+    const frozen = JSON.parse(String(row?.request_json)) as {
+      event: { change: { project: { catalogLinks: Array<Record<string, unknown>> } } };
+    };
+    const edges = frozen.event.change.project.catalogLinks.filter(
+      (link) =>
+        link.fromKind === "plan" &&
+        link.fromId === planId &&
+        link.relation === "belongs-to" &&
+        link.toKind === "iteration" &&
+        link.toId === iterationId,
+    );
+    // invariant: Link identity is endpoints plus relation, so the settled ordinal-2 row is REPLACED by
+    // the reviewed ordinal 0 instead of publishing a second parallel membership edge.
+    expect(edges).toEqual([
+      { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
+    ]);
+  }, 30_000);
+
   test("a same-target correction after a partial settlement adopts the settled rows and publishes the omission", async () => {
     const fixture = await remoteFixture("remote-register-partial-correction");
     const iterationId = "20260921-remote-partial-correction";

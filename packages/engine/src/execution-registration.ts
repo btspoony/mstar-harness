@@ -588,7 +588,12 @@ export async function commitExecutionRegistration(
               }
             }
             const desired = portableCatalogLink(link);
-            if (!nextLinks.some((row) => samePortableCatalogLink(row, desired))) nextLinks.push(desired);
+            // invariant: A reviewed relation is ONE edge of the journal: its identity is its endpoints
+            // and relation, and its ordinal is content. A journal already carrying that relation is
+            // settled by replacing the row (the reviewed ordinal wins), never by a second parallel edge.
+            const existing = nextLinks.findIndex((row) => samePortableLinkEndpoints(row, desired));
+            if (existing === -1) nextLinks.push(desired);
+            else nextLinks[existing] = desired;
           }
           return { ...current, catalogEntities: nextEntities, catalogLinks: nextLinks };
         },
@@ -738,15 +743,18 @@ function samePortableCatalogRow(row: Record<string, unknown>, desired: Record<st
   );
 }
 
-/** note: Whether one journal link row is exactly the reviewed relation (ordinal absent means 0). */
-function samePortableCatalogLink(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
+/**
+ * note: The IDENTITY of one journal link: its endpoints and relation. The ordinal is content (the
+ * order within that relation), so the same edge at another ordinal is the same membership, not a
+ * second one.
+ */
+function samePortableLinkEndpoints(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
   return (
     row.fromKind === desired.fromKind &&
     row.fromId === desired.fromId &&
     row.relation === desired.relation &&
     row.toKind === desired.toKind &&
-    row.toId === desired.toId &&
-    (row.ordinal ?? 0) === desired.ordinal
+    row.toId === desired.toId
   );
 }
 
@@ -878,17 +886,21 @@ function remoteRegistrationFacts(
   }
   for (const link of delta.links ?? []) {
     const desired = portableCatalogLink(link);
-    if (!links.some((row) => samePortableCatalogLink(row, desired))) {
+    // invariant: One reviewed relation is exactly ONE journal edge, proved by identity (endpoints and
+    // relation); its ordinal is content, so a settled edge at another ordinal is settled, while a
+    // second parallel edge for the same relation means the reviewed membership was duplicated.
+    const edges = links.filter((row) => samePortableLinkEndpoints(row, desired)).length;
+    if (edges !== 1) {
       throw remoteEffectMismatch(
         settled,
-        `publishes no ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ${link.to.kind} ` +
-          `${JSON.stringify(link.to.id)} link`,
+        edges === 0
+          ? `publishes no ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ${link.to.kind} ` +
+              `${JSON.stringify(link.to.id)} link`
+          : `publishes ${String(edges)} parallel ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ` +
+              `${link.to.kind} ${JSON.stringify(link.to.id)} edges for one reviewed relation`,
         {
-          missing_link: {
-            from: { kind: link.from.kind, id: link.from.id },
-            relation: link.relation,
-            to: { kind: link.to.kind, id: link.to.id },
-          },
+          ...(edges === 0 ? { missing_link: { from: { kind: link.from.kind, id: link.from.id }, relation: link.relation, to: { kind: link.to.kind, id: link.to.id } } } : {}),
+          link_edges: edges,
         },
       );
     }
