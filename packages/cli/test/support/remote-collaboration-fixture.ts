@@ -14,6 +14,7 @@
  * client, callback, token or in-process object is passed into the CLI.
  */
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,23 +50,28 @@ export const REMOTE_PROJECT: FixtureProject = {
 
 export type FixtureIssue = Readonly<{ issueId: string; title: string; status: string; updatedAt: string }>;
 
+/** note: The unmarked native issue every fixture observation carries by default. */
+export const FIXTURE_ISSUE_ID = "77777777-7777-4777-8777-777777777777";
+
 export type ScopeCheckDocument = Readonly<{
   projectId: string;
   scope: Readonly<{ provider: "linear"; workspaceId: string; teamId: string; projectId: string }>;
   journalIssueId: string;
   checkedAt: string;
-  outcome: Readonly<{
-    kind: "verified";
-    readerId: string;
-    writerId: string;
-    capabilities: Readonly<{
-      fullRead: boolean;
-      appendOnly: boolean;
-      exactLookup: boolean;
-      fieldFidelity: boolean;
-      privateAudience: boolean;
-    }>;
-  }>;
+  outcome:
+    | Readonly<{
+        kind: "verified";
+        readerId: string;
+        writerId: string;
+        capabilities: Readonly<{
+          fullRead: boolean;
+          appendOnly: boolean;
+          exactLookup: boolean;
+          fieldFidelity: boolean;
+          privateAudience: boolean;
+        }>;
+      }>
+    | Readonly<{ kind: "unavailable" | "scope-mismatch" | "denied" | "revoked" | "unsafe-fidelity" }>;
 }>;
 
 export type ObservationDocument = Readonly<{
@@ -110,6 +116,48 @@ export type RemoteSandbox = Readonly<{
 
 export type PublishedSelector = Readonly<{ commit: string; generation: number }>;
 
+/** note: The one send permit `outbox-dispatch` issued, as its envelope carries it. */
+export type OutboxPermit = Readonly<{
+  operationId: string;
+  attemptId: string;
+  requestHash: string;
+  binding: Readonly<{
+    generation: number;
+    projectKey: string;
+    selectorCommit: string;
+    provider: "linear";
+    workspaceId: string;
+    teamId: string;
+    projectId: string;
+    journalIssueId: string;
+    writerId: string | null;
+  }>;
+  frozenRequest: Readonly<{ event: unknown; target: string | null }>;
+}>;
+
+/** note: One intent as `outbox-show` discloses it; a lookup runs under that original binding. */
+export type OutboxIntent = Readonly<{
+  operationId: string;
+  projectId: string;
+  generation: number;
+  attemptId: string;
+  requestHash: string;
+  binding: OutboxPermit["binding"];
+}>;
+
+/** note: A receipt the HOST submits through `outbox-receipt`/`outbox-reconcile`; never produced by the CLI. */
+export type OutboxReceiptDocument = Readonly<{
+  version: 1;
+  selectorCommit: string;
+  generation: number;
+  projectId: string;
+  operationId: string;
+  attemptId: string;
+  requestHash: string;
+  observedAt: string;
+  outcome: unknown;
+}>;
+
 /**
  * invariant: A sandbox child sees only its own workspace `HOME` and the
  * interpreter path. Ambient harness variables, the invoking session identity
@@ -133,6 +181,26 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+/** note: One CLI run's envelope, parsed the same way for bun- and node-spawned children. */
+export function parseSandboxCommand(result: RunResult): SandboxCommand {
+  let envelope: Record<string, unknown> = {};
+  try {
+    envelope = asRecord(JSON.parse(result.stdout));
+  } catch {
+    // note: A non-JSON body stays empty; the raw result carries the failure.
+  }
+  const details = asRecord(envelope.details);
+  return {
+    exitCode: result.exitCode,
+    ok: envelope.status === "ok",
+    code: envelope.code,
+    message: typeof envelope.message === "string" ? envelope.message : "",
+    recovery: typeof details.recovery === "string" ? details.recovery : "",
+    data: asRecord(envelope.data),
+    result,
+  };
+}
+
 export class RemoteCollaborationFixture {
   private readonly root: string;
   private readonly origin: string;
@@ -140,9 +208,15 @@ export class RemoteCollaborationFixture {
   private readonly publisher: string;
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
+  /** note: The provider records this host actually holds; only `send` appends, only `lookup` reads. */
+  private readonly effects: Array<
+    Readonly<{ operationId: string; attemptId: string; recordId: string; identity: Record<string, unknown>; event: unknown }>
+  > = [];
+  /** note: Every provider call the TEST RUNNER made; the CLI has no channel into this state. */
+  readonly providerCalls: Array<Readonly<{ kind: "send" | "lookup"; operationId: string }>> = [];
   private issues: readonly FixtureIssue[] = [
     {
-      issueId: "77777777-7777-4777-8777-777777777777",
+      issueId: FIXTURE_ISSUE_ID,
       title: "Observed native issue",
       status: "Todo",
       updatedAt: "2026-11-20T00:00:00.000Z",
@@ -217,25 +291,7 @@ export class RemoteCollaborationFixture {
       });
       return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
     };
-    const runJson = (args: readonly string[]): SandboxCommand => {
-      const result = run(args);
-      let envelope: Record<string, unknown> = {};
-      try {
-        envelope = asRecord(JSON.parse(result.stdout));
-      } catch {
-        // note: A non-JSON body stays empty; the raw result carries the failure.
-      }
-      const details = asRecord(envelope.details);
-      return {
-        exitCode: result.exitCode,
-        ok: envelope.status === "ok",
-        code: envelope.code,
-        message: typeof envelope.message === "string" ? envelope.message : "",
-        recovery: typeof details.recovery === "string" ? details.recovery : "",
-        data: asRecord(envelope.data),
-        result,
-      };
-    };
+    const runJson = (args: readonly string[]): SandboxCommand => parseSandboxCommand(run(args));
     const writeJson = (name: string, value: unknown): string => {
       const path = join(hosts, `${String(hostSequence++)}-${name}.json`);
       writeFileSync(path, `${JSON.stringify(value)}\n`);
@@ -318,6 +374,69 @@ export class RemoteCollaborationFixture {
   /** note: Replace the readable provider issues the next observation carries. */
   setIssues(issues: readonly FixtureIssue[]): void {
     this.issues = issues;
+  }
+
+  /**
+   * The host sends one issued permit to the provider and records the effect it actually
+   * produced. Called twice for one attempt it records a duplicate effect, which is exactly
+   * the cardinality a `lookup` must report as ambiguous.
+   */
+  send(permit: OutboxPermit): OutboxReceiptDocument {
+    this.providerCalls.push({ kind: "send", operationId: permit.operationId });
+    const recordId = randomUUID();
+    const identity = {
+      provider: "linear",
+      workspaceId: permit.binding.workspaceId,
+      teamId: permit.binding.teamId,
+      projectId: permit.binding.projectId,
+      issueId: permit.frozenRequest.target ?? recordId,
+    };
+    this.effects.push({
+      operationId: permit.operationId,
+      attemptId: permit.attemptId,
+      recordId,
+      identity,
+      event: permit.frozenRequest.event,
+    });
+    return {
+      version: 1,
+      selectorCommit: permit.binding.selectorCommit,
+      generation: permit.binding.generation,
+      projectId: permit.binding.projectKey,
+      operationId: permit.operationId,
+      attemptId: permit.attemptId,
+      requestHash: permit.requestHash,
+      observedAt: new Date().toISOString(),
+      outcome: { kind: "confirmed", identity, recordId, event: permit.frozenRequest.event },
+    };
+  }
+
+  /**
+   * The host looks up what the provider holds for one attempt under its ORIGINAL binding.
+   * Exactly one exact record confirms; none is `not-found` and a duplicate is `ambiguous`,
+   * so neither is ever reported as a business success.
+   */
+  lookup(intent: OutboxIntent): OutboxReceiptDocument {
+    this.providerCalls.push({ kind: "lookup", operationId: intent.operationId });
+    const found = this.effects.filter(
+      (effect) => effect.operationId === intent.operationId && effect.attemptId === intent.attemptId,
+    );
+    const envelope = {
+      version: 1 as const,
+      selectorCommit: intent.binding.selectorCommit,
+      generation: intent.generation,
+      projectId: intent.projectId,
+      operationId: intent.operationId,
+      attemptId: intent.attemptId,
+      requestHash: intent.requestHash,
+      observedAt: new Date().toISOString(),
+    };
+    if (found.length === 1) {
+      const [only] = found;
+      return { ...envelope, outcome: { kind: "confirmed", identity: only!.identity, recordId: only!.recordId, event: only!.event } };
+    }
+    const reason = found.length === 0 ? ("not-found" as const) : ("ambiguous" as const);
+    return { ...envelope, outcome: { kind: "unconfirmed", reason } };
   }
 
   /**

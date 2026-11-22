@@ -230,6 +230,9 @@ export type ObservationSubmission = Readonly<{
   snapshot: RemoteSnapshot | null;
 }>;
 
+/** note: The header as read from the input: `snapshot` stays raw until ingest proves its fidelity. */
+type ObservationHeader = Omit<ObservationSubmission, "snapshot"> & Readonly<{ snapshot: unknown }>;
+
 // ---------------------------------------------------------------------------
 // note: Narrow DTO validation. Every message names the offending field path so a
 // Host Agent author can fix the document, never guess.
@@ -255,11 +258,11 @@ function invalid(path: string, detail: string): never {
 /**
  * note: The named refusal for content whose fidelity the snapshot cannot keep. It
  * is never silent: an imported field the portable representation cannot hold
- * refuses the whole observation, and the lossless original stays in the local
- * store the snapshot does not replace.
+ * refuses the whole observation and invalidates the addressed cache, so no reader
+ * keeps serving the previous snapshot as current.
  */
 function unsafeFidelity(path: string, detail: string): never {
-  throw new StoreError("remote.unsafe-fidelity", `${path}: ${detail}. Nothing was written.`);
+  throw new StoreError("remote.unsafe-fidelity", `${path}: ${detail}. The addressed cache is invalidated instead of serving it.`);
 }
 
 /** note: A portable field is one bounded line that cannot name a filesystem location or carry a credential. */
@@ -1036,7 +1039,7 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
   };
 }
 
-function observationSubmission(value: unknown): ObservationSubmission {
+function observationSubmission(value: unknown): ObservationHeader {
   const body = record(value, "submission");
   if (body.version !== 1) invalid("submission.version", "must be 1");
   const selectorCommit = text(body.selectorCommit, "submission.selectorCommit");
@@ -1048,7 +1051,7 @@ function observationSubmission(value: unknown): ObservationSubmission {
     generation: positiveInteger(body.generation, "submission.generation"),
     check,
     expectRevision: nonNegativeInteger(body.expectRevision, "submission.expectRevision"),
-    snapshot: body.snapshot === null ? null : snapshot(body.snapshot, check),
+    snapshot: body.snapshot,
   };
 }
 
@@ -1889,10 +1892,12 @@ export type RemoteObservationResult = Readonly<{
  * `remote observe`: accept one verification/observation submission.
  *
  * A negative access check records the invalidation, clears the active
- * projection and is then returned as its named refusal. A positive check
- * requires the whole project snapshot (never a diff: the cache replaces the
- * project atomically) and commits at `expectRevision`; a stale base refuses
- * `collaboration.observation-stale` and a known gap is stored as `partial`.
+ * projection and is then returned as its named refusal. A snapshot whose portable
+ * representation cannot keep a field is refused the same way: the addressed cache
+ * is invalidated with `remote.unsafe-fidelity` before that refusal is reported.
+ * A positive check requires the whole project snapshot (never a diff: the cache
+ * replaces the project atomically) and commits at `expectRevision`; a stale base
+ * refuses `collaboration.observation-stale` and a known gap is stored as `partial`.
  * This never creates or adopts an issue, never confirms an intent and never
  * writes a local-authority table.
  */
@@ -1944,8 +1949,22 @@ export async function ingestRemoteObservation(
     );
   }
 
+  // note: Snapshot fidelity is proven here rather than while reading the header: content the
+  // portable representation cannot keep invalidates the addressed cache with its named refusal,
+  // so the previously served snapshot never stays current behind a refused observation.
+  let snapshotValue: RemoteSnapshot | null = null;
+  let unsafe: StoreError | null = null;
+  if (submission.snapshot !== null) {
+    try {
+      snapshotValue = snapshot(submission.snapshot, submission.check);
+    } catch (error) {
+      if (error instanceof StoreError && error.code === "remote.unsafe-fidelity") unsafe = error;
+      else throw error;
+    }
+  }
+
   const outcome = await withRemoteCacheWrite(context, ({ db }) =>
-    recordObservation(db, submission, negative),
+    recordObservation(db, submission, negative, snapshotValue, unsafe),
   );
 
   // invariant: The invalidation is durable BEFORE its refusal is reported: a caller that saw
@@ -1957,8 +1976,10 @@ export async function ingestRemoteObservation(
 /** note: One submission's whole cache transaction, run under the writer's guarded connection. */
 function recordObservation(
   db: StoreDb,
-  submission: ObservationSubmission,
+  submission: ObservationHeader,
   negative: StoreError | null,
+  snapshotValue: RemoteSnapshot | null,
+  unsafe: StoreError | null,
 ): { recorded: RemoteObservationResult } | { refused: StoreError } {
   const stored = db
     .prepare(
@@ -2004,19 +2025,20 @@ function recordObservation(
     submission.generation,
     submission.check.projectId,
   );
-  if (negative !== null) {
-    // invariant: A revocation invalidates serving as soon as it is submitted. It never waits
-    // for the snapshot replacement CAS to match: a host that last read an older revision
-    // must still revoke.
+  const refusal = negative ?? unsafe;
+  if (refusal !== null) {
+    // invariant: A revocation or a snapshot the portable representation cannot keep invalidates
+    // serving as soon as it is submitted. It never waits for the snapshot replacement CAS to
+    // match: a host that last read an older revision must still invalidate.
     db.prepare(
       "update remote_observations set revision = ?, as_of = null, completeness = 'unavailable', code = ?, " +
         "snapshot_json = null, received_at = ? where generation = ? and project_key = ?",
-    ).run(next, negative.code, at, submission.generation, submission.check.projectId);
+    ).run(next, refusal.code, at, submission.generation, submission.check.projectId);
     db.prepare("delete from remote_issue_identities where generation = ? and project_key = ?").run(
       submission.generation,
       submission.check.projectId,
     );
-    return { refused: negative };
+    return { refused: refusal };
   }
   if (submission.expectRevision !== revision) {
     throw new StoreError(
@@ -2025,7 +2047,6 @@ function recordObservation(
         `${String(revision)} for ${submission.check.projectId}. Re-read the scope and resubmit; nothing was written.`,
     );
   }
-  const snapshotValue = submission.snapshot;
   if (snapshotValue === null) {
     throw new StoreError(
       "collaboration.observation-incomplete",
