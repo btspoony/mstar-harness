@@ -135,20 +135,31 @@ const importedRecord = z
     "the reviewed portable legacy register row: one spelling per field, and at least one field",
   );
 
-const transitionRecord = z.object({
-  eventId: providerId.describe("the history row's stable event UUID"),
-  fromDisposition: z.enum(ISSUE_DISPOSITIONS),
-  toDisposition: z.enum(ISSUE_DISPOSITIONS),
-  actor: z.string().nullish(),
-  occurredAt: rfc3339.nullish(),
-  recordedAt: rfc3339,
-  reason: z.string(),
-  evidence: z
-    .union([closureEvidence, importedRecord])
-    .describe("the closure document normally; the reviewed legacy register row when imported is true"),
-  issueRevision: z.number().int().nonnegative(),
-  imported: z.boolean(),
-}).strict();
+const transitionRecord = z
+  .object({
+    eventId: providerId.describe("the history row's stable event UUID"),
+    fromDisposition: z.enum(ISSUE_DISPOSITIONS),
+    toDisposition: z.enum(ISSUE_DISPOSITIONS),
+    actor: z.string().nullish(),
+    occurredAt: rfc3339.nullish(),
+    recordedAt: rfc3339,
+    reason: z.string(),
+    evidence: z
+      .union([closureEvidence, importedRecord])
+      .describe("the closure document normally; the reviewed legacy register row when imported is true"),
+    issueRevision: z.number().int().nonnegative(),
+    imported: z.boolean(),
+  })
+  .strict()
+  // invariant: The evidence arm follows `imported`, exactly as the runtime reads it: an imported
+  // transition carries the reviewed legacy register row, which must hold at least one business
+  // field, while a non-imported one carries the closure document. The bare union would admit an
+  // empty object through the all-optional closure arm.
+  .refine((row) => (row.imported ? importedRecord : closureEvidence).safeParse(row.evidence).success, {
+    path: ["evidence"],
+    message:
+      "must be the closure document, or the reviewed legacy register row with at least one business field when imported is true",
+  });
 
 /** note: A dangling target stays as the spellable reference; the read boundary renders it unresolved. */
 const relationRecord = z.object({
