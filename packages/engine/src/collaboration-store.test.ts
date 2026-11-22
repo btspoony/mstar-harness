@@ -6109,6 +6109,14 @@ describe("remote composite flows", () => {
       confirmed_components: [`provider:${idA}`],
       abandoned_components: [idB],
     });
+    // invariant: The durability fact names WHICH work is durable and which acknowledgement never
+    // applied; the confirmed provider component is never described as an effect that never landed,
+    // and the corrected request contains only the entries that did not settle.
+    const mixedRecovery = String(detailsOf(declined).recovery);
+    expect(mixedRecovery).not.toContain("effect was never applied");
+    expect(mixedRecovery).toContain("the confirmed components named here are durable and are never re-sent");
+    expect(mixedRecovery).toContain("its execution acknowledgement was not applied");
+    expect(mixedRecovery).toContain("ONLY the entries that did not settle");
     expect(await intentPhases(cache.context, "residual-remote-mixed")).toEqual(["declined"]);
 
     // invariant: The recovery route works: the confirmed receipt invalidated the cached base (and
@@ -6254,6 +6262,210 @@ describe("remote composite flows", () => {
     expect(recovery).toContain("mstar store collaboration remote observe --harness <abs> --input <file|->");
     expect(recovery).not.toContain("--project");
     expect(await intentPhases(cache.context, "residual-remote-mixed-unreadable")).toEqual(["prepared"]);
+  }, 30_000);
+
+  test("an unresolved conflict at a repair leaf names that leaf's own fork", async () => {
+    const cache = await outboxCache("composite-conflict-leaf");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-close-leaf",
+      operation: {
+        kind: "residual-close" as const,
+        issueId: MSTAR_ISSUE,
+        disposition: "resolved" as const,
+        evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: 1,
+      },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close-leaf"));
+    const intent = await readRemoteIntent(cache.context, outboxId);
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, outboxId));
+    const frozen = recordedEvent(cache.dbPath, outboxId);
+    const competing = ["00000000-0000-4000-8000-000000000d01", "00000000-0000-4000-8000-000000000d02"].map(
+      (operationId, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea1" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea2",
+        event: { ...frozen, operationId, parents: ["8".repeat(64)] },
+      }),
+    );
+    const heads = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, outboxId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: competing,
+      }),
+    );
+    // note: The reviewed repair of that fork is sent, and the provider answers with a SECOND fork,
+    // so the chain's LAST leaf is itself an unresolved conflict.
+    const repairId = "00000000-0000-4000-8000-000000000d03";
+    const repair = await prepareRemoteResolution(cache.context, outboxId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: { ...frozen, operationId: repairId, parents: heads },
+    });
+    const repairAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, outboxId, heads)),
+    );
+    const second = ["00000000-0000-4000-8000-000000000d04", "00000000-0000-4000-8000-000000000d05"].map(
+      (operationId, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea3" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea4",
+        event: { ...frozen, operationId, parents: ["9".repeat(64)] },
+      }),
+    );
+    const secondHeads = second.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, repair.requestHash, {
+        kind: "conflict",
+        expectedHeads: heads,
+        observedHeads: secondHeads,
+        observedRecords: second,
+      }),
+    );
+
+    // invariant: The LAST leaf is the fork a reviewed successor must address: the original already
+    // links to the repair, so a second `outbox-resolve` of the original is refused.
+    const pending = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(pending.code).toBe("collaboration.operation-partial");
+    const recovery = String(detailsOf(pending).recovery);
+    expect(recovery).toContain(`outbox-resolve --harness <abs> --operation ${repairId}`);
+    expect(recovery).not.toContain(`outbox-resolve --harness <abs> --operation ${outboxId}`);
+    expect(await intentPhases(cache.context, "residual-remote-close-leaf")).toEqual(["prepared"]);
+
+    // invariant: The named route is the working one: a successor of the LEAF fork, dispatched with
+    // that leaf's observation and confirmed, settles the whole chain for this reservation.
+    const successorId = "00000000-0000-4000-8000-000000000d06";
+    const successor = await prepareRemoteResolution(cache.context, repairId, {
+      operationId: successorId,
+      operator: "operator-two",
+      reason: "merge the second fork",
+      event: { ...frozen, operationId: successorId, parents: secondHeads },
+    });
+    const successorAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, successorId, forkObservationFor(cache, repairId, secondHeads)),
+    );
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, successorId, successorAttempt, successor.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea5",
+        event: recordedEvent(cache.dbPath, successorId),
+      }),
+    );
+    const completed = await residualCloseExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("residual-remote-close-leaf");
+    expect(await intentPhases(cache.context, "residual-remote-close-leaf")).toEqual(["confirmed"]);
+  }, 30_000);
+
+  test("a partially prepared batch counts only readable confirmations and never claims an unapplied effect", async () => {
+    const cache = await outboxCache("composite-preparation-partial");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const operationId = "residual-remote-preparation-partial";
+    const request = {
+      planId: workflow.planId,
+      operationId,
+      operation: { kind: "residual-add" as const, entries: [residualEntry("partial-a"), residualEntry("partial-b")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    // note: Entry A freezes; in the scope gap before entry B's freeze a competing durable intent
+    // appears at entry B's own operation id, so the batch stops BEHIND a frozen component.
+    let scopes = 0;
+    setRemoteWriteScopeGapForTest(async () => {
+      scopes += 1;
+      if (scopes < 2) return;
+      setRemoteWriteScopeGapForTest(undefined);
+      const entryB = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, operationId), 1);
+      await prepareRemoteIntent(cache.context, {
+        binding: intentBindingFor(cache.commit),
+        event: {
+          version: 1,
+          repoKey: cache.fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId: entryB,
+          parents: [],
+          change: { kind: "issue-create", issueRef: issueRefForOperation(entryB), mstar: completeIssueSubject() },
+        },
+        target: null,
+        expectedHeads: [],
+        executionKey: { ...compositeKeyOf(cache.context, operationId), operationId: entryB },
+        origin: {
+          verb: "residual-add",
+          request: {
+            planId: workflow.planId,
+            // note: A DIFFERENT business request than this batch's entry B, so both attempts meet
+            // the same durable collision instead of replaying the seeded row.
+            input: deriveResidualEntries([residualEntry("partial-b-other")], SELECTED_PROJECT.localProjectId)[0],
+          },
+        },
+      });
+    });
+    const partial = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(partial.code).toBe("collaboration.operation-partial");
+    const entryA = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, operationId), 0);
+    // invariant: Entry A is durable provider work, but an unconfirmed one claims no confirmation.
+    expect(detailsOf(partial)).toMatchObject({
+      phase: "prepared",
+      confirmed_components: [],
+      frozen_components: [entryA],
+    });
+    const unconfirmedRecovery = String(detailsOf(partial).recovery);
+    expect(unconfirmedRecovery).toContain("durable provider work");
+    expect(unconfirmedRecovery).toContain("execution acknowledgement was not applied");
+    expect(unconfirmedRecovery).toContain("readable confirmation");
+    expect(unconfirmedRecovery).not.toContain("Nothing was applied");
+    expect(await intentPhases(cache.context, operationId)).toEqual(["prepared"]);
+
+    // invariant: A confirmed component WITH its readable receipt is named durable work that is
+    // never re-sent, never an operation whose effect was not applied.
+    await confirmIntent(cache, entryA, "77777777-7777-4777-8777-777777777784");
+    const confirmedPartial = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(confirmedPartial.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(confirmedPartial)).toMatchObject({
+      confirmed_components: [`provider:${entryA}`],
+      frozen_components: [entryA],
+    });
+    const confirmedRecovery = String(detailsOf(confirmedPartial).recovery);
+    expect(confirmedRecovery).toContain("never re-sent");
+    expect(confirmedRecovery).toContain("execution acknowledgement was not applied");
+    expect(confirmedRecovery).not.toContain("Nothing was applied");
+
+    // invariant: A `confirmed` state whose receipt cannot be read proves nothing, so the same
+    // refusal stops naming it as a confirmed component.
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      db.prepare("delete from remote_outbox_receipts where operation_id = ? and outcome = 'confirmed'").run(entryA);
+    } finally {
+      db.close();
+    }
+    const unreadable = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(unreadable.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(unreadable)).toMatchObject({ confirmed_components: [] });
+    expect(String(detailsOf(unreadable).recovery)).toContain("readable confirmation");
   }, 30_000);
 
   test("a first-entry deterministic refusal declines its reservation so a corrected same-plan retry proceeds", async () => {

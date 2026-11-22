@@ -2373,8 +2373,9 @@ export function terminalTransitionRefusal(
       requested_disposition: disposition,
       recovery:
         `Inspect the issue with \`mstar issue show --id ${showId}\`. Reopening a terminal issue is a deliberate ` +
-        `change, never a default step: \`mstar issue reopen\` needs --actor project-manager, a non-empty --reason, ` +
-        `and the issue's current revision as --expect.`,
+        `change, never a default step: read the registered inputs with \`mstar issue reopen --help\` or ` +
+        `\`mstar schema IssueReopen\`; the reason is that JSON payload's field, supplied with --payload or --file ` +
+        `alongside --actor project-manager and the issue's current revision as --expect.`,
     },
   );
 }

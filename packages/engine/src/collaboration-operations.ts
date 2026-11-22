@@ -243,16 +243,23 @@ function recordedRefusal(operationId: string, cause: DeclineCause | null): Error
   // refusal still names the entry/path/field the first attempt reported.
   // invariant: A decline's own recovery is the actionable one (repair the fork, recover only the
   // missing work); the durable-decline fact is prepended instead of replacing it, so a replayed
-  // refusal never sends the operator at a retry the fenced fork would refuse.
+  // refusal never sends the operator at a retry the fenced fork would refuse. Confirmed components
+  // are DURABLE work — a decline that names them must not claim an effect-free operation; only the
+  // execution acknowledgement stayed unapplied.
   const recovery =
     typeof cause?.details?.recovery === "string"
       ? cause.details.recovery
       : "issue the corrected request under a new operation id";
+  const confirmedComponents = cause?.details?.confirmed_components;
+  const durable = Array.isArray(confirmedComponents) && confirmedComponents.length > 0;
   error.details = {
     ...(cause?.details ?? {}),
     operation_id: operationId,
     phase: "declined",
-    recovery: `This operation id was declined durably and its effect was never applied. ${recovery}`,
+    recovery: durable
+      ? `This operation id was declined durably; the confirmed components named here are durable and are never re-sent, ` +
+        `while its execution acknowledgement was not applied. ${recovery}`
+      : `This operation id was declined durably and its effect was never applied. ${recovery}`,
   };
   return error;
 }
@@ -959,7 +966,8 @@ function partialRefusal(input: {
 /**
  * note: The refusal of a MULTI-ENTRY composite whose provider preparation stopped part-way. Each
  * earlier entry is already durable, so the refusal names them: reporting "nothing was frozen" would
- * strand them and invite a duplicate identity.
+ * strand them and invite a duplicate identity. Only a confirmation whose receipt is readable counts
+ * as provider work, and the durable intents are never described as an unapplied effect.
  */
 export function remoteCompositePreparationPartial(
   intent: CompositeIntent,
@@ -967,16 +975,21 @@ export function remoteCompositePreparationPartial(
   cause: unknown,
 ): ExecutionError {
   const pending = frozen[frozen.length - 1];
+  const confirmed = frozen.filter((entry) => entry.state === "confirmed" && entry.confirmed !== null);
   return partialRefusal({
     intent,
     phase: "prepared",
-    confirmed: frozen.filter((entry) => entry.state === "confirmed").map((entry) => `provider:${entry.operationId}`),
+    confirmed: confirmed.map((entry) => `provider:${entry.operationId}`),
     frozen: frozen.map((entry) => entry.operationId),
     cause,
     recovery:
-      `The provider intents named in frozen_components are durable and are reused when this SAME verb is reissued with ` +
-      `the SAME --operation id${pending === undefined ? "" : `; inspect ${pending.operationId} with \`outbox-show\``}. ` +
-      `Nothing was applied.`,
+      `The provider intents named in frozen_components are durable provider work, not a local effect: they are reused ` +
+      `when this SAME verb is reissued with the SAME --operation id` +
+      `${pending === undefined ? "" : `; inspect ${pending.operationId} with \`outbox-show\``}, and the execution ` +
+      `acknowledgement was not applied. ` +
+      (confirmed.length === 0
+        ? `No provider component holds a readable confirmation yet.`
+        : `The confirmed components above are never re-sent; recover only the entries that did not freeze.`),
   });
 }
 
@@ -1026,9 +1039,9 @@ function derivedOperationUuid(material: string): string {
 /**
  * note: How one provider intent the composite froze is settled beyond its own row: a confirmed
  * repair reached through the live `resolved_by` chain, a recorded abandonment that will never
- * produce an effect (naming the fork it withdrew from), or the chain's LIVE leaf — an enqueued or
- * uncertain replacement the operator must finish. `null` means the intent itself is the live row
- * (its own refusal names it) or its settlement is unreadable.
+ * produce an effect (naming the fork it withdrew from), or the chain's LIVE leaf — an enqueued,
+ * uncertain or still-unresolved-conflict replacement the operator must finish. `null` means the
+ * intent itself is the live row (its own refusal names it) or its settlement is unreadable.
  */
 type RemoteSettlement =
   | { kind: "confirmed"; repair: RemoteIntentRead }
@@ -1057,7 +1070,12 @@ async function remoteSettlementOf(context: StoreContext, operationId: string): P
       // itself is reported by its own state.
       return cursor === operationId ? null : { kind: "live", intent: read };
     }
-    if (read.resolvedBy === null) return null;
+    if (read.resolvedBy === null) {
+      // invariant: The chain's LAST leaf can itself be an unresolved conflict. That leaf — not the
+      // ancestor whose `resolved_by` already links to it — is the fork a reviewed replacement must
+      // address, so it is the entry's live work instead of an unreadable settlement.
+      return cursor === operationId ? null : { kind: "live", intent: read };
+    }
     fork = cursor;
     cursor = read.resolvedBy;
   }
@@ -1082,7 +1100,12 @@ function abandonedRemoteCause(
     .map((entry) => `provider:${entry.operationId}${entry.confirmed === null ? "" : ` (issue ${entry.confirmed.identity.issueId})`}`)
     .join(", ");
   const forks = [...new Set(abandoned.map((entry) => entry.fork).filter((id): id is string => id !== null))];
-  const retry = "reissue the verb under a new operation id";
+  // invariant: A mixed decline names the request that can finish the batch: confirmed components are
+  // durable, so only the entries that did not settle belong in the new request.
+  const retry =
+    settled === ""
+      ? "reissue the verb under a new operation id"
+      : "issue a new request under a new operation id containing ONLY the entries that did not settle";
   // invariant: A withdrawn repair does not reopen its fork: the conflicted intent still blocks every
   // later send with its own base check, so the recovery records a NEW reviewed replacement of that
   // fork (dispatched with its fork observation) before the retry.
@@ -1146,6 +1169,19 @@ function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undef
     );
   }
   if (leaf !== undefined) {
+    if (leaf.state === "conflict") {
+      // invariant: The live leaf is itself an unresolved conflict, so the original already links to
+      // it: a second `outbox-resolve` of the original is refused. The leaf's OWN fork takes the
+      // reviewed successor.
+      return (
+        `The conflicted intent ${entry.operationId} is taken over by ${leaf.operationId}, which is itself an unresolved ` +
+        `conflict: record a reviewed replacement of THAT fork with \`mstar store collaboration remote outbox-resolve ` +
+        `--harness <abs> --operation ${leaf.operationId} --input <file|->\`, dispatch it with its fork observation ` +
+        `(\`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->\`), ` +
+        `record its result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, ` +
+        `then reissue this SAME verb with the SAME --operation id once it confirms.`
+      );
+    }
     return leaf.state === "unconfirmed"
       ? `The conflicted intent ${entry.operationId} is taken over by resolution ${leaf.operationId}, whose send is ` +
           `uncertain: reconcile that attempt with \`mstar store collaboration remote outbox-reconcile --harness <abs> ` +

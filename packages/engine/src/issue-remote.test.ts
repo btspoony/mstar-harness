@@ -748,10 +748,14 @@ test("a terminal refusal addressed by provider id names an executable inspect co
   const shown = await showIssue(fixture.context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
   // note: The marked subject's provider id surfaces as the detail's externalId either way.
   expect(JSON.stringify(shown)).toContain(REMOTE_IDS.markedIssueId);
-  // invariant: Reopening is never the default suggestion: the recovery states the deliberate
-  // inputs a reopen needs instead of pointing at reopen as the next step.
+  // invariant: Reopening is never the default suggestion: the recovery names the deliberate
+  // inputs a reopen requires through the command's OWN registered contract (its JSON
+  // `IssueReopen` payload), never a flag the command does not accept.
   expect(recovery).toContain("mstar issue reopen");
-  expect(recovery).toContain("--reason");
+  expect(recovery).toContain("mstar issue reopen --help");
+  expect(recovery).toContain("mstar schema IssueReopen");
+  expect(recovery).toContain("--payload");
+  expect(recovery).not.toContain("--reason");
   expect(outboxRows(fixture.context)).toHaveLength(0);
 });
 
