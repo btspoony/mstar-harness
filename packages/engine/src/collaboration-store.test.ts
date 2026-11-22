@@ -73,16 +73,34 @@ import {
   type RemoteSnapshot,
   type ScopeCheck,
 } from "./collaboration-remote.js";
-import { MIGRATIONS, SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, openStore, type StoreContext } from "./store-db.js";
+import { MIGRATIONS, SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import {
+  remoteCompositeEntryOperationId,
   remoteCompositeOperationId,
   reserveCompositeIntent,
   runCollaborationComposite,
   type CompositeIntent,
 } from "./collaboration-operations.js";
-import { readExecutionState, withExecutionTransaction } from "./execution-store.js";
-import { captureIssue, closeIssue, moveIssue } from "./issue.js";
-import { addMilestone } from "./milestone-store.js";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  readExecutionPlan,
+  readExecutionState,
+  withExecutionTransaction,
+  type ExecutionCaller,
+  type ExecutionSessionRef,
+  type ExecutionToken,
+} from "./execution-store.js";
+import { residualAddExecutionPlan, residualCloseExecutionPlan } from "./execution-coordination.js";
+import { commitExecutionRegistration } from "./execution-registration.js";
+import { importExecutionMinimal } from "./execution-minimal-import.js";
+import type { WorkflowEntry } from "./status.js";
+import type { ResidualInput } from "./coordination.js";
+import type { WorkflowSnapshot } from "./workflow.js";
+import { assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
+import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
+import { replaceRoadmapAuthority } from "./roadmap-store.js";
+import { registerCatalogEntity } from "./catalog.js";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
 
@@ -3423,7 +3441,7 @@ describe("remote observation cache", () => {
       entry.mutate(location.dbPath);
       await expect(readRemoteStatus(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
     }
-  });
+  }, 30_000);
 
   test("an ineffective unique index or a split foreign key refuses admission", async () => {
     // note: Same columns, no uniqueness at all: only the declared predicate can tell them apart.
@@ -4575,6 +4593,15 @@ function confirmedJournal(overrides: Record<string, unknown> = {}): Record<strin
   };
 }
 
+/** note: The competing immutable journal records behind one fork, bound to the journal anchor. */
+function forkRecords(fixture: { repoKey: string }): Array<Record<string, unknown>> {
+  return ["00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902"].map((operationId, index) => ({
+    identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+    recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4",
+    event: { ...journalEvent(fixture, operationId), parents: ["8".repeat(64)] },
+  }));
+}
+
 function observationCompleteness(dbPath: string): string {
   const db = new DatabaseSync(dbPath);
   try {
@@ -4745,7 +4772,7 @@ describe("remote outbox lifecycle", () => {
         kind: "conflict",
         expectedHeads: [OBSERVED_PROJECT_HEAD],
         observedHeads: fork,
-        observedRecords: [],
+        observedRecords: forkRecords(forked.fixture),
       }),
     );
     expect(conflictedRead.state).toBe("conflict");
@@ -4799,7 +4826,34 @@ describe("remote outbox lifecycle", () => {
     await expect(dispatchRemoteIntent(forked.context, resolution)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
     });
-  });
+
+    // invariant: An unresolved fork cannot yield a COMPLETE observation, yet the reviewed
+    // resolution still dispatches: its base is the complete fork evidence it cites.
+    const forkCheck = positiveCheck();
+    await ingestRemoteObservation(
+      forked.context,
+      observation(forkCheck, {
+        selectorCommit: forked.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: { ...completeSnapshot(forkCheck), project: { ...completeSnapshot(forkCheck).project, head: fork } },
+      }),
+    );
+    const dispatched = await dispatchRemoteIntent(forked.context, resolution);
+    expect(dispatched.kind).toBe("permit");
+    // invariant: The original conflict stays conflicted; only the resolution advances.
+    expect((await readRemoteIntent(forked.context, conflicted)).state).toBe("conflict");
+    const confirmed = await recordRemoteReceipt(
+      forked.context,
+      receiptInput(forked.commit, resolution, attemptOf(dispatched), (await readRemoteIntent(forked.context, resolution)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5",
+        event: resolutionEvent,
+      }),
+    );
+    expect(confirmed.state).toBe("confirmed");
+  }, 30_000);
 
   test("an explicit abandonment is the only path for an unsent intent", async () => {
     const cache = await outboxCache("outbox-abandon");
@@ -4948,7 +5002,7 @@ describe("remote outbox lifecycle", () => {
         FORGED_ISSUE_REF,
         "resolved",
         { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
-        { operationId: "00000000-0000-4000-8000-000000000502", actor },
+        { operationId: "00000000-0000-4000-8000-000000000502", actor, expectedRevision: 1 },
       ),
     );
     expect(closed.code).toBe("remote.effect-pending");
@@ -5006,5 +5060,946 @@ describe("remote outbox lifecycle", () => {
       ["issue-replace", MSTAR_ISSUE],
       ["project-replace", JOURNAL_ANCHOR],
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Task 2 review fixes: receipt identity, fork recovery, inspection scope,
+// domain checks before freezing, and the confirmed business result.
+// ---------------------------------------------------------------------------
+
+/** note: One capture request the fixture accepts, varying only by title when a case needs another. */
+function fixtureCapture(title = "A captured finding"): Record<string, unknown> {
+  return {
+    projectId: SELECTED_PROJECT.localProjectId,
+    title,
+    kind: "bug",
+    severity: "high",
+    impact: "remote writes are not durable",
+    acceptance: "a captured finding is one durable intent",
+    sourceIdentity: "qc/review.md",
+    rootCauseKey: "missing-guard",
+    acceptanceKey: "guard-present",
+    occurrenceKey: "run-1",
+    sourceKind: "qc",
+    location: "packages/engine/src/issue.ts:1",
+    observedBehavior: "the write refused",
+    evidence: ["stack: TypeError"],
+    discoveredAt: "2026-11-20T00:00:00.000Z",
+  };
+}
+
+/** note: The frozen request of one recorded operation, as the cache stores it. */
+function frozenOperation(dbPath: string, operationId: string): Record<string, unknown> {
+  const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
+  if (row === undefined) throw new Error(`operation ${operationId} is not recorded`);
+  return JSON.parse(row.request_json) as Record<string, unknown>;
+}
+
+/** note: Re-observe the fixture's whole project after a confirmed effect invalidated its base. */
+async function reobserve(cache: { context: StoreContext; commit: string }, expectRevision: number): Promise<void> {
+  await ingestRemoteObservation(
+    cache.context,
+    observation(positiveCheck(), { selectorCommit: cache.commit, generation: 3, expectRevision }),
+  );
+}
+
+/** note: An ordinary write's outbox intent is addressed by its own operation id. */
+function outboxIdFor(dbPath: string, operationId: string): string {
+  const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
+  if (row === undefined) throw new Error(`no outbox intent is recorded for operation ${operationId}`);
+  return row.operation_id;
+}
+
+/** note: The outbox state and evidence of one operation. */
+function outboxStateOf(dbPath: string, operationId: string): string {
+  const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
+  if (row === undefined) throw new Error(`operation ${operationId} is not recorded`);
+  return row.state;
+}
+
+/** note: Rewrite the binding's own verification facts, as an expired or revoked check would. */
+function rewriteVerification(dbPath: string, patch: { verifiedAt?: string; outcome?: Record<string, unknown> }): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select verification_json from remote_bindings where generation = 3").get() as {
+      verification_json: string;
+    };
+    const check = JSON.parse(row.verification_json) as Record<string, unknown>;
+    if (patch.outcome !== undefined) check.outcome = patch.outcome;
+    if (patch.verifiedAt !== undefined) check.checkedAt = patch.verifiedAt;
+    db.prepare("update remote_bindings set verification_json = ?, verified_at = ? where generation = 3").run(
+      JSON.stringify(check),
+      patch.verifiedAt ?? String(check.checkedAt),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+describe("remote outbox review fixes", () => {
+  test("an operation id replays only its identical request, target and execution key", async () => {
+    const cache = await outboxCache("outbox-replay-identity");
+    const project = SELECTED_PROJECT.localProjectId;
+    const duplicateId = "00000000-0000-4000-8000-000000000601";
+    const first = await refusalOf(() =>
+      addMilestone(cache.context, { projectId: project, name: "First delivery", target: null, ordinal: 1 }, {
+        operationId: duplicateId,
+        expectedStoreRevision: 0,
+      }),
+    );
+    expect(first.code).toBe("remote.effect-pending");
+
+    // invariant: Another verb under the same operation id never replays the milestone request.
+    await expect(
+      replaceRoadmapAuthority(
+        cache.context,
+        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n` },
+        { operationId: duplicateId },
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: A changed payload under the same id never replays the accepted request.
+    await expect(
+      addMilestone(cache.context, { projectId: project, name: "Another delivery", target: null, ordinal: 1 }, {
+        operationId: duplicateId,
+        expectedStoreRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: The identical request still replays its durable state.
+    const replay = await refusalOf(() =>
+      addMilestone(cache.context, { projectId: project, name: "First delivery", target: null, ordinal: 1 }, {
+        operationId: duplicateId,
+        expectedStoreRevision: 0,
+      }),
+    );
+    expect(replay.code).toBe("remote.effect-pending");
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+
+    // invariant: A replacement addressed by another provider id never replays this target.
+    const closeId = "00000000-0000-4000-8000-000000000602";
+    const closed = await refusalOf(() =>
+      closeIssue(
+        cache.context,
+        MSTAR_ISSUE,
+        "resolved",
+        { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        { operationId: closeId, actor: "project-manager", expectedRevision: 1 },
+      ),
+    );
+    expect(closed.code).toBe("remote.effect-pending");
+    await expect(
+      closeIssue(
+        cache.context,
+        PROVIDER_ONLY_ISSUE,
+        "resolved",
+        { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        { operationId: closeId, actor: "project-manager", expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    expect(outboxRows(cache.dbPath)).toHaveLength(2);
+  });
+
+  test("a create is confirmed by its new record and its replay reports the result", async () => {
+    const cache = await outboxCache("outbox-create-confirm");
+    const operationId = "00000000-0000-4000-8000-000000000611";
+    const capture = fixtureCapture() as never;
+    const queued = await refusalOf(() => captureIssue(cache.context, capture, { operationId, actor: "project-manager" }));
+    expect(queued.code).toBe("remote.effect-pending");
+    const permit = await dispatchRemoteIntent(cache.context, operationId);
+    const attemptId = attemptOf(permit);
+    const frozen = frozenOperation(cache.dbPath, operationId).event as RemoteEvent;
+    const created = "99999999-9999-4999-8999-999999999999";
+    const requestHash = outboxRows(cache.dbPath)[0]!.request_hash;
+
+    // invariant: The journal anchor is never the created issue's identity.
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        receiptInput(cache.commit, operationId, attemptId, requestHash, {
+          kind: "confirmed",
+          identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+          recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8",
+          event: frozen,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+
+    // invariant: The NEW issue identity in the selected scope confirms the exact frozen create.
+    const confirmed = await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, operationId, attemptId, requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: created },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8",
+        event: frozen,
+      }),
+    );
+    expect(confirmed.state).toBe("confirmed");
+    expect(confirmed.confirmed?.identity.issueId).toBe(created);
+
+    // invariant: The identical business replay reports its recorded result, not another refusal.
+    const replay = await captureIssue(cache.context, capture, { operationId, actor: "project-manager" });
+    expect(replay).toMatchObject({ issueId: created, revision: 1, storeRevision: 0, created: true });
+    // invariant: A different capture under that id is still a conflict, never the recorded result.
+    await expect(
+      captureIssue(cache.context, fixtureCapture("Another finding") as never, { operationId, actor: "project-manager" }),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+  });
+
+  test("a reconciliation never proves an attempt unsent and a conflict never becomes confirmed", async () => {
+    const cache = await outboxCache("outbox-unsent");
+    const operationId = "00000000-0000-4000-8000-000000000621";
+    const intent = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
+
+    // invariant: A lookup cannot prove nothing was sent; only the host's own receipt can.
+    await expect(
+      reconcileRemoteIntent(
+        cache.context,
+        receiptInput(cache.commit, operationId, attemptId, intent.requestHash, { kind: "not-sent", code: "pre-send" }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
+    await expect(abandonRemoteIntent(cache.context, { operationId, reason: "assume unsent" })).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+    });
+    const unsent = await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, operationId, attemptId, intent.requestHash, { kind: "not-sent", code: "pre-send" }),
+    );
+    expect(unsent.state).toBe("unconfirmed");
+    expect((await abandonRemoteIntent(cache.context, { operationId, reason: "host refused before send" })).state).toBe(
+      "abandoned",
+    );
+
+    // note: A complete fork is the only conflict evidence that is recorded at all.
+    const forked = await outboxCache("outbox-conflict-terminal");
+    const conflictedId = "00000000-0000-4000-8000-000000000622";
+    const conflicted = await prepareRemoteIntent(forked.context, issueIntent(forked.fixture, forked.commit, conflictedId));
+    const forkedAttempt = attemptOf(await dispatchRemoteIntent(forked.context, conflictedId));
+    const heads = ["6".repeat(64), "7".repeat(64)].sort();
+    const records = heads.map((_, index) => ({
+      identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+      recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea",
+      event: {
+        ...(frozenOperation(forked.dbPath, conflictedId).event as RemoteEvent),
+        operationId: index === 0 ? "00000000-0000-4000-8000-0000000009a1" : "00000000-0000-4000-8000-0000000009a2",
+        parents: ["8".repeat(64)],
+      },
+    }));
+    const conflictInput = (outcome: Record<string, unknown>): Record<string, unknown> =>
+      receiptInput(forked.commit, conflictedId, forkedAttempt, conflicted.requestHash, outcome);
+    // invariant: Partial, foreign and duplicated evidence is refused instead of stored.
+    await expect(
+      recordRemoteReceipt(forked.context, conflictInput({ kind: "conflict", expectedHeads: [OBSERVED_ISSUE_HEAD], observedHeads: heads, observedRecords: [] })),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    await expect(
+      recordRemoteReceipt(
+        forked.context,
+        conflictInput({
+          kind: "conflict",
+          expectedHeads: [OBSERVED_ISSUE_HEAD],
+          observedHeads: heads,
+          observedRecords: [records[0]!, { ...records[1]!, identity: { ...providerScope(), issueId: JOURNAL_ANCHOR } }],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    await expect(
+      recordRemoteReceipt(
+        forked.context,
+        conflictInput({ kind: "conflict", expectedHeads: [OBSERVED_ISSUE_HEAD], observedHeads: heads, observedRecords: [records[0]!, records[0]!] }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    const recorded = await recordRemoteReceipt(
+      forked.context,
+      conflictInput({ kind: "conflict", expectedHeads: [OBSERVED_ISSUE_HEAD], observedHeads: heads, observedRecords: records }),
+    );
+    expect(recorded.state).toBe("conflict");
+    // invariant: The recorded conflict is terminal: a later exact confirmation never rewrites it.
+    await expect(
+      recordRemoteReceipt(
+        forked.context,
+        conflictInput({
+          kind: "confirmed",
+          identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+          recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeeb",
+          event: frozenOperation(forked.dbPath, conflictedId).event as RemoteEvent,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
+    expect(outboxStateOf(forked.dbPath, conflictedId)).toBe("conflict");
+  });
+
+  test("expired or denied read access discloses only intent metadata", async () => {
+    const cache = await outboxCache("outbox-metadata");
+    const operationId = "00000000-0000-4000-8000-000000000631";
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+    const full = await readRemoteIntent(cache.context, operationId);
+    expect(full).toMatchObject({ disclosure: "full", target: JOURNAL_ANCHOR });
+    expect(full.event).not.toBeNull();
+
+    // invariant: An expired check withholds the frozen request but never the durable state.
+    rewriteVerification(cache.dbPath, { verifiedAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+    const expired = await readRemoteIntent(cache.context, operationId);
+    expect(expired).toMatchObject({
+      disclosure: "metadata",
+      state: "enqueued",
+      requestHash: full.requestHash,
+      target: null,
+      event: null,
+      expectedHeads: [],
+      receipts: [],
+    });
+    expect(expired.binding.selectorCommit).toBe(cache.commit);
+
+    // invariant: A denied check discloses the same metadata and refuses a business replay.
+    rewriteVerification(cache.dbPath, {
+      verifiedAt: new Date().toISOString(),
+      outcome: { kind: "denied" },
+    });
+    expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({ disclosure: "metadata", event: null });
+    await expect(
+      captureIssue(cache.context, fixtureCapture() as never, { operationId: "00000000-0000-4000-8000-000000000632", actor: "project-manager" }),
+    ).rejects.toMatchObject({ code: "remote.unavailable" });
+  });
+
+  test("a draining selector serves reads and reconciliation under its previous binding", async () => {
+    const cache = await outboxCache("outbox-draining");
+    const operationId = "00000000-0000-4000-8000-000000000641";
+    const intent = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
+
+    cache.fixture.publish(
+      cache.fixture.payload({
+        generation: 4,
+        phase: "draining",
+        previous: { selectorCommit: cache.commit, generation: 3, mode: "remote" },
+        cutover: {
+          operator: "operator-one",
+          reviewedAt: "2026-11-21T00:00:00.000Z",
+          sourceFenced: false,
+          pendingOperationIds: [operationId],
+          verifiedTargetDigest: "a".repeat(64),
+        },
+      }),
+    );
+
+    // invariant: The pinned previous generation stays inspectable while the selector drains.
+    const read = await readRemoteIntent(cache.context, operationId);
+    expect(read).toMatchObject({ generation: 3, disclosure: "full", state: "unconfirmed", attemptId });
+    expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).generation).toBe(3);
+    // invariant: Recovery under the previous binding is admitted; a new prepare and a new
+    // receipt (a send settlement, not recovery) are not.
+    const reconciled = await reconcileRemoteIntent(
+      cache.context,
+      receiptInput(cache.commit, operationId, attemptId, intent.requestHash, { kind: "unconfirmed", reason: "no-response" }),
+    );
+    expect(reconciled.state).toBe("unconfirmed");
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        receiptInput(cache.commit, operationId, attemptId, intent.requestHash, { kind: "unconfirmed", reason: "ambiguous" }),
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(
+      prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, "00000000-0000-4000-8000-000000000642")),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+  });
+
+  test("a remote close enforces the observed revision and the open transition", async () => {
+    const cache = await outboxCache("outbox-close-checks");
+    const actor = "project-manager";
+    // invariant: A missing or stale reviewed revision never freezes against the current subject.
+    await expect(
+      closeIssue(
+        cache.context,
+        MSTAR_ISSUE,
+        "resolved",
+        { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        { operationId: "00000000-0000-4000-8000-000000000651", actor },
+      ),
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    await expect(
+      closeIssue(
+        cache.context,
+        MSTAR_ISSUE,
+        "resolved",
+        { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        { operationId: "00000000-0000-4000-8000-000000000652", actor, expectedRevision: 7 },
+      ),
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    // invariant: A referenced canonical issue must be observed, and never the closing issue itself.
+    await expect(
+      closeIssue(
+        cache.context,
+        MSTAR_ISSUE,
+        "duplicate",
+        { reason: "same finding", references: ["review-fixture"], canonicalIssueId: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
+        { operationId: "00000000-0000-4000-8000-000000000653", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "issue.not-found" });
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  });
+
+  test("milestone gates count the scoped snapshot and enforce referenced milestones", async () => {
+    const cache = await outboxCache("outbox-milestone-checks");
+    const project = SELECTED_PROJECT.localProjectId;
+    // note: The snapshot's issues are scoped to this project, so a milestone's counts must not
+    // compare the provider project id with the local project key (they differ here).
+    const observed = completeSnapshot();
+    const withMilestoneIssue = {
+      ...observed,
+      issues: observed.issues.map((issue) =>
+        issue.mstar === null
+          ? issue
+          : { ...issue, mstar: { ...issue.mstar, fields: { ...issue.mstar.fields, milestoneId: "milestone-1" } } },
+      ),
+    };
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), { selectorCommit: cache.commit, generation: 3, expectRevision: 1, snapshot: withMilestoneIssue }),
+    );
+    await expect(
+      updateMilestone(
+        cache.context,
+        project,
+        "milestone-1",
+        { status: "delivered" },
+        { operationId: "00000000-0000-4000-8000-000000000661", expectedStoreRevision: 0 },
+      ),
+    ).rejects.toMatchObject({ code: "milestone.open-issues" });
+    await expect(
+      removeMilestone(cache.context, project, "milestone-1", {
+        operationId: "00000000-0000-4000-8000-000000000662",
+        expectedStoreRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "milestone.not-empty" });
+    // invariant: Assigning an unknown milestone refuses before anything is frozen.
+    await expect(
+      assignIssueMilestone(
+        cache.context,
+        MSTAR_ISSUE,
+        { projectId: project, milestoneId: "milestone-missing", reason: "assign it" },
+        { operationId: "00000000-0000-4000-8000-000000000663", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: 0 },
+      ),
+    ).rejects.toMatchObject({ code: "milestone.not-found" });
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  });
+
+  test("a roadmap write refuses a stale reviewed revision", async () => {
+    const cache = await outboxCache("outbox-roadmap-revision");
+    const project = SELECTED_PROJECT.localProjectId;
+    await expect(
+      replaceRoadmapAuthority(
+        cache.context,
+        { projectId: project, expectedProjectRevision: 9, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
+        { operationId: "00000000-0000-4000-8000-000000000671" },
+      ),
+    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
+    await expect(
+      replaceRoadmapAuthority(
+        cache.context,
+        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 7, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
+        { operationId: "00000000-0000-4000-8000-000000000672" },
+      ),
+    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+    // invariant: The reviewed basis still admits the write, and its confirmation is reported.
+    await expect(
+      replaceRoadmapAuthority(
+        cache.context,
+        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
+        { operationId: "00000000-0000-4000-8000-000000000673" },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+  });
+
+  test("an unrelated conflict keeps blocking after a reviewed resolution", async () => {
+    const cache = await outboxCache("outbox-unrelated-conflict");
+    const conflictedId = "00000000-0000-4000-8000-000000000681";
+    const conflicted = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, conflictedId));
+    const heads = ["6".repeat(64), "7".repeat(64)].sort();
+    const records = heads.map((_, index) => ({
+      identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+      recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeec" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeed",
+      event: {
+        ...journalEvent(cache.fixture, index === 0 ? "00000000-0000-4000-8000-0000000009b1" : "00000000-0000-4000-8000-0000000009b2"),
+        parents: ["8".repeat(64)],
+      },
+    }));
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, conflictedId, attemptId, conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: heads,
+        observedRecords: records,
+      }),
+    );
+    const resolutionId = "00000000-0000-4000-8000-000000000682";
+    const resolutionEvent = {
+      ...journalEvent(cache.fixture, resolutionId, heads),
+    };
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    // note: A SECOND, unrelated conflict of the same binding still blocks the resolution: only
+    // the NAMED fork is exempt. The sibling is forced into the durable conflict state here
+    // because serialized sends cannot otherwise reach two conflicts in one binding.
+    const otherId = "00000000-0000-4000-8000-000000000683";
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, otherId));
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      db.prepare("update remote_outbox set state = 'conflict' where operation_id = ?").run(otherId);
+    } finally {
+      db.close();
+    }
+    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      details: expect.objectContaining({ ahead: otherId }),
+    });
+  });
+});
+
+/** note: One execution workflow in the remote fixture's own harness root, bound to one coordinator. */
+async function remoteExecutionWorkflow(cache: {
+  context: StoreContext;
+}): Promise<{
+  caller: ExecutionCaller;
+  planId: string;
+  planToken: ExecutionToken;
+  session: ExecutionSessionRef;
+  storeId: string;
+  epoch: number;
+}> {
+  (await initializeStore(cache.context)).close();
+  const state = await readExecutionState(cache.context);
+  const caller: ExecutionCaller = { sessionId: "host-remote-coord", role: "coordinator", workflowId: "wf-remote" };
+  const created = await createExecutionWorkflow({ harnessDir: cache.context.harnessDir, caller }, {
+    entry: { id: "wf-remote", type: "plan", started_at: "2026-11-20T00:00:00.000Z", dir: "workflows/wf-remote" } as WorkflowEntry,
+    snapshot: {
+      schema_version: 1,
+      id: "wf-remote",
+      type: "plan",
+      status: "running",
+      started_at: "2026-11-20T00:00:00.000Z",
+      updated_at: "2026-11-20T00:00:00.000Z",
+      plans: [{ id: "p-remote", title: "Remote plan", file: "plans/p-remote.md", status: "Todo" }],
+      delivery_kind: "development",
+      branch: { source: "feature/wf-remote", target: "main" },
+    } as unknown as WorkflowSnapshot,
+    expected: state.token,
+    operationId: "create-wf-remote",
+  });
+  const [workflow] = created.data.workflows;
+  const bound = await bindExecutionSession({ harnessDir: cache.context.harnessDir, caller }, {
+    workflowId: "wf-remote",
+    expected: workflow.workflowToken,
+    operationId: "bind-wf-remote",
+  } as Parameters<typeof bindExecutionSession>[1]);
+  const plan = await readExecutionPlan({ harnessDir: cache.context.harnessDir, caller }, bound.data, "p-remote");
+  return {
+    caller,
+    planId: "p-remote",
+    planToken: plan.token,
+    session: bound.data,
+    storeId: created.storeId,
+    epoch: created.epoch,
+  };
+}
+
+/** note: The complete snapshot whose marked issue carries one scoped plan link. */
+function linkedSnapshot(planId: string): RemoteSnapshot {
+  const snapshot = completeSnapshot();
+  return {
+    ...snapshot,
+    issues: snapshot.issues.map((issue) =>
+      issue.mstar === null
+        ? issue
+        : {
+            ...issue,
+            mstar: {
+              ...issue.mstar,
+              provenance: [
+                ...issue.mstar.provenance,
+                {
+                  eventId: "55555555-5555-4555-8555-555555555555",
+                  kind: "plan",
+                  target: planId,
+                  sourceHash: "5".repeat(64),
+                  origin: "scoped",
+                  legacyProject: null,
+                  legacyBucket: null,
+                  legacyEntryId: null,
+                  legacyRecord: null,
+                  importedAt: null,
+                },
+              ],
+            },
+          },
+    ),
+  };
+}
+
+/** note: Point one plan row's project bucket at a selected project, as a prepared plan carries it. */
+function setPlanProjectBucket(context: StoreContext, planId: string, projectId: string): void {
+  const db = new DatabaseSync(storeDbPath(context));
+  try {
+    const row = db.prepare("select state_json from execution_plans where plan_id = ?").get(planId) as {
+      state_json: string;
+    };
+    const state = JSON.parse(row.state_json) as { metadata?: Record<string, unknown> };
+    state.metadata = { ...(state.metadata ?? {}), project_id: projectId };
+    db.prepare("update execution_plans set state_json = ? where plan_id = ?").run(JSON.stringify(state), planId);
+  } finally {
+    db.close();
+  }
+}
+
+/** note: A residual entry the remote fixture accepts. */
+function residualEntry(occurrenceKey: string): ResidualInput {
+  return {
+    title: `A residual ${occurrenceKey}`,
+    kind: "bug",
+    severity: "high",
+    impact: "the residual path was refused",
+    acceptance: "the remote composite freezes one intent",
+    sourceIdentity: `review/${occurrenceKey}.md`,
+    rootCauseKey: "remote-composite",
+    acceptanceKey: "frozen-intent",
+    occurrenceKey,
+    sourceKind: "qc",
+    location: "packages/engine/src/execution-coordination.ts:1",
+    observedBehavior: "the verb refused before reserving",
+    evidence: ["stack: StoreError"],
+    discoveredAt: "2026-11-20T00:00:00.000Z",
+  };
+}
+
+/** note: The reservation key the execution store recorded for one composite operation. */
+function compositeKeyOf(context: StoreContext, operationId: string): {
+  executionStoreId: string;
+  executionEpoch: number;
+  operationId: string;
+} {
+  const handle = new DatabaseSync(storeDbPath(context));
+  try {
+    const row = handle
+      .prepare(
+        "select execution_store_id, execution_epoch from execution_collaboration_intents where operation_id = ?",
+      )
+      .get(operationId) as { execution_store_id?: unknown; execution_epoch?: unknown } | undefined;
+    if (typeof row?.execution_store_id !== "string" || typeof row?.execution_epoch !== "number") {
+      throw new Error(`composite ${operationId} holds no reservation`);
+    }
+    return { executionStoreId: row.execution_store_id, executionEpoch: row.execution_epoch, operationId };
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The frozen event of one recorded outbox operation. */
+function recordedEvent(dbPath: string, operationId: string): RemoteEvent {
+  return frozenOperation(dbPath, operationId).event as RemoteEvent;
+}
+
+/** note: The frozen project document of one recorded project event. */
+function recordedProject(dbPath: string, operationId: string): Record<string, unknown> {
+  const change = recordedEvent(dbPath, operationId).change;
+  if (change.kind !== "project-replace") throw new Error(`operation ${operationId} is not a project event`);
+  return change.project;
+}
+
+/** note: Confirm one dispatched intent against the exact frozen effect it carries. */
+async function confirmIntent(
+  cache: { context: StoreContext; commit: string; dbPath: string },
+  operationId: string,
+  identityIssueId: string,
+): Promise<void> {
+  const permit = await dispatchRemoteIntent(cache.context, operationId);
+  const attemptId = attemptOf(permit);
+  const requestHash = outboxRows(cache.dbPath).find((row) => row.operation_id === operationId)!.request_hash;
+  await recordRemoteReceipt(
+    cache.context,
+    receiptInput(cache.commit, operationId, attemptId, requestHash, {
+      kind: "confirmed",
+      identity: { ...providerScope(), issueId: identityIssueId },
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeef",
+      event: recordedEvent(cache.dbPath, operationId),
+    }),
+  );
+}
+
+describe("remote composite flows", () => {
+  test("a remote residual-add freezes one genesis event per entry and finalizes after confirmation", async () => {
+    const cache = await outboxCache("composite-residual-add");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-add",
+      operation: { kind: "residual-add" as const, entries: [residualEntry("remote-1")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+
+    // invariant: A remote residual-add is admitted through the shared reservation frame.
+    const queued = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(queued)).toMatchObject({ phase: "prepared", operation_id: "residual-remote-add" });
+    const outboxId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "residual-remote-add"), 0);
+    expect(outboxStateOf(cache.dbPath, outboxId)).toBe("enqueued");
+    const event = recordedEvent(cache.dbPath, outboxId);
+    expect(event.parents).toEqual([]);
+    expect(event.change.kind).toBe("issue-create");
+    const genesis = event.change as unknown as { mstar: { provenance: unknown } };
+    expect(genesis.mstar.provenance).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "plan", target: workflow.planId, origin: "scoped" })]),
+    );
+    expect(await intentPhases(cache.context, "residual-remote-add")).toEqual(["prepared"]);
+
+    // invariant: An identical replay before confirmation re-serves the reservation, never a second intent.
+    const replay = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(replay.code).toBe("collaboration.operation-partial");
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+
+    // invariant: The confirmed effect then commits ONLY the execution delta.
+    await confirmIntent(cache, outboxId, "77777777-7777-4777-8777-777777777777");
+    const completed = await residualAddExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("residual-remote-add");
+    expect(await intentPhases(cache.context, "residual-remote-add")).toEqual(["confirmed"]);
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+    // invariant: A further replay serves the recorded execution result.
+    const served = await residualAddExecutionPlan(execution, request);
+    expect(served.replayed).toBe(true);
+  });
+
+  test("a remote residual-close checks the plan link and the admitted revision before freezing", async () => {
+    const cache = await outboxCache("composite-residual-close");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-close",
+      operation: {
+        kind: "residual-close" as const,
+        issueId: MSTAR_ISSUE,
+        disposition: "resolved" as const,
+        evidence: { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: 1,
+      },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+
+    // invariant: Only a finding linked to THIS plan is closable remotely, and the refusal keeps
+    // the admitted reservation so the same operation id resumes once the link exists.
+    const unlinked = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(unlinked.code).toBe("collaboration.operation-partial");
+    expect(unlinked.message).toContain("not linked to plan");
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close"));
+    expect(outboxStateOf(cache.dbPath, outboxId)).toBe("enqueued");
+    expect(recordedEvent(cache.dbPath, outboxId).parents).toEqual([OBSERVED_ISSUE_HEAD]);
+    await confirmIntent(cache, outboxId, MSTAR_ISSUE);
+    const completed = await residualCloseExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("residual-remote-close");
+    expect(await intentPhases(cache.context, "residual-remote-close")).toEqual(["confirmed"]);
+
+  });
+
+  test("a remote residual-close refuses a stale admitted issue revision", async () => {
+    const cache = await outboxCache("composite-residual-close-stale");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    // invariant: The admitted revision is re-checked against the OBSERVED subject before freezing.
+    const stale = await refusalOf(() =>
+      residualCloseExecutionPlan(
+        { harnessDir: cache.context.harnessDir, caller: workflow.caller },
+        {
+          planId: workflow.planId,
+          operationId: "residual-remote-close-stale",
+          operation: {
+            kind: "residual-close",
+            issueId: MSTAR_ISSUE,
+            disposition: "resolved",
+            evidence: { reason: "fixed", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+            expectedIssueRevision: 9,
+          },
+          expected: workflow.planToken,
+          session: workflow.session,
+        },
+      ),
+    );
+    expect(stale.code).toBe("collaboration.operation-partial");
+    expect(stale.message).toContain("revision");
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  });
+
+  test("a remote registration publishes its catalog delta into the project journal", async () => {
+    const cache = await outboxCache("composite-registration");
+    (await initializeStore(cache.context)).close();
+    const state = await readExecutionState(cache.context);
+    const caller: ExecutionCaller = { sessionId: "host-remote-registration", role: "coordinator", workflowId: "wf-reg" };
+    const planId = "p-reg";
+    const planFile = join(cache.context.harnessDir, "plans", `${planId}.md`);
+    mkdirSync(dirname(planFile), { recursive: true });
+    writeFileSync(planFile, `# Registered plan\n\n**plan_id:** ${planId}\n`);
+    const request = {
+      operationId: "registration-remote-1",
+      actor: "project-manager",
+      expectedCatalogRevision: 0,
+      workflow: {
+        kind: "plan" as const,
+        workflowId: "wf-reg",
+        options: {
+          harnessDir: cache.context.harnessDir,
+          plan: { id: planId, title: "Registered plan", file: `plans/${planId}.md` },
+          deliveryKind: "development" as const,
+          branchWork: "feature/wf-reg",
+          branchTarget: "main",
+          project: SELECTED_PROJECT.localProjectId,
+          startedAt: "2026-11-20T00:00:00.000Z",
+        },
+      },
+      delta: {
+        entities: [{ kind: "plan" as const, id: planId, title: "Registered plan", rootKind: "plans" as const, relativePath: `${planId}.md` }],
+        binding: { catalogKind: "plan" as const, catalogId: planId },
+      },
+      expected: state.token,
+    };
+    const execution = { harnessDir: cache.context.harnessDir, caller };
+
+    // invariant: The reviewed delta is one project-replace intent, not a local catalog write.
+    const queued = await refusalOf(() => commitExecutionRegistration(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(queued)).toMatchObject({ phase: "prepared", operation_id: "registration-remote-1" });
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "registration-remote-1"));
+    expect(frozenOperation(cache.dbPath, outboxId).target).toBe(JOURNAL_ANCHOR);
+    expect(recordedProject(cache.dbPath, outboxId).catalogEntities).toContainEqual(
+      expect.objectContaining({ kind: "plan", id: planId, lifecycle: "active", revision: 1 }),
+    );
+    // note: A second registration of the same document conflicts on the observed duplicate.
+    await expect(commitExecutionRegistration(execution, { ...request, operationId: "registration-remote-2", expected: (await readExecutionState(cache.context)).token })).rejects.toMatchObject({
+      code: "collaboration.operation-partial",
+    });
+
+    await confirmIntent(cache, outboxId, JOURNAL_ANCHOR);
+    const receipt = await commitExecutionRegistration(execution, request);
+    expect(receipt).toMatchObject({ operationId: "registration-remote-1", workflowId: "wf-reg", recovered: false });
+    expect(await intentPhases(cache.context, "registration-remote-1")).toEqual(["confirmed"]);
+  });
+});
+
+describe("remote execution-import flow", () => {
+  test("a remote import finalizes its execution delta with no provider event", async () => {
+    const cache = await outboxCache("composite-import");
+    (await initializeStore(cache.context)).close();
+    const request = { context: cache.context, operator: "operator-one", operationId: "import-remote-1" };
+    // invariant: The import moves execution state only; its remote collaboration half is the
+    // verified active lane, so it reserves, finalizes and records NO provider intent.
+    const result = await importExecutionMinimal(request);
+    expect(result.verdict).toBe("upgraded");
+    expect(result.imported).toBe(0);
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+    expect(await intentPhases(cache.context, "import-remote-1")).toEqual(["confirmed"]);
+    // invariant: A replay serves the recorded result without a second reservation.
+    const replay = await importExecutionMinimal(request);
+    expect(replay).toEqual(result);
+    expect(await intentPhases(cache.context, "import-remote-1")).toEqual(["confirmed"]);
+  });
+});
+
+describe("remote confirmed business results", () => {
+  test("milestone, roadmap and catalog replays report their recorded results", async () => {
+    const cache = await outboxCache("outbox-confirmed-results");
+    const project = SELECTED_PROJECT.localProjectId;
+
+    // note: One milestone add, confirmed, then replayed by its own verb.
+    const milestoneId = "00000000-0000-4000-8000-000000000a11";
+    const milestoneMutation = { operationId: milestoneId, expectedStoreRevision: 0 };
+    await expect(
+      addMilestone(cache.context, { projectId: project, name: "Second delivery", target: null, ordinal: 1 }, milestoneMutation),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+    const milestoneIntent = outboxIdFor(cache.dbPath, milestoneId);
+    await confirmIntent(cache, milestoneIntent, JOURNAL_ANCHOR);
+    const milestone = await addMilestone(
+      cache.context,
+      { projectId: project, name: "Second delivery", target: null, ordinal: 1 },
+      milestoneMutation,
+    );
+    expect(milestone).toMatchObject({ projectId: project, storeRevision: 0, changed: true });
+    expect(milestone.revision).toBe(1);
+
+    // note: A confirmed effect invalidates the read base, so the next write re-observes first.
+    await reobserve(cache, 2);
+
+    // note: One roadmap replacement, confirmed, then replayed by its own verb.
+    const roadmapId = "00000000-0000-4000-8000-000000000a12";
+    const content = `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n`;
+    await expect(
+      replaceRoadmapAuthority(
+        cache.context,
+        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
+        { operationId: roadmapId },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, roadmapId), JOURNAL_ANCHOR);
+    const roadmap = await replaceRoadmapAuthority(
+      cache.context,
+      { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
+      { operationId: roadmapId },
+    );
+    expect(roadmap).toMatchObject({ projectId: project, revision: 3, storeRevision: 0 });
+
+    await reobserve(cache, 4);
+
+    // note: One portable catalog registration, confirmed, then replayed by its own verb.
+    const catalogId = "00000000-0000-4000-8000-000000000a13";
+    const entity = {
+      kind: "document" as const,
+      id: "spec-2",
+      title: "Spec two",
+      documentKind: "spec" as const,
+      rootKind: "specs" as const,
+      relativePath: "specs/spec-2.md",
+    };
+    await expect(
+      registerCatalogEntity(cache.context, entity, { operationId: catalogId, actor: "project-manager", projectId: project }),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, catalogId), JOURNAL_ANCHOR);
+    const registered = await registerCatalogEntity(cache.context, entity, {
+      operationId: catalogId,
+      actor: "project-manager",
+      projectId: project,
+    });
+    expect(registered).toEqual({ kind: "document", id: "spec-2", revision: 1, storeRevision: 0 });
+    expect(outboxRows(cache.dbPath)).toHaveLength(3);
   });
 });

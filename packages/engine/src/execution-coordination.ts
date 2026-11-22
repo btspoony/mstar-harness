@@ -113,8 +113,11 @@ import {
   captureIssueOn,
   closeIssueOn,
   closedRemoteSubject,
+  closedSubjectMatches,
   issueWriteSeat,
   linkIssueScopedOn,
+  residualGenesisMatches,
+  residualGenesisSubject,
   IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
@@ -133,6 +136,7 @@ import {
   assertNoPendingCompositeReservation,
   hasPreparedCompositeIntent,
   noteOutstandingAcknowledgement,
+  remoteCompositeEntryOperationId,
   remoteCompositeOperationId,
   repairCompositeAcknowledgement,
   reserveCompositeIntent,
@@ -1458,17 +1462,6 @@ export async function residualAddExecutionPlan(
   request: ExecutionPlanRequest<ResidualAddOperation>,
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const resolved = resolvePlanOperationRequest(context.caller, request, "residual-add");
-  // invariant: A residual-add composes a capture and a plan link, and the link's base is the head
-  // the CONFIRMED capture publishes: the two cannot be frozen together, so the remote route is the
-  // ordinary capture intent followed by the link once the provider has confirmed the first.
-  if (resolveCollaborationLocation(context).mode === "remote") {
-    throw new StoreError(
-      "collaboration.mode-unavailable",
-      "A residual-add is not an admitted remote composite: it composes a capture with a plan link whose base is the " +
-        "head the confirmed capture publishes, so the two cannot be frozen together. Record the finding with " +
-        "`mstar issue add` (one remote intent), then link the plan after the provider confirms it. Nothing was reserved.",
-    );
-  }
   const operation = resolved.call.operation;
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "entries"], "residual-add operation");
   const entries = operation.entries;
@@ -1548,6 +1541,33 @@ export async function residualAddExecutionPlan(
         }
       }
       return serializeExecutionValue({ planId, issues: captured });
+    },
+    async remote(context, intent) {
+      // invariant: A residual-add's provider effect is one genesis event per entry, each already
+      // carrying its plan link (a genesis document cannot be appended to before it is published, so
+      // the link is part of the frozen effect instead of a second intent). Every entry is frozen
+      // against the SAME complete observation; each is dispatched and confirmed in FIFO order.
+      const at = new Date().toISOString();
+      const planId = address.planId;
+      const intents: RemoteIntent[] = [];
+      for (const [index, input] of derived.entries()) {
+        const operationId = remoteCompositeEntryOperationId(intent.key, index);
+        intents.push(
+          await prepareRemoteIssueWrite(context, {
+            projectId: input.projectId,
+            operationId,
+            kind: "issue-create",
+            executionKey: { ...intent.key, operationId },
+            next: () => residualGenesisSubject(input, planId, at),
+            replay: (event) => event.change.kind === "issue-create" && residualGenesisMatches(event.change.mstar, input, planId),
+          }),
+        );
+      }
+      // note: Each entry is its own immutable intent; the composite is confirmed only when every
+      // one of them is, and the pending one names the phase the operator resumes from.
+      const pending = intents.find((entry) => entry.state !== "confirmed");
+      if (pending !== undefined) return pending;
+      return { ...intents[0]!, state: "confirmed" };
     },
   });
 }
@@ -1647,6 +1667,13 @@ export async function residualCloseExecutionPlan(
             );
           }
           return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
+        },
+        replay: (event) => {
+          const change = event.change;
+          return (
+            change.kind === "issue-replace" &&
+            closedSubjectMatches(change.mstar, operation.disposition, operation.evidence, actor)
+          );
         },
       });
     },

@@ -44,6 +44,7 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import type { RemoteEvent, RemoteIntent } from "./collaboration-remote.js";
 import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -837,11 +838,32 @@ async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T
  * Location facts (root kind, relative path, source hash) are checkout evidence the remote
  * document does not carry; the portable identity, metadata and lifecycle are what it publishes.
  */
+/**
+ * note: The confirmed business result of a remote catalog write: the frozen document is the
+ * recorded effect, so the row's revision comes from it. A remote write owns no local store
+ * revision, so `storeRevision` is 0 exactly as a remote composite's collaboration revision is.
+ */
+function confirmedCatalogReceipt(intent: RemoteIntent, kind: CatalogReceipt["kind"], id: string): CatalogReceipt {
+  const confirmed = intent.confirmed;
+  if (confirmed === null) {
+    throw new CatalogError(
+      "catalog.revision-conflict",
+      `Operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
+    );
+  }
+  const change = confirmed.event.change;
+  const entities = change.kind === "project-replace" ? (change.project.catalogEntities as Array<Record<string, unknown>>) : [];
+  const row = entities.find((entity) => entity.kind === kind && entity.id === id);
+  return { kind, id, revision: typeof row?.revision === "number" ? row.revision : 0, storeRevision: 0 };
+}
+
 async function queueCatalogWrite(
   context: StoreContext,
   operation: CatalogOperation,
+  entity: Readonly<{ kind: CatalogReceipt["kind"]; id: string }>,
   next: (current: Record<string, unknown>) => Record<string, unknown>,
-): Promise<never> {
+  replay: (event: RemoteEvent) => boolean,
+): Promise<CatalogReceipt> {
   const projectId = operation.projectId;
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new CatalogError(
@@ -852,13 +874,14 @@ async function queueCatalogWrite(
   // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
   // would close the cycle before the catalog contract initializes.
   const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
-  throw pendingRemoteEffect(
-    await prepareRemoteProjectWrite(context, {
-      projectId: projectId.trim(),
-      operationId: operation.operationId,
-      next,
-    }),
-  );
+  const intent = await prepareRemoteProjectWrite(context, {
+    projectId: projectId.trim(),
+    operationId: operation.operationId,
+    next,
+    replay,
+  });
+  if (intent.confirmed !== null) return confirmedCatalogReceipt(intent, entity.kind, entity.id);
+  throw pendingRemoteEffect(intent);
 }
 
 /** note: The observed portable entities of one project journal. */
@@ -898,16 +921,35 @@ export async function registerCatalogEntity(
     const description = normalizeDescription(input?.description);
     const documentKind = normalizeDocumentKind(kind, input?.documentKind);
     const lifecycle = input?.lifecycle === undefined ? "active" : requireLifecycle(input.lifecycle);
-    return queueCatalogWrite(context, { ...op, projectId: operation.projectId }, (current) => {
-      const entities = observedEntities(current);
-      if (entities.some((entity) => entity.kind === kind && entity.id === id)) {
-        throw new CatalogError("catalog.duplicate", `${kind} ${id} is already registered in the observed project; nothing was enqueued.`);
-      }
-      return {
-        ...current,
-        catalogEntities: [...entities, { kind, id, title, description, documentKind, lifecycle, revision: 1 }],
-      };
-    });
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      { kind, id },
+      (current) => {
+        const entities = observedEntities(current);
+        if (entities.some((entity) => entity.kind === kind && entity.id === id)) {
+          throw new CatalogError("catalog.duplicate", `${kind} ${id} is already registered in the observed project; nothing was enqueued.`);
+        }
+        return {
+          ...current,
+          catalogEntities: [...entities, { kind, id, title, description, documentKind, lifecycle, revision: 1 }],
+        };
+      },
+      (event) => {
+        const change = event.change;
+        if (change.kind !== "project-replace") return false;
+        return (change.project.catalogEntities as Array<Record<string, unknown>>).some(
+          (entity) =>
+            entity.kind === kind &&
+            entity.id === id &&
+            entity.title === title &&
+            entity.description === description &&
+            entity.documentKind === documentKind &&
+            entity.lifecycle === lifecycle &&
+            entity.revision === 1,
+        );
+      },
+    );
   }
   return withCatalogWrite(context, (db) => registerCatalogEntityOn(db, context, input, operation));
 }
@@ -1021,7 +1063,11 @@ export async function updateCatalogEntity(
   const expected = requireExpectedRevision(expectedRevision);
   const record = normalizePatch(patch);
   if (resolveCollaborationLocation(context).mode === "remote") {
-    return queueCatalogWrite(context, { ...op, projectId: operation.projectId }, (current) => {
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      target,
+      (current) => {
       const entities = observedEntities(current);
       const row = entities.find((entity) => entity.kind === target.kind && entity.id === target.id);
       if (row === undefined) throw new CatalogError("catalog.not-found", `${target.kind} ${target.id} is not registered in the observed project`);
@@ -1049,7 +1095,22 @@ export async function updateCatalogEntity(
             : entity,
         ),
       };
-    });
+      },
+      (event) => {
+        const change = event.change;
+        if (change.kind !== "project-replace") return false;
+        const row = (change.project.catalogEntities as Array<Record<string, unknown>>).find(
+          (entity) => entity.kind === target.kind && entity.id === target.id,
+        );
+        if (row === undefined) return false;
+        return (
+          (record.title === undefined || row.title === record.title) &&
+          (record.description === undefined || row.description === record.description) &&
+          (record.documentKind === undefined || row.documentKind === record.documentKind) &&
+          (record.lifecycle === undefined || row.lifecycle === record.lifecycle)
+        );
+      },
+    );
   }
   const hash = requestHash("updateCatalogEntity", { target, record, expected, ...op });
 
@@ -1137,7 +1198,11 @@ export async function linkCatalogEntities(
     const to = requireKey("link.to", link.to);
     assertAllowedLink(from, link.relation, to);
     const ordinal = normalizeOrdinal(link.ordinal);
-    return queueCatalogWrite(context, { ...op, projectId: operation.projectId }, (current) => {
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      from,
+      (current) => {
       const entities = observedEntities(current);
       for (const endpoint of [from, to]) {
         if (!entities.some((entity) => entity.kind === endpoint.kind && entity.id === endpoint.id)) {
@@ -1174,7 +1239,21 @@ export async function linkCatalogEntities(
           { fromKind: from.kind, fromId: from.id, relation: link.relation, toKind: to.kind, toId: to.id, ordinal },
         ],
       };
-    });
+      },
+      (event) => {
+        const change = event.change;
+        if (change.kind !== "project-replace") return false;
+        return (change.project.catalogLinks as Array<Record<string, unknown>>).some(
+          (row) =>
+            row.fromKind === from.kind &&
+            row.fromId === from.id &&
+            row.relation === link.relation &&
+            row.toKind === to.kind &&
+            row.toId === to.id &&
+            row.ordinal === ordinal,
+        );
+      },
+    );
   }
   return withCatalogWrite(context, (db) => linkCatalogEntitiesOn(db, context, link, operation));
 }

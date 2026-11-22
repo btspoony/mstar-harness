@@ -48,12 +48,15 @@ import {
   hasPreparedCompositeIntent,
   noteOutstandingAcknowledgement,
   repairCompositeAcknowledgement,
+  remoteCompositeOperationId,
   reserveCompositeIntent,
   runCollaborationComposite,
   type CompositeIntent,
   type CompositeKey,
 } from "./collaboration-operations.js";
-import { openCollaborationStore, readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { openCollaborationStore, readCollaborationAuthority, readRemoteCacheAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { prepareRemoteProjectWrite } from "./collaboration-remote.js";
 import {
   assertRegisteredCompassDocument,
   assertRegisteredPlanDocuments,
@@ -336,6 +339,19 @@ export async function commitExecutionRegistration(
     );
   }
 
+  // invariant: A `remote` registration publishes its reviewed catalog delta into ONE project
+  // journal (Q2: outbox operations address one project), so the journal is resolved BEFORE any
+  // reservation exists; an ambiguous or absent project refuses with nothing reserved.
+  const remote = resolveCollaborationLocation(context).mode === "remote";
+  const journalProject = remote ? remoteRegistrationProject(request.workflow) : null;
+  if (remote && journalProject === null) {
+    throw new CatalogError(
+      "catalog.invalid-entity",
+      "A remote registration publishes its catalog delta into one project journal, so the reviewed workflow must name " +
+        "exactly one project (a plan's `project`, or one iteration project). Split a multi-project iteration into one " +
+        "registration per project. Nothing was reserved.",
+    );
+  }
   // invariant: The witness preflight: a registration publishes the reviewed delta into the
   // repository's collaboration lane, so that lane must be the ACTIVE one this
   // operation freezes as its target.
@@ -365,6 +381,19 @@ export async function commitExecutionRegistration(
     // new/unbound/unleased requirement and the plan rows' own seals are the C3
     // creation gates, reused verbatim.
     const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
+    if (remote) {
+      // invariant: A plan row's catalog pin names a LOCAL catalog store identity; a remote
+      // registration has no such store, so a pinned row is refused before anything is reserved.
+      const pinned = creation.plans.filter((entry) => entry.pin !== null);
+      if (pinned.length > 0) {
+        throw new StoreError(
+          "collaboration.mode-unavailable",
+          `Plan ${pinned.map((entry) => entry.planId).join(", ")} carries a catalog pin from a local catalog store, which a ` +
+            `remote registration cannot satisfy. Re-register these plans against the provider project, or drop the pin. ` +
+            `Nothing was reserved.`,
+        );
+      }
+    }
     assertRegisteredCompassDocument(plan.request.workflow);
     assertRegisteredPlanDocuments(plan.request.workflow);
 
@@ -457,7 +486,7 @@ export async function commitExecutionRegistration(
   // inside a write transaction. Entities this delta publishes join the evidence
   // deterministically (the apply transaction publishes exactly them).
   const pinnedPlanIds = [...new Set(creation.plans.filter((entry) => entry.pin !== null).map((entry) => entry.planId))];
-  const selection = await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
+  const selection = remote ? { storeId: null, planIds: [] } : await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
   const reviewedPlanIds = (plan.request.delta.entities ?? [])
     .filter((entity) => entity.kind === "plan")
     .map((entity) => entity.id);
@@ -508,8 +537,87 @@ export async function commitExecutionRegistration(
       // (a location collision attaches to an existing id instead of a new one).
       return stableJson({ catalogRevision: readCatalogStoreVersionsOn(handle.db).catalogRevision, entities });
     },
+    async remote(context) {
+      // invariant: The provider journal IS the remote catalog. The reviewed delta is frozen as one
+      // project-replace against the observed journal head; portable identity, metadata and
+      // lifecycle publish, while checkout-only location facts stay out of the document.
+      const operationId = remoteCompositeOperationId(prepared.intent.key);
+      return prepareRemoteProjectWrite(context, {
+        projectId: journalProject as string,
+        operationId,
+        executionKey: { ...prepared.intent.key, operationId },
+        next: (current) => {
+          const entities = current.catalogEntities as Array<Record<string, unknown>>;
+          const published: Array<Record<string, unknown>> = [];
+          for (const entity of plan.request.delta.entities) {
+            if (
+              entities.some((row) => row.kind === entity.kind && row.id === entity.id) ||
+              published.some((row) => row.kind === entity.kind && row.id === entity.id)
+            ) {
+              throw new CatalogError(
+                "catalog.duplicate",
+                `${entity.kind} ${entity.id} is already registered in the observed project; nothing was enqueued.`,
+              );
+            }
+            published.push({
+              kind: entity.kind,
+              id: entity.id,
+              title: entity.title,
+              description: entity.description ?? null,
+              documentKind: entity.documentKind ?? null,
+              lifecycle: entity.lifecycle ?? "active",
+              revision: 1,
+            });
+          }
+          const links = current.catalogLinks as Array<Record<string, unknown>>;
+          const known = new Set([...entities, ...published].map((row) => `${String(row.kind)}:${String(row.id)}`));
+          const appended = (plan.request.delta.links ?? []).map((link) => {
+            for (const endpoint of [link.from, link.to]) {
+              if (!known.has(`${endpoint.kind}:${endpoint.id}`)) {
+                throw new CatalogError(
+                  "catalog.link-refused",
+                  `${endpoint.kind} ${endpoint.id} is not registered in the observed project; a dangling link is never published.`,
+                );
+              }
+            }
+            return {
+              fromKind: link.from.kind,
+              fromId: link.from.id,
+              relation: link.relation,
+              toKind: link.to.kind,
+              toId: link.to.id,
+              ordinal: link.ordinal ?? 0,
+            };
+          });
+          return { ...current, catalogEntities: [...entities, ...published], catalogLinks: [...links, ...appended] };
+        },
+        replay: (event) => {
+          const change = event.change;
+          if (change.kind !== "project-replace") return false;
+          const entities = change.project.catalogEntities as Array<Record<string, unknown>>;
+          const links = change.project.catalogLinks as Array<Record<string, unknown>>;
+          return (
+            plan.request.delta.entities.every((entity) =>
+              entities.some((row) => row.kind === entity.kind && row.id === entity.id),
+            ) &&
+            (plan.request.delta.links ?? []).every((link) =>
+              links.some(
+                (row) =>
+                  row.fromKind === link.from.kind &&
+                  row.fromId === link.from.id &&
+                  row.relation === link.relation &&
+                  row.toKind === link.to.kind &&
+                  row.toId === link.to.id,
+              ),
+            )
+          );
+        },
+      });
+    },
     finalize(tx, receipt) {
-      const facts = registrationEffectFacts(receipt.facts);
+      const facts = remote
+        ? remoteRegistrationFacts(receipt.facts, plan.request.delta)
+        : registrationEffectFacts(receipt.facts);
       const binding = plan.request.delta.binding;
       const bound = facts.entities.find(
         (entity) => entity.reviewed.kind === binding.catalogKind && entity.reviewed.id === binding.catalogId,
@@ -587,8 +695,59 @@ function registrationEffectFacts(facts: string): { catalogRevision: number; enti
   return parsed as unknown as { catalogRevision: number; entities: PublishedRegistrationEntity[] };
 }
 
+/**
+ * note: The ONE project journal a remote registration addresses. A plan names its project
+ * directly; an iteration names exactly one project for a remote registration, since one outbox
+ * operation addresses one journal. Null means the reviewed workflow does not decide it.
+ */
+function remoteRegistrationProject(workflow: CatalogExecutionWorkflow): string | null {
+  if (workflow.kind === "plan") {
+    const project = workflow.options.project;
+    return typeof project === "string" && project.trim() !== "" ? project.trim() : null;
+  }
+  const declared = workflow.options.projects ?? (workflow.options.project === undefined ? [] : [workflow.options.project]);
+  const projects = [...new Set(declared.filter((entry) => typeof entry === "string" && entry.trim() !== ""))];
+  return projects.length === 1 ? projects[0]! : null;
+}
+
+/**
+ * invariant: The effect facts a REMOTE registration's finalization pins. The provider journal is the
+ * committed effect, so every reviewed entity is published exactly as frozen; the portable document
+ * holds no catalog revision, so the pinned revision is 0 rather than a local counter.
+ */
+function remoteRegistrationFacts(
+  facts: string,
+  delta: CatalogExecutionCatalogDelta,
+): { catalogRevision: number; entities: PublishedRegistrationEntity[] } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(facts);
+  } catch {
+    parsed = null;
+  }
+  if (!isPlainObject(parsed) || !("remote" in parsed)) {
+    throw new StoreError(
+      "store.corrupt",
+      "the committed remote registration effect carries no readable remote facts",
+    );
+  }
+  return {
+    catalogRevision: 0,
+    entities: delta.entities.map((entity) => ({
+      reviewed: { kind: entity.kind, id: entity.id },
+      published: { kind: entity.kind, id: entity.id, revision: 1 },
+    })),
+  };
+}
+
 /** note: The frozen collaboration target stamp of this repository's ACTIVE lane. */
 async function collaborationStamp(context: ExecutionContext): Promise<CollaborationStamp> {
+  // invariant: A `remote` checkout's registration publishes its catalog delta into the provider
+  // journal, so its stamp is the private cache's own identity, never a local lane.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const authority = await readRemoteCacheAuthority(context);
+    return { repoKey: authority.repoKey, mode: "remote", storeId: authority.storeId, epoch: authority.epoch };
+  }
   // invariant: WRITE admission: the binding must hold before this verb reserves an intent,
   // so an unbound checkout refuses here instead of after the reservation.
   const handle = await openCollaborationStore(context, "write");

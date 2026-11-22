@@ -24,7 +24,14 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import type { ProviderIssueIdentity } from "./collaboration-remote.js";
+import type {
+  ProviderIssueIdentity,
+  RemoteEvent,
+  RemoteIntent,
+  RemoteIssue,
+  RemoteIssueWrite,
+  RemoteObservedSubject,
+} from "./collaboration-remote.js";
 import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 
 
@@ -1065,25 +1072,232 @@ export function captureIssueOn(
 // ---------------------------------------------------------------------------
 
 /**
- * The remote branch of every ordinary issue write: freeze the normalized effect as one durable
- * outbox intent and report its state. A local SQL effect never stands in for the provider, and a
- * durable enqueue is never business success (`remote.effect-pending`).
+ * note: The recorded business result of a confirmed remote issue write. The provider effect IS the
+ * business outcome: the issue is the confirmed record, the revision is the frozen subject's own,
+ * and a remote write owns no local collaboration revision (exactly as a remote composite does not).
  */
-async function queueRemoteIssueWrite(
-  context: StoreContext,
-  write: Readonly<{
-    projectId?: string;
-    operationId: string;
-    kind: "issue-create" | "issue-replace";
-    issueId?: string;
-    issueRef?: string;
-    next(current: Record<string, unknown> | null): Record<string, unknown>;
-  }>,
-): Promise<never> {
+function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
+  const confirmed = intent.confirmed;
+  if (confirmed === null) {
+    throw new StoreError(
+      "store.corrupt",
+      `operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
+    );
+  }
+  const change = confirmed.event.change;
+  return {
+    issueId: confirmed.identity.issueId,
+    revision: change.kind === "project-replace" ? 0 : Number((change.mstar.fields as Record<string, unknown>).revision ?? 0),
+    storeRevision: 0,
+    created: change.kind === "issue-create",
+  };
+}
+
+/**
+ * The remote branch of every ordinary issue write: freeze the normalized effect as one durable
+ * outbox intent and report it. A confirmed intent reports the recorded business result of an
+ * identical replay; anything else is `remote.effect-pending`, never business success, and no
+ * local SQL effect ever stands in for the provider.
+ */
+async function queueRemoteIssueWrite(context: StoreContext, write: RemoteIssueWrite): Promise<IssueReceipt> {
   // note: Dynamic on purpose — collaboration-remote.ts imports this module's vocabularies, so a
   // static import would close a cycle before they initialize.
   const { prepareRemoteIssueWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
-  throw pendingRemoteEffect(await prepareRemoteIssueWrite(context, write));
+  const intent = await prepareRemoteIssueWrite(context, write);
+  if (intent.confirmed !== null) return confirmedIssueReceipt(intent);
+  throw pendingRemoteEffect(intent);
+}
+
+/** note: One frozen array member's last entry, or null when the subject appends nothing there. */
+function lastFrozen(subject: Record<string, unknown>, member: string): Record<string, unknown> | null {
+  const entries = subject[member];
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const last: unknown = entries[entries.length - 1];
+  return last !== null && typeof last === "object" ? (last as Record<string, unknown>) : null;
+}
+
+/** note: The frozen subject of an issue change, or null when the event replaces the project journal. */
+function frozenSubject(event: RemoteEvent): Record<string, unknown> | null {
+  const change = event.change;
+  return change.kind === "project-replace" ? null : change.mstar;
+}
+
+/** note: The frozen fields of an issue change's subject, or null for a project event. */
+function frozenFields(event: RemoteEvent): Record<string, unknown> | null {
+  const subject = frozenSubject(event);
+  return subject === null ? null : (subject.fields as Record<string, unknown>);
+}
+
+/** note: One frozen occurrence equals this observation, excluding the generated row id and recorded time. */
+function frozenOccurrenceMatches(
+  row: Record<string, unknown> | null,
+  cols: OccurrenceColumns,
+  evidence: readonly string[],
+): boolean {
+  if (row === null) return false;
+  const frozenEvidence = row.evidence;
+  return (
+    row.occurrenceKey === cols.occurrenceKey &&
+    row.sourceKind === cols.sourceKind &&
+    row.sourceIdentity === cols.sourceIdentity &&
+    row.rootCauseKey === cols.rootCauseKey &&
+    row.acceptanceKey === cols.acceptanceKey &&
+    row.location === cols.location &&
+    row.observedBehavior === cols.observedBehavior &&
+    row.discoveredAt === cols.discoveredAt &&
+    Array.isArray(frozenEvidence) &&
+    frozenEvidence.length === evidence.length &&
+    evidence.every((entry, index) => frozenEvidence[index] === entry)
+  );
+}
+
+/** note: A create's frozen genesis is this capture's own request; generated ids and times never decide it. */
+function genesisMatches(subject: Record<string, unknown>, input: CaptureInput): boolean {
+  const cols = occurrenceColumns(input);
+  const fields = subject.fields as Record<string, unknown>;
+  const occurrences = subject.occurrences as Array<Record<string, unknown>>;
+  const provenance = subject.provenance as Array<Record<string, unknown>>;
+  return (
+    fields.title === input.title &&
+    fields.kind === input.kind &&
+    fields.severity === input.severity &&
+    fields.impact === input.impact &&
+    fields.acceptance === input.acceptance &&
+    fields.owner === (input.owner ?? null) &&
+    fields.disposition === "open" &&
+    occurrences.length === 1 &&
+    frozenOccurrenceMatches(occurrences[0] ?? null, cols, input.evidence) &&
+    // note: A residual genesis appends its plan link after the capture record, so the capture
+    // identity is proved by its own first provenance row, not by the total count.
+    provenance.length >= 1 &&
+    provenance[0]?.kind === "capture" &&
+    provenance[0]?.target === cols.sourceIdentity
+  );
+}
+
+/** note: A frozen closure is this terminal request: disposition, actor, reason and its evidence. */
+export function closedSubjectMatches(
+  subject: Record<string, unknown>,
+  disposition: TerminalDisposition,
+  evidence: ClosureEvidence,
+  actor: string,
+): boolean {
+  const fields = subject.fields as Record<string, unknown>;
+  const transition = lastFrozen(subject, "transitions");
+  if (transition === null) return false;
+  const recorded = transition.evidence as Record<string, unknown>;
+  const references = recorded.references;
+  return (
+    fields.disposition === disposition &&
+    transition.fromDisposition === "open" &&
+    transition.toDisposition === disposition &&
+    transition.actor === actor &&
+    recorded.reason === evidence.reason &&
+    recorded.canonicalIssueId === (evidence.canonicalIssueId ?? null) &&
+    recorded.alignmentRef === (evidence.alignmentRef ?? null) &&
+    Array.isArray(references) &&
+    references.length === evidence.references.length &&
+    evidence.references.every((entry, index) => references[index] === entry)
+  );
+}
+
+/** note: A frozen reopen is this terminal-to-open request. */
+function reopenedSubjectMatches(subject: Record<string, unknown>, reason: string, actor: string): boolean {
+  const fields = subject.fields as Record<string, unknown>;
+  const transition = lastFrozen(subject, "transitions");
+  return (
+    fields.disposition === "open" &&
+    transition !== null &&
+    transition.toDisposition === "open" &&
+    transition.actor === actor &&
+    transition.reason === reason
+  );
+}
+
+/** note: A frozen triage carries exactly the values this patch sets. */
+function patchedSubjectMatches(subject: Record<string, unknown>, patch: Record<string, unknown>): boolean {
+  const fields = subject.fields as Record<string, unknown>;
+  return Object.entries(patch).every(([key, value]) => fields[key] === value);
+}
+
+/** note: A frozen link is this same relation or provenance append, under the same origin. */
+function linkedSubjectMatches(subject: Record<string, unknown>, link: IssueLink, origin: "scoped" | "unscoped"): boolean {
+  if ("relation" in link) {
+    const relation = lastFrozen(subject, "relations");
+    return (
+      ISSUE_REF_PATTERN.test(link.issueId) &&
+      relation !== null &&
+      relation.relation === link.relation &&
+      relation.target === link.issueId
+    );
+  }
+  const provenance = lastFrozen(subject, "provenance");
+  return (
+    provenance !== null &&
+    provenance.kind === link.kind &&
+    provenance.target === link.target &&
+    provenance.origin === origin
+  );
+}
+
+/**
+ * note: The genesis subject of a remote residual capture: the ordinary capture document plus its
+ * plan link. Folding the link into the genesis event keeps it immutable - a published provider
+ * record cannot be rewritten, so the link is frozen with the first effect instead of appended later.
+ */
+export function residualGenesisSubject(input: CaptureInput, planId: string, at: string): Record<string, unknown> {
+  const genesis = genesisIssueSubject(input, at);
+  const provenance = genesis.provenance as Array<Record<string, unknown>>;
+  return {
+    ...genesis,
+    provenance: [
+      ...provenance,
+      {
+        eventId: randomUUID(),
+        kind: "plan",
+        target: planId,
+        sourceHash: sha256(lengthDelimited(["plan", planId])),
+        origin: "scoped",
+        legacyProject: null,
+        legacyBucket: null,
+        legacyEntryId: null,
+        legacyRecord: null,
+        importedAt: null,
+      },
+    ],
+  };
+}
+
+/** note: A frozen residual genesis is this capture plus this plan link. */
+export function residualGenesisMatches(
+  subject: Record<string, unknown>,
+  input: CaptureInput,
+  planId: string,
+): boolean {
+  if (!genesisMatches(subject, input)) return false;
+  return (subject.provenance as Array<Record<string, unknown>>).some(
+    (row) => row.kind === "plan" && row.target === planId && row.origin === "scoped",
+  );
+}
+
+/** note: The observed issue one stable reference or provider id names, if the scope observes it. */
+function observedIssue(observed: RemoteObservedSubject, addressed: string): RemoteIssue | undefined {
+  return observed.issues.find(
+    (issue) => issue.identity.issueId === addressed || (issue.mstar !== null && issue.mstar.issueRef === addressed),
+  );
+}
+
+/** note: A remote relation names an observed issue; a dangling or self edge refuses before freezing. */
+function assertObservedRelation(observed: RemoteObservedSubject, issueId: string, link: IssueLink): void {
+  if (!("relation" in link)) return;
+  const other = link.issueId;
+  if (!ISSUE_REF_PATTERN.test(other)) return;
+  if (other === issueId || other === observedIssue(observed, issueId)?.mstar?.issueRef) {
+    throw new IssueError("issue.scope-refused", "Self-edges are not allowed");
+  }
+  if (observedIssue(observed, other) === undefined) {
+    throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
+  }
 }
 
 /** note: The capture's own provenance row: the reviewed business record, never a raw payload. */
@@ -1268,6 +1482,7 @@ export async function captureIssue(
       operationId: mutation.operationId,
       kind: "issue-create",
       next: () => genesisIssueSubject(input, nowRfc3339()),
+      replay: (event) => event.change.kind === "issue-create" && genesisMatches(event.change.mstar, input),
     });
   }
   return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
@@ -1287,11 +1502,48 @@ export async function appendOccurrence(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => ({
-        ...current,
-        fields: patchedFields(current!, {}, at),
-        occurrences: [...(current!.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
-      }),
+      next: (current, observed) => {
+        const subject = current!;
+        const fields = subject.fields as Record<string, unknown>;
+        requireExpectedRevision(mutation, Number(fields.revision));
+        // note: The occurrence rules are the domain's own: identity belongs to this issue, and a
+        // reused key never silently lands another observation on it.
+        const native = observedIssue(observed, issueId);
+        const authority: readonly Record<string, unknown>[] = (native?.mstar?.occurrences ?? []) as readonly Record<
+          string,
+          unknown
+        >[];
+        const sameKey = authority.find((entry) => entry.occurrenceKey === cols.occurrenceKey);
+        if (sameKey !== undefined) {
+          if (!frozenOccurrenceMatches(sameKey as unknown as Record<string, unknown>, cols, input.evidence)) {
+            throw new IssueError(
+              "issue.occurrence-conflict",
+              "occurrenceKey was reused with a different observation; the original occurrence is retained.",
+            );
+          }
+        } else if (
+          authority.length > 0 &&
+          (authority[0]!.sourceIdentity !== cols.sourceIdentity ||
+            authority[0]!.rootCauseKey !== cols.rootCauseKey ||
+            authority[0]!.acceptanceKey !== cols.acceptanceKey)
+        ) {
+          throw new IssueError(
+            "issue.ambiguous-identity",
+            "The occurrence's source/root-cause/acceptance identity does not match this issue; refusing a guessed merge",
+          );
+        }
+        return {
+          ...subject,
+          fields: patchedFields(subject, {}, at),
+          occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
+        };
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return (
+          subject !== null && frozenOccurrenceMatches(lastFrozen(subject, "occurrences"), cols, input.evidence)
+        );
+      },
     });
   }
   const hash = requestHash("appendOccurrence", {
@@ -2032,7 +2284,15 @@ export async function triageIssue(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => ({ ...current, fields: patchedFields(current!, normalized, at) }),
+      next: (current) => {
+        const subject = current!;
+        requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
+        return { ...subject, fields: patchedFields(subject, normalized, at) };
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return subject !== null && patchedSubjectMatches(subject, normalized);
+      },
     });
   }
   return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
@@ -2208,7 +2468,31 @@ export async function closeIssue(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => closedRemoteSubject(current!, disposition, evidence, mutation.actor, at),
+      next: (current, observed) => {
+        const subject = current!;
+        const fields = subject.fields as Record<string, unknown>;
+        requireExpectedRevision(mutation, Number(fields.revision));
+        if (fields.disposition !== "open") {
+          throw new IssueError(
+            "issue.invalid-disposition",
+            `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${disposition}`,
+          );
+        }
+        if (disposition === "duplicate" || disposition === "superseded") {
+          const canonical = evidence.canonicalIssueId!;
+          const native = observedIssue(observed, issueId);
+          const self = canonical === issueId || canonical === native?.mstar?.issueRef;
+          if (self) throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
+          if (observedIssue(observed, canonical) === undefined) {
+            throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
+          }
+        }
+        return closedRemoteSubject(subject, disposition, evidence, mutation.actor, at);
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return subject !== null && closedSubjectMatches(subject, disposition, evidence, mutation.actor);
+      },
     });
   }
   return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
@@ -2228,10 +2512,21 @@ export async function reopenIssue(
       kind: "issue-replace",
       issueId,
       next: (current) => {
-        const fields = current!.fields as Record<string, unknown>;
+        const subject = current!;
+        const fields = subject.fields as Record<string, unknown>;
+        requireExpectedRevision(mutation, Number(fields.revision));
+        if (fields.disposition === "open") {
+          throw new IssueError("issue.invalid-disposition", "Only terminal\u2192open is accepted; open cannot transition to open");
+        }
+        if (typeof fields.disposition !== "string" || !Object.hasOwn(TERMINAL, fields.disposition)) {
+          throw new IssueError(
+            "issue.invalid-disposition",
+            `Only terminal\u2192open is accepted; ${String(fields.disposition)} is not terminal`,
+          );
+        }
         const revision = (fields.revision as number) + 1;
         return {
-          ...current,
+          ...subject,
           fields: { ...fields, disposition: "open", closedAt: null, revision, updatedAt: at },
           transitions: [
             ...(current!.transitions as unknown[]),
@@ -2249,6 +2544,10 @@ export async function reopenIssue(
             },
           ],
         };
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return subject !== null && reopenedSubjectMatches(subject, payload.reason, mutation.actor);
       },
     });
   }
@@ -2458,10 +2757,39 @@ export async function assignIssueMilestone(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => ({
-        ...current,
-        fields: patchedFields(current!, { milestoneId: input.milestoneId }, at),
-      }),
+      next: (current, observed) => {
+        const subject = current!;
+        const fields = subject.fields as Record<string, unknown>;
+        requireExpectedRevision(mutation, Number(fields.revision));
+        // note: The snapshot's issues ARE this project's scope, so the provider project id is never
+        // compared with the local project key (they are different identifiers).
+        if (observedIssue(observed, issueId) === undefined) {
+          throw new IssueError("milestone.project-mismatch", "Issue does not belong to the requested project");
+        }
+        // invariant: A referenced milestone must exist in the observed project and still accept
+        // assignment; the fresh provider parent alone would only notice this after enqueue.
+        if (input.milestoneId !== null) {
+          const milestone = observed.project.milestones.find((entry) => entry.milestoneId === input.milestoneId);
+          if (milestone === undefined) {
+            throw new IssueError("milestone.not-found", `Milestone ${input.milestoneId} is not observed in project ${projectId}`);
+          }
+          if (milestone.status === "delivered" || milestone.status === "dropped") {
+            throw new IssueError("milestone.terminal", "Reopen the target milestone before assigning an issue to it");
+          }
+        }
+        const currentMilestone = fields.milestoneId;
+        if (typeof currentMilestone === "string") {
+          const held = observed.project.milestones.find((entry) => entry.milestoneId === currentMilestone);
+          if (held !== undefined && (held.status === "delivered" || held.status === "dropped")) {
+            throw new IssueError("milestone.terminal", "Reopen the current milestone before moving or clearing its issue");
+          }
+        }
+        return { ...subject, fields: patchedFields(subject, { milestoneId: input.milestoneId }, at) };
+      },
+      replay: (event) => {
+        const fields = frozenFields(event);
+        return fields !== null && fields.milestoneId === input.milestoneId;
+      },
     });
   }
   const hash = requestHash("assignIssueMilestone", {
@@ -2624,7 +2952,16 @@ export async function linkIssue(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => linkedSubject(current!, link, "unscoped", nowRfc3339()),
+      next: (current, observed) => {
+        const subject = current!;
+        requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
+        if ("relation" in link) assertObservedRelation(observed, issueId, link);
+        return linkedSubject(subject, link, "unscoped", nowRfc3339());
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return subject !== null && linkedSubjectMatches(subject, link, "unscoped");
+      },
     });
   }
   return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
@@ -2644,7 +2981,16 @@ export async function linkIssueScoped(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
-      next: (current) => linkedSubject(current!, link, "scoped", nowRfc3339()),
+      next: (current, observed) => {
+        const subject = current!;
+        requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
+        if ("relation" in link) assertObservedRelation(observed, issueId, link);
+        return linkedSubject(subject, link, "scoped", nowRfc3339());
+      },
+      replay: (event) => {
+        const subject = frozenSubject(event);
+        return subject !== null && linkedSubjectMatches(subject, link, "scoped");
+      },
     });
   }
   return withWrite(context, (handle) => linkIssueOnWithOrigin(handle.db, issueId, link, mutation, undefined, "scoped"));

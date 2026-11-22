@@ -132,9 +132,11 @@ export type {
   RemoteBindResult,
   RemoteCatalogEntity,
   RemoteCatalogLink,
+  RemoteConfirmedEffect,
   RemoteMilestone,
   RemoteMstarIssue,
   RemoteObservationResult,
+  RemoteObservedSubject,
   RemoteEvent,
   RemoteEventChange,
   RemoteIntent,
@@ -820,7 +822,7 @@ export type {
   CompositeKey,
   CompositeKind,
 } from "./collaboration-operations.js";
-export { remoteCompositeOperationId } from "./collaboration-operations.js";
+export { remoteCompositeEntryOperationId, remoteCompositeOperationId } from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
