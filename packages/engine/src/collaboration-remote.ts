@@ -2354,6 +2354,22 @@ function adoptionSubject(adoption: AdoptionDocument, nativeTitle: string, projec
 }
 
 /**
+ * note: The intent a replay answered. A verb that admits no no-change outcome refuses an
+ * established claim instead of mapping it to a success.
+ */
+function replayedOnly(outcome: RemoteIntent | RemoteNoChange, operationId: string): RemoteIntent {
+  if ("noChange" in outcome) {
+    throw new StoreError(
+      "remote.operation-conflict",
+      `Operation ${operationId} records an established no-change write; this verb is a different request and needs a ` +
+        `new operation id. Nothing was enqueued.`,
+      { operationId },
+    );
+  }
+  return outcome;
+}
+
+/**
  * `remote adopt-issue`: validate the strict adoption DTO against the exact observed, unmarked
  * native issue, then freeze it as one durable `issue-adopt` intent. The verb never creates an
  * issue, never marks the native issue, never appends to a cache snapshot, and never performs a
@@ -2635,31 +2651,50 @@ function frozenIssueSubject(value: unknown, path: string, errors?: string[]): Re
  * selected transport scope supplies it) and nothing outside the allowlist.
  */
 function frozenProjectSubject(value: unknown, path: string, projectKey: string, errors?: string[]): Record<string, unknown> {
-  const body = record(value, path);
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
-  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"]);
-  const projectId = text(body.projectId, `${path}.projectId`);
-  if (projectId !== projectKey) invalid(`${path}.projectId`, "must be the event's project");
-  const milestones = list(body.milestones, `${path}.milestones`).map((entry, index) =>
+  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"], errors);
+  const projectId = collected(errors, () => text(body.projectId, `${path}.projectId`), "");
+  if (projectId !== "" && projectId !== projectKey) {
+    const message = `${path}.projectId: must be the event's project`;
+    if (errors === undefined) invalid(`${path}.projectId`, "must be the event's project");
+    errors.push(message);
+  }
+  // invariant: Each collection is its own boundary, and a uniqueness check runs only on the
+  // identities that PARSED: a placeholder row names no id, so it can never fabricate a duplicate
+  // that hides the diagnostic of the row it stands in for.
+  const repeated = (member: string, keys: readonly string[], detail: string): void => {
+    if (new Set(keys).size === keys.length) return;
+    if (errors === undefined) invalid(`${path}.${member}`, detail);
+    errors.push(`${path}.${member}: ${detail}`);
+  };
+  const milestones = collected(errors, () => list(body.milestones, `${path}.milestones`), []).map((entry, index) =>
     collected(errors, () => milestone(entry, `${path}.milestones[${index}]`), {} as unknown as RemoteMilestone),
   );
-  if (new Set(milestones.map((entry) => entry.milestoneId)).size !== milestones.length) {
-    invalid(`${path}.milestones`, "must not repeat a milestone id");
-  }
-  const catalogEntities = list(body.catalogEntities, `${path}.catalogEntities`).map((entry, index) =>
-    collected(errors, () => catalogEntity(entry, `${path}.catalogEntities[${index}]`), {} as unknown as RemoteCatalogEntity),
+  repeated(
+    "milestones",
+    milestones.map((entry) => entry.milestoneId).filter((id): id is string => typeof id === "string" && id !== ""),
+    "must not repeat a milestone id",
   );
-  if (new Set(catalogEntities.map((entry) => `${entry.kind}:${entry.id}`)).size !== catalogEntities.length) {
-    invalid(`${path}.catalogEntities`, "must not repeat a (kind, id) pair");
-  }
+  const catalogEntities = collected(errors, () => list(body.catalogEntities, `${path}.catalogEntities`), []).map(
+    (entry, index) =>
+      collected(errors, () => catalogEntity(entry, `${path}.catalogEntities[${index}]`), {} as unknown as RemoteCatalogEntity),
+  );
+  repeated(
+    "catalogEntities",
+    catalogEntities
+      .filter((entry) => typeof entry.kind === "string" && typeof entry.id === "string")
+      .map((entry) => `${entry.kind}:${entry.id}`),
+    "must not repeat a (kind, id) pair",
+  );
   return {
     projectId,
     milestones,
-    roadmap: roadmap(body.roadmap, `${path}.roadmap`),
+    roadmap: collected(errors, () => roadmap(body.roadmap, `${path}.roadmap`), null),
     catalogEntities,
-    catalogLinks: list(body.catalogLinks, `${path}.catalogLinks`).map((entry, index) =>
-      catalogLink(entry, `${path}.catalogLinks[${index}]`),
+    catalogLinks: collected(errors, () => list(body.catalogLinks, `${path}.catalogLinks`), []).map((entry, index) =>
+      collected(errors, () => catalogLink(entry, `${path}.catalogLinks[${index}]`), {} as unknown as RemoteCatalogLink),
     ),
   };
 }
@@ -4864,6 +4899,10 @@ export async function prepareRemoteResolution(
       );
     }
     assertResolutionHistory(stored.request.event, recorded, event, conflicted);
+    // note: A merge legitimately decides the CURRENT fields (a reviewed resolution of a fork may
+    // keep either branch's disposition), so admission proves the history both branches carry. The
+    // business OUTCOME the original request named is proved later, by the composite that acknowledges
+    // it: a settled repair whose recorded disposition is not the requested one is never acknowledged.
     const requestJson = canonicalJson({
       binding,
       event,
@@ -5200,33 +5239,91 @@ export type RemoteNoChange = Readonly<{ noChange: unknown }>;
  * concurrent capture that froze it between the replay lookup and this answer is a replay or a
  * collision, never an established success answered over it — and re-proves the sampled
  * observation revision, refusing a no-op decided on a superseded base.
+ *
+ * A PROVEN answer is then recorded, not merely reported: the operation id is claimed under the
+ * outbox's own uniqueness boundary with the request identity that established it and the business
+ * result, as an intent that is already settled and NEVER dispatchable (nothing was sent, and
+ * nothing ever will be). A later write under that id therefore meets a durable row instead of
+ * freezing a different provider effect, and an identical request replays the recorded answer.
  */
-async function proveEstablishedNoOp(
+async function recordEstablishedNoOp(
   context: StoreContext,
-  proof: { operationId: string; binding: RemoteIntentBinding; sampledRevision: number },
-): Promise<"durable" | "proven"> {
+  claim: {
+    operationId: string;
+    binding: RemoteIntentBinding;
+    sampledRevision: number;
+    /** note: The frozen-request identity of the write this observation satisfied; null when unrepresentable. */
+    request: Readonly<{
+      event: RemoteEvent;
+      target: string;
+      executionKey: RemoteIntentExecutionKey | null;
+      origin: RemoteWriteOrigin;
+    }> | null;
+    result: unknown;
+  },
+): Promise<"durable" | "recorded"> {
   return withRemoteCacheWrite(context, (handle) => {
     const row = handle.db
       .prepare("select 1 as found from remote_outbox where operation_id = ?")
-      .get(proof.operationId) as { found?: number } | undefined;
+      .get(claim.operationId) as { found?: number } | undefined;
     if (row !== undefined) return "durable" as const;
-    const current = observationRevisionOf(handle.db, proof.binding.generation, proof.binding.projectKey);
-    if (current === proof.sampledRevision) return "proven" as const;
-    throw new StoreError(
-      "collaboration.observation-stale",
-      `The observed scope of project ${proof.binding.projectKey} moved under this write's sampled base (observation ` +
-        `revision ${String(proof.sampledRevision)} at read, ${String(current)} at the established answer), so its ` +
-        `no-op decision cannot answer on it. Re-run \`mstar store collaboration remote observe\` and reissue the ` +
-        `SAME verb with the SAME operation id; nothing was enqueued.`,
-      {
-        projectId: proof.binding.projectKey,
-        sampledRevision: proof.sampledRevision,
-        freezeRevision: current,
-        recovery:
-          "Re-run `mstar store collaboration remote observe --harness <abs> --input <file|->` for this project, then reissue the SAME verb with the SAME operation id.",
-      },
-    );
+    const current = observationRevisionOf(handle.db, claim.binding.generation, claim.binding.projectKey);
+    if (current !== claim.sampledRevision) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The observed scope of project ${claim.binding.projectKey} moved under this write's sampled base (observation ` +
+          `revision ${String(claim.sampledRevision)} at read, ${String(current)} at the established answer), so its ` +
+          `no-op decision cannot answer on it. Re-run \`mstar store collaboration remote observe\` and reissue the ` +
+          `SAME verb with the SAME operation id; nothing was enqueued.`,
+        {
+          projectId: claim.binding.projectKey,
+          sampledRevision: claim.sampledRevision,
+          freezeRevision: current,
+          recovery:
+            "Re-run `mstar store collaboration remote observe --harness <abs> --input <file|->` for this project, then reissue the SAME verb with the SAME operation id.",
+        },
+      );
+    }
+    if (claim.request === null) return "recorded" as const;
+    const frozen = {
+      binding: claim.binding,
+      event: claim.request.event,
+      target: claim.request.target,
+      expectedHeads: claim.request.event.parents,
+    };
+    const requestHash = createHash("sha256").update(canonicalJson(frozen), "utf8").digest("hex");
+    const at = nowRfc3339();
+    handle.db
+      .prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+          "state, created_at, updated_at, abandon_reason) values (?, ?, ?, ?, ?, ?, 'abandoned', ?, ?, ?)",
+      )
+      .run(
+        claim.operationId,
+        claim.binding.generation,
+        claim.binding.projectKey,
+        requestHash,
+        canonicalJson({ ...frozen, origin: claim.request.origin, result: { noChange: claim.result } }),
+        claim.request.executionKey === null ? null : canonicalJson(claim.request.executionKey),
+        at,
+        at,
+        NO_CHANGE_REASON,
+      );
+    return "recorded" as const;
   });
+}
+
+/** note: The retained cause of a recorded no-change claim: no provider effect was ever needed. */
+const NO_CHANGE_REASON =
+  "no-change: the observed authority already carried this request, so no provider effect was needed and nothing was sent";
+
+/**
+ * note: The business answer a SETTLED no-change claim records, or null for an ordinary intent: its
+ * freeze report carries the domain result rather than the intent's own receipt shapes.
+ */
+function recordedNoChange(result: unknown): { answer: unknown } | null {
+  if (!isRecord(result) || Object.keys(result).length !== 1 || !("noChange" in result)) return null;
+  return { answer: result.noChange };
 }
 
 export type RemoteIssueWrite = Readonly<{
@@ -5345,7 +5442,7 @@ async function replayedIntent(
   issueRef: string | null,
   executionKey: RemoteIntentExecutionKey | null,
   origin: RemoteWriteOrigin,
-): Promise<RemoteIntent | null> {
+): Promise<RemoteIntent | RemoteNoChange | null> {
   let read: RemoteIntentRead;
   try {
     read = await readRemoteIntent(context, operationId);
@@ -5393,6 +5490,13 @@ async function replayedIntent(
   }
   if (read.origin === null || read.origin.verb !== origin.verb || !isDeepStrictEqual(read.origin.request, origin.request)) {
     return conflict(`is frozen under the business request ${read.origin === null ? "of no recorded verb" : `"${read.origin.verb}"`}`);
+  }
+  // invariant: An established answer that was RECORDED under this id returns that answer, never a
+  // pending intent: the claim is settled by construction (no attempt, no receipt), and a different
+  // request under the id refused above.
+  const settledNoChange = recordedNoChange(read.result);
+  if (read.state === "abandoned" && read.receipts.length === 0 && settledNoChange !== null) {
+    return { noChange: settledNoChange.answer };
   }
   return {
     version: 1,
@@ -5517,10 +5621,33 @@ export async function prepareRemoteIssueWrite(
   // sampled base a concurrent effect superseded.
   const established = write.unchanged?.(current, observed) ?? null;
   if (established !== null) {
-    const proof = await proveEstablishedNoOp(context, {
+    // note: An adoption or replacement always observes the subject it rewrites, so the satisfied
+    // request is representable; a create never reaches this branch. The recorded claim carries the
+    // observed subject as the request the authority already holds.
+    const proof = await recordEstablishedNoOp(context, {
       operationId,
       binding: scope.binding,
       sampledRevision: scope.observationRevision,
+      request:
+        // shortcut: A replacement whose observed subject carries no event head has no representable
+        // frozen request, so its no-change answer stays unrecorded; upgrade when a head-less
+        // replacement becomes a real remote write path.
+        current === null || parents.length === 0
+          ? null
+          : {
+              event: {
+                version: 1,
+                repoKey: scope.location.repoKey,
+                projectId,
+                operationId,
+                parents,
+                change: { kind, issueRef, mstar: current },
+              },
+              target: native.identity.issueId,
+              executionKey,
+              origin,
+            },
+      result: established,
     });
     if (proof === "durable") {
       const durable = await replayedIntent(context, operationId, kind, replayProjectKey, replayTarget, replayRef, executionKey, origin);
