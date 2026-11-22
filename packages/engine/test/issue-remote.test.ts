@@ -1,20 +1,20 @@
 /**
  * issue-remote.test.ts — the remote issue-write gates the local lanes already answer.
  *
- * Run with `bun test packages/engine/src/issue-remote.test.ts`.
+ * Run with `bun test packages/engine/test/issue-remote.test.ts`.
  *
  * Cases drive the REAL remote boundary against a real bound checkout (the shared
  * remote-scope fixture): one complete observation, the real outbox freeze, and the
  * real receipts. They prove:
  *
- * - I-001224: a recurring remote capture resolves the established occurrence or the
+ * - a recurring remote capture resolves the established occurrence or the
  *   established identity before any create — same occurrence answers the established
  *   receipt, same identity appends through ONE issue-replace, only a new identity
  *   enqueues issue-create, and a reused key refuses like the local body does.
- * - I-001225: remote closure answers the local open-state gate (a terminal issue is
+ * - remote closure answers the local open-state gate (a terminal issue is
  *   never closed again, so no transition records `fromDisposition: "open"`) and the
  *   multi-plan acceptance gate against the observed project's plan links.
- * - I-001226: a remote milestone assignment compares `--expect-store` with the observed
+ * - a remote milestone assignment compares `--expect-store` with the observed
  *   store revision before enqueueing, exactly like the local `withWrite` branch.
  */
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
@@ -24,15 +24,15 @@ import { tmpdir } from "node:os";
 import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation } from "../src/collaboration-identity.js";
 import {
   bindRemoteAuthority,
   ingestRemoteObservation,
   prepareRemoteIntent,
   setRemoteWriteScopeGapForTest,
   type RemoteSnapshot,
-} from "./collaboration-remote.js";
-import { assignIssueMilestone, captureIssue, closeIssue, showIssue, type CaptureInput, type ClosureEvidence } from "./issue.js";
+} from "../src/collaboration-remote.js";
+import { assignIssueMilestone, captureIssue, closeIssue, showIssue, type CaptureInput, type ClosureEvidence } from "../src/issue.js";
 import {
   completeSnapshot,
   confirmFrozenIntent,
@@ -41,7 +41,7 @@ import {
   positiveCheck,
   REMOTE_IDS,
   submission,
-} from "./remote-scope.fixture.js";
+} from "../src/remote-scope.fixture.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -50,11 +50,11 @@ import {
   type ExecutionCaller,
   type ExecutionSessionRef,
   type ExecutionToken,
-} from "./execution-store.js";
-import { mutateExecutionPlan } from "./execution-coordination.js";
-import type { WorkflowSnapshot } from "./workflow.js";
-import type { WorkflowEntry } from "./status.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+} from "../src/execution-store.js";
+import { mutateExecutionPlan } from "../src/execution-coordination.js";
+import type { WorkflowSnapshot } from "../src/workflow.js";
+import type { WorkflowEntry } from "../src/status.js";
+import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-remote-"));
 const HOME = join(ROOT, "home");
@@ -478,7 +478,7 @@ function residualCloseRequest(
 }
 
 // ---------------------------------------------------------------------------
-// I-001224 — remote capture dedupe
+// remote capture dedupe
 // ---------------------------------------------------------------------------
 
 test("a recurring remote capture returns the established occurrence without a second create", async () => {
@@ -814,7 +814,7 @@ test("a different payload under an established operation id refuses instead of r
 });
 
 // ---------------------------------------------------------------------------
-// I-001225 — remote close gates
+// remote close gates
 // ---------------------------------------------------------------------------
 
 test("a remote closure refuses an already-terminal issue", async () => {
@@ -1114,7 +1114,7 @@ test("a plan-scoped remote residual-close enforces the canonical gate", async ()
 });
 
 // ---------------------------------------------------------------------------
-// I-001226 — remote milestone assignment store revision
+// remote milestone assignment store revision
 // ---------------------------------------------------------------------------
 
 test("a remote milestone assignment refuses on a stale store revision", async () => {
