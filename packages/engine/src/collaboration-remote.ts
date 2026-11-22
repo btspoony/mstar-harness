@@ -18,6 +18,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   readCollaborationBinding,
   initializeRemoteCacheStore,
@@ -5318,6 +5319,16 @@ function proveSampledBase(
   };
 }
 
+/** note: Field-wise identity of one execution reservation; the frozen key is never compared as serialized JSON. */
+function sameExecutionKey(left: RemoteIntentExecutionKey | null, right: RemoteIntentExecutionKey | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.executionStoreId === right.executionStoreId &&
+    left.executionEpoch === right.executionEpoch &&
+    left.operationId === right.operationId
+  );
+}
+
 /**
  * note: The replay of one ordinary write: an operation id that already holds a frozen intent returns
  * THAT intent, so a retried verb never re-derives a different subject (a minted reference, a
@@ -5377,10 +5388,10 @@ async function replayedIntent(
   if (target !== undefined && read.target !== target) {
     return conflict(`addresses provider record ${String(read.target)}, not ${String(target)}`);
   }
-  if (canonicalJson(read.executionKey) !== canonicalJson(executionKey)) {
+  if (!sameExecutionKey(read.executionKey, executionKey)) {
     return conflict("was frozen under another execution reservation");
   }
-  if (read.origin === null || canonicalJson(read.origin) !== canonicalJson(origin)) {
+  if (read.origin === null || read.origin.verb !== origin.verb || !isDeepStrictEqual(read.origin.request, origin.request)) {
     return conflict(`is frozen under the business request ${read.origin === null ? "of no recorded verb" : `"${read.origin.verb}"`}`);
   }
   return {
