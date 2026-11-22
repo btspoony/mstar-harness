@@ -156,7 +156,7 @@
     "@deepseek-ai/dsh-client-ui-theme": "^0.2.2-rc.3",
     "@deepseek-ai/dsh-scope": "^0.2.2-rc.3",
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
     "@deepseek-ai/dsh-util-code-language": "0.2.2-rc.3",
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
