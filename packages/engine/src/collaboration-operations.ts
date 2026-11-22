@@ -1169,7 +1169,14 @@ async function runRemoteComposite<T>(
         });
         continue;
       }
-      if (settlement?.kind === "abandoned") abandoned.push({ operationId: settlement.operationId, reason: settlement.reason });
+      if (settlement?.kind === "abandoned") {
+        // invariant: The chain from this entry ends in an abandonment with no live repair, so the
+        // entry can never confirm. It is carried as abandoned, which lets the settled-composite
+        // decision below see the whole chain instead of waiting on the original conflict forever.
+        abandoned.push({ operationId: settlement.operationId, reason: settlement.reason });
+        effective.push({ ...entry, state: "abandoned" });
+        continue;
+      }
     }
     effective.push(entry);
   }

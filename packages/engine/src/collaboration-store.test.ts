@@ -5986,6 +5986,78 @@ describe("remote composite flows", () => {
     expect(await intentPhases(cache.context, "residual-remote-close-stale")).toEqual(["declined"]);
   });
 
+  test("a remote composite whose conflict repair was abandoned declines instead of waiting", async () => {
+    const cache = await outboxCache("composite-conflict-abandoned");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-close-abandoned",
+      operation: {
+        kind: "residual-close" as const,
+        issueId: MSTAR_ISSUE,
+        disposition: "resolved" as const,
+        evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: 1,
+      },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close-abandoned"));
+    const intent = await readRemoteIntent(cache.context, outboxId);
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, outboxId));
+    const frozen = recordedEvent(cache.dbPath, outboxId);
+    const competing = ["00000000-0000-4000-8000-000000000a01", "00000000-0000-4000-8000-000000000a02"].map(
+      (operationId, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea1" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea2",
+        event: { ...frozen, operationId, parents: ["8".repeat(64)] },
+      }),
+    );
+    const heads = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, outboxId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: competing,
+      }),
+    );
+    // note: The reviewed repair of that fork is withdrawn before it ever confirms.
+    const resolutionId = "00000000-0000-4000-8000-000000000a03";
+    await prepareRemoteResolution(cache.context, outboxId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: { ...frozen, operationId: resolutionId, parents: heads },
+    });
+    await abandonRemoteIntent(cache.context, { operationId: resolutionId, reason: "reviewed repair withdrawn" });
+    expect(outboxStateOf(cache.dbPath, outboxId)).toBe("conflict");
+
+    // invariant: The settled chain ends abandoned with no confirmed effect, so the reservation is
+    // declined with the named refusal and its recovery instead of waiting on the conflict forever.
+    const declined = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(declined.code).toBe("remote.effect-abandoned");
+    expect(declined.message).toContain("abandoned");
+    expect(declined.message).toContain("outbox-show");
+    expect(declined.message).toContain("new operation id");
+    expect(detailsOf(declined)).toMatchObject({ phase: "declined", operation_id: "residual-remote-close-abandoned" });
+    expect(await intentPhases(cache.context, "residual-remote-close-abandoned")).toEqual(["declined"]);
+  }, 30_000);
+
   test("a remote registration publishes its catalog delta into the project journal", async () => {
     const cache = await outboxCache("composite-registration");
     (await initializeStore(cache.context)).close();
