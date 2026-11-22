@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.4] - 2026-11-22
+
+### Breaking
+
+- The comment gate no longer accepts natural-language declared prefixes (`why:`, `invariant:`, `safety:`, `note:`): a declared prefix states no machine-resolvable claim and is not a shape. The surviving shapes are the bounded marker, the contract pointer, `@generated`, and the tracked `TODO`.
+- A comment survives only when its claim resolves at HEAD against machine-resolvable external evidence: the only retained pointer forms are a resolvable repo path (`docs/`, `skills/`, `packages/`, `scripts/`; an ADR record is cited by its `docs/adr/...` path) or a URL — `plans/…`, `#<n>`, `issue <n>`, `contract §` and a numeric `ADR-<n>` id are no longer shapes because the linter cannot resolve them — beside a bounded marker with its bound, `@generated`, and a tracked `TODO`; the anchor is what justifies the comment, not the prose.
+- Existing `note:` comments, including single-line `/** note: */` blocks, were removed or repointed (the issue-sync module headers now point at `docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`); a natural-language reason worth keeping moves to an ADR or docs page, and the comment keeps only the `see` pointer.
+
+- Version alignment with harness **4.8.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.4**.
+
 ## [4.8.3] - 2026-11-22
 
 - Version alignment with harness **4.8.3**.

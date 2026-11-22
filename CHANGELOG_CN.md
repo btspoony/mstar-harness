@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [4.8.4] - 2026-11-22
+
+### Breaking
+
+- 注释门不再接受自然语言声明前缀（`why:`、`invariant:`、`safety:`、`note:`）：声明前缀不构成可机器验证的声明，不再算作形状。保留的形状为有界标记、契约指针、`@generated` 与带跟踪引用的 `TODO`。
+- 注释只有在其声明能在 HEAD 上解析到可机器验证的外部证据时才保留：唯一保留的指针形式是可解析的仓库路径（`docs/`、`skills/`、`packages/`、`scripts/`；ADR 记录按其 `docs/adr/...` 路径引用）或 URL——`plans/`、`#<n>`、`issue <n>`、`contract §` 与数字编号 `ADR-<n>` 因 linter 无法解析，不再是形状——其余为带边界的标记、`@generated` 与带跟踪引用的 `TODO`；证明注释合理的是锚点本身，而不是那段散文。
+- 既有 `note:` 注释（含单行 `/** note: */` 块）一律删除或改挂可解析指针（issue-sync 模块头注释现指向 `docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`）；值得保留的自然语言理由移入 ADR 或 docs 页面，注释只保留 `see` 指针。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.4**。
+
 ## [4.8.3] - 2026-11-22
 
 ### Added
