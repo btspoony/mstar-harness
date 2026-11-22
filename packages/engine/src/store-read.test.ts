@@ -36,7 +36,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
-import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption } from "./collaboration-remote.js";
+import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteSnapshot } from "./collaboration-remote.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
@@ -64,7 +64,10 @@ import {
   queryOpenIssueRollup,
   withStoreRead,
   type IssueFlow,
+  type IterationListDTO,
+  type ReadEnvelope,
   type WorkflowDTO,
+  type WorkflowListDTO,
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(nodeOs.tmpdir(), "mstar-store-read-"));
@@ -1805,8 +1808,8 @@ describe("remote read boundary", () => {
     return { fixture, context, commit, check };
   }
 
-  /** note: Two selected projects: A carries the relation, B is its cross-project target. */
-  async function twoProjectScope(name: string) {
+  /** note: Two selected projects bound; only A is observed, so a test chooses B's evidence. */
+  async function twoProjectBind(name: string) {
     const fixture = createRemoteScope(ROOT, name);
     const commit = fixture.publish({
       projects: [
@@ -1834,10 +1837,16 @@ describe("remote read boundary", () => {
     await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
     // note: A submitted check must not predate the binding's recorded verification.
     const checkA = positiveCheck();
-    const checkB = secondCheck();
     await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
-    await ingestRemoteObservation(context, submission(commit, checkB, secondSnapshot(checkB), 0));
-    return { context, commit, checkA, checkB };
+    return { fixture, context, commit, checkA };
+  }
+
+  /** note: Two selected projects: A carries the relation, B is its cross-project target. */
+  async function twoProjectScope(name: string) {
+    const bound = await twoProjectBind(name);
+    const checkB = secondCheck();
+    await ingestRemoteObservation(bound.context, submission(bound.commit, checkB, secondSnapshot(checkB), 0));
+    return { ...bound, checkB };
   }
 
   function expireBinding(context: StoreContext, projectId: string): void {
@@ -2081,25 +2090,129 @@ describe("remote read boundary", () => {
     expect(cacheState(dbPath)).toEqual(before);
   });
 
-  test("a relation title resolves only across current scopes, never an expired project", async () => {
+  test("a native issue detail never resolves another project's relation title", async () => {
     const { context } = await twoProjectScope("remote-read-relation-title");
-    const fresh = await showIssue(context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
-    expect(fresh).toMatchObject({
-      relations: [{ toIssue: SECOND_IDS.issueRef, title: "Second project subject" }],
-      collaboration: { completeness: "complete" },
-    });
-
-    expireBinding(context, SECOND_IDS.projectId);
-    const expired = await showIssue(context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
-    // invariant: A's current detail never discloses B's expired content, and A's own
-    // observation stays complete because only A contributes to this read.
-    expect(expired).toMatchObject({
+    // invariant: A native detail declares ONLY its own project, so B's fresh title is not
+    // disclosed while B's provider scope, asOf and revision are absent from the stamp.
+    const scoped = await showIssue(context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
+    expect(scoped).toMatchObject({
       relations: [{ toIssue: SECOND_IDS.issueRef, title: null }],
       collaboration: {
         completeness: "complete",
         providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
       },
     });
+
+    // note: A stable reference declares every selected project, so B's title is disclosed
+    // together with B's own provider scope.
+    const acrossProjects = await getIssue(context, REMOTE_IDS.issueRef);
+    expect(acrossProjects).toMatchObject({
+      relations: [{ toIssue: SECOND_IDS.issueRef, title: "Second project subject" }],
+      collaboration: { completeness: "complete" },
+    });
+    expect(acrossProjects.collaboration.providerScopes?.map((scope) => scope.projectId)).toEqual([
+      REMOTE_IDS.projectId,
+      SECOND_IDS.projectId,
+    ]);
+
+    // invariant: An expired contributing project refuses the cross-project read; it never
+    // serves B's title without a current stamp.
+    expireBinding(context, SECOND_IDS.projectId);
+    await expect(getIssue(context, REMOTE_IDS.issueRef)).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+  });
+
+  test("a project-filtered iteration list reads only the declared project", async () => {
+    const { context, commit } = await twoProjectBind("remote-read-iteration-scope");
+    await initializeStore(context);
+    const checkA = positiveCheck();
+    const base = completeSnapshot(checkA);
+    const withIteration = {
+      ...base,
+      project: {
+        ...base.project,
+        catalogEntities: [
+          ...base.project.catalogEntities,
+          { kind: "iteration", id: "iteration-a", title: "Iteration A", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+        ],
+        catalogLinks: [
+          ...base.project.catalogLinks,
+          { fromKind: "iteration", fromId: "iteration-a", relation: "belongs-to", toKind: "project", toId: REMOTE_IDS.projectId, ordinal: 0 },
+        ],
+      },
+    } satisfies RemoteSnapshot;
+    await ingestRemoteObservation(context, submission(commit, checkA, withIteration, 1));
+    const filtered = () => withStoreRead(context, queryDashboard("iterations", { projectId: REMOTE_IDS.projectId }));
+    const expectation = (envelope: ReadEnvelope<IterationListDTO>): void => {
+      expect(envelope.data).toMatchObject({
+        total: 1,
+        items: [{ iterationId: "iteration-a", projects: [REMOTE_IDS.projectId] }],
+        attribution: "present",
+      });
+      expect(envelope.collaboration).toMatchObject({
+        completeness: "complete",
+        providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+      });
+    };
+
+    // B unobserved: A's filtered list is answered, never refused on B's missing evidence.
+    expectation(await filtered());
+    const partialB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, partialB, secondSnapshot(partialB, "partial"), 0));
+    expectation(await filtered());
+    const completeB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, completeB, secondSnapshot(completeB), 1));
+    expectation(await filtered());
+
+    // invariant: The unfiltered list still declares both projects, so B's expiry refuses it.
+    expireBinding(context, SECOND_IDS.projectId);
+    await expect(withStoreRead(context, queryDashboard("iterations"))).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+    expectation(await filtered());
+  });
+
+  test("a project-filtered workflow list reads identities only from the declared project", async () => {
+    const { context, commit } = await twoProjectBind("remote-read-workflow-scope");
+    await initializeStore(context);
+    await withExecutionWrite(context, (db) => {
+      db.prepare("update projection_meta set generation = 1, checked_at = ?, freshness = 'current' where id = 1").run(FIXTURE_AT);
+      db.prepare(
+        "insert into projection_workflows(generation, id, type, status, phase, started_at, ended_at, updated_at, " +
+          "branch_base, branch_source, branch_integration, branch_target, active_registration) " +
+          "values (1, 'plan-1', 'plan', 'running', null, ?, null, null, null, null, null, null, 1)",
+      ).run(FIXTURE_AT);
+    });
+    const filtered = () =>
+      withStoreRead(context, { ...queryDashboard("workflows", { projectId: REMOTE_IDS.projectId }), needsProjection: false });
+    const expectation = (envelope: ReadEnvelope<WorkflowListDTO>): void => {
+      expect(envelope.data).toMatchObject({
+        total: 1,
+        items: [{ id: "plan-1", catalog: { kind: "plan", id: "plan-1", title: "Plan one" }, badges: [] }],
+      });
+      expect(envelope.collaboration).toMatchObject({
+        completeness: "complete",
+        providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+      });
+    };
+
+    // invariant: An unobserved, partial or complete second project never suppresses A's
+    // identities nor contributes content to this filtered read.
+    expectation(await filtered());
+    const partialB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, partialB, secondSnapshot(partialB, "partial"), 0));
+    expectation(await filtered());
+
+    // note: The unfiltered list declares both projects: a partial second project leaves the
+    // catalog UNKNOWN there (no identity, no "missing" claim) and the envelope reports partial.
+    const unfiltered = await withStoreRead(context, { ...queryDashboard("workflows"), needsProjection: false });
+    expect(unfiltered.data.items[0]).toMatchObject({ id: "plan-1", catalog: null, badges: [] });
+    expect(unfiltered.collaboration).toMatchObject({ completeness: "partial" });
+
+    const completeB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, completeB, secondSnapshot(completeB), 1));
+    expectation(await filtered());
   });
 
   test("observation stamps cover exactly the projects a narrowed read contributes", async () => {

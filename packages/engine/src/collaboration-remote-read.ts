@@ -594,7 +594,15 @@ export function remoteIssueRead(view: RemoteReadView, id: string, projectId?: st
         { issueRef: id, projects: found.map((entry) => entry.projectId) },
       );
     }
-    return { kind: "mstar", detail: mstarDetail(found[0]!.projectId, found[0]!.issue, view) };
+    return {
+      kind: "mstar",
+      detail: mstarDetail(
+        found[0]!.projectId,
+        found[0]!.issue,
+        view,
+        evidence.map((entry) => entry.projectId),
+      ),
+    };
   }
   if (projectId === undefined || projectId.trim() === "") {
     throw new IssueError(
@@ -618,10 +626,15 @@ export function remoteIssueRead(view: RemoteReadView, id: string, projectId?: st
   }
   return issue.mstar === null
     ? { kind: "native", detail: providerOnly(projectId, issue) }
-    : { kind: "mstar", detail: mstarDetail(projectId, issue, view) };
+    : { kind: "mstar", detail: mstarDetail(projectId, issue, view, [projectId]) };
 }
 
-function mstarDetail(projectId: string, issue: RemoteIssue, view: RemoteReadView): IssueDetail {
+function mstarDetail(
+  projectId: string,
+  issue: RemoteIssue,
+  view: RemoteReadView,
+  projectIds: readonly string[],
+): IssueDetail {
   const subject = subjectOf(issue);
   if (subject === null) unreadable(projectId, "an MStar subject");
   const issueRef = subject.issueRef;
@@ -657,7 +670,7 @@ function mstarDetail(projectId: string, issue: RemoteIssue, view: RemoteReadView
     fromIssue: issueRef,
     relation: String(row.relation),
     toIssue: String(row.target),
-    title: titleOfRef(view, String(row.target)),
+    title: titleOfRef(view, String(row.target), projectIds),
   }));
   const provenance = subject.provenance.map((row, index) => ({
     id: index + 1,
@@ -713,11 +726,12 @@ function mstarDetail(projectId: string, issue: RemoteIssue, view: RemoteReadView
   };
 }
 
-function titleOfRef(view: RemoteReadView, issueRef: string): string | null {
-  for (const projectId of view.projectIds) {
+function titleOfRef(view: RemoteReadView, issueRef: string, projectIds: readonly string[]): string | null {
+  for (const projectId of projectIds) {
     const evidence = view.projects.get(projectId);
-    // invariant: A relation title is cross-project data. Only a current, complete scope
-    // may disclose it; an unresolved title stays null rather than reading an expired snapshot.
+    // invariant: A relation title is cross-project data. Only a project this read DECLARES
+    // and that is current and complete may disclose it; an unresolved title stays null
+    // rather than reading an undeclared or expired snapshot.
     if (evidence === undefined || evidence.freshness !== "fresh" || evidence.snapshot === null) continue;
     for (const issue of evidence.snapshot.issues) {
       if (issue.mstar?.issueRef === issueRef) {

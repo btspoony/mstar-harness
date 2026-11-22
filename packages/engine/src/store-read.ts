@@ -1621,10 +1621,14 @@ function remoteIdentity(row: RemoteCatalogRow): CatalogIdentityDTO {
 }
 
 /** note: `null` means the optional catalog source was unavailable (never "no rows"). */
-function remoteCatalogRowsFor(sources: StoreReadSources, required: boolean): readonly RemoteCatalogRow[] | null {
+function remoteCatalogRowsFor(
+  sources: StoreReadSources,
+  required: boolean,
+  projectIds?: readonly string[],
+): readonly RemoteCatalogRow[] | null {
   if (sources.remote === null) return null;
   try {
-    return remoteCatalogRows(sources.remote, sources.remote.projectIds);
+    return remoteCatalogRows(sources.remote, projectIds ?? sources.remote.projectIds);
   } catch (error) {
     if (required) throw error;
     return null;
@@ -1635,9 +1639,10 @@ function catalogIdentitiesIn(
   sources: StoreReadSources,
   keys: readonly CatalogKey[],
   required: boolean,
+  projectIds?: readonly string[],
 ): Map<string, CatalogIdentityDTO> {
   if (sources.remote === null) return catalogIdentities(sources.collaboration?.db ?? null, keys);
-  const rows = remoteCatalogRowsFor(sources, required);
+  const rows = remoteCatalogRowsFor(sources, required, projectIds);
   const found = new Map<string, CatalogIdentityDTO>();
   if (rows === null || keys.length === 0) return found;
   const wanted = new Set(keys.map((key) => identityToken(key.kind, key.id)));
@@ -1662,10 +1667,14 @@ function projectMembershipIn(
   }
 }
 
-function iterationAttributionIn(sources: StoreReadSources, required: boolean): IterationListDTO["attribution"] {
+function iterationAttributionIn(
+  sources: StoreReadSources,
+  required: boolean,
+  projectIds?: readonly string[],
+): IterationListDTO["attribution"] {
   if (sources.remote === null) return iterationAttribution(sources.collaboration?.db ?? null);
   try {
-    return remoteCatalogLinks(sources.remote, sources.remote.projectIds).attribution;
+    return remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds).attribution;
   } catch (error) {
     if (required) throw error;
     return "absent";
@@ -1675,11 +1684,12 @@ function iterationAttributionIn(sources: StoreReadSources, required: boolean): I
 function iterationLinksIn(
   sources: StoreReadSources,
   kind: "plan" | "document",
+  projectIds?: readonly string[],
 ): ReadonlyMap<string, readonly string[]> {
   if (sources.remote === null) {
     return kind === "plan" ? iterationPlanIds(sources.collaboration?.db ?? null) : iterationDocumentIds(sources.collaboration?.db ?? null);
   }
-  const links = remoteCatalogLinks(sources.remote, sources.remote.projectIds);
+  const links = remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds);
   return kind === "plan" ? links.planLinks : links.documentLinks;
 }
 
@@ -1922,10 +1932,14 @@ function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO
 function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters): WorkflowListDTO {
   const db = executionSource(sources);
   const projectId = text(filters.projectId);
+  // invariant: A project filter declares exactly that project for this read: membership,
+  // catalog identities and the known-catalog flag all come from it, so an unrelated
+  // project's gap never suppresses this project's rows or taints their stamp.
+  const scopeIds = projectId === null ? undefined : [projectId];
   // invariant: A project filter makes membership a required source. Enforcing it here
   // covers both zero-producing returns below; only an unfiltered list is optional.
-  const membership = projectMembershipIn(sources, projectId !== null, projectId === null ? undefined : [projectId]);
-  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false) !== null : sources.collaboration !== null;
+  const membership = projectMembershipIn(sources, projectId !== null, scopeIds);
+  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false, scopeIds) !== null : sources.collaboration !== null;
   const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
@@ -1959,7 +1973,7 @@ function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters):
   const identities = catalogIdentitiesIn(sources, [
     ...page.map(workflowCatalogKey),
     ...page.flatMap((workflow) => (plansByWorkflow.get(workflow.id) ?? []).map((plan) => ({ kind: "plan" as const, id: plan.plan_id }))),
-  ], false);
+  ], false, scopeIds);
   return {
     items: page.map((workflow) =>
       toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities, catalogKnown),
@@ -2194,9 +2208,9 @@ function gateStepOf(
 }
 
 /** note: The iteration identity rows the selected source holds, sorted title/id. */
-function iterationCatalogRows(sources: StoreReadSources): CatalogIdentityDTO[] {
+function iterationCatalogRows(sources: StoreReadSources, projectIds?: readonly string[]): CatalogIdentityDTO[] {
   if (sources.remote !== null) {
-    const rows = remoteCatalogRowsFor(sources, true) ?? [];
+    const rows = remoteCatalogRowsFor(sources, true, projectIds) ?? [];
     return rows
       .filter((row) => row.kind === "iteration")
       .map(remoteIdentity)
@@ -2213,21 +2227,25 @@ function readIterationList(sources: StoreReadSources, filters: DashboardFilters)
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
   const projectId = text(filters.projectId);
-  const membership = projectMembershipIn(sources, true);
-  const catalogRows = iterationCatalogRows(sources).filter(
+  // invariant: A project filter declares exactly that project for this read: membership,
+  // catalog rows, links and attribution all come from it, so another project's missing,
+  // partial or expired evidence neither refuses nor contributes to this list.
+  const scopeIds = projectId === null ? undefined : [projectId];
+  const membership = projectMembershipIn(sources, true, scopeIds);
+  const catalogRows = iterationCatalogRows(sources, scopeIds).filter(
     (row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId),
   );
 
-  const linkPlanIds = iterationLinksIn(sources, "plan");
+  const linkPlanIds = iterationLinksIn(sources, "plan", scopeIds);
   const compassByIteration = compassesByIteration(generated);
   const planIds = iterationMembershipPlanIds(compassByIteration, linkPlanIds, catalogRows.map((row) => row.id));
-  const documentIds = iterationLinksIn(sources, "document");
+  const documentIds = iterationLinksIn(sources, "document", scopeIds);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentitiesIn(sources, [
     ...page.map((row) => ({ kind: "iteration" as const, id: row.id })),
     ...page.flatMap((row) => (planIds.get(row.id) ?? []).map((planId) => ({ kind: "plan" as const, id: planId }))),
     ...page.flatMap((row) => (documentIds.get(row.id) ?? []).map((documentId) => ({ kind: "document" as const, id: documentId }))),
-  ], true);
+  ], true, scopeIds);
   return {
     items: page.map((row) =>
       composeIteration(
@@ -2246,7 +2264,7 @@ function readIterationList(sources: StoreReadSources, filters: DashboardFilters)
     total: catalogRows.length,
     // One list-level disclosure: whether ANY iteration is attributed to a
     // project, so a project's empty Iterations feature can tell a fact from a gap.
-    attribution: iterationAttributionIn(sources, true),
+    attribution: iterationAttributionIn(sources, true, scopeIds),
   };
 }
 
