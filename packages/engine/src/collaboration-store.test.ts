@@ -44,6 +44,7 @@ import {
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  readRemoteCacheAuthority,
   setLocalPredecessorPublicationGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
@@ -7708,5 +7709,70 @@ describe("remote outbox qc fixes", () => {
     );
     // invariant: With every candidate complete and current, the same lookup is a proven miss.
     await expect(close("00000000-0000-4000-8000-0000000008b2")).rejects.toMatchObject({ code: "issue.not-found" });
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// note: A pre-v3 remote cache is derived observation state: the reviewed bind replaces it
+// ---------------------------------------------------------------------------
+
+/** note: A real pre-v3 REMOTE cache: `remote` exists only since v2, so this is the oldest remote shape. */
+function writeV2RemoteLane(location: CollaborationLocation): void {
+  writeV2Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.prepare("update collaboration_meta set mode = 'remote' where id = 1").run();
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+describe("pre-v3 remote cache recovery", () => {
+  test("the reviewed bind replaces the derived cache and an admitted read names that recovery", async () => {
+    const fixture = remoteFixture("remote-prev3-recovery");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV2RemoteLane(location);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    // note: The checkout records the generation this pre-v3 cache belongs to, exactly as an earlier
+    // bind of that release left it. Its store identity must survive the replacement.
+    writeRemoteCollaborationBinding(context, {
+      repoKey: fixture.repoKey,
+      selectorCommit: commit,
+      generation: 3,
+      storeId: "v1-store",
+      epoch: 1,
+    });
+
+    // invariant: An ordinary admitted read refuses, and it names the REACHABLE recovery — the
+    // reviewed bind, never a local `store upgrade` that produces no remote receipt.
+    await expect(readRemoteCacheAuthority(context)).rejects.toMatchObject({
+      code: "collaboration.upgrade-required",
+      message: expect.stringContaining("mstar store collaboration remote bind"),
+    });
+
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 3,
+      checks: [positiveCheck()],
+    });
+    // invariant: The replacement kept the recorded store identity, so the checkout binding still
+    // names the cache the bind published.
+    expect(bound).toMatchObject({
+      version: 1,
+      generation: 3,
+      binding: { version: 3, mode: "remote", storeId: "v1-store", epoch: 1 },
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(metaRecord(location.dbPath)).toMatchObject({
+      mode: "remote",
+      store_id: "v1-store",
+      authority_state: "active",
+    });
+    expect(tableNames(location.dbPath)).toContain("remote_outbox");
+    expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(3);
   }, 30_000);
 });

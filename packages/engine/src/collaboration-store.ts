@@ -1136,14 +1136,24 @@ function notActive(dbPath: string, state: "staged" | "active"): StoreError {
   );
 }
 
-/** note: An admitted old lane is never migrated implicitly; the explicit upgrade is the only route. */
-function upgradeRequired(dbPath: string, found: number): StoreError {
+/**
+ * note: An admitted old lane is never migrated implicitly. A local/mirror lane advances through
+ * `store upgrade`; a `remote` lane is derived observation state, so its recovery is the reviewed
+ * bind that replaces it — no local upgrade verb produces its receipt.
+ */
+function upgradeRequired(location: CollaborationLocation, found: number): StoreError {
   const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+  const recovery =
+    location.mode === "remote"
+      ? `A remote cache is derived observation state and is never upgraded in place: run ` +
+        `"mstar store collaboration remote bind" for this scope, which replaces a pre-v${String(current)} cache ` +
+        `under the checked selector`
+      : `run "mstar store upgrade --operator <name>" once for this scope`;
   return new StoreError(
     "collaboration.upgrade-required",
-    `The collaboration store at ${dbPath} records schema version ${String(found)}, and this build reads ` +
-      `version ${String(current)}. Ordinary reads never migrate a lane: run "mstar store upgrade --operator <name>" ` +
-      `once for this scope, then retry the same verb. Nothing was read or modified.`,
+    `The collaboration store at ${location.dbPath} records schema version ${String(found)}, and this build reads ` +
+      `version ${String(current)}. Ordinary reads never migrate a lane: ${recovery}, then retry the same verb. ` +
+      `Nothing was read or modified.`,
   );
 }
 
@@ -1523,7 +1533,7 @@ function admit(
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
-      throw upgradeRequired(location.dbPath, schemaVersion);
+      throw upgradeRequired(location, schemaVersion);
     }
     assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
@@ -1752,6 +1762,36 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 }
 
 /**
+ * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
+ * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
+ * singleton naming this repository and mode, and (by being below the outbox schema) no outbox
+ * work. Anything unreadable, foreign or newer is never deleted. The replaced lane's identity is
+ * returned so the fresh lane keeps it.
+ */
+async function replaceDerivedLaneBelow(
+  location: CollaborationLocation,
+  below: number,
+  timeout: number,
+): Promise<RetainedLaneIdentity | undefined> {
+  const dbPath = location.dbPath;
+  const db = await connectAt(dbPath, "read", timeout);
+  let recorded: { version: number; meta: CollaborationMeta };
+  try {
+    recorded = { version: validateCollaborationMigrations(readAppliedMigrations(db, false)), meta: readMeta(db) };
+  } finally {
+    db.close();
+  }
+  if (recorded.version >= below) return undefined;
+  if (recorded.meta.repoKey !== location.repoKey || recorded.meta.mode !== location.mode) {
+    throw staleBinding(dbPath, recorded.meta, `this checkout's ${location.repoKey} (${location.mode})`);
+  }
+  // note: The derived cache is retired with its journals: a stale sidecar would otherwise be
+  // picked up by the replacement's name.
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+  return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
+}
+
+/**
  * invariant: Ensure the store's directory chain exists: every existing component must
  * already be a real directory, and creation makes the missing chain private.
  */
@@ -1814,17 +1854,37 @@ export async function initializeCollaborationStore(location: CollaborationLocati
  * note: The remote cache lane's own initializer. `remote bind` owns it: the local domain
  * entries never create or open a remote lane, so no local-authority verb can
  * stand in for the verified cache.
+ *
+ * A cache below the outbox schema is DERIVED observation state with no outbox work to preserve,
+ * so the reviewed bind replaces it in place instead of failing its own documented recovery. The
+ * replaced lane's store identity is kept: the checkout binding that named it stays valid, so the
+ * bind publishes over the same generation.
  */
 export async function initializeRemoteCacheStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
-  return createOrContinueStore(location);
+  // note: `remote` has existed only since v2, so every pre-current remote cache is below the outbox
+  // schema and holds no outbox work: any of them is replaced, never migrated in place.
+  return createOrContinueStore(location, {
+    replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
+  });
 }
 
-async function createOrContinueStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
+/** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
+type RetainedLaneIdentity = Readonly<{ storeId: string; epoch: number }>;
+
+async function createOrContinueStore(
+  location: CollaborationLocation,
+  options: { replaceBelowVersion?: number } = {},
+): Promise<CollaborationAuthority> {
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
-  if (existsSync(dbPath)) return continueExisting(location, timeout);
+  let retained: RetainedLaneIdentity | undefined;
+  if (existsSync(dbPath)) {
+    if (options.replaceBelowVersion === undefined || location.mode !== "remote") return continueExisting(location, timeout);
+    retained = await replaceDerivedLaneBelow(location, options.replaceBelowVersion, timeout);
+    if (retained === undefined) return continueExisting(location, timeout);
+  }
 
   const dir = dirname(dbPath);
   createStoreDirectories(dir);
@@ -1869,8 +1929,8 @@ async function createOrContinueStore(location: CollaborationLocation): Promise<C
       }
       db.prepare(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
-          "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', 1, 0, 0, ?)",
-      ).run(location.repoKey, location.mode, randomUUID(), at);
+          "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', ?, 0, 0, ?)",
+      ).run(location.repoKey, location.mode, retained?.storeId ?? randomUUID(), retained?.epoch ?? 1, at);
       db.exec("commit");
     } catch (error) {
       try {
@@ -1937,6 +1997,70 @@ export type CollaborationUpgradeReceipt = Readonly<{
 }>;
 
 /**
+ * note: The declared inventory of one supported lane version: every table and column an image of
+ * that generation must carry. A restore verifies an older verified image against ITS OWN declared
+ * shape before advancing the staged copy through the ladder.
+ */
+export function collaborationInventoryOf(version: number): Readonly<Record<string, readonly string[]>> {
+  if (version <= 1) return COLLABORATION_COLUMNS;
+  if (version < COLLABORATION_OUTBOX_SCHEMA.version) return COLLABORATION_V2_COLUMNS;
+  return COLLABORATION_CURRENT_COLUMNS;
+}
+
+/**
+ * invariant: Advance one lane's bytes through this build's supported ladder inside the caller's
+ * open transaction: each recorded predecessor is re-validated, the v2 rebuild+backfill and the v3
+ * outbox each run under a proof of the shape they start from, and every ledger row is appended
+ * only after its layout is verified. An already-current lane is only revalidated.
+ */
+export function applyCollaborationLadder(
+  db: StoreDb,
+  dbPath: string,
+): Readonly<{ fromVersion: number; issuesBackfilled: number }> {
+  const appliedMax = validateCollaborationMigrations(readAppliedMigrations(db, false));
+  const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+  if (appliedMax === current) {
+    assertCurrentSchema(db, dbPath);
+    return { fromVersion: current, issuesBackfilled: 0 };
+  }
+  let issuesBackfilled = 0;
+  if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
+    assertLegacySchema(db, dbPath);
+    const present = db
+      .prepare("pragma table_info(issues)")
+      .all()
+      .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
+    if (present.includes("issue_ref")) {
+      throw new StoreError(
+        "store.corrupt",
+        `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
+          `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
+          `verified backup pair; nothing was modified.`,
+      );
+    }
+    issuesBackfilled = applyRemoteCacheSchema(db);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_REMOTE_SCHEMA.version,
+      COLLABORATION_REMOTE_SCHEMA.name,
+      migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
+  // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
+  assertRemoteCacheSchema(db, dbPath);
+  db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+  db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+    COLLABORATION_OUTBOX_SCHEMA.version,
+    COLLABORATION_OUTBOX_SCHEMA.name,
+    migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+    nowRfc3339(),
+  );
+  assertCurrentSchema(db, dbPath);
+  return { fromVersion: appliedMax, issuesBackfilled };
+}
+
+/**
  * `mstar store upgrade --operator <name>` for the collaboration lane: the ONLY
  * way an admitted older lane advances to the current schema. Ordinary reads
  * never migrate.
@@ -1978,8 +2102,6 @@ export async function upgradeCollaborationStore(
   try {
     db.exec("begin immediate");
     try {
-      const applied = readAppliedMigrations(db, false);
-      const appliedMax = validateCollaborationMigrations(applied);
       const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
       const meta = readMeta(db);
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
@@ -2013,47 +2135,12 @@ export async function upgradeCollaborationStore(
         epoch: meta.epoch,
         issuesBackfilled,
       });
-      if (appliedMax === current) {
+      const ladder = applyCollaborationLadder(db, dbPath);
+      if (ladder.fromVersion === current) {
         // note: A committed earlier upgrade revalidates instead of reapplying.
-        assertCurrentSchema(db, dbPath);
         db.exec("commit");
         return receipt(current, 0);
       }
-      const fromVersion = appliedMax;
-      let issuesBackfilled = 0;
-      if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
-        assertLegacySchema(db, dbPath);
-        const present = db
-          .prepare("pragma table_info(issues)")
-          .all()
-          .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
-        if (present.includes("issue_ref")) {
-          throw new StoreError(
-            "store.corrupt",
-            `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
-              `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
-              `verified backup pair; nothing was modified.`,
-          );
-        }
-        issuesBackfilled = applyRemoteCacheSchema(db);
-        db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-          COLLABORATION_REMOTE_SCHEMA.version,
-          COLLABORATION_REMOTE_SCHEMA.name,
-          migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
-          nowRfc3339(),
-        );
-      }
-      // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
-      // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
-      assertRemoteCacheSchema(db, dbPath);
-      db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
-      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-        COLLABORATION_OUTBOX_SCHEMA.version,
-        COLLABORATION_OUTBOX_SCHEMA.name,
-        migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
-        nowRfc3339(),
-      );
-      assertCurrentSchema(db, dbPath);
       db.prepare(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
           "values ('standalone', ?, ?, ?, ?)",
@@ -2063,11 +2150,11 @@ export async function upgradeCollaborationStore(
         JSON.stringify({
           version: 1,
           operator: operator.trim(),
-          fromVersion,
+          fromVersion: ladder.fromVersion,
           toVersion: current,
           storeId: meta.storeId,
           epoch: meta.epoch,
-          issuesBackfilled,
+          issuesBackfilled: ladder.issuesBackfilled,
         }),
         nowRfc3339(),
       );
@@ -2075,7 +2162,7 @@ export async function upgradeCollaborationStore(
       // under it: the ladder is never advanced under a selection this process lost.
       assertSelectionUnchanged(context, location);
       db.exec("commit");
-      return receipt(fromVersion, issuesBackfilled);
+      return receipt(ladder.fromVersion, ladder.issuesBackfilled);
     } catch (error) {
       try {
         db.exec("rollback");
