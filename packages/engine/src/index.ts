@@ -98,17 +98,56 @@ export type {
   CollaborationBinding,
   CollaborationStamp,
   CollaborationStoreHandle,
+  CollaborationUpgradeReceipt,
+  IssueRef,
 } from "./collaboration-store.js";
 export {
   adoptCollaborationBinding,
+  assertIssueRef,
   initializeCollaborationStore,
+  ISSUE_REF_PATTERN,
+  mintIssueRef,
   openCollaborationStore,
+  openRemoteCache,
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  readRemoteCacheAuthority,
+  upgradeCollaborationStore,
   withCollaborationWrite,
+  withRemoteCacheWrite,
   writeCollaborationBinding,
+  writeRemoteCollaborationBinding,
 } from "./collaboration-store.js";
+// note: The remote authority boundary: strict verification/observation DTOs, the explicit bind
+// that materializes the selected provider scope, scoped observation ingest into the cache, and
+// the status read. No provider call, credential or transport lives here.
+export type {
+  ObservationSubmission,
+  ProviderIssueIdentity,
+  ProviderProjectScope,
+  RemoteAvailability,
+  RemoteBindResult,
+  RemoteCatalogEntity,
+  RemoteCatalogLink,
+  RemoteMilestone,
+  RemoteMstarIssue,
+  RemoteObservationResult,
+  RemoteProjectStatus,
+  RemoteRoadmap,
+  RemoteSnapshot,
+  RemoteStatus,
+  ScopeCapabilities,
+  ScopeCheck,
+  ScopeOutcome,
+  SnapshotCoverage,
+  VerificationBatch,
+} from "./collaboration-remote.js";
+export {
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  readRemoteStatus,
+} from "./collaboration-remote.js";
 // note: The one-way authority cutover: reviewed manifest, verified staged copy,
 // activation claim, durable source fence, guarded publication and replay.
 export type {
@@ -760,7 +799,9 @@ export type {
   IssueLink,
   IssueMove,
   IssuePage,
+  IssueProvenanceKind,
   IssueReceipt,
+  IssueRelationKind,
   IssueReopen,
   IssueTriage,
   MutationContext,
@@ -791,6 +832,8 @@ export {
   ISSUE_ACTION_NAMES,
   ISSUE_DISPOSITIONS,
   ISSUE_KINDS,
+  ISSUE_PROVENANCE_KINDS,
+  ISSUE_RELATIONS,
   ISSUE_SEVERITIES,
   ISSUE_PAYLOAD_SCHEMAS,
   TERMINAL_DISPOSITIONS,

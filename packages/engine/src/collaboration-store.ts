@@ -373,10 +373,233 @@ create table cutover_publications(
 const COLLABORATION_SCHEMA: Migration = { version: 1, name: "collaboration-core", sql: COLLABORATION_SCHEMA_SQL };
 
 /**
- * invariant: The closed collaboration table inventory this build requires. A store that
- * is missing one of these - or carries a table outside it - is not the current
- * collaboration schema, and a damaged one must refuse instead of admitting a
- * handle whose domain queries would fail later.
+ * note: The portable issue key the v2 lane owns. It is allocated once, never derived from a
+ * provider, a local sequence, a Git author or a checkout scope, and every
+ * issue-producing path (capture, legacy import, cutover copy, v1 backfill) mints
+ * one through `mintIssueRef`.
+ */
+export const ISSUE_REF_PREFIX = "mstar:issue:";
+export const ISSUE_REF_PATTERN = /^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export type IssueRef = string;
+
+export function mintIssueRef(): IssueRef {
+  return `${ISSUE_REF_PREFIX}${randomUUID()}`;
+}
+
+/**
+ * note: A supplied reference must be exactly the contract's spelling. It is a remote-boundary
+ * input (an adoption or snapshot document), so a malformed one is input refusal.
+ */
+export function assertIssueRef(value: unknown): IssueRef {
+  if (typeof value !== "string" || !ISSUE_REF_PATTERN.test(value)) {
+    throw new StoreError("remote.input-invalid", "an IssueRef is 'mstar:issue:<lowercase uuid>'");
+  }
+  return value;
+}
+
+/**
+ * invariant: v2 `collaboration-remote-cache` - the exact Data Model delta over the byte-
+ * identical v1 `collaboration-core`: `remote` joins the mode CHECK, `issues`
+ * gains its stable `issue_ref`, and the three remote projection tables appear.
+ * `collaboration_meta` is rebuilt because SQLite cannot alter a CHECK in place;
+ * it references nothing and is referenced by nothing, so the copy is a plain
+ * row move.
+ */
+const COLLABORATION_META_V2_SQL = `
+create table collaboration_meta_remote_cache(
+  id integer primary key check (id = 1),
+  repository_key text not null,
+  mode text not null check (mode in ('local','mirror','remote')),
+  store_id text not null,
+  authority_state text not null check (authority_state in ('staged','active')),
+  authority_epoch integer not null check (authority_epoch > 0),
+  revision integer not null check (revision >= 0),
+  catalog_revision integer not null check (catalog_revision >= 0),
+  created_at text not null,
+  activated_at text
+);
+insert into collaboration_meta_remote_cache(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision, created_at, activated_at)
+  select id, repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision, created_at, activated_at
+  from collaboration_meta;
+drop table collaboration_meta;
+alter table collaboration_meta_remote_cache rename to collaboration_meta;
+create table remote_bindings(
+  generation integer not null check (typeof(generation) = 'integer' and generation > 0),
+  project_key text not null,
+  selector_commit text not null,
+  provider text not null check (provider = 'linear'),
+  workspace_id text not null,
+  team_id text not null,
+  provider_project_id text not null,
+  journal_issue_id text not null,
+  writer_id text,
+  verified_at text not null,
+  verification_json text not null,
+  primary key (generation, project_key),
+  unique (generation, provider, workspace_id, provider_project_id)
+);
+create table remote_observations(
+  generation integer not null,
+  project_key text not null,
+  revision integer not null default 0 check (revision >= 0),
+  as_of text,
+  completeness text not null check (completeness in ('complete','partial','unavailable')),
+  code text,
+  snapshot_json text,
+  received_at text not null,
+  primary key (generation, project_key),
+  foreign key (generation, project_key) references remote_bindings(generation, project_key),
+  check (
+    (completeness = 'unavailable' and snapshot_json is null and as_of is null)
+    or (completeness in ('complete','partial') and snapshot_json is not null and as_of is not null)
+  )
+);
+create table remote_issue_identities(
+  generation integer not null,
+  project_key text not null,
+  provider_issue_id text not null,
+  issue_ref text,
+  primary key (generation, project_key, provider_issue_id),
+  foreign key (generation, project_key) references remote_observations(generation, project_key)
+);
+create unique index remote_issue_identities_ref on remote_issue_identities(generation, issue_ref) where issue_ref is not null;
+create unique index remote_issue_identities_provider on remote_issue_identities(generation, provider_issue_id);
+`;
+
+/**
+ * invariant: `issues` gains `issue_ref TEXT NOT NULL UNIQUE`. It is referenced by six child
+ * tables and this batch runs with `foreign_keys=ON` inside one transaction, so
+ * the same FK-safe staging the execution lane's severity/disposition rebuilds
+ * use applies here: the children are staged out, the parent rebuilt, the
+ * children restored before COMMIT. Values are minted by the caller between the
+ * two halves - a random per-row UUID cannot be expressed as table DDL.
+ */
+const ISSUE_COLUMN_LIST =
+  "id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, " +
+  "closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id";
+
+const COLLABORATION_ISSUES_V2_STAGE_SQL = `
+create table occurrences_remote_cache_stage as select * from occurrences;
+create table provenance_remote_cache_stage as select * from provenance;
+create table relations_remote_cache_stage as select * from relations;
+create table issue_transitions_remote_cache_stage as select * from issue_transitions;
+create table issue_project_moves_remote_cache_stage as select * from issue_project_moves;
+create table issue_sync_state_remote_cache_stage as select * from issue_sync_state;
+delete from occurrences;
+delete from provenance;
+delete from relations;
+delete from issue_transitions;
+delete from issue_project_moves;
+delete from issue_sync_state;
+create table issues_remote_cache(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded','obsolete')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique,
+  issue_ref text not null unique,
+  milestone_id text references project_milestones(milestone_id)
+);
+`;
+
+const COLLABORATION_ISSUES_V2_RESTORE_SQL = `
+drop table issues;
+alter table issues_remote_cache rename to issues;
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+insert into occurrences select * from occurrences_remote_cache_stage;
+insert into provenance select * from provenance_remote_cache_stage;
+insert into relations select * from relations_remote_cache_stage;
+insert into issue_transitions select * from issue_transitions_remote_cache_stage;
+insert into issue_project_moves select * from issue_project_moves_remote_cache_stage;
+insert into issue_sync_state select * from issue_sync_state_remote_cache_stage;
+drop table occurrences_remote_cache_stage;
+drop table provenance_remote_cache_stage;
+drop table relations_remote_cache_stage;
+drop table issue_transitions_remote_cache_stage;
+drop table issue_project_moves_remote_cache_stage;
+drop table issue_sync_state_remote_cache_stage;
+`;
+
+/**
+ * invariant: v2 `collaboration-remote-cache`. Its `sql` is the complete DDL (the checksum's
+ * subject); applying it runs the two issue halves around the per-row reference
+ * backfill, because the static text cannot carry a random value.
+ */
+const COLLABORATION_REMOTE_SCHEMA: Migration = {
+  version: 2,
+  name: "collaboration-remote-cache",
+  sql: `${COLLABORATION_META_V2_SQL}\n${COLLABORATION_ISSUES_V2_STAGE_SQL}\n${COLLABORATION_ISSUES_V2_RESTORE_SQL}`,
+};
+
+/** note: The lane's ordered migrations: v1 is immutable, v2 is appended. */
+export const COLLABORATION_MIGRATIONS: readonly Migration[] = [COLLABORATION_SCHEMA, COLLABORATION_REMOTE_SCHEMA];
+
+/** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
+const COLLABORATION_REMOTE_TABLES: readonly string[] = [
+  "remote_bindings",
+  "remote_issue_identities",
+  "remote_observations",
+];
+
+/**
+ * note: Apply the v2 delta inside the caller's open transaction and return the number of
+ * issue rows that received a minted reference. The caller verifies the resulting
+ * layout and records the ledger row before committing.
+ */
+function applyRemoteCacheSchema(db: StoreDb): number {
+  db.exec(COLLABORATION_META_V2_SQL);
+  db.exec(COLLABORATION_ISSUES_V2_STAGE_SQL);
+  const columns = ISSUE_COLUMN_LIST.split(", ");
+  const rows = db.prepare(`select ${ISSUE_COLUMN_LIST} from issues`).all() as Array<Record<string, unknown>>;
+  const insert = db.prepare(
+    `insert into issues_remote_cache(${ISSUE_COLUMN_LIST}, issue_ref) values (${[...columns, "issue_ref"].map(() => "?").join(", ")})`,
+  );
+  for (const row of rows) insert.run(...columns.map((column) => row[column]), mintIssueRef());
+  db.exec(COLLABORATION_ISSUES_V2_RESTORE_SQL);
+  return rows.length;
+}
+
+/**
+ * invariant: The closed collaboration table inventory this build requires - the v2 shape.
+ * A store that is missing one of these - or carries a table outside it - is not
+ * the current collaboration schema, and a damaged one must refuse instead of
+ * admitting a handle whose domain queries would fail later.
  */
 const COLLABORATION_TABLES: readonly string[] = [
   "catalog_entities",
@@ -396,17 +619,19 @@ const COLLABORATION_TABLES: readonly string[] = [
   "project_roadmaps",
   "provenance",
   "relations",
+  "remote_bindings",
+  "remote_issue_identities",
+  "remote_observations",
   "schema_version",
   "sync_cursor",
   "sync_runs",
 ];
 
 /**
- * The required current-schema columns, taken from `COLLABORATION_SCHEMA` (plus
- * the shared ledger table). A table that kept its name but lost a required
- * column is a damaged store, not a current one, and must refuse at admission
- * instead of failing a later domain query. The DDL is the lane's immutable v1
- * shape; a future schema change arrives as a new migration with its own list.
+ * The columns the cutover COPIES from a combined source store, in its own
+ * pre-cutover shape: that source predates `issues.issue_ref`, so the copy
+ * mints the reference on the target side instead of reading it. Admission uses
+ * the current (v2) inventory below.
  */
 export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   catalog_entities: [
@@ -468,6 +693,112 @@ export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> 
   sync_cursor: ["binding_id", "direction", "cursor", "updated_at"],
   sync_runs: ["binding_id", "direction", "run_id", "holder_pid", "holder_host", "started_at", "reason"],
 };
+
+/**
+ * The required current-schema columns, taken from the v2 DDL (plus the shared
+ * ledger table). A table that kept its name but lost a required column is a
+ * damaged store, not a current one, and must refuse at admission instead of
+ * failing a later domain query.
+ */
+const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ...COLLABORATION_COLUMNS,
+  issues: [...COLLABORATION_COLUMNS.issues!, "issue_ref"],
+  remote_bindings: [
+    "generation", "project_key", "selector_commit", "provider", "workspace_id", "team_id", "provider_project_id",
+    "journal_issue_id", "writer_id", "verified_at", "verification_json",
+  ],
+  remote_issue_identities: ["generation", "project_key", "provider_issue_id", "issue_ref"],
+  remote_observations: [
+    "generation", "project_key", "revision", "as_of", "completeness", "code", "snapshot_json", "received_at",
+  ],
+};
+
+/**
+ * invariant: The v2 delta's enforced layout: the columns that must reject null, the
+ * primary and foreign keys, the unique indexes and the state vocabulary. The
+ * declared DDL is canonical, so admission proves what SQLite actually built
+ * instead of trusting table and column names; a lane that kept its names but
+ * lost a key or a CHECK can never admit a handle whose invariants it cannot
+ * enforce.
+ */
+type ForeignKeyLayout = readonly (readonly [column: string, table: string, target: string])[];
+type UniqueIndexLayout = Readonly<{ columns: readonly string[]; where: string | null }>;
+
+type KeyLayout = Readonly<{
+  table: string;
+  notNull: readonly string[];
+  primaryKey?: readonly string[];
+  foreignKeys: readonly ForeignKeyLayout[];
+  uniqueIndexes: readonly UniqueIndexLayout[];
+  checks: readonly string[];
+}>;
+
+const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
+  {
+    table: "collaboration_meta",
+    notNull: [],
+    foreignKeys: [],
+    uniqueIndexes: [],
+    checks: ["check (mode in ('local','mirror','remote'))"],
+  },
+  {
+    table: "issues",
+    notNull: ["issue_ref"],
+    foreignKeys: [[["milestone_id", "project_milestones", "milestone_id"]]],
+    uniqueIndexes: [{ columns: ["issue_ref"], where: null }],
+    checks: [],
+  },
+  {
+    table: "remote_bindings",
+    notNull: [
+      "generation", "project_key", "selector_commit", "provider", "workspace_id", "team_id", "provider_project_id",
+      "journal_issue_id", "verified_at", "verification_json",
+    ],
+    primaryKey: ["generation", "project_key"],
+    foreignKeys: [],
+    uniqueIndexes: [{ columns: ["generation", "provider", "workspace_id", "provider_project_id"], where: null }],
+    checks: ["check (typeof(generation) = 'integer' and generation > 0)", "check (provider = 'linear')"],
+  },
+  {
+    table: "remote_observations",
+    notNull: ["generation", "project_key", "revision", "completeness", "received_at"],
+    primaryKey: ["generation", "project_key"],
+    foreignKeys: [
+      [
+        ["generation", "remote_bindings", "generation"],
+        ["project_key", "remote_bindings", "project_key"],
+      ],
+    ],
+    uniqueIndexes: [],
+    checks: [
+      "check (revision >= 0)",
+      "check (completeness in ('complete','partial','unavailable'))",
+      "check ( (completeness = 'unavailable' and snapshot_json is null and as_of is null) or " +
+        "(completeness in ('complete','partial') and snapshot_json is not null and as_of is not null) )",
+    ],
+  },
+  {
+    table: "remote_issue_identities",
+    notNull: ["generation", "project_key", "provider_issue_id"],
+    primaryKey: ["generation", "project_key", "provider_issue_id"],
+    foreignKeys: [
+      [
+        ["generation", "remote_observations", "generation"],
+        ["project_key", "remote_observations", "project_key"],
+      ],
+    ],
+    uniqueIndexes: [
+      { columns: ["generation", "issue_ref"], where: "where issue_ref is not null" },
+      { columns: ["generation", "provider_issue_id"], where: null },
+    ],
+    checks: [],
+  },
+];
+
+/** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
+const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+  (table) => !COLLABORATION_REMOTE_TABLES.includes(table),
+);
 
 /**
  * The collaboration tables a combined source still holds, in dependency order
@@ -657,6 +988,17 @@ function notActive(dbPath: string, state: "staged" | "active"): StoreError {
   );
 }
 
+/** note: An admitted old lane is never migrated implicitly; the explicit upgrade is the only route. */
+function upgradeRequired(dbPath: string, found: number): StoreError {
+  const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+  return new StoreError(
+    "collaboration.upgrade-required",
+    `The collaboration store at ${dbPath} records schema version ${String(found)}, and this build reads ` +
+      `version ${String(current)}. Ordinary reads never migrate a lane: run "mstar store upgrade --operator <name>" ` +
+      `once for this scope, then retry the same verb. Nothing was read or modified.`,
+  );
+}
+
 function staleBinding(
   dbPath: string,
   recorded: { repoKey: string; mode: string; storeId?: string; epoch?: number },
@@ -764,18 +1106,37 @@ function assertAdmittedTarget(dbPath: string): void {
 }
 
 /**
- * invariant: The closed table inventory, and nothing outside it. A dropped domain table or
- * a foreign/combined database copied onto this path refuses before admission.
+ * invariant: The closed table inventory, the exact columns, and the v2 delta's keys
+ * and CHECKs. A dropped domain table, a foreign/combined database, an extra or
+ * missing column, or a lost key refuses before admission.
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
+  assertKeyLayout(db, dbPath);
+}
+
+/** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
+function assertLegacySchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_V1_TABLES, COLLABORATION_COLUMNS, false);
+}
+
+/** invariant: The closed table inventory and required columns, or a named refusal. */
+function assertInventory(
+  db: StoreDb,
+  dbPath: string,
+  tablesWanted: readonly string[],
+  columnsWanted: Readonly<Record<string, readonly string[]>>,
+  exactColumns: boolean,
+): void {
   const rows = db.prepare("select name from sqlite_master where type = 'table'").all();
   const present = new Set<string>();
   for (const row of rows) {
-    const name = (row as { name?: unknown }).name;
+    if (row === null || typeof row !== "object" || !("name" in row)) continue;
+    const name = row.name;
     if (typeof name === "string" && !name.startsWith("sqlite_")) present.add(name);
   }
-  const missing = COLLABORATION_TABLES.filter((name) => !present.has(name));
-  const unexpected = [...present].filter((name) => !COLLABORATION_TABLES.includes(name));
+  const missing = tablesWanted.filter((name) => !present.has(name));
+  const unexpected = [...present].filter((name) => !tablesWanted.includes(name));
   if (missing.length > 0 || unexpected.length > 0) {
     throw unreadable(
       dbPath,
@@ -783,16 +1144,138 @@ function assertCurrentSchema(db: StoreDb, dbPath: string): void {
         `unexpected: ${unexpected.join(", ") || "none"})`,
     );
   }
-  const damaged: string[] = [];
-  for (const [table, required] of Object.entries(COLLABORATION_COLUMNS)) {
-    const columns = new Set(
-      (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((column) => column.name),
-    );
-    const lost = required.filter((column) => !columns.has(column));
-    if (lost.length > 0) damaged.push(`${table}(${lost.join(", ")})`);
-  }
+  const damaged = columnDrift(db, columnsWanted, exactColumns);
   if (damaged.length > 0) {
-    throw unreadable(dbPath, `its schema is missing required columns: ${damaged.join("; ")}`);
+    throw unreadable(dbPath, `its schema does not carry the required columns: ${damaged.join("; ")}`);
+  }
+}
+
+/** note: Per table, the required columns `db` does not carry, and - when exact - the columns it adds. */
+function columnDrift(
+  db: StoreDb,
+  required: Readonly<Record<string, readonly string[]>>,
+  exact: boolean,
+): string[] {
+  const damaged: string[] = [];
+  for (const [table, columnsWanted] of Object.entries(required)) {
+    const columns = (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((column) =>
+      String(column.name),
+    );
+    const lost = columnsWanted.filter((column) => !columns.includes(column));
+    const added = exact ? columns.filter((column) => !columnsWanted.includes(column)) : [];
+    if (lost.length > 0 || added.length > 0) {
+      damaged.push(`${table}(missing: ${lost.join(", ") || "none"}; unexpected: ${added.join(", ") || "none"})`);
+    }
+  }
+  return damaged;
+}
+
+/** note: The database's foreign keys, one string per constraint in `id`/`seq` order - never flattened. */
+function foreignKeyGroups(db: StoreDb, table: string): string[] {
+  const rows = db.prepare(`pragma foreign_key_list(${table})`).all() as Array<{
+    id?: unknown;
+    seq?: unknown;
+    from?: unknown;
+    table?: unknown;
+    to?: unknown;
+  }>;
+  const groups = new Map<number, Array<{ seq: number; entry: string }>>();
+  for (const row of rows) {
+    if (typeof row.id !== "number" || typeof row.seq !== "number") continue;
+    const entry = `${String(row.from)}->${String(row.table)}.${String(row.to)}`;
+    const group = groups.get(row.id) ?? [];
+    group.push({ seq: row.seq, entry });
+    groups.set(row.id, group);
+  }
+  return [...groups.values()]
+    .map((group) => group.sort((left, right) => left.seq - right.seq).map((item) => item.entry).join(","))
+    .sort();
+}
+
+/** note: The trailing `WHERE` clause of a declared index, normalized; `null` for a full index. */
+function indexPredicate(sql: string | null): string | null {
+  if (sql === null) return null;
+  const match = /\bon\s+\S+\s*\([^)]*\)\s*(.*)$/i.exec(sql.replace(/\s+/g, " ").trim());
+  const predicate = match === null ? "" : (match[1] ?? "").trim().toLowerCase();
+  return predicate === "" ? null : predicate;
+}
+
+/** note: The database's unique indexes with their columns and predicates: `WHERE 0` is not the declared index. */
+function uniqueIndexLayouts(db: StoreDb, table: string): UniqueIndexLayout[] {
+  const rows = (db.prepare(`pragma index_list(${table})`).all() as Array<{ name?: unknown; unique?: unknown }>).filter(
+    (index) => index.unique === 1 && typeof index.name === "string",
+  );
+  return rows.map((index) => {
+    const name = String(index.name);
+    const columns = (db.prepare(`pragma index_info(${name})`).all() as Array<{ name?: unknown }>).map((column) =>
+      String(column.name),
+    );
+    const declared = db.prepare("select sql from sqlite_master where type = 'index' and name = ?").get(name) as
+      | { sql?: unknown }
+      | undefined;
+    return {
+      columns,
+      where: indexPredicate(declared !== undefined && typeof declared.sql === "string" ? declared.sql : null),
+    };
+  });
+}
+
+/**
+ * invariant: The v2 delta's actual keys and vocabulary, read from the database's own
+ * catalog: `table_info` for nullability and primary-key order,
+ * `foreign_key_list`, `index_list`/`index_info` for unique indexes, and the
+ * declared SQL's CHECK clauses. A lane with a retained name and checksum but a
+ * lost constraint is damaged, not current.
+ */
+function assertKeyLayout(db: StoreDb, dbPath: string): void {
+  const refusal = (table: string, detail: string): never => {
+    throw unreadable(dbPath, `its ${table} ${detail}`);
+  };
+  for (const layout of COLLABORATION_KEY_LAYOUT) {
+    const columns = db.prepare(`pragma table_info(${layout.table})`).all() as Array<{
+      name?: unknown;
+      notnull?: unknown;
+      pk?: unknown;
+    }>;
+    const byName = new Map(columns.map((column) => [String(column.name), column]));
+    const nullable = layout.notNull.filter((column) => byName.get(column)?.notnull !== 1);
+    if (nullable.length > 0) refusal(layout.table, `accepts null in ${nullable.join(", ")}`);
+    if (layout.primaryKey !== undefined) {
+      const actual = columns
+        .filter((column) => typeof column.pk === "number" && column.pk > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk))
+        .map((column) => String(column.name))
+        .join(",");
+      const wanted = layout.primaryKey.join(",");
+      if (actual !== wanted) refusal(layout.table, `primary key is (${actual}) instead of (${wanted})`);
+    }
+    const foreignKeys = foreignKeyGroups(db, layout.table);
+    const wantedKeys = layout.foreignKeys
+      .map((group) => group.map(([column, table, target]) => `${column}->${table}.${target}`).join(","))
+      .sort();
+    if (foreignKeys.join("|") !== wantedKeys.join("|")) {
+      refusal(layout.table, `foreign keys are (${foreignKeys.join(" | ") || "none"})`);
+    }
+    const uniqueIndexes = uniqueIndexLayouts(db, layout.table);
+    for (const wanted of layout.uniqueIndexes) {
+      const columns = wanted.columns.join(",");
+      if (!uniqueIndexes.some((index) => index.columns.join(",") === columns && index.where === wanted.where)) {
+        refusal(
+          layout.table,
+          `lacks a unique index on (${wanted.columns.join(", ")})${wanted.where === null ? "" : ` ${wanted.where}`}`,
+        );
+      }
+    }
+    const declared = db
+      .prepare("select sql from sqlite_master where type = 'table' and name = ?")
+      .get(layout.table) as { sql?: unknown } | undefined;
+    const definition =
+      declared !== undefined && typeof declared.sql === "string"
+        ? declared.sql.replace(/\s+/g, " ").toLowerCase()
+        : "";
+    for (const check of layout.checks) {
+      if (!definition.includes(check)) refusal(layout.table, `lacks the CHECK ${check}`);
+    }
   }
 }
 
@@ -816,7 +1299,7 @@ function readMeta(db: StoreDb): CollaborationMeta {
   if (
     record === undefined ||
     typeof record.repository_key !== "string" ||
-    (record.mode !== "local" && record.mode !== "mirror") ||
+    (record.mode !== "local" && record.mode !== "mirror" && record.mode !== "remote") ||
     typeof record.store_id !== "string" ||
     (record.authority_state !== "staged" && record.authority_state !== "active") ||
     typeof record.authority_epoch !== "number" ||
@@ -854,7 +1337,10 @@ function admit(
     // note: The ledger's version verdict comes FIRST: a store written by a newer
     // build is an upgrade requirement, not a damaged current schema, even when
     // that build's layout no longer matches this one's inventory.
-    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), [COLLABORATION_SCHEMA]);
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
+      throw upgradeRequired(location.dbPath, schemaVersion);
+    }
     assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
@@ -1137,6 +1623,20 @@ function discardStaging(stagingDir: string, stagingPath: string): void {
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
   if (location.mode === "remote") remoteLaneRefusal();
+  return createOrContinueStore(location);
+}
+
+/**
+ * note: The remote cache lane's own initializer. `remote bind` owns it: the local domain
+ * entries never create or open a remote lane, so no local-authority verb can
+ * stand in for the verified cache.
+ */
+export async function initializeRemoteCacheStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
+  assertStoreRuntimeSupported();
+  return createOrContinueStore(location);
+}
+
+async function createOrContinueStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
@@ -1168,13 +1668,21 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     try {
       const at = nowRfc3339();
       db.exec(SCHEMA_VERSION_TABLE_SQL);
-      db.exec(COLLABORATION_SCHEMA.sql);
-      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-        COLLABORATION_SCHEMA.version,
-        COLLABORATION_SCHEMA.name,
-        migrationChecksum(COLLABORATION_SCHEMA),
-        at,
-      );
+      // invariant: Fresh initialization applies every supported version in order before
+      // publication, and each row is appended only after its layout is applied.
+      for (const migration of COLLABORATION_MIGRATIONS) {
+        if (migration.version === COLLABORATION_REMOTE_SCHEMA.version) {
+          applyRemoteCacheSchema(db);
+        } else {
+          db.exec(migration.sql);
+        }
+        db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+          migration.version,
+          migration.name,
+          migrationChecksum(migration),
+          at,
+        );
+      }
       db.prepare(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
           "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', 1, 0, 0, ?)",
@@ -1232,6 +1740,149 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     discardStaging(stagingDir, stagingPath);
   }
   return authority;
+}
+
+/** note: What one explicit upgrade did: the versions crossed and the references it minted. */
+export type CollaborationUpgradeReceipt = Readonly<{
+  version: 1;
+  fromVersion: number;
+  toVersion: number;
+  storeId: string;
+  epoch: number;
+  issuesBackfilled: number;
+}>;
+
+/**
+ * `mstar store upgrade --operator <name>` for the collaboration lane: the ONLY
+ * way an admitted v1 lane advances to v2. Ordinary reads never migrate.
+ *
+ * The whole delta runs in one `BEGIN IMMEDIATE`: the applied set is re-read
+ * inside the transaction, the recorded v1 checksum must equal this build's
+ * immutable `collaboration-core`, the v1 layout must be exactly the declared
+ * one (a partial or damaged lane refuses instead of being "repaired"), the v2
+ * DDL and the per-row `IssueRef` backfill run together, the resulting layout is
+ * verified, and only then is the ledger row appended and the batch committed.
+ * A crash therefore leaves v1 bytes: replaying the same verb revalidates and
+ * commits, while a half-applied schema refuses.
+ */
+export async function upgradeCollaborationStore(
+  context: StoreContext,
+  operator: string,
+): Promise<CollaborationUpgradeReceipt> {
+  assertStoreRuntimeSupported();
+  if (typeof operator !== "string" || operator.trim() === "") {
+    throw new StoreError(
+      "store.attestation-invalid",
+      "A collaboration upgrade records the operator who ran it; pass a non-empty --operator <name>. Nothing was modified.",
+    );
+  }
+  const location = resolveCollaborationLocation(context);
+  const dbPath = location.dbPath;
+  const timeout = busyTimeoutMs();
+  assertAdmittedTarget(dbPath);
+  if (!existsSync(dbPath)) throw notInitialized(dbPath);
+  await assertControlCheckoutScope(context, location);
+
+  const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
+    (error: unknown) => {
+      if (!existsSync(dbPath)) throw notInitialized(dbPath);
+      throw error;
+    },
+  );
+  try {
+    db.exec("begin immediate");
+    try {
+      const applied = readAppliedMigrations(db, false);
+      const appliedMax = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
+      const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+      const meta = readMeta(db);
+      if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
+        throw staleBinding(dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+      }
+      const receipt = (fromVersion: number, issuesBackfilled: number): CollaborationUpgradeReceipt => ({
+        version: 1,
+        fromVersion,
+        toVersion: current,
+        storeId: meta.storeId,
+        epoch: meta.epoch,
+        issuesBackfilled,
+      });
+      if (appliedMax === current) {
+        // note: A committed earlier upgrade revalidates instead of reapplying.
+        assertCurrentSchema(db, dbPath);
+        db.exec("commit");
+        return receipt(current, 0);
+      }
+      if (appliedMax !== COLLABORATION_SCHEMA.version) {
+        throw new StoreError(
+          "store.schema-drift",
+          `The collaboration store at ${dbPath} records schema version ${String(appliedMax)}; this build upgrades ` +
+            `version ${String(COLLABORATION_SCHEMA.version)} only. Inspect the lane with mstar path resolve; nothing was modified.`,
+        );
+      }
+      const recorded = applied[0];
+      if (recorded === undefined || recorded.checksum !== migrationChecksum(COLLABORATION_SCHEMA)) {
+        throw new StoreError(
+          "store.corrupt",
+          `The collaboration store at ${dbPath} records a v1 checksum that is not this build's immutable ` +
+            `"collaboration-core" migration; the lane is refused rather than rebuilt on unknown bytes. Nothing was modified.`,
+        );
+      }
+      assertLegacySchema(db, dbPath);
+      const present = db
+        .prepare("pragma table_info(issues)")
+        .all()
+        .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
+      if (present.includes("issue_ref")) {
+        throw new StoreError(
+          "store.corrupt",
+          `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
+            `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
+            `verified backup pair; nothing was modified.`,
+        );
+      }
+      const issuesBackfilled = applyRemoteCacheSchema(db);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        COLLABORATION_REMOTE_SCHEMA.version,
+        COLLABORATION_REMOTE_SCHEMA.name,
+        migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+        nowRfc3339(),
+      );
+      assertCurrentSchema(db, dbPath);
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+          "values ('standalone', ?, ?, ?, ?)",
+      ).run(
+        `upgrade:collaboration:${String(COLLABORATION_REMOTE_SCHEMA.version)}:${meta.storeId}:${String(meta.epoch)}`,
+        migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+        JSON.stringify({
+          version: 1,
+          operator: operator.trim(),
+          fromVersion: COLLABORATION_SCHEMA.version,
+          toVersion: COLLABORATION_REMOTE_SCHEMA.version,
+          storeId: meta.storeId,
+          epoch: meta.epoch,
+          issuesBackfilled,
+        }),
+        nowRfc3339(),
+      );
+      db.exec("commit");
+      return receipt(COLLABORATION_SCHEMA.version, issuesBackfilled);
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // note: nothing committed either way
+      }
+      throw error instanceof StoreError ? error : asRefusal(dbPath, error);
+    }
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // note: connection-level failure; the transaction above already rolled back
+    }
+  }
 }
 
 /**
@@ -1842,14 +2493,57 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
   }
 }
 
-/** note: The one refusal for a resolved remote selection: no local domain in this build stands in for its lane. */
+/**
+ * note: The one refusal for a resolved remote selection on a LOCAL domain entry: the remote
+ * lane is a verified cache, and no local collaboration table is its authority.
+ */
 function remoteLaneRefusal(): never {
   throw new StoreError(
     "collaboration.mode-unavailable",
-    `This repository selects remote collaboration from the checked selector, but this build has no remote collaboration ` +
-      `lane: its persisted cache and bind verb ship with the v2 schema. Nothing was read or created; use the local or ` +
-      `mirror authority in its own checkout until then.`,
+    `This repository selects remote collaboration from the checked selector, where the provider is the authority and ` +
+      `this checkout's database is only a verified cache. Local issue, catalog and ledger rows never stand in for it, ` +
+      `so this local domain entry refuses; remote reads and observations use the remote boundary ` +
+      `("mstar store collaboration remote status|bind|observe"). Nothing was read or created.`,
   );
+}
+
+/**
+ * invariant: A remote-cache entry's scope: the checkout resolves remote, its recorded v3 binding
+ * is active and names the exact checked commit and generation, and the checked
+ * selection exists. Anything else refuses before a lane is opened.
+ */
+function remoteCacheScope(context: StoreContext): { location: CollaborationLocation; binding: CollaborationBinding } {
+  const location = resolveCollaborationLocation(context);
+  if (location.mode !== "remote") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout resolves ${location.mode} collaboration, not remote, so it has no remote cache lane to read. ` +
+        `Use the local domain verbs for this scope; nothing was modified.`,
+    );
+  }
+  const binding = readCollaborationBinding(context);
+  if (binding === null || binding.state !== "active") {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout resolves remote collaboration from ${AUTHORITY_REF} but holds no finalized remote binding, ` +
+        `so it cannot be proven to belong to that selector generation. Record it with the reviewed remote bind ` +
+        `("mstar store collaboration remote bind --input <file|->"); nothing was read or created.`,
+    );
+  }
+  assertBindingMatches(binding, location);
+  return { location, binding };
+}
+
+/** note: The lane's own identity must equal the checkout binding's: a replaced generation is stale. */
+export function assertRemoteCacheIdentity(authority: CollaborationAuthority, binding: CollaborationBinding): void {
+  if (binding.version !== 3 || binding.storeId !== authority.storeId || binding.epoch !== authority.epoch) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout is bound to remote cache store ${binding.version === 3 ? binding.storeId : "?"} epoch ` +
+        `${binding.version === 3 ? String(binding.epoch) : "?"}, but the lane resolved to store ${authority.storeId} ` +
+        `epoch ${String(authority.epoch)}. Re-establish the cache with the reviewed remote bind; nothing was modified.`,
+    );
+  }
 }
 
 /** note: A v2 binding names a local/mirror authority only; a remote scope records v3 through the reviewed bind. */
@@ -2133,6 +2827,26 @@ export async function writeCollaborationStage<T>(
 ): Promise<T> {
   assertStoreRuntimeSupported();
   if (location.mode === "remote") remoteLaneRefusal();
+  return writeStage(location, apply);
+}
+
+/**
+ * note: The remote lane's own staging transaction: `remote bind` creates or advances the cache
+ * under the same `BEGIN IMMEDIATE` + guarded connection, admitted in either state
+ * so a fresh staged lane can be published and its binding rows committed once.
+ */
+export async function writeRemoteCacheStage<T>(
+  location: CollaborationLocation,
+  apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+): Promise<T> {
+  assertStoreRuntimeSupported();
+  return writeStage(location, apply);
+}
+
+async function writeStage<T>(
+  location: CollaborationLocation,
+  apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+): Promise<T> {
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
@@ -2195,8 +2909,38 @@ export async function withCollaborationWrite<T>(
   apply: (handle: CollaborationStoreHandle) => T,
   expected?: CollaborationStamp,
 ): Promise<T> {
+  return withWriteLane(context, apply, expected, "domain");
+}
+
+/**
+ * note: Run one effect on the remote cache inside a write transaction. The scope is the
+ * checkout's v3 binding against the checked selector, and the lane identity must
+ * equal it; the transaction mechanics are the local writer's.
+ */
+export async function withRemoteCacheWrite<T>(
+  context: StoreContext,
+  apply: (handle: CollaborationStoreHandle) => T,
+): Promise<T> {
+  return withWriteLane(context, apply, undefined, "remote-cache");
+}
+
+async function withWriteLane<T>(
+  context: StoreContext,
+  apply: (handle: CollaborationStoreHandle) => T,
+  expected: CollaborationStamp | undefined,
+  lane: "domain" | "remote-cache",
+): Promise<T> {
   assertStoreRuntimeSupported();
-  const location = resolveCollaborationLocation(context);
+  let location: CollaborationLocation;
+  let remoteBinding: CollaborationBinding | undefined;
+  if (lane === "remote-cache") {
+    const scope = remoteCacheScope(context);
+    location = scope.location;
+    remoteBinding = scope.binding;
+  } else {
+    location = resolveCollaborationLocation(context);
+    assertSelectedLane(context, location);
+  }
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
@@ -2208,7 +2952,8 @@ export async function withCollaborationWrite<T>(
   try {
     const admitted = admit(probe, location, expected, "active");
     // note: The binding is proved on the same refusing read, before a writer exists.
-    await assertControlBinding(context, location, admitted, "write");
+    if (lane === "remote-cache") assertRemoteCacheIdentity(admitted, remoteBinding!);
+    else await assertControlBinding(context, location, admitted, "write");
   } finally {
     probe.close();
   }
@@ -2263,4 +3008,77 @@ export async function withCollaborationWrite<T>(
       // note: connection-level failure; the transaction above already rolled back
     }
   }
+}
+
+/**
+ * note: Open the remote cache lane's active handle. This is the ONLY open that serves a
+ * remote checkout: the local domain entries refuse a remote selection outright,
+ * so a cache row can never be read or written as local authority.
+ */
+export async function openRemoteCache(
+  context: StoreContext,
+  mode: "read" | "write",
+): Promise<CollaborationStoreHandle> {
+  assertStoreRuntimeSupported();
+  const { location, binding } = remoteCacheScope(context);
+  if (mode === "write" && existsSync(location.dbPath)) {
+    try {
+      accessSync(location.dbPath, constants.W_OK);
+    } catch (error) {
+      throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
+    }
+  }
+  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs());
+  try {
+    assertRemoteCacheIdentity(handle.authority, binding);
+  } catch (error) {
+    handle.close();
+    throw error;
+  }
+  return handle;
+}
+
+/** note: The active remote cache identity alone; nothing is created. */
+export async function readRemoteCacheAuthority(context: StoreContext): Promise<CollaborationAuthority> {
+  const handle = await openRemoteCache(context, "read");
+  handle.close();
+  return handle.authority;
+}
+
+/**
+ * note: Record a checkout's v3 remote binding. Only the reviewed `remote bind` writes it,
+ * and only AFTER the cache binding transaction committed: a crash between the
+ * two leaves a committed lane whose binding file the same verb completes.
+ */
+export function writeRemoteCollaborationBinding(
+  context: StoreContext,
+  binding: Readonly<{
+    repoKey: string;
+    selectorCommit: string;
+    generation: number;
+    storeId: string;
+    epoch: number;
+  }>,
+): CollaborationBinding {
+  const path = bindingPath(context);
+  mkdirSync(dirname(path), { recursive: true });
+  const body: CollaborationBinding = {
+    version: 3,
+    state: "active",
+    repoKey: binding.repoKey,
+    mode: "remote",
+    selectorCommit: binding.selectorCommit,
+    generation: binding.generation,
+    storeId: binding.storeId,
+    epoch: binding.epoch,
+    boundAt: nowRfc3339(),
+  };
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  return body;
 }

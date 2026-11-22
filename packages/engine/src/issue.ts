@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import {
+  mintIssueRef,
   openCollaborationStore,
   readCollaborationObservation,
   withCollaborationWrite,
@@ -45,6 +46,14 @@ export const TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "supers
 export type TerminalDisposition = (typeof TERMINAL_DISPOSITIONS)[number];
 export const ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS] as const;
 export type Disposition = (typeof ISSUE_DISPOSITIONS)[number];
+
+/** note: The one relation vocabulary; a remote snapshot validates against it instead of a copy. */
+export const ISSUE_RELATIONS = ["related", "blocks", "duplicate-of", "superseded-by"] as const;
+export type IssueRelationKind = (typeof ISSUE_RELATIONS)[number];
+
+/** note: The one provenance-kind vocabulary; a remote snapshot validates against it instead of a copy. */
+export const ISSUE_PROVENANCE_KINDS = ["plan", "iteration", "pr", "report"] as const;
+export type IssueProvenanceKind = (typeof ISSUE_PROVENANCE_KINDS)[number];
 
 
 export type MutationContext = {
@@ -419,8 +428,8 @@ export type IssueReopen = { reason: string };
 export type IssueMove = { projectId: string; reason: string };
 
 export type IssueLink =
-  | { relation: "related" | "blocks" | "duplicate-of" | "superseded-by"; issueId: string }
-  | { kind: "plan" | "iteration" | "pr" | "report"; target: string };
+  | { relation: IssueRelationKind; issueId: string }
+  | { kind: IssueProvenanceKind; target: string };
 export type IssueErrorCode =
   | "issue.not-found"
   | "issue.ambiguous-identity"
@@ -482,18 +491,8 @@ export function vocabularyMap<const T extends string>(values: readonly T[]): Rec
 const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 const ISSUE_KIND_MAP: Record<IssueKind, true> = vocabularyMap(ISSUE_KINDS);
 const ISSUE_SEVERITY_MAP: Record<Severity, true> = vocabularyMap(ISSUE_SEVERITIES);
-const RELATIONS: Record<"related" | "blocks" | "duplicate-of" | "superseded-by", true> = {
-  related: true,
-  blocks: true,
-  "duplicate-of": true,
-  "superseded-by": true,
-};
-const PROVENANCE_KINDS: Record<"plan" | "iteration" | "pr" | "report", true> = {
-  plan: true,
-  iteration: true,
-  pr: true,
-  report: true,
-};
+const RELATIONS: Record<IssueRelationKind, true> = vocabularyMap(ISSUE_RELATIONS);
+const PROVENANCE_KINDS: Record<IssueProvenanceKind, true> = vocabularyMap(ISSUE_PROVENANCE_KINDS);
 
 function requireNonblank(label: string, value: string): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -980,8 +979,8 @@ export function captureIssueOn(
   const issueId = `I-${String(counter.nextValue).padStart(6, "0")}`;
   db.prepare("update issue_counter set next_value = next_value + 1 where id = 1").run();
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key) " +
-      "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, created_at, updated_at, revision, provider, identity_key, issue_ref) " +
+      "values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, 'local', ?, ?)",
   ).run(
     issueId,
     projectId,
@@ -995,6 +994,7 @@ export function captureIssueOn(
     at,
     at,
     identityKey,
+    mintIssueRef(),
   );
   const occurrenceId = insertOccurrence(db, issueId, cols, at);
   insertCaptureProvenance(db, issueId, cols);

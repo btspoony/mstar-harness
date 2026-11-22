@@ -35,6 +35,7 @@ import {
   COLLABORATION_COLUMNS,
   COLLABORATION_CUTOVER_TABLES,
   initializeCollaborationStore,
+  mintIssueRef,
   readCollaborationStage,
   beginBindingClaim,
   writeCollaborationBinding,
@@ -1158,11 +1159,16 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
 function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>, ledger: unknown[][]): void {
   for (const table of [...COLLABORATION_CUTOVER_TABLES].reverse()) db.prepare(`delete from ${table}`).run();
   for (const table of COLLABORATION_CUTOVER_TABLES) {
-    const columns = COLLABORATION_COLUMNS[table]!;
+    // invariant: The combined source predates the portable key, so the target mints one reference
+    // per copied issue. The digest evidence above compares the SOURCE columns only.
+    const columns = table === "issues" ? [...COLLABORATION_COLUMNS[table]!, "issue_ref"] : COLLABORATION_COLUMNS[table]!;
     const statement = db.prepare(
       `insert into ${table}(${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`,
     );
-    for (const row of rows[table] ?? []) statement.run(...row);
+    for (const row of rows[table] ?? []) {
+      if (table === "issues") statement.run(...row, mintIssueRef());
+      else statement.run(...row);
+    }
   }
   db.prepare("delete from collaboration_operations where key_space = 'standalone'").run();
   const receipt = db.prepare(

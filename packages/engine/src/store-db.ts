@@ -91,12 +91,26 @@ export type StoreErrorCode =
   // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
   | "collaboration.not-active"
-  // note: A `remote` selection resolves, but this build has no remote lane: the persisted cache
-  // and its bind verb land with the v2 schema, so no domain I/O may stand in for them.
+  // note: An admitted older lane is read, not migrated: only `store upgrade --operator` advances it.
+  | "collaboration.upgrade-required"
+  // note: A `remote` selection's local database is a verified cache; the local domain entries
+  // refuse it because the provider, not these rows, is the authority.
   | "collaboration.mode-unavailable"
   | "collaboration.operation-partial"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
+  // note: Remote observation evidence: a scope the host could not verify, the snapshot gap a
+  // consumer must disclose instead of reading as empty, and a stale base revision.
+  | "collaboration.observation-incomplete"
+  | "collaboration.observation-stale"
+  // note: The remote boundary's own refusals (collaboration-remote.ts): a malformed DTO, a
+  // check that does not address the selected project, and the provider access outcomes.
+  | "remote.input-invalid"
+  | "remote.scope-mismatch"
+  | "remote.denied"
+  | "remote.revoked"
+  | "remote.unsafe-fidelity"
+  | "remote.unavailable"
   // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
   // partially cut store is not runtime authority, a competing source/mode/
   // manifest cannot win by force, pending catalog or mirror work must be
