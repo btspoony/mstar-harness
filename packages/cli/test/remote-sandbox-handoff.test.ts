@@ -15,7 +15,7 @@
  * B consumes only what a provider traversal and the bare origin carry: the fixture renders
  * the provider's own confirmed records into its snapshots, so nothing A held is passed in.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -293,7 +293,8 @@ function reconstruct(source: HandoffSource): Readonly<{ b: RemoteSandbox; shown:
 /**
  * note: One bounded Git probe under an exact environment: the hostile global configuration is
  * named explicitly and `HOME` is private, so the runner's own `GIT_DIR`, signing setup and hooks
- * never reach it, and a wedged Git or signer is killed at the fixture deadline.
+ * never reach it, and a wedged Git or signer is killed at the fixture deadline. `PATH` stays the
+ * runner's, so the hostile config names the fixture's own rejecting signer instead.
  */
 function hostileGitProbe(cwd: string, args: readonly string[], home: string, config: string): RunResult {
   return boundedRun(["git", ...args], {
@@ -326,10 +327,16 @@ describe("remote handoff", () => {
   test("remote handoff: inherited Git configuration cannot redirect or block the tracked push", () => {
     const hostileRoot = mkdtempSync(join(tmpdir(), "mstar-hostile-git-"));
     const hostileConfig = join(hostileRoot, "gitconfig");
+    // note: The hostile config selects a fixture-owned signer that always refuses, so the
+    // control's failure never depends on which `gpg` the runner's PATH happens to carry.
+    const signer = join(hostileRoot, "rejecting-signer");
+    const signerMarker = "fixture-signer: this control never signs";
+    writeFileSync(signer, `#!/bin/sh\necho "${signerMarker}" >&2\nexit 1\n`);
+    chmodSync(signer, 0o755);
     // note: A runner-level config that would sign every commit and rewrite every HTTPS URL.
     writeFileSync(
       hostileConfig,
-      '[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[core]\n\thooksPath = /nonexistent/hooks\n[url "https://invalid.example.test/"]\n\tinsteadOf = https://\n',
+      `[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = ${JSON.stringify(signer)}\n[core]\n\thooksPath = /nonexistent/hooks\n[url "https://invalid.example.test/"]\n\tinsteadOf = https://\n`,
     );
     const ambientGlobal = process.env.GIT_CONFIG_GLOBAL;
     const ambientGitDir = process.env.GIT_DIR;
@@ -350,10 +357,11 @@ describe("remote handoff", () => {
         probeHome,
         hostileConfig,
       );
-      // note: A killed child (124) would prove only the deadline, so the refusal must be Git's own.
+      // note: A killed child (124) would prove only the deadline, so the refusal must be the
+      // fixture signer's own: a missing or runner-resolved `gpg` never produces this marker.
       expect(refused.exitCode).not.toBe(0);
       expect(refused.exitCode).not.toBe(124);
-      expect(refused.stderr).toContain("gpg");
+      expect(refused.stderr).toContain(signerMarker);
       // note: The second inherited fact: a runner-set GIT_DIR that names no repository, which
       // the fixture's own Git children ignore.
       process.env.GIT_DIR = join(hostileRoot, "not-a-repository");
