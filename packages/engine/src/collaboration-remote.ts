@@ -34,7 +34,7 @@ import {
   type CollaborationBinding,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
-import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, type CaptureInput } from "./issue.js";
+import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
   assertSelectionUnchanged,
   CollaborationIdentityError,
@@ -369,6 +369,16 @@ function text(value: unknown, path: string): string {
   return value;
 }
 
+/** note: The issue domain's dedup rule, reused here: a frozen subject never persists a guessed key. */
+function semanticKey(value: unknown, path: string): string {
+  if (typeof value !== "string") invalid(path, "must be a non-empty string");
+  try {
+    return requireSemanticKey(path, value);
+  } catch (error) {
+    invalid(path, error instanceof IssueError ? error.message : "is unknown or ambiguous");
+  }
+}
+
 function optionalText(value: unknown, path: string): string | null {
   if (value === null) return null;
   return text(value, path);
@@ -664,6 +674,19 @@ function occurrence(value: unknown, path: string): Record<string, unknown> {
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
     // note: The domain's imported provenance is a business field of the history, not a private detail.
     imported: boolean(body.imported, `${path}.imported`),
+  };
+}
+
+/**
+ * invariant: Freezing a new intent applies the issue domain's dedup rule; an
+ * observed chain is provider evidence and is never re-judged by this boundary.
+ */
+function frozenOccurrence(value: unknown, path: string): Record<string, unknown> {
+  const row = occurrence(value, path);
+  return {
+    ...row,
+    rootCauseKey: semanticKey(row.rootCauseKey, `${path}.rootCauseKey`),
+    acceptanceKey: semanticKey(row.acceptanceKey, `${path}.acceptanceKey`),
   };
 }
 
@@ -2311,7 +2334,7 @@ function frozenIssueSubject(value: unknown, path: string): Record<string, unknow
   return {
     fields: mstarFields(body.fields, `${path}.fields`),
     occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
-      occurrence(entry, `${path}.occurrences[${index}]`),
+      frozenOccurrence(entry, `${path}.occurrences[${index}]`),
     ),
     transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
       transition(entry, `${path}.transitions[${index}]`),

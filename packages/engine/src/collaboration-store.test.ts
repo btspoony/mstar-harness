@@ -4311,6 +4311,51 @@ describe("remote outbox intents", () => {
     expect(outboxRows(location.dbPath)).toEqual([]);
   });
 
+  test("a shape-valid subject with a guessed semantic key is refused before any outbox row", async () => {
+    const fixture = remoteFixture("outbox-semantic-key");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const replacement = (operationId: string, occurrences: readonly Record<string, unknown>[]): Record<string, unknown> =>
+      intentRequest(fixture, commit, operationId, {
+        event: {
+          version: 1,
+          repoKey: fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId,
+          parents: ["a".repeat(64)],
+          change: {
+            kind: "issue-replace",
+            issueRef: FORGED_ISSUE_REF,
+            mstar: { ...completeIssueSubject(), occurrences },
+          },
+        },
+        target: MSTAR_ISSUE,
+      });
+    const occurrence = (completeIssueSubject().occurrences as Record<string, unknown>[])[0]!;
+
+    // invariant: The shape is complete; only the issue domain's dedup rule (issue.ts
+    // occurrenceColumns via requireSemanticKey) refuses a guessed root-cause/acceptance key.
+    const guessed = [
+      { rootCauseKey: "?" },
+      { rootCauseKey: "Unknown" },
+      { acceptanceKey: " ? " },
+      { acceptanceKey: "unknown" },
+    ];
+    for (const [index, patch] of guessed.entries()) {
+      const operationId = `00000000-0000-4000-8000-0000000000e${String(index + 1)}`;
+      await expect(
+        prepareRemoteIntent(context, replacement(operationId, [{ ...occurrence, ...patch }])),
+      ).rejects.toMatchObject({ code: "remote.input-invalid", message: expect.stringContaining("ambiguous") });
+      expect(outboxRows(location.dbPath)).toEqual([]);
+    }
+
+    // invariant: The same complete subject with domain keys still enqueues normally.
+    const accepted = await prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000ef", [occurrence]));
+    expect(accepted).toMatchObject({ state: "enqueued", target: MSTAR_ISSUE });
+  });
+
   test("a replacement must cite its replaced heads before anything is enqueued", async () => {
     const fixture = remoteFixture("outbox-parents");
     const commit = fixture.publish(fixture.payload());
