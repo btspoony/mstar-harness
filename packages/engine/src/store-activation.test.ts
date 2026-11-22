@@ -3727,7 +3727,7 @@ describe("explicit adoption verb", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Remote bootstrap admission: a fresh remote checkout initializes EXECUTION
+// note: Remote bootstrap admission: a fresh remote checkout initializes EXECUTION
 // only, from the cache the reviewed `remote bind` published under the checked
 // selector generation. The bootstrap never creates a local authority, never
 // rebuilds an absent cache, and never restores a prior execution lane.

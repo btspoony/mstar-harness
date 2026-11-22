@@ -1,5 +1,5 @@
 /**
- * store-remote-outbox.ts (command family) — the provider-free recovery surface of the
+ * note: store-remote-outbox.ts (command family) — the provider-free recovery surface of the
  * collaboration outbox: `store collaboration remote outbox-*`.
  *
  * Every verb here is a thin route to ONE engine operation; none of them opens a provider
@@ -84,7 +84,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 /**
- * The exact supported route for one refusal, by cause and by the verb that refused it. A
+ * note: The exact supported route for one refusal, by cause and by the verb that refused it. A
  * document refusal is resubmitted to the verb that reads THAT document: a resolution is not
  * a receipt, and reconciliation is not a receipt either. Texts stay literal because the
  * repository's refusal-quality lint proves each named command statically.
@@ -153,7 +153,7 @@ function absoluteFile(value: string, flag: string): string {
 }
 
 /**
- * Read one JSON document for a verb: a file path (resolved against the caller's working
+ * note: Read one JSON document for a verb: a file path (resolved against the caller's working
  * directory, exactly like the observation lane's reader), or `-` for stdin. An unreadable
  * path or a body that is not JSON is a usage refusal naming the flag, before any store work.
  */

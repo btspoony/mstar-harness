@@ -974,7 +974,7 @@ describe("overview read model", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Remote selection: the dashboard transport never collapses to an empty page
+// note: Remote selection: the dashboard transport never collapses to an empty page
 // ---------------------------------------------------------------------------
 
 describe("remote dashboard transport", () => {

@@ -439,7 +439,7 @@ describe("dashboard views over a real store", () => {
   });
 });
 // ---------------------------------------------------------------------------
-// Remote native issue detail: the transport carries the project it addresses
+// note: Remote native issue detail: the transport carries the project it addresses
 // ---------------------------------------------------------------------------
 
 test("dashboard issue-detail accepts the project a remote native record needs", () => {
@@ -450,7 +450,7 @@ test("dashboard issue-detail accepts the project a remote native record needs", 
 });
 
 // ---------------------------------------------------------------------------
-// Remote bootstrap at the CLI boundary: the Q3 sequence
+// note: Remote bootstrap at the CLI boundary: the Q3 sequence
 // (`status` -> `bind` -> `store init` -> `observe`) over the controlled host
 // fixture. Each sandbox is a separate checkout with its own `HOME` and an
 // allowlisted child environment; only public JSON documents cross into the CLI.

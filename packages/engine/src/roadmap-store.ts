@@ -270,7 +270,7 @@ function confirmedRoadmapReceipt(intent: RemoteIntent, projectId: string, conten
 }
 
 /**
- * The remote branch of every roadmap write: freeze the new project journal document (the
+ * note: The remote branch of every roadmap write: freeze the new project journal document (the
  * reviewed content plus the next roadmap revision) as one durable outbox intent. The caller's
  * reviewed project/roadmap revisions are compared with the OBSERVED document before anything is
  * frozen, so a stale reviewer can never overwrite content that moved under it. Roadmap content is

@@ -1,5 +1,5 @@
 /**
- * Two-sandbox handoff acceptance and the durability limitation.
+ * note: Two-sandbox handoff acceptance and the durability limitation.
  *
  * Sandbox A confirms one remote change and pushes one tracked result, then is removed
  * (its workspace, `HOME`, cache and execution store are deleted). Sandbox B is a fresh
@@ -87,7 +87,7 @@ function seedWorkflow(storePath: string): void {
 }
 
 /**
- * The Git component: B's handoff succeeds only when the tracked branch it clones still
+ * note: The Git component: B's handoff succeeds only when the tracked branch it clones still
  * carries A's pushed commit. A copy any other ref reaches keeps the result recoverable but
  * is not a successful handoff, an unreferenced copy may be pruned and so proves no survival,
  * and an object that is gone is a proven loss. A probe that cannot read the origin decides
@@ -114,7 +114,7 @@ function gitSource(bare: string, commit: string): GitState {
 }
 
 /**
- * The provider component: the complete traversal must still carry the confirmed record —
+ * note: The provider component: the complete traversal must still carry the confirmed record —
  * the issue's MStar marker at the exact reference and head. A visible native issue without
  * the marker is not the record, and a traversal that is not complete decides nothing.
  */
@@ -132,7 +132,7 @@ function providerSource(fixture: RemoteCollaborationFixture, expected: ProviderI
 }
 
 /**
- * The host handoff report. `missing` is every component the handoff lacks, `recovered`
+ * note: The host handoff report. `missing` is every component the handoff lacks, `recovered`
  * the ones it independently confirmed, and `recoverable` says whether a missing component
  * still has a surviving copy: `true` when Git keeps A's result on a ref outside the tracked
  * branch, `false` once every copy is proven gone, and `null` while any survival is undecided.
@@ -175,7 +175,7 @@ function adoptionDocument(operation: string): unknown {
 }
 
 /**
- * A's whole side of the handoff: bind, initialize, observe, freeze one adoption, dispatch
+ * note: A's whole side of the handoff: bind, initialize, observe, freeze one adoption, dispatch
  * it, lose the response, settle it by unique exact evidence, push one tracked result and
  * prove both durable copies before it is deleted.
  */

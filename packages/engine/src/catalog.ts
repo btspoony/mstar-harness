@@ -833,7 +833,7 @@ async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T
 }
 
 /**
- * The remote branch of every catalog write: the portable catalog is part of a project journal,
+ * note: The remote branch of every catalog write: the portable catalog is part of a project journal,
  * so the change is frozen as one durable project-replace intent against the observed document.
  * Location facts (root kind, relative path, source hash) are checkout evidence the remote
  * document does not carry; the portable identity, metadata and lifecycle are what it publishes.

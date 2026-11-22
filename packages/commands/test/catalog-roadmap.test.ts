@@ -649,6 +649,37 @@ describe("catalog and roadmap command families", () => {
     }
   });
 
+  test("roadmap export states a real created_at and omits one no stored date can fill", async () => {
+    const { cwd, harness } = await activeFixture("roadmap-created-at");
+    // note: A dated export round-trips: the exported document is itself replaceable and
+    // re-exports the same frontmatter line.
+    const dated = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(dated.status).toBe("ok");
+    const datedMarkdown = String(dated.data);
+    const datedLine = datedMarkdown.split("\n").find((line) => line.startsWith("created_at: "));
+    expect(datedLine).toMatch(/^created_at: "\d{4}-\d{2}-\d{2}"$/);
+    const datedFile = join(cwd, "created-at-dated.md");
+    writeFileSync(datedFile, datedMarkdown);
+    const replaced = await roadmap["roadmap.replace"]!.execute({ project: "proj", file: datedFile, expectProject: 1, expectRoadmap: "absent", operation: "created-at-dated", harness }, invocation(cwd));
+    expect(replaced.status).toBe("ok");
+    const reexported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
+    expect(String(reexported.data).split("\n").find((line) => line.startsWith("created_at: "))).toBe(datedLine);
+
+    // invariant: A recorded identity with no usable date (a remote snapshot's null, a blank
+    // legacy row) leaves the field out; an empty scalar would fail `YYYY-MM-DD`.
+    const undated = await activeFixture("roadmap-created-at-absent");
+    const lane = resolveCollaborationLocation({ harnessDir: undated.harness }).dbPath;
+    const writer = new DatabaseSync(lane);
+    try {
+      writer.prepare("update catalog_entities set registered_at = '', updated_at = '' where kind = 'project' and id = 'proj'").run();
+    } finally {
+      writer.close();
+    }
+    const blank = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness: undated.harness }, invocation(undated.cwd));
+    expect(blank.status).toBe("ok");
+    expect(String(blank.data)).not.toContain("created_at");
+  });
+
   test("roadmap JSON export returns the v2 envelope", async () => {
     const { cwd, harness } = await activeFixture("roadmap-json-export");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));

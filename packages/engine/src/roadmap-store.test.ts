@@ -226,7 +226,7 @@ async function collaborationOperation(context: StoreContext, operationId: string
 }
 
 // ---------------------------------------------------------------------------
-// Remote selection: the roadmap authority comes from admitted evidence
+// note: Remote selection: the roadmap authority comes from admitted evidence
 // ---------------------------------------------------------------------------
 
 describe("remote roadmap authority", () => {

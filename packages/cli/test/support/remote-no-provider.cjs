@@ -1,5 +1,5 @@
 /**
- * Test-only preload: deny and RECORD every outbound provider channel a CLI child
+ * note: Test-only preload: deny and RECORD every outbound provider channel a CLI child
  * could open. It is loaded with `NODE_OPTIONS=--require` into the built CLI, so a
  * regression that reaches the network, a provider credential outside the sandbox,
  * or a subprocess other than the pinned Git executable fails the child instead of silently
@@ -12,6 +12,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { fileURLToPath } = require("node:url");
 const childProcess = require("node:child_process");
 const net = require("node:net");
 const http = require("node:http");
@@ -22,6 +23,11 @@ const logPath = process.env.MSTAR_NO_PROVIDER_LOG;
 if (!logPath) throw new Error("remote-no-provider guard: MSTAR_NO_PROVIDER_LOG is required");
 const sentinel = process.env.MSTAR_NO_PROVIDER_SENTINEL ?? "";
 const append = fs.appendFileSync;
+
+// note: Captured before the patches below, so the guard's own identity checks run unguarded.
+const realpathSync = fs.realpathSync;
+const statSync = fs.statSync;
+const fstatSync = fs.fstatSync;
 
 append(logPath, `${JSON.stringify({ kind: "loaded" })}\n`);
 
@@ -68,23 +74,100 @@ Object.defineProperty(globalThis, "WebSocket", {
   },
 });
 
-function guardRead(name, holder) {
+/** note: The argument a read API names a file with: a path string, a Buffer, or a file URL. */
+function pathArgument(target) {
+  if (typeof target === "string") return target;
+  if (Buffer.isBuffer(target)) return target.toString();
+  if (target instanceof URL) {
+    try { return fileURLToPath(target); } catch { return null; }
+  }
+  return null;
+}
+
+/**
+ * note: Canonical path of a read target. `realpath` is what makes a symlink, a `..` route or a
+ * directory alias name the sentinel; a target that cannot be resolved falls back to its lexical
+ * path, which still compares equal to a sentinel spelled the same way.
+ */
+function canonicalPath(target) {
+  const raw = pathArgument(target);
+  if (raw === null || raw === "") return null;
+  try { return realpathSync(raw); } catch { return path.resolve(raw); }
+}
+
+const sentinelPath = canonicalPath(sentinel);
+const sentinelStat = sentinel === "" ? null : (() => {
+  try { return statSync(sentinel); } catch { return null; }
+})();
+
+function namesSentinel(target) {
+  return sentinelPath !== null && canonicalPath(target) === sentinelPath;
+}
+
+/** note: A descriptor standing for the sentinel (an inherited fd) is the same disclosure as its path. */
+function descriptorIsSentinel(handle) {
+  const fd = typeof handle === "number" ? handle : (handle !== null && typeof handle === "object" && typeof handle.fd === "number" ? handle.fd : null);
+  if (sentinelStat === null || fd === null) return false;
+  try {
+    const stat = fstatSync(fd);
+    return stat.dev === sentinelStat.dev && stat.ino === sentinelStat.ino;
+  } catch { return false; }
+}
+
+function guardPath(name, holder) {
   const original = holder[name];
-  holder[name] = function guardedRead(file, ...rest) {
-    if (sentinel !== "" && path.resolve(String(file)) === path.resolve(sentinel)) {
-      record("fs:credential-read", file);
-    }
+  if (typeof original !== "function") return;
+  holder[name] = function guardedPath(file, ...rest) {
+    if (namesSentinel(file)) record("fs:credential-read", file);
     return original.call(holder, file, ...rest);
   };
 }
 
-guardRead("readFileSync", fs);
-guardRead("readFile", fs);
-guardRead("openSync", fs);
-guardRead("open", fs);
-guardRead("createReadStream", fs);
-guardRead("readFile", fs.promises);
-guardRead("open", fs.promises);
+/**
+ * note: A recursive copy discloses the sentinel when its source IS the sentinel or an ancestor of
+ * it, so `cp`/`cpSync` are judged by containment rather than exact identity.
+ */
+function copiesSentinel(target) {
+  if (sentinelPath === null) return false;
+  const resolved = canonicalPath(target);
+  if (resolved === null) return false;
+  const prefix = resolved.endsWith(path.sep) ? resolved : `${resolved}${path.sep}`;
+  return resolved === sentinelPath || sentinelPath.startsWith(prefix);
+}
+
+function guardCopy(name, holder) {
+  const original = holder[name];
+  if (typeof original !== "function") return;
+  holder[name] = function guardedCopy(source, ...rest) {
+    if (copiesSentinel(source)) record("fs:credential-read", source);
+    return original.call(holder, source, ...rest);
+  };
+}
+
+function guardDescriptor(name, holder) {
+  const original = holder[name];
+  if (typeof original !== "function") return;
+  holder[name] = function guardedDescriptor(handle, ...rest) {
+    if (descriptorIsSentinel(handle)) record("fs:credential-read", handle);
+    return original.call(holder, handle, ...rest);
+  };
+}
+
+guardPath("readFileSync", fs);
+guardPath("readFile", fs);
+guardPath("openSync", fs);
+guardPath("open", fs);
+guardPath("createReadStream", fs);
+guardPath("copyFileSync", fs);
+guardPath("copyFile", fs);
+guardCopy("cpSync", fs);
+guardPath("readFile", fs.promises);
+guardPath("open", fs.promises);
+guardPath("copyFile", fs.promises);
+guardCopy("cp", fs.promises);
+guardDescriptor("readvSync", fs);
+guardDescriptor("readv", fs);
+guardDescriptor("readv", fs.promises);
 
 const allowedGit = process.env.MSTAR_NO_PROVIDER_GIT ?? "";
 

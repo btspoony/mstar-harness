@@ -27,8 +27,11 @@ const context: StoreContext = { harnessDir: harness };
 const projectId = "milestone-assignment-project";
 let db: StoreDb;
 let issueNumber = 0;
+/** note: v2 made the stable reference NOT NULL and unique; the fixture mints one per row. */
+let issueRefSequence = 0;
 function makeIssue(id: string, project = projectId): void {
-  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?)").run(id, project, id);
+  const issueRef = `mstar:issue:00000000-0000-4000-8000-${String(++issueRefSequence).padStart(12, "0")}`;
+  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,issue_ref) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?)").run(id, project, id, issueRef);
 }
 function revision(): number {
   const row = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };

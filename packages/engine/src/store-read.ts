@@ -1631,7 +1631,7 @@ function readProjectList(sources: StoreReadSources): ProjectListDTO {
 
 // --- Remote catalog adapters ------------------------------------------------
 //
-// The portable catalog a remote snapshot carries is identity and relations
+// note: The portable catalog a remote snapshot carries is identity and relations
 // only: no checkout path and no local timestamps. These adapters answer the
 // same shape the local joins answer, so a view has ONE composition path.
 
@@ -1962,7 +1962,7 @@ function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO
   return { unregistered, adopted };
 }
 /**
- * The execution workflow list.
+ * note: The execution workflow list.
  *
  * `catalogProjectIds` narrows ONLY the catalog join (membership, identities and
  * the known-catalog flag) to the projects a containing response declares, while

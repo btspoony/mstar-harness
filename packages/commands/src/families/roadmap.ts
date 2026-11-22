@@ -136,12 +136,15 @@ function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
 }
 function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number | null): string {
+  // invariant: `created_at` states a real date or is absent: an empty scalar would fail the
+  // document's own `YYYY-MM-DD` contract and make the export unreadable to the importer.
+  const createdAt = roadmap.content?.frontmatter?.created_at ?? (roadmap.catalog.registeredAt ?? roadmap.catalog.updatedAt)?.slice(0, 10);
   const lines = [
     "---",
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
     `title: ${JSON.stringify(roadmap.content?.frontmatter?.title ?? roadmap.catalog.title)}`,
     `status: ${JSON.stringify(roadmap.content?.frontmatter?.status ?? "active")}`,
-    `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? (roadmap.catalog.registeredAt ?? roadmap.catalog.updatedAt ?? "").slice(0, 10))}`,
+    ...(createdAt ? [`created_at: ${JSON.stringify(createdAt)}`] : []),
     "---",
     "",
     "# Roadmap",

@@ -1,5 +1,5 @@
 /**
- * The provider-free outbox command surface: `adopt-issue` preparation, the seven recovery
+ * note: The provider-free outbox command surface: `adopt-issue` preparation, the seven recovery
  * verbs, and the domain families' pending-effect propagation.
  *
  * Every case drives real command definitions against a real remote cache lane and a real Git
@@ -71,7 +71,7 @@ type Fixture = {
 };
 
 /**
- * A real remote checkout: a bare origin carrying the protected selector ref, a `.mstarc`
+ * note: A real remote checkout: a bare origin carrying the protected selector ref, a `.mstarc`
  * selecting remote, and this checkout's harness directory. Nothing else is created.
  */
 function remoteFixture(label: string): Fixture {
@@ -276,7 +276,7 @@ const RECEIPT_SCOPE = {
   projectId: IDS.projectId,
 };
 
-/** A prepared fixture with one enqueued adoption, its dispatch permit and the frozen event. */
+/** note: A prepared fixture with one enqueued adoption, its dispatch permit and the frozen event. */
 async function adoptAndDispatch(label: string) {
   const fixture = remoteFixture(label);
   await fixture.bind();
@@ -452,7 +452,7 @@ describe("remote outbox commands", () => {
 
   test("an unconfirmed send blocks the next dispatch and is abandoned only with recorded proof", async () => {
     const { fixture, permit } = await adoptAndDispatch("blocking");
-    // A second intent of the same project waits behind the first unconfirmed send.
+    // note: A second intent of the same project waits behind the first unconfirmed send.
     const queued = await invoke("store.collaboration.remote.adopt-issue", {
       harness: fixture.harness,
       project: IDS.projectId,

@@ -318,7 +318,7 @@ async function snapshotIssueTables(context: StoreContext): Promise<Record<string
 }
 
 // ---------------------------------------------------------------------------
-// Remote selection: the provider tuple comes from the admitted snapshot
+// note: Remote selection: the provider tuple comes from the admitted snapshot
 // ---------------------------------------------------------------------------
 
 describe("remote project binding", () => {

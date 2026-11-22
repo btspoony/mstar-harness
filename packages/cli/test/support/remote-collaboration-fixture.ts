@@ -1,5 +1,5 @@
 /**
- * The controlled host and sandbox fixture for the remote collaboration suites.
+ * note: The controlled host and sandbox fixture for the remote collaboration suites.
  *
  * The fixture owns the provider state in memory in the TEST RUNNER and a local
  * bare Git origin that publishes the protected authority ref plus a tracked
@@ -409,7 +409,7 @@ export class RemoteCollaborationFixture {
   }
 
   /**
-   * Publish one reviewed `active` selector generation to the bare origin. A
+   * note: Publish one reviewed `active` selector generation to the bare origin. A
    * successor names the generation it supersedes and its fenced cutover, so the
    * moved-selector case is a real reviewed advance rather than an edited file.
    */
@@ -478,7 +478,7 @@ export class RemoteCollaborationFixture {
   }
 
   /**
-   * The host sends one issued permit to the provider and records the effect it actually
+   * note: The host sends one issued permit to the provider and records the effect it actually
    * produced. Called twice for one attempt it records a duplicate effect, which is exactly
    * the cardinality a `lookup` must report as ambiguous.
    */
@@ -514,7 +514,7 @@ export class RemoteCollaborationFixture {
   }
 
   /**
-   * The host looks up what the provider holds for one attempt under its ORIGINAL binding.
+   * note: The host looks up what the provider holds for one attempt under its ORIGINAL binding.
    * Exactly one exact record confirms; none is `not-found` and a duplicate is `ambiguous`,
    * so neither is ever reported as a business success.
    */
@@ -542,7 +542,7 @@ export class RemoteCollaborationFixture {
   }
 
   /**
-   * The Host Agent's live scope check for one selected project. Everything is
+   * note: The Host Agent's live scope check for one selected project. Everything is
    * current at submission time, which is what a positive check must prove.
    */
   verify(project: FixtureProject = REMOTE_PROJECT): ScopeCheckDocument {
