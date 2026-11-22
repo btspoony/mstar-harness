@@ -1727,7 +1727,7 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
       const previous = db
         .prepare("select verified_at, verification_json from remote_bindings where generation = ? and project_key = ?")
         .get(batch.generation, selected.localProjectId);
-      if (isRecord(previous)) assertCheckAdvances(selected.localProjectId, check, previous);
+      if (isRecord(previous)) assertCheckAdvances(selected.localProjectId, check, previous, { replayUnsafeFidelity: false });
       upsert.run(
         batch.generation,
         selected.localProjectId,
@@ -1818,19 +1818,36 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
 
 /**
  * invariant: A check never rewrites a binding's evidence at an older host time, and
- * a conflicting tie cannot replace the recorded one. Two asymmetric ties are
- * admitted: a byte-identical replay, and an addressed negative check tied with a
+ * a conflicting tie cannot replace the recorded one. Three asymmetric ties are
+ * admitted: a byte-identical replay, an addressed negative check tied with a
  * recorded positive - a revocation invalidates serving even in the same
- * millisecond. The reverse never holds: a tied positive cannot reverse a recorded
- * negative and restore the binding.
+ * millisecond - and, only where `replayUnsafeFidelity` says this submission is the
+ * decoded `unsafe-fidelity` refusal it is admitted for, the exact positive check
+ * such an observation recorded under its negative outcome. The reverse never holds:
+ * a tied positive cannot reverse a recorded negative and restore the binding.
  */
-function assertCheckAdvances(projectId: string, check: ScopeCheck, recorded: Record<string, unknown>): void {
+function assertCheckAdvances(
+  projectId: string,
+  check: ScopeCheck,
+  recorded: Record<string, unknown>,
+  options: Readonly<{ replayUnsafeFidelity: boolean }>,
+): void {
   if (typeof recorded.verified_at !== "string") return;
   const prior = Date.parse(recorded.verified_at);
   const current = Date.parse(check.checkedAt);
   if (current > prior) return;
   if (current === prior) {
     if (recorded.verification_json === JSON.stringify(serializeCheck(check))) return;
+    // invariant: A decoder-detected fidelity refusal records the submitted check under its
+    // effective negative outcome, so the observation resubmitting exactly that check is a
+    // replay rather than a stale timestamp. Only that replay admits it: a bind never restores
+    // verification or the writer from a refusal it would not re-record.
+    if (
+      options.replayUnsafeFidelity &&
+      check.outcome.kind === "verified" &&
+      recordedOutcome(recorded) === "unsafe-fidelity" &&
+      recorded.verification_json === JSON.stringify(serializeCheck({ ...check, outcome: { kind: "unsafe-fidelity" } }))
+    ) return;
     if (check.outcome.kind !== "verified" && recordedOutcome(recorded) === "verified") return;
   }
   throw new StoreError(
@@ -1999,7 +2016,12 @@ function recordObservation(
       `The cache binds ${submission.check.projectId} to another selector commit than the submission names. Nothing was written.`,
     );
   }
-  assertCheckAdvances(submission.check.projectId, submission.check, stored);
+  // invariant: Only the branch that re-persists a decoded `unsafe-fidelity` refusal may replay
+  // the check that refusal was recorded from. A snapshot that now decodes is a positive
+  // observation, and a tied positive never restores what the refusal revoked.
+  assertCheckAdvances(submission.check.projectId, submission.check, stored, {
+    replayUnsafeFidelity: unsafe !== null,
+  });
   const current = db
     .prepare("select revision from remote_observations where generation = ? and project_key = ?")
     .get(submission.generation, submission.check.projectId);
@@ -2012,20 +2034,25 @@ function recordObservation(
   }
   const next = revision + 1;
   const at = nowRfc3339();
+  const refusal = negative ?? unsafe;
   // invariant: The check itself becomes the binding's latest evidence before either branch,
-  // so status, freshness and ordering all read the verification a reader can see. A
-  // negative check carries no writer: it proves no authorized sender exists.
+  // so status, freshness and ordering all read the verification a reader can see. A negative
+  // check stands as submitted, and a snapshot the portable representation cannot keep is
+  // recorded under that same named outcome: the submitted verification alone must never keep
+  // disclosing frozen content or naming a writer. Either refusal revokes the writer in this
+  // same transaction, so no permit — reviewed resolutions included — survives behind it.
+  const recordedCheck =
+    negative === null && unsafe !== null ? { ...submission.check, outcome: { kind: "unsafe-fidelity" as const } } : submission.check;
   db.prepare(
     "update remote_bindings set verified_at = ?, verification_json = ?, writer_id = ? " +
       "where generation = ? and project_key = ?",
   ).run(
     submission.check.checkedAt,
-    JSON.stringify(serializeCheck(submission.check)),
-    submission.check.outcome.kind === "verified" ? submission.check.outcome.writerId : null,
+    JSON.stringify(serializeCheck(recordedCheck)),
+    refusal === null && submission.check.outcome.kind === "verified" ? submission.check.outcome.writerId : null,
     submission.generation,
     submission.check.projectId,
   );
-  const refusal = negative ?? unsafe;
   if (refusal !== null) {
     // invariant: A revocation or a snapshot the portable representation cannot keep invalidates
     // serving as soon as it is submitted. It never waits for the snapshot replacement CAS to

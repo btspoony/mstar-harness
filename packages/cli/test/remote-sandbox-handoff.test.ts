@@ -15,17 +15,20 @@
  * B consumes only what a provider traversal and the bare origin carry: the fixture renders
  * the provider's own confirmed records into its snapshots, so nothing A held is passed in.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { RemoteSnapshot } from "@mstar-harness/engine";
+import type { RunResult } from "./harness";
 import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
   TRACKED_BRANCH,
   RemoteCollaborationFixture,
+  boundedRun,
+  fixtureGit,
   type OutboxIntent,
   type OutboxPermit,
   type ProviderIssueRecord,
@@ -63,9 +66,6 @@ type HandoffSource = Readonly<{
   aCache: string;
 }>;
 
-function git(cwd: string, args: readonly string[]): string {
-  return execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-}
 
 function rowCount(db: DatabaseSync, table: string): number {
   const row = db.prepare(`select count(*) as n from ${table}`).get();
@@ -95,18 +95,18 @@ function seedWorkflow(storePath: string): void {
  */
 function gitSource(bare: string, commit: string): GitState {
   try {
-    git(process.cwd(), ["-C", bare, "rev-parse", "--git-dir"]);
+    fixtureGit(process.cwd(), ["-C", bare, "rev-parse", "--git-dir"]);
   } catch {
     return "unknown";
   }
   try {
-    git(process.cwd(), ["-C", bare, "cat-file", "-e", commit]);
+    fixtureGit(process.cwd(), ["-C", bare, "cat-file", "-e", commit]);
   } catch (error) {
     const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : null;
     // note: `cat-file -e` answers 1 for an absent object; any other failure is not proof.
     return status === 1 ? "absent" : "unknown";
   }
-  const refs = git(process.cwd(), ["-C", bare, "for-each-ref", "--contains", commit, "--format=%(refname)"])
+  const refs = fixtureGit(process.cwd(), ["-C", bare, "for-each-ref", "--contains", commit, "--format=%(refname)"])
     .split("\n")
     .filter((ref) => ref !== "");
   if (refs.includes(`refs/heads/${TRACKED_BRANCH}`)) return "present";
@@ -230,12 +230,12 @@ function handoffFromA(fixture: RemoteCollaborationFixture): HandoffSource {
   if (record === null) throw new Error("fixture: the provider does not hold the confirmed adoption");
 
   writeFileSync(join(a.repo, HANDOFF_FILE), "# Handoff result\n\nOne confirmed remote change and one tracked result.\n");
-  git(a.repo, ["add", HANDOFF_FILE]);
-  git(a.repo, ["commit", "-q", "-m", "record the confirmed handoff"]);
-  const commit = git(a.repo, ["rev-parse", "HEAD"]);
-  git(a.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
+  fixtureGit(a.repo, ["add", HANDOFF_FILE]);
+  fixtureGit(a.repo, ["commit", "-q", "-m", "record the confirmed handoff"]);
+  const commit = fixtureGit(a.repo, ["rev-parse", "HEAD"]);
+  fixtureGit(a.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
   // note: `get-url` expands the fixture's insteadOf mapping to the bare transport path.
-  const bare = git(a.repo, ["remote", "get-url", "origin"]);
+  const bare = fixtureGit(a.repo, ["remote", "get-url", "origin"]);
   const aCache = fixture.cachePath(a);
   const aStore = new DatabaseSync(join(a.harness, "store.db"));
   try {
@@ -258,7 +258,7 @@ function handoffFromA(fixture: RemoteCollaborationFixture): HandoffSource {
 /** note: B's independent bootstrap: fresh clone, fresh execution lane, then the confirmed read. */
 function reconstruct(source: HandoffSource): Readonly<{ b: RemoteSandbox; shown: SandboxCommand }> {
   const b = source.fixture.sandbox("b");
-  expect(git(b.repo, ["rev-parse", "HEAD"])).toBe(source.commit);
+  expect(fixtureGit(b.repo, ["rev-parse", "HEAD"])).toBe(source.commit);
   expect(existsSync(join(b.repo, HANDOFF_FILE))).toBe(true);
   expect(b.environment.HOME).toBe(b.home);
   expect(Object.keys(b.environment).sort()).toEqual(["HOME", "PATH", "TMPDIR", "TZ"]);
@@ -290,6 +290,27 @@ function reconstruct(source: HandoffSource): Readonly<{ b: RemoteSandbox; shown:
   return { b, shown: b.runJson(["issue", "show", "--id", issueRef, "--harness", b.harness]) };
 }
 
+/**
+ * note: One bounded Git probe under an exact environment: the hostile global configuration is
+ * named explicitly and `HOME` is private, so the runner's own `GIT_DIR`, signing setup and hooks
+ * never reach it, and a wedged Git or signer is killed at the fixture deadline. `PATH` stays the
+ * runner's, so the hostile config names the fixture's own rejecting signer instead.
+ */
+function hostileGitProbe(cwd: string, args: readonly string[], home: string, config: string): RunResult {
+  return boundedRun(["git", ...args], {
+    cwd,
+    env: {
+      PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+      HOME: home,
+      TMPDIR: process.env.TMPDIR ?? tmpdir(),
+      TZ: "UTC",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: config,
+      GIT_TERMINAL_PROMPT: "0",
+    },
+  });
+}
+
 describe("remote handoff", () => {
   const hosts: RemoteCollaborationFixture[] = [];
 
@@ -302,6 +323,72 @@ describe("remote handoff", () => {
   afterEach(() => {
     for (const created of hosts.splice(0)) created.dispose();
   });
+
+  test("remote handoff: inherited Git configuration cannot redirect or block the tracked push", () => {
+    const hostileRoot = mkdtempSync(join(tmpdir(), "mstar-hostile-git-"));
+    const hostileConfig = join(hostileRoot, "gitconfig");
+    // note: The hostile config selects a fixture-owned signer that always refuses, so the
+    // control's failure never depends on which `gpg` the runner's PATH happens to carry.
+    const signer = join(hostileRoot, "rejecting-signer");
+    const signerMarker = "fixture-signer: this control never signs";
+    writeFileSync(signer, `#!/bin/sh\necho "${signerMarker}" >&2\nexit 1\n`);
+    chmodSync(signer, 0o755);
+    // note: A runner-level config that would sign every commit and rewrite every HTTPS URL.
+    writeFileSync(
+      hostileConfig,
+      `[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tprogram = ${JSON.stringify(signer)}\n[core]\n\thooksPath = /nonexistent/hooks\n[url "https://invalid.example.test/"]\n\tinsteadOf = https://\n`,
+    );
+    const ambientGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const ambientGitDir = process.env.GIT_DIR;
+    process.env.GIT_CONFIG_GLOBAL = hostileConfig;
+    try {
+      // note: Non-vacuity: a bounded Git child under exactly this hostile configuration and a
+      // private HOME cannot commit, so the fixture's later success is not a vacuous pass.
+      const probe = join(hostileRoot, "probe");
+      const probeHome = join(hostileRoot, "home");
+      mkdirSync(probe, { recursive: true });
+      mkdirSync(probeHome, { recursive: true });
+      expect(hostileGitProbe(probe, ["init", "-q"], probeHome, hostileConfig).exitCode).toBe(0);
+      writeFileSync(join(probe, "probe.txt"), "probe\n");
+      expect(hostileGitProbe(probe, ["add", "probe.txt"], probeHome, hostileConfig).exitCode).toBe(0);
+      const refused = hostileGitProbe(
+        probe,
+        ["-c", "user.name=probe", "-c", "user.email=probe@example.test", "commit", "-q", "-m", "probe"],
+        probeHome,
+        hostileConfig,
+      );
+      // note: A killed child (124) would prove only the deadline, so the refusal must be the
+      // fixture signer's own: a missing or runner-resolved `gpg` never produces this marker.
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.exitCode).not.toBe(124);
+      expect(refused.stderr).toContain(signerMarker);
+      // note: The second inherited fact: a runner-set GIT_DIR that names no repository, which
+      // the fixture's own Git children ignore.
+      process.env.GIT_DIR = join(hostileRoot, "not-a-repository");
+
+      const fixture = host("hostile-git");
+      fixture.publish(1);
+      const sandbox = fixture.sandbox("hostile");
+      expect(sandbox.bind(fixture.verify()).exitCode).toBe(0);
+      writeFileSync(join(sandbox.repo, "hostile.md"), "hostile\n");
+      fixtureGit(sandbox.repo, ["add", "hostile.md"]);
+      fixtureGit(sandbox.repo, ["commit", "-q", "-m", "push under inherited Git configuration"]);
+      const commit = fixtureGit(sandbox.repo, ["rev-parse", "HEAD"]);
+      fixtureGit(sandbox.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
+
+      // invariant: The fixture's own environment wins, so the clone, commit and push run under
+      // sandbox-private Git configuration and the commit reaches only the bare fixture origin.
+      const bare = fixtureGit(sandbox.repo, ["remote", "get-url", "origin"]);
+      expect(bare).not.toContain("invalid.example.test");
+      expect(gitSource(bare, commit)).toBe("present");
+    } finally {
+      if (ambientGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = ambientGlobal;
+      if (ambientGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = ambientGitDir;
+      rmSync(hostileRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   test("remote handoff: B reconstructs the confirmed change and pushed Git after A is removed", () => {
     const fixture = host("two-sandbox");
@@ -351,9 +438,9 @@ describe("remote handoff", () => {
     // invariant: A later descendant push still reaches A's result from the tracked branch, so
     // survival follows that history rather than the branch tip.
     writeFileSync(join(b.repo, "later-work.md"), "later\n");
-    git(b.repo, ["add", "later-work.md"]);
-    git(b.repo, ["commit", "-q", "-m", "later work on the tracked branch"]);
-    git(b.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(b.repo, ["add", "later-work.md"]);
+    fixtureGit(b.repo, ["commit", "-q", "-m", "later work on the tracked branch"]);
+    fixtureGit(b.repo, ["push", "-q", "origin", `HEAD:refs/heads/${TRACKED_BRANCH}`]);
     expect(gitSource(source.bare, source.commit)).toBe("present");
   }, 90_000);
 
@@ -372,7 +459,7 @@ describe("remote handoff", () => {
     ).toEqual({ code: "remote.handoff-unavailable", missing: ["provider"], recovered: ["git"], recoverable: false });
 
     const b = fixture.sandbox("b");
-    expect(git(b.repo, ["rev-parse", "HEAD"])).toBe(source.commit);
+    expect(fixtureGit(b.repo, ["rev-parse", "HEAD"])).toBe(source.commit);
     expect(existsSync(join(b.repo, HANDOFF_FILE))).toBe(true);
     expect(b.bind(fixture.verify()).exitCode).toBe(0);
     expect(b.init().exitCode).toBe(0);
@@ -395,8 +482,8 @@ describe("remote handoff", () => {
     const source = handoffFromA(fixture);
     // note: The tracked branch is deleted and its unreachable objects are pruned, so the
     // origin holds no surviving copy; the provider record is untouched.
-    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
-    git(source.bare, ["prune", "--expire=now"]);
+    fixtureGit(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(source.bare, ["prune", "--expire=now"]);
     expect(providerSource(fixture, source.record)).toBe("present");
     expect(gitSource(source.bare, source.commit)).toBe("absent");
     expect(
@@ -411,7 +498,7 @@ describe("remote handoff", () => {
     const source = handoffFromA(fixture);
     // note: Deleting the branch leaves the commit's objects in the origin with no ref holding
     // them, so the loss is unproven: a `false` verdict here would be a false claim.
-    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
     expect(gitSource(source.bare, source.commit)).toBe("unknown");
     expect(providerSource(fixture, source.record)).toBe("present");
     expect(
@@ -425,8 +512,8 @@ describe("remote handoff", () => {
     // note: Another branch keeps the commit alive after the tracked branch is gone, so the
     // result is recoverable by an operator - but B clones the tracked branch and cannot obtain
     // it. The old any-ref probe called this a successful handoff.
-    git(source.bare, ["update-ref", "refs/heads/kept-result", source.commit]);
-    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(source.bare, ["update-ref", "refs/heads/kept-result", source.commit]);
+    fixtureGit(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
     expect(providerSource(fixture, source.record)).toBe("present");
     expect(gitSource(source.bare, source.commit)).toBe("surviving");
     expect(
@@ -440,8 +527,8 @@ describe("remote handoff", () => {
     const fixture = host("both-loss");
     const source = handoffFromA(fixture);
     fixture.discardEffects(OPERATION);
-    git(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
-    git(source.bare, ["prune", "--expire=now"]);
+    fixtureGit(source.bare, ["update-ref", "-d", `refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(source.bare, ["prune", "--expire=now"]);
     const report = handoffReport({
       provider: providerSource(fixture, source.record),
       git: gitSource(source.bare, source.commit),

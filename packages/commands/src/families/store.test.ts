@@ -14,6 +14,7 @@ import {
   MIGRATIONS,
   migrationChecksum,
   openStore,
+  readCollaborationBinding,
   resolveCollaborationLocation,
   SCHEMA_VERSION_TABLE_SQL,
   writeCollaborationBinding,
@@ -603,6 +604,59 @@ test("store.upgrade refuses a v1 lane this checkout is not bound to and leaves i
     if (owned.status !== "ok") throw new Error(`expected the owned upgrade to succeed: ${owned.message}`);
     expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 } });
     expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2, 3], issueRef: true, issues: 1 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("store.init names the executable adopt recovery for a replacement checkout of a published authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-init-adopt-"));
+  const repoId = `fixture-adopt-${String(Date.now())}`;
+  try {
+    const publisher = join(root, "publisher");
+    const replacement = join(root, "replacement");
+    for (const dir of [publisher, replacement]) {
+      mkdirSync(dir, { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+      // note: The same repository id in both checkouts is what makes them one scope.
+      writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId}\n`);
+      mkdirSync(join(dir, ".mstar"), { recursive: true });
+    }
+    const storeInit = getStoreCommandDefinitions().find(({ id }) => id === "store.init");
+    const adopt = getStoreCommandDefinitions().find(({ id }) => id === "store.collaboration.adopt");
+    if (storeInit === undefined || adopt === undefined) throw new Error("missing store.init/store.collaboration.adopt definitions");
+    const harnessOf = (dir: string): string => join(dir, ".mstar");
+    const initAt = (dir: string) => storeInit.execute(storeInit.input.parse({ harness: harnessOf(dir) }), invocation(dir));
+
+    expect((await initAt(publisher)).status).toBe("ok");
+    const bound = readCollaborationBinding({ harnessDir: harnessOf(publisher), checkoutRoot: publisher });
+    if (bound === null) throw new Error("store.init recorded no collaboration binding");
+    const storeId = bound.storeId;
+
+    // note: A replacement checkout resolves the same repository but records no binding, so
+    // `store init` must name the explicit adoption instead of creating another authority.
+    const refused = await initAt(replacement);
+    expect(refused).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    if (refused.status === "ok") throw new Error("expected the unbound init to refuse");
+    const details: unknown = refused.details;
+    const recovery =
+      details !== null && typeof details === "object" && "recovery" in details && typeof details.recovery === "string"
+        ? details.recovery
+        : "";
+    // invariant: The local/mirror route is the adoption of the authority that checkout already
+    // published, complete with the target and the exact store it must match — never advice to
+    // start a checkout for another repository.
+    expect(recovery).toContain("mstar store collaboration adopt --harness <abs> --expect-store <store-id>");
+    expect(recovery).not.toContain("starts a new checkout for the other repository");
+    expect(existsSync(join(harnessOf(replacement), "store.db"))).toBe(false);
+
+    // invariant: The named recovery is accepted and binds this checkout to that authority.
+    const adopted = await adopt.execute(
+      adopt.input.parse({ harness: harnessOf(replacement), expectStore: storeId, out: join(root, "adopt-receipt.json") }),
+      invocation(replacement),
+    );
+    expect(adopted.status).toBe("ok");
+    expect(await initAt(replacement)).toMatchObject({ status: "ok" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

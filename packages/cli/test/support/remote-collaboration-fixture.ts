@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { remoteEventHead, type RemoteEvent } from "@mstar-harness/engine";
 import { CLI_ROOT, type RunResult } from "../harness";
@@ -174,10 +174,66 @@ function childEnvironment(home: string): Readonly<Record<string, string>> {
   };
 }
 
-function realGit(cwd: string, args: readonly string[]): string {
-  return execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+/** note: The deadline every fixture child gets; a wedged CLI or Git process is killed, never waited out. */
+const CHILD_TIMEOUT_MS = 120_000;
+/** note: The exit code a killed child reports, so a timed-out run fails instead of reading as null. */
+const TIMEOUT_EXIT_CODE = 124;
+/** note: A shared fixture-only Git home; ambient `HOME` and host Git config never reach a fixture child. */
+const FIXTURE_GIT_HOME = join(tmpdir(), "mstar-fixture-git-home");
+
+/**
+ * invariant: A fixture Git child sees its own `HOME` and an explicit minimal environment, and
+ * no system or global Git config, so a runner-set signing, hook or `insteadOf` setting can
+ * neither redirect nor block the fixture's clone, commit or push.
+ */
+function gitEnvironment(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
+  return {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: home,
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    TZ: "UTC",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_TERMINAL_PROMPT: "0",
+  };
 }
 
+/** note: One bounded fixture Git child under that environment; `home` is the sandbox's own when cloning. */
+export function fixtureGit(cwd: string, args: readonly string[], home: string = FIXTURE_GIT_HOME): string {
+  return execFileSync("git", [...args], {
+    cwd,
+    env: gitEnvironment(home),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  }).trim();
+}
+
+/**
+ * note: One bounded synchronous child. A child that hits the deadline is reported as a failed
+ * run before any caller asserts its exit status, so a hang never reads as a product answer.
+ */
+export function boundedRun(command: readonly string[], options: { cwd: string; env: Record<string, string> }): RunResult {
+  const proc = Bun.spawnSync([...command], {
+    cwd: options.cwd,
+    env: { ...options.env },
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
+  const stderr = proc.stderr.toString();
+  return {
+    exitCode: proc.exitCode ?? TIMEOUT_EXIT_CODE,
+    stdout: proc.stdout.toString(),
+    stderr:
+      proc.exitCode === null
+        ? `${stderr}\nfixture: the child was killed after ${String(CHILD_TIMEOUT_MS)}ms without exiting\n`
+        : stderr,
+  };
+}
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -261,16 +317,16 @@ export class RemoteCollaborationFixture {
     this.bare = join(this.root, "origin.git");
     this.publisher = join(this.root, "publisher");
     mkdirSync(this.bare, { recursive: true });
-    realGit(this.root, ["init", "-q", "--bare", this.bare]);
+    fixtureGit(this.root, ["init", "-q", "--bare", this.bare]);
     mkdirSync(this.publisher, { recursive: true });
-    realGit(this.publisher, ["init", "-q", "-b", TRACKED_BRANCH]);
-    realGit(this.publisher, ["config", "user.name", "Remote Selector"]);
-    realGit(this.publisher, ["config", "user.email", "selector@example.test"]);
+    fixtureGit(this.publisher, ["init", "-q", "-b", TRACKED_BRANCH]);
+    fixtureGit(this.publisher, ["config", "user.name", "Remote Selector"]);
+    fixtureGit(this.publisher, ["config", "user.email", "selector@example.test"]);
     // invariant: the collaboration declaration is TRACKED; a sandbox obtains it from Git.
     writeFileSync(join(this.publisher, ".mstarc"), "[collaboration]\nmode=remote\n");
-    realGit(this.publisher, ["add", ".mstarc"]);
-    realGit(this.publisher, ["commit", "-q", "-m", "declare remote collaboration"]);
-    realGit(this.publisher, ["push", "-q", this.bare, `HEAD:refs/heads/${TRACKED_BRANCH}`]);
+    fixtureGit(this.publisher, ["add", ".mstarc"]);
+    fixtureGit(this.publisher, ["commit", "-q", "-m", "declare remote collaboration"]);
+    fixtureGit(this.publisher, ["push", "-q", this.bare, `HEAD:refs/heads/${TRACKED_BRANCH}`]);
   }
 
   dispose(): void {
@@ -283,9 +339,12 @@ export class RemoteCollaborationFixture {
     const repo = join(dir, "repo");
     const home = join(dir, "home");
     mkdirSync(dir, { recursive: true });
+    // invariant: The sandbox's own `HOME` exists BEFORE the clone, so clone, commit and push
+    // all run under it rather than under the test runner's Git configuration.
+    mkdirSync(home, { recursive: true });
     // invariant: a genuine clone through the synthetic canonical URL; the checkout,
     // its origin and `.mstarc` are all canonical Git state, never fixture-written files.
-    realGit(this.root, [
+    fixtureGit(this.root, [
       "clone",
       "-q",
       "--branch",
@@ -294,10 +353,9 @@ export class RemoteCollaborationFixture {
       `url.${this.bare}.insteadOf=${this.origin}`,
       this.origin,
       repo,
-    ]);
-    mkdirSync(home, { recursive: true });
-    realGit(repo, ["config", "user.name", `Sandbox ${name}`]);
-    realGit(repo, ["config", "user.email", `sandbox-${name}@example.test`]);
+    ], home);
+    fixtureGit(repo, ["config", "user.name", `Sandbox ${name}`], home);
+    fixtureGit(repo, ["config", "user.email", `sandbox-${name}@example.test`], home);
     const harness = join(repo, ".mstar");
     mkdirSync(harness, { recursive: true });
     const hosts = join(dir, "host");
@@ -309,15 +367,8 @@ export class RemoteCollaborationFixture {
     const environment = childEnvironment(home);
     let hostSequence = 0;
 
-    const run = (args: readonly string[]): RunResult => {
-      const proc = Bun.spawnSync([process.execPath, "run", entry, ...args], {
-        cwd: repo,
-        env: { ...environment },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-    };
+    const run = (args: readonly string[]): RunResult =>
+      boundedRun([process.execPath, "run", entry, ...args], { cwd: repo, env: { ...environment } });
     const runJson = (args: readonly string[]): SandboxCommand => parseSandboxCommand(run(args));
     const writeJson = (name: string, value: unknown): string => {
       const path = join(hosts, `${String(hostSequence++)}-${name}.json`);
@@ -390,10 +441,10 @@ export class RemoteCollaborationFixture {
     writeFileSync(join(this.publisher, "authority.json"), `${JSON.stringify(payload, null, 2)}\n`);
     // note: A successor commit must differ even when only its generation number does.
     writeFileSync(join(this.publisher, "generation.txt"), `${String(generation)}-${String(Date.now())}-${String(Math.random())}\n`);
-    realGit(this.publisher, ["add", "authority.json", "generation.txt"]);
-    realGit(this.publisher, ["commit", "-q", "-m", `publish generation ${String(generation)}`]);
-    realGit(this.publisher, ["push", "-q", "--force", this.bare, `HEAD:${AUTHORITY_REF}`]);
-    const commit = realGit(this.publisher, ["rev-parse", "HEAD"]);
+    fixtureGit(this.publisher, ["add", "authority.json", "generation.txt"]);
+    fixtureGit(this.publisher, ["commit", "-q", "-m", `publish generation ${String(generation)}`]);
+    fixtureGit(this.publisher, ["push", "-q", "--force", this.bare, `HEAD:${AUTHORITY_REF}`]);
+    const commit = fixtureGit(this.publisher, ["rev-parse", "HEAD"]);
     this.published = { commit, generation };
     return this.published;
   }
