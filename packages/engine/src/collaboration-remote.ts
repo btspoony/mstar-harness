@@ -2240,7 +2240,9 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
   return frozenIntent(await prepareRemoteIssueWrite(context, {
     projectId,
     operationId,
-    ...(adoption.kind === "retain" ? { issueRef: adoption.issueRef } : {}),
+    // invariant: A `retain` keeps the reviewed reference; a `new` adoption mints it once from its
+    // operation id, so the identical replay names the same reference instead of a second one.
+    issueRef: adoption.kind === "retain" ? adoption.issueRef : issueRefForOperation(operationId),
     issueId,
     kind: "issue-adopt",
     next: () => subject,

@@ -88,7 +88,11 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                         ? "The engine refused this supplied attestation. Omit --attestation to use the document the verb generates from its own recorded facts, or correct the file: `mstar schema --command workflow.adopt-terminal` publishes the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
                         : code.startsWith("execution.adoption")
                           ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                          : undefined;
+                          : code === "collaboration.mode-unavailable"
+                            // invariant: A remote checkout has no local catalog or registration lane, so the
+                            // named cause is the mode, not the request payload.
+                            ? "Remote authority admits no local catalog or registration lane, so nothing was reserved. Read the addressed plan rows and their catalog pins with mstar plan show --workflow <workflow-id> --plan <plan-id>, then re-register against the provider project or run this verb in a local or mirror checkout."
+                            : undefined;
   const refusalDetails = details === undefined
     ? undefined
     : {

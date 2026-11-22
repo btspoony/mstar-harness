@@ -1,0 +1,626 @@
+/**
+ * The provider-free outbox command surface: `adopt-issue` preparation, the seven recovery
+ * verbs, and the domain families' pending-effect propagation.
+ *
+ * Every case drives real command definitions against a real remote cache lane and a real Git
+ * selector ref. No provider exists anywhere in the fixture: the CLI/engine read the selector,
+ * freeze intents and record receipts, and the host's provider call is never simulated inside
+ * the product code.
+ */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import {
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  remoteEventHead,
+  type RemoteEvent,
+} from "@mstar-harness/engine";
+import { getCommandDefinitions } from "../src/index.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
+
+const roots: string[] = [];
+const HOME = mkdtempSync(join(tmpdir(), "mstar-outbox-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  // note: The collaboration lane is user-level, so every fixture's homedir is private.
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME, { recursive: true, force: true });
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+const IDS = {
+  projectId: "fixture-project",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  teamId: "22222222-2222-4222-8222-222222222222",
+  providerProjectId: "33333333-3333-4333-8333-333333333333",
+  journalIssueId: "44444444-4444-4444-8444-444444444444",
+  writerId: "55555555-5555-4555-8555-555555555555",
+  providerIssueId: "77777777-7777-4777-8777-777777777777",
+} as const;
+
+const OPERATIONS = {
+  adopt: "99999999-9999-4999-8999-999999999999",
+  capture: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  milestone: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  roadmap: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  catalog: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  resolution: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+} as const;
+
+let sequence = 0;
+function git(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], { cwd, encoding: "utf8" }).trim();
+}
+
+type Fixture = {
+  repo: string;
+  harness: string;
+  commit: string;
+  scope: Readonly<Record<string, string>>;
+  bind: () => Promise<void>;
+  observe: (revision: number) => Promise<void>;
+  path: (name: string, value: unknown) => string;
+  text: (name: string, content: string) => string;
+};
+
+/**
+ * A real remote checkout: a bare origin carrying the protected selector ref, a `.mstarc`
+ * selecting remote, and this checkout's harness directory. Nothing else is created.
+ */
+function remoteFixture(label: string): Fixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `mstar-outbox-${label}-`)));
+  roots.push(root);
+  const owner = `outbox-${sequence++}`;
+  const origin = `https://github.com/${owner}/fixture.git`;
+  const bare = join(root, "origin.git");
+  execFileSync("git", ["init", "-q", "--bare", bare]);
+  const repo = join(root, "repo");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  for (const [key, value] of [
+    ["user.name", "Outbox Fixture"],
+    ["user.email", "outbox@example.test"],
+    ["remote.origin.url", origin],
+    [`url.${bare}.insteadOf`, origin],
+  ] as const) git(repo, ["config", key, value]);
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+  const harness = join(repo, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const repoKey = `github.com/${owner}/fixture`;
+
+  const publisher = join(root, "publisher");
+  mkdirSync(publisher, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: publisher });
+  git(publisher, ["config", "user.name", "Selector"]);
+  git(publisher, ["config", "user.email", "selector@example.test"]);
+  writeFileSync(join(publisher, "authority.json"), `${JSON.stringify({
+    version: 1,
+    repoKey,
+    generation: 3,
+    mode: "remote",
+    phase: "active",
+    projects: [{
+      localProjectId: IDS.projectId,
+      provider: "linear",
+      workspaceId: IDS.workspaceId,
+      teamId: IDS.teamId,
+      projectId: IDS.providerProjectId,
+      journalIssueId: IDS.journalIssueId,
+      writerId: IDS.writerId,
+    }],
+    previous: null,
+    cutover: null,
+  })}\n`);
+  git(publisher, ["add", "authority.json"]);
+  git(publisher, ["commit", "-q", "-m", "selector"]);
+  git(publisher, ["push", "-q", "--force", bare, "HEAD:refs/heads/mstar-collaboration-authority"]);
+  const commit = git(publisher, ["rev-parse", "HEAD"]);
+
+  const scope = {
+    provider: "linear",
+    workspaceId: IDS.workspaceId,
+    teamId: IDS.teamId,
+    projectId: IDS.providerProjectId,
+  };
+  const check = {
+    projectId: IDS.projectId,
+    scope,
+    journalIssueId: IDS.journalIssueId,
+    checkedAt: new Date(Date.now() - 1_000).toISOString(),
+    outcome: {
+      kind: "verified",
+      readerId: "reader-one",
+      writerId: IDS.writerId,
+      capabilities: { fullRead: true, appendOnly: true, exactLookup: true, fieldFidelity: true, privateAudience: true },
+    },
+  };
+  const snapshot = () => ({
+    asOf: new Date(Date.now() - 5_000).toISOString(),
+    coverage: { kind: "complete" },
+    project: {
+      projectId: IDS.projectId,
+      head: ["1".repeat(64)],
+      binding: scope,
+      milestones: [],
+      roadmap: null,
+      catalogEntities: [
+        { kind: "project", id: IDS.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+      ],
+      catalogLinks: [],
+    },
+    issues: [
+      {
+        identity: { ...scope, issueId: IDS.providerIssueId },
+        nativeTitle: "Unmarked native issue",
+        nativeStatus: "Todo",
+        providerUpdatedAt: new Date(Date.now() - 5_000).toISOString(),
+        mstar: null,
+      },
+    ],
+  });
+  return {
+    repo,
+    harness,
+    commit,
+    scope,
+    async bind() {
+      await bindRemoteAuthority({ harnessDir: harness }, { version: 1, selectorCommit: commit, generation: 3, checks: [check] });
+    },
+    async observe(revision: number) {
+      await ingestRemoteObservation(
+        { harnessDir: harness },
+        { version: 1, selectorCommit: commit, generation: 3, check, expectRevision: revision, snapshot: snapshot() },
+      );
+    },
+    path(name: string, value: unknown) {
+      const target = join(root, `${name}-${sequence++}.json`);
+      writeFileSync(target, JSON.stringify(value));
+      return target;
+    },
+    text(name: string, content: string) {
+      const target = join(root, `${name}-${sequence++}.md`);
+      writeFileSync(target, content);
+      return target;
+    },
+  };
+}
+
+function invocation(cwd: string, input?: string): InvocationContext {
+  return {
+    cwd,
+    controlRoot: cwd,
+    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+    signal: new AbortController().signal,
+    effects: {
+      async readInput() {
+        return input ?? "";
+      },
+      async spawn() {
+        return { exitCode: 1, signal: null, stdout: "", stderr: "" };
+      },
+      async startDashboard() {
+        throw new Error("not available in this command family");
+      },
+      async openBrowser() {
+        throw new Error("not available in this command family");
+      },
+    },
+  };
+}
+
+function definition(id: string): CommandDefinition {
+  const found = getCommandDefinitions().find((entry) => entry.id === id);
+  if (found === undefined) throw new Error(`missing command definition: ${id}`);
+  return found;
+}
+
+async function invoke(id: string, input: Record<string, unknown>, cwd: string, stdin?: string): Promise<CommandEnvelope> {
+  return definition(id).execute(definition(id).input.parse(input), invocation(cwd, stdin));
+}
+
+function dataOf(result: CommandEnvelope): Record<string, unknown> {
+  if (result.status !== "ok" || result.data === null || typeof result.data !== "object" || Array.isArray(result.data)) {
+    throw new Error(`expected a successful object result, got ${JSON.stringify(result)}`);
+  }
+  return result.data as Record<string, unknown>;
+}
+
+const adoption = {
+  version: 1,
+  kind: "new",
+  capture: {
+    kind: "bug",
+    severity: "high",
+    impact: "The outbox surface is unimplemented.",
+    acceptance: "The outbox commands settle a durable intent.",
+    sourceIdentity: "review:outbox-commands",
+    rootCauseKey: "remote.outbox.commands",
+    acceptanceKey: "remote.outbox.commands.stored",
+    occurrenceKey: "outbox-commands-occurrence",
+    sourceKind: "review",
+    location: "packages/commands",
+    observedBehavior: "The provider-free loop cannot be finished.",
+    evidence: ["fixture"],
+    discoveredAt: new Date(Date.now() - 10_000).toISOString(),
+  },
+};
+
+const capturePayload = {
+  projectId: IDS.projectId,
+  title: "A captured finding",
+  kind: "bug",
+  severity: "high",
+  impact: "impact body",
+  acceptance: "acceptance body",
+  sourceIdentity: "review:outbox-capture",
+  rootCauseKey: "remote.outbox.capture",
+  acceptanceKey: "remote.outbox.capture.stored",
+  occurrenceKey: "outbox-capture-occurrence",
+  sourceKind: "review",
+  location: "packages/commands",
+  observedBehavior: "A queued capture reported success.",
+  evidence: ["fixture"],
+  discoveredAt: new Date(Date.now() - 10_000).toISOString(),
+};
+
+const RECEIPT_SCOPE = {
+  selectorCommit: "",
+  generation: 3,
+  projectId: IDS.projectId,
+};
+
+/** A prepared fixture with one enqueued adoption, its dispatch permit and the frozen event. */
+async function adoptAndDispatch(label: string) {
+  const fixture = remoteFixture(label);
+  await fixture.bind();
+  await fixture.observe(0);
+  const adoptInput = fixture.path("adopt", adoption);
+  const adopted = await invoke("store.collaboration.remote.adopt-issue", {
+    harness: fixture.harness,
+    project: IDS.projectId,
+    issue: IDS.providerIssueId,
+    operation: OPERATIONS.adopt,
+    input: adoptInput,
+  }, fixture.repo);
+  const intent = dataOf(adopted);
+  const dispatched = await invoke("store.collaboration.remote.outbox-dispatch", {
+    harness: fixture.harness,
+    operation: OPERATIONS.adopt,
+  }, fixture.repo);
+  const result = dataOf(dispatched) as { kind: string; permit: Record<string, any> };
+  return { fixture, intent, permit: result.permit };
+}
+
+function receiptOf(permit: Record<string, any>, outcome: unknown, overrides: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    ...RECEIPT_SCOPE,
+    selectorCommit: permit.binding.selectorCommit,
+    operationId: permit.operationId,
+    attemptId: permit.attemptId,
+    requestHash: permit.requestHash,
+    observedAt: new Date().toISOString(),
+    outcome,
+    ...overrides,
+  };
+}
+
+describe("remote outbox commands", () => {
+  test("adopt-issue freezes one durable intent and outbox-pending|show disclose it without a permit", async () => {
+    const { fixture, intent, permit } = await adoptAndDispatch("lifecycle");
+    expect(intent).toMatchObject({ operationId: OPERATIONS.adopt, state: "enqueued", replayed: false, projectId: IDS.projectId });
+
+    // invariant: A replay of the identical adoption returns the stored intent, never a second row.
+    const replay = await invoke("store.collaboration.remote.adopt-issue", {
+      harness: fixture.harness,
+      project: IDS.projectId,
+      issue: IDS.providerIssueId,
+      operation: OPERATIONS.adopt,
+      input: fixture.path("adopt-replay", adoption),
+    }, fixture.repo);
+    expect(dataOf(replay)).toMatchObject({ operationId: OPERATIONS.adopt, replayed: true, state: "unconfirmed" });
+
+    const shown = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo));
+    expect(shown).toMatchObject({
+      operationId: OPERATIONS.adopt,
+      state: "unconfirmed",
+      attemptId: permit.attemptId,
+      disclosure: "full",
+      target: IDS.providerIssueId,
+    });
+    expect((shown.event as Record<string, unknown>).change).toMatchObject({ kind: "issue-adopt" });
+
+    // note: The listing reports only current-binding enqueued intents; a dispatched one is absent.
+    const pending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
+      harness: fixture.harness,
+      project: IDS.projectId,
+    }, fixture.repo));
+    expect(pending).toMatchObject({ version: 1, projectId: IDS.projectId, intents: [] });
+
+    const unknown = await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: "12121212-1212-4212-8212-121212121212",
+    }, fixture.repo);
+    expect(unknown).toMatchObject({ status: "refused", code: "remote.intent-not-found", exitCode: 1 });
+    expect(unknown.details?.recovery).toContain("outbox-pending");
+  });
+
+  test("a malformed or stale document refuses without mutating the recorded intent", async () => {
+    const { fixture, permit } = await adoptAndDispatch("malformed");
+    const before = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo));
+    const malformed = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: "-",
+    }, fixture.repo, "{not json");
+    expect(malformed).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    const stale = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("receipt-stale", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" }, { requestHash: "0".repeat(64) })),
+    }, fixture.repo);
+    expect(stale).toMatchObject({ status: "refused", code: "remote.operation-conflict", exitCode: 1 });
+    const after = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo));
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.state).toBe("unconfirmed");
+  });
+
+  test("--input reads a relative file path as well as stdin", async () => {
+    const { fixture, permit } = await adoptAndDispatch("relative-input");
+    const absolute = fixture.path("relative-receipt", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" }));
+    // invariant: The documented file input is a PATH, not an absolute path: it resolves against
+    // the caller's working directory exactly like the observation lane's reader.
+    const recorded = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: relative(process.cwd(), absolute),
+    }, fixture.repo);
+    expect(recorded).toMatchObject({ status: "ok", exitCode: 0 });
+    expect(dataOf(recorded)).toMatchObject({ state: "unconfirmed" });
+  });
+
+  test("a refused document names the verb that reads that document, not another DTO's verb", async () => {
+    const { fixture } = await adoptAndDispatch("recovery-routing");
+    // note: Valid JSON that is not the document the verb reads reaches the engine's own
+    // narrow validation; the recovery must resubmit it to THIS verb.
+    const reconcile = await invoke("store.collaboration.remote.outbox-reconcile", {
+      harness: fixture.harness,
+      input: fixture.path("bad-reconcile", { version: 1 }),
+    }, fixture.repo);
+    expect(reconcile).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(reconcile.details?.recovery).toContain("outbox-reconcile");
+    expect(reconcile.details?.recovery).not.toContain("outbox-receipt");
+
+    const resolve = await invoke("store.collaboration.remote.outbox-resolve", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      input: fixture.path("bad-resolution", { version: 1 }),
+    }, fixture.repo);
+    expect(resolve).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(resolve.details?.recovery).toContain("outbox-resolve");
+    expect(resolve.details?.recovery).not.toContain("outbox-receipt");
+
+    const receipt = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-receipt", { version: 1 }),
+    }, fixture.repo);
+    expect(receipt).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(receipt.details?.recovery).toContain("outbox-receipt");
+  });
+
+  test("a receipt records evidence while the outbox state, not the command, says whether the effect landed", async () => {
+    const { fixture, permit } = await adoptAndDispatch("receipt");
+    const unconfirmed = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("receipt", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" })),
+    }, fixture.repo);
+    // note: Exit 0 acknowledges the recorded evidence only; the state is the durable outcome.
+    expect(unconfirmed).toMatchObject({ status: "ok", exitCode: 0 });
+    expect(dataOf(unconfirmed)).toMatchObject({ state: "unconfirmed" });
+
+    const reconciled = await invoke("store.collaboration.remote.outbox-reconcile", {
+      harness: fixture.harness,
+      input: fixture.path("reconcile", receiptOf(permit, { kind: "unconfirmed", reason: "ambiguous" })),
+    }, fixture.repo);
+    expect(reconciled).toMatchObject({ status: "ok", exitCode: 0 });
+    expect(dataOf(reconciled)).toMatchObject({ state: "unconfirmed" });
+
+    const confirmed = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("confirmed", receiptOf(permit, {
+        kind: "confirmed",
+        identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+        recordId: "abababab-abab-4bab-8bab-abababababab",
+        event: permit.frozenRequest.event,
+      })),
+    }, fixture.repo);
+    expect(dataOf(confirmed)).toMatchObject({ state: "confirmed" });
+  });
+
+  test("an unconfirmed send blocks the next dispatch and is abandoned only with recorded proof", async () => {
+    const { fixture, permit } = await adoptAndDispatch("blocking");
+    // A second intent of the same project waits behind the first unconfirmed send.
+    const queued = await invoke("store.collaboration.remote.adopt-issue", {
+      harness: fixture.harness,
+      project: IDS.projectId,
+      issue: IDS.providerIssueId,
+      operation: "13131313-1313-4313-8313-131313131313",
+      input: fixture.path("adopt-second", adoption),
+    }, fixture.repo);
+    expect(queued).toMatchObject({ status: "ok" });
+
+    const refused = await invoke("store.collaboration.remote.outbox-abandon", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      reason: "operator lost the response",
+    }, fixture.repo);
+    expect(refused).toMatchObject({ status: "refused", code: "remote.dispatch-refused", exitCode: 1 });
+
+    const notSent = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("not-sent", receiptOf(permit, { kind: "not-sent", code: "host-pre-send-refusal" })),
+    }, fixture.repo);
+    expect(dataOf(notSent)).toMatchObject({ state: "unconfirmed" });
+
+    const abandoned = await invoke("store.collaboration.remote.outbox-abandon", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      reason: "host refused before send",
+    }, fixture.repo);
+    expect(dataOf(abandoned)).toMatchObject({ state: "abandoned" });
+    const shown = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo));
+    expect(shown).toMatchObject({ state: "abandoned", abandonReason: "host refused before send" });
+  });
+
+  test("a conflict is surfaced, resolved under a new id, and dispatched only with fresh fork evidence", async () => {
+    const { fixture, permit } = await adoptAndDispatch("conflict");
+    const frozen = permit.frozenRequest.event as RemoteEvent;
+    const competing = { ...frozen, operationId: "14141414-1414-4414-8414-141414141414" } as RemoteEvent;
+    const head = remoteEventHead(competing);
+    const recordId = "15151515-1515-4515-8515-151515151515";
+
+    const conflicted = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("conflict", receiptOf(permit, {
+        kind: "conflict",
+        expectedHeads: permit.frozenRequest.expectedHeads,
+        observedHeads: [head],
+        observedRecords: [{ identity: { ...fixture.scope, issueId: IDS.providerIssueId }, recordId, event: competing }],
+      })),
+    }, fixture.repo);
+    expect(dataOf(conflicted)).toMatchObject({ state: "conflict" });
+
+    // invariant: The original conflicted intent is never rewritten or resent.
+    const resend = await invoke("store.collaboration.remote.outbox-dispatch", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo);
+    expect(resend).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
+
+    const resolved = dataOf(await invoke("store.collaboration.remote.outbox-resolve", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      input: fixture.path("resolution", {
+        version: 1,
+        operationId: OPERATIONS.resolution,
+        operator: "ops",
+        reason: "the reviewed replacement cites both branches",
+        event: { ...frozen, operationId: OPERATIONS.resolution, parents: [head], change: { ...frozen.change, issueRef: frozen.change.kind === "project-replace" ? undefined : frozen.change.issueRef } },
+      }),
+    }, fixture.repo));
+    expect(resolved).toMatchObject({ operationId: OPERATIONS.resolution, state: "enqueued" });
+    // invariant: One reviewed resolution per fork, and the original intent keeps its conflict.
+    const twice = await invoke("store.collaboration.remote.outbox-resolve", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+      input: fixture.path("resolution-twice", {
+        version: 1,
+        operationId: "16161616-1616-4616-8616-161616161616",
+        operator: "ops",
+        reason: "duplicate review",
+        event: { ...frozen, operationId: "16161616-1616-4616-8616-161616161616", parents: [head], change: frozen.change },
+      }),
+    }, fixture.repo);
+    expect(twice).toMatchObject({ status: "refused", exitCode: 1 });
+    expect(dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: OPERATIONS.adopt,
+    }, fixture.repo))).toMatchObject({ state: "conflict", resolvedBy: OPERATIONS.resolution });
+
+    const bare = await invoke("store.collaboration.remote.outbox-dispatch", {
+      harness: fixture.harness,
+      operation: OPERATIONS.resolution,
+    }, fixture.repo);
+    expect(bare).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
+    // invariant: An enqueued resolution missing its fork evidence is recovered by supplying that
+    // evidence to the dispatch verb, not by reconciling a send that never happened.
+    expect(bare.details?.recovery).toContain("outbox-dispatch");
+    expect(bare.details?.recovery).toContain("--input");
+
+    const permitted = dataOf(await invoke("store.collaboration.remote.outbox-dispatch", {
+      harness: fixture.harness,
+      operation: OPERATIONS.resolution,
+      input: fixture.path("fork", {
+        version: 1,
+        selectorCommit: permit.binding.selectorCommit,
+        generation: 3,
+        projectId: IDS.projectId,
+        conflictOperationId: OPERATIONS.adopt,
+        asOf: new Date(Date.now() + 2_000).toISOString(),
+        coverage: "complete",
+        heads: [{
+          recordId,
+          issueRef: competing.change.kind === "project-replace" ? "mstar:issue:00000000-0000-4000-8000-000000000000" : competing.change.issueRef,
+          head,
+        }],
+      }),
+    }, fixture.repo));
+    expect(permitted).toMatchObject({ kind: "permit" });
+  });
+
+  test("the domain families report the durable outbox state instead of a queued business success", async () => {
+    const fixture = remoteFixture("domains");
+    await fixture.bind();
+    await fixture.observe(0);
+
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["issue.add", { harness: fixture.harness, operationId: OPERATIONS.capture, actor: "project-manager", payload: capturePayload }],
+      ["milestone.add", { harness: fixture.harness, project: IDS.projectId, name: "Outbox milestone", ordinal: 1, expectStore: 0, operation: OPERATIONS.milestone }],
+      ["roadmap.replace", {
+        harness: fixture.harness,
+        project: IDS.projectId,
+        file: fixture.text("roadmap-candidate", `---\nproject_id: ${IDS.projectId}\ntitle: Fixture roadmap\nstatus: active\ncreated_at: 2026-01-01\n---\n\n# Fixture roadmap\n\n- one\n`),
+        expectProject: 1,
+        expectRoadmap: "absent",
+        operation: OPERATIONS.roadmap,
+      }],
+      ["catalog.register", {
+        harness: fixture.harness,
+        kind: "document",
+        id: "fixture-spec",
+        title: "Fixture spec",
+        rootKind: "specs",
+        path: "specs/fixture.md",
+        documentKind: "spec",
+        expect: 1,
+        operationId: OPERATIONS.catalog,
+        actor: "project-manager",
+        project: IDS.projectId,
+      }],
+    ];
+    for (const [id, input] of cases) {
+      const result = await invoke(id, input, fixture.repo);
+      // invariant: A durable enqueue is a pending refusal carrying the operation id and state.
+      expect(result).toMatchObject({ status: "refused", code: "remote.effect-pending", exitCode: 1 });
+      expect(result.status === "refused" ? result.details : {}).toMatchObject({ operationId: expect.any(String), state: "enqueued" });
+      expect(result.details?.recovery).toContain("outbox-show");
+    }
+
+    // note: The mirror keeps its own command surface and its own inputs: a remote lane holds no
+    // mirror ledger, so this verb refuses before recording anything into the cache or a local row.
+    const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
+    expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
+    expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
+    const stillPending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
+      harness: fixture.harness,
+      project: IDS.projectId,
+    }, fixture.repo));
+    expect((stillPending.intents as unknown[]).length).toBe(4);
+  });
+});
