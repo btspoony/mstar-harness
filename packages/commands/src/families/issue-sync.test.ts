@@ -1,9 +1,3 @@
-/**
- * note: issue-sync.test.ts — the three local verbs of the Linear mirror: pending, apply,
- * ingest. mstar makes no Linear call, so nothing here is faked except the
- * filesystem and stdin: the fixture plays the agent that holds the host's tools,
- * and every assertion reads the store's real ledger.
- */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,11 +64,6 @@ type Fixture = {
   read<T>(fn: (db: StoreDb) => T): Promise<T>;
 };
 
-/**
- * note: A repository with a .mstarc mirror block, a git identity and an initialized
- * store that binds one Linear project and holds three local issues — the state
- * an operator reaches after project bind and three captures.
- */
 async function fixture(name: string, options: { enabled?: boolean; bind?: boolean; email?: string } = {}): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const repoRoot = join(dir, "repo");

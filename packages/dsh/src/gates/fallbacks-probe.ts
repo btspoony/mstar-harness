@@ -37,11 +37,6 @@ export const FALLBACKS_ENTRY_NAME = 'dsh-llm-fallbacks'
  * pattern as the optional `jobs` seam in agent-flow.ts).
  */
 export interface LoaderEntryView {
-  /**
-   * note: Stable id inside the containing entry tree (`EntryOptions.id`). Rows of
-   * ONE plugin share `options.name`, so id is the only field that tells them
-   * apart — a row locates a sibling row of the same plugin by this.
-   */
   id?: string
   options: {
     name: string

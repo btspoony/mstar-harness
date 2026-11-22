@@ -1,20 +1,3 @@
-/**
- * note: marker.ts — the ONE correlation marker between a Linear issue and the local
- * issue it mirrors.
- *
- * ```
- * <!-- mstar-sync: repo=<owner/name>; local=<issue-id>; author=<Name <email>> -->
- * ```
- *
- * It carries who pushed the issue (the pushing checkout's git author) and which
- * local issue it came from, so an ingest can associate a remote record with its
- * local row by identity instead of by prose. No token, no store id, no path:
- * every field means the same thing in any clone of the same repository.
- *
- * The LAST marker in a description decides. An operator who quotes a marker in
- * prose must not be able to change which issue a record is associated with.
- */
-
 /** The three fields the marker carries. `author` is `"Name <email>"` as git reports it. */
 export type MarkerFields = { repo: string; localId: string; author: string };
 

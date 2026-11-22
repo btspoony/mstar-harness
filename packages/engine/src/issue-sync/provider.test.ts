@@ -1,9 +1,3 @@
-/**
- * note: provider.test.ts — the remote record shapes carry no credential.
- *
- * mstar owns no transport and no token here, so the types the engine hands a
- * caller must never grow a credential field: the bearer belongs to the host.
- */
 import { describe, expect, test } from "bun:test";
 import type { ProviderItem, ProviderWritePayload } from "./provider.js";
 

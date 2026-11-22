@@ -1,12 +1,3 @@
-/**
- * note: identity.test.ts — the one git-identity reader: the repository identity
- * (\`owner/name\`) and the author that stamps every pushed marker.
- *
- * The fixture is a REAL temporary repository: a mock of git could not prove the
- * normalization or the empty-config refusals. Global and system config are
- * disabled for the duration, so a developer's own user.email never decides the
- * outcome.
- */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
