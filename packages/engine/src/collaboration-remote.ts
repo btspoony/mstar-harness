@@ -3167,6 +3167,20 @@ function laneStillRecorded(context: StoreContext, lane: SampledLane): boolean {
   );
 }
 
+/**
+ * note: Whether the origin still publishes the sampled selector. A successor published before
+ * this checkout binds it makes the sampled pair inspection-only all the same, so a moved or
+ * vanished ref withholds the payload instead of refusing the row.
+ */
+function laneStillPublished(context: StoreContext, lane: SampledLane): boolean {
+  try {
+    assertSelectionUnchanged(context, lane.location);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function assertAdmittedLane(
   lane: { generation: number; selectorCommit: string },
   row: OutboxIntentRow,
@@ -3721,13 +3735,15 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
     const row = intentRow(handle.db, target);
     const stored = storedRequest(row);
     assertFrozenBinding(handle.db, stored.request.binding, target);
-    // invariant: Disclosure follows the pair this open admitted. A checkout that rebound while the
-    // lane opened authorized nothing here, however current the row's own check still is: the row
-    // stays inspectable, its frozen content does not.
+    // invariant: Disclosure follows the pair this open admitted. A checkout that rebound, or an
+    // origin that published a successor this checkout has not bound yet, while the lane opened
+    // authorized nothing here, however current the row's own check still is: the row stays
+    // inspectable, its frozen content does not.
     const admitted =
       row.generation === lane.generation &&
       stored.request.binding.selectorCommit === lane.selectorCommit &&
-      laneStillRecorded(context, lane);
+      laneStillRecorded(context, lane) &&
+      laneStillPublished(context, lane);
     return intentRead(
       handle.db,
       row,
@@ -4105,26 +4121,57 @@ function repairedForks(db: StoreDb, operationId: string): Set<string> {
 /** note: One outbox row's state and its `resolved_by` link, as a resolution-chain walk needs them. */
 type ResolutionLink = Readonly<{ state: string; resolvedBy: string | null }>;
 
-/**
- * note: Whether a recorded conflict is SETTLED: its live `resolved_by` chain reaches a confirmed
- * terminal repair. A repair may itself conflict and be repaired, so only the whole chain proves
- * the fork settled; an abandoned, enqueued, unconfirmed or missing link (or a cycle) settles nothing.
- */
-export function conflictSettled(
-  chain: ReadonlyMap<string, ResolutionLink>,
-  operationId: string,
-): boolean {
+/** note: The live chain's terminal confirmed repair id, or null when it reaches no confirmation. */
+function settledRepair(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): string | null {
   const visited = new Set<string>();
   let cursor: string | null = operationId;
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
     const link = chain.get(cursor);
-    if (link === undefined) return false;
-    if (link.state === "confirmed") return true;
-    if (link.state !== "conflict") return false;
+    if (link === undefined) return null;
+    if (link.state === "confirmed") return cursor;
+    if (link.state !== "conflict") return null;
     cursor = link.resolvedBy;
   }
-  return false;
+  return null;
+}
+
+/**
+ * note: Whether a recorded conflict reopens admission: its live `resolved_by` chain reaches a
+ * confirmed terminal repair AND the observation shows that fork merged — exactly one current head
+ * on the repaired record, and not one of the competing heads the conflict recorded. A complete
+ * snapshot still carrying the fork proves the rows, never the merge.
+ */
+export function conflictMerged(
+  db: StoreDb,
+  chain: ReadonlyMap<string, ResolutionLink>,
+  operationId: string,
+  snapshot: RemoteSnapshot | null,
+): boolean {
+  const terminal = settledRepair(chain, operationId);
+  if (terminal === null || snapshot === null) return false;
+  let repair: StoredRequest;
+  let fork: Extract<RemoteReceiptOutcome, { kind: "conflict" }>;
+  try {
+    repair = storedRequest(intentRow(db, terminal));
+    fork = recordedFork(db, operationId);
+  } catch {
+    return false;
+  }
+  const heads = observedHeads(snapshot, repair.request.event, repair.request.target);
+  const [head, ...rest] = heads;
+  return head !== undefined && rest.length === 0 && !fork.observedHeads.includes(head);
+}
+
+/** note: The stored project snapshot a merge proof is read from, or null when absent or unreadable. */
+function storedSnapshot(db: StoreDb, generation: number, projectKey: string): RemoteSnapshot | null {
+  const scope = scopeRow(db, generation, projectKey);
+  if (scope === undefined || typeof scope.snapshot_json !== "string") return null;
+  try {
+    return JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+  } catch {
+    return null;
+  }
 }
 
 /** note: One binding lane's outbox rows, keyed by operation id, for resolution-chain walks. */
@@ -4216,9 +4263,10 @@ export async function dispatchRemoteIntent(
     // reviewed intent repairs are exempt - its own resolved fork and every ancestor fork of that
     // repair (a repair can itself conflict) - so a reviewed successor of a conflicted repair
     // proceeds. Every other conflict still blocks until its LIVE chain reaches a confirmed
-    // terminal repair, and an abandoned repair keeps the fork closed until a replacement
-    // resolution takes it over.
+    // terminal repair AND the cached observation shows that fork merged; an abandoned repair keeps
+    // the fork closed until a replacement resolution takes it over.
     const chain = outboxChain(db, row.generation, row.projectKey);
+    const snapshot = storedSnapshot(db, row.generation, row.projectKey);
     const blocking = db
       .prepare(
         "select operation_id, state from remote_outbox where generation = ? and project_key = ? " +
@@ -4230,7 +4278,7 @@ export async function dispatchRemoteIntent(
       if (entry.state === "unconfirmed") return true;
       if (typeof entry.operation_id !== "string") return true;
       if (repaired.has(entry.operation_id)) return false;
-      return !conflictSettled(chain, entry.operation_id);
+      return !conflictMerged(db, chain, entry.operation_id, snapshot);
     });
     if (unresolved !== undefined) {
       const aheadId = typeof unresolved.operation_id === "string" ? unresolved.operation_id : "?";

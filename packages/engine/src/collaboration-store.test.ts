@@ -6217,7 +6217,8 @@ describe("remote outbox re-review", () => {
       resolvedBy: resolutionId,
     });
     await abandonRemoteIntent(cache.context, { operationId: queuedId, reason: "superseded by the reviewed resolution" });
-    const nextHead = ["9".repeat(64)];
+    // note: The merge writes one new head; the fork's competing heads are no longer current.
+    const nextHead = [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))];
     await observeHead(cache, nextHead);
     const nextId = "00000000-0000-4000-8000-000000000714";
     await prepareRemoteIntent(
@@ -6340,8 +6341,31 @@ describe("remote outbox re-review", () => {
         event: recordedEvent(cache.dbPath, resolutionId),
       }),
     );
+    // invariant: A confirmed repair with a refresh still showing the competing heads is not a
+    // merge, so the recorded conflict keeps blocking ordinary sends.
     await observeHead(cache, fork.heads);
-    expect((await dispatchRemoteIntent(cache.context, ordinaryId)).kind).toBe("permit");
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
+    });
+    // invariant: The merged observation carries one new head, so the queue opens; the intent
+    // frozen on the fork's competing heads is stale and never receives a permit.
+    const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))];
+    await observeHead(cache, mergedHead);
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("provider base moved"),
+    });
+    await abandonRemoteIntent(cache.context, { operationId: ordinaryId, reason: "base merged by the reviewed repair" });
+    const mergedId = "00000000-0000-4000-8000-000000000718";
+    await prepareRemoteIntent(
+      cache.context,
+      journalIntent(cache.fixture, cache.commit, mergedId, {
+        event: journalEvent(cache.fixture, mergedId, mergedHead),
+        expectedHeads: mergedHead,
+      }),
+    );
+    expect((await dispatchRemoteIntent(cache.context, mergedId)).kind).toBe("permit");
   }, 30_000);
 
   test("an abandoned resolution restores the conflict block", async () => {
@@ -6855,8 +6879,31 @@ describe("remote outbox qc fixes", () => {
         event: recordedEvent(cache.dbPath, secondId),
       }),
     );
+    // invariant: Confirmation alone reopens nothing: a refresh still carrying the competing heads
+    // leaves the walked fork unmerged and the queue closed.
     await observeHead(cache, fork.heads);
-    expect((await dispatchRemoteIntent(cache.context, ordinaryId)).kind).toBe("permit");
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
+    });
+    // invariant: The merged observation carries one new head; the queue opens and the stale intent
+    // frozen on the fork heads is refused by its own base check.
+    const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, secondId))];
+    await observeHead(cache, mergedHead);
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("provider base moved"),
+    });
+    await abandonRemoteIntent(cache.context, { operationId: ordinaryId, reason: "base merged by the reviewed repair" });
+    const mergedId = "00000000-0000-4000-8000-000000000805";
+    await prepareRemoteIntent(
+      cache.context,
+      journalIntent(cache.fixture, cache.commit, mergedId, {
+        event: journalEvent(cache.fixture, mergedId, mergedHead),
+        expectedHeads: mergedHead,
+      }),
+    );
+    expect((await dispatchRemoteIntent(cache.context, mergedId)).kind).toBe("permit");
   }, 30_000);
 
   test("a conflicted outbox repair is repaired by a successor in the live chain", async () => {
@@ -6916,10 +6963,31 @@ describe("remote outbox qc fixes", () => {
         event: journalEvent(cache.fixture, successorId, second.heads),
       }),
     );
-    // invariant: A confirmed terminal repair settles the LIVE `resolved_by` chain, so the ancestor
-    // conflict no longer blocks an ordinary send frozen on the merged base.
+    // invariant: A confirmed terminal repair settles the LIVE `resolved_by` chain, but a refresh
+    // still carrying the competing heads is not a merge: the ancestor conflict keeps blocking.
     await observeHead(cache, second.heads);
-    expect((await dispatchRemoteIntent(cache.context, ordinaryId)).kind).toBe("permit");
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
+    });
+    // invariant: The merged observation carries the terminal repair's one head; the queue opens,
+    // and an intent frozen on the fork heads is refused by its own base check.
+    const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, successorId))];
+    await observeHead(cache, mergedHead);
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("provider base moved"),
+    });
+    await abandonRemoteIntent(cache.context, { operationId: ordinaryId, reason: "base merged by the terminal repair" });
+    const mergedId = "00000000-0000-4000-8000-000000000815";
+    await prepareRemoteIntent(
+      cache.context,
+      journalIntent(cache.fixture, cache.commit, mergedId, {
+        event: journalEvent(cache.fixture, mergedId, mergedHead),
+        expectedHeads: mergedHead,
+      }),
+    );
+    expect((await dispatchRemoteIntent(cache.context, mergedId)).kind).toBe("permit");
   }, 30_000);
 
   test("an outbox resolution must merge the same subject and keep both branches", async () => {
@@ -7160,6 +7228,48 @@ describe("remote outbox qc fixes", () => {
     expect(sampled).toBe(true);
   }, 30_000);
 
+  test("an inspection withholds the payload when the origin publishes before the bind", async () => {
+    const cache = await outboxCache("outbox-show-published-gap");
+    const operationId = "00000000-0000-4000-8000-000000000892";
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+    const committed = cache.commit;
+    // note: The successor reaches the origin BETWEEN the inspection's single sample and the cache
+    // open, but this checkout has not bound it yet, so only the live ref can tell.
+    let sampled = false;
+    setRemoteIntentSampleGapForTest(() => {
+      if (sampled) return;
+      sampled = true;
+      cache.fixture.publish(
+        cache.fixture.payload({
+          generation: 4,
+          previous: { selectorCommit: committed, generation: 3, mode: "remote" },
+          cutover: {
+            operator: "operator-one",
+            reviewedAt: "2026-11-21T00:00:00.000Z",
+            sourceFenced: true,
+            pendingOperationIds: [],
+            verifiedTargetDigest: "a".repeat(64),
+          },
+        }),
+      );
+    });
+    try {
+      // invariant: The live selector is re-proved at the disclosure boundary. A published successor
+      // the checkout has not bound yet is not the pair the row was authorized under, so the row
+      // stays inspectable and its frozen content is withheld.
+      expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
+        generation: 3,
+        disclosure: "metadata",
+        event: null,
+        target: null,
+        receipts: [],
+      });
+    } finally {
+      setRemoteIntentSampleGapForTest(undefined);
+    }
+    expect(sampled).toBe(true);
+  }, 30_000);
+
   test("an unresolved outbox fork keeps counts closed across a complete refresh", async () => {
     const cache = await outboxCache("outbox-conflict-counts");
     const conflictedId = "00000000-0000-4000-8000-000000000861";
@@ -7195,7 +7305,14 @@ describe("remote outbox qc fixes", () => {
         event: journalEvent(cache.fixture, resolutionId, fork.heads),
       }),
     );
+    // invariant: A confirmed repair is not a merge: a refresh that still carries the competing
+    // heads proves the rows, never the fork, so counts stay closed.
     await observeHead(cache, fork.heads);
+    await expect(
+      (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
+    ).rejects.toMatchObject({ code: "remote.unavailable", message: expect.stringContaining("remote.effect-conflict") });
+    // invariant: One current head that is none of the competing heads is the merge proof; counts reopen.
+    await observeHead(cache, [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))]);
     expect(remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId).milestones).toHaveLength(1);
   }, 30_000);
 

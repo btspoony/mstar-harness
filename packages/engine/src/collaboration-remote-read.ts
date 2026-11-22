@@ -26,7 +26,7 @@ import {
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation, assertSelectionUnchanged, type CollaborationLocation } from "./collaboration-identity.js";
 import {
-  conflictSettled,
+  conflictMerged,
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
   type RemoteIssue,
@@ -224,9 +224,22 @@ export async function openRemoteReadView(
         resolvedBy: typeof entry.resolved_by === "string" ? entry.resolved_by : null,
       });
     }
+    // invariant: Q1: a recorded fork closes required reads until its LIVE `resolved_by` chain
+    // reaches a confirmed terminal repair AND the observation shows that fork merged. A nominally
+    // complete traversal of the same competing heads proves the rows, never that the fork settled.
     const unresolvedForks = new Set<string>();
     for (const [operationId, link] of links) {
-      if (link.state === "conflict" && !conflictSettled(links, operationId)) unresolvedForks.add(link.projectId);
+      if (link.state !== "conflict") continue;
+      const raw = byProject.get(link.projectId)?.snapshot_json;
+      let snapshot: RemoteSnapshot | null = null;
+      if (typeof raw === "string") {
+        try {
+          snapshot = JSON.parse(raw) as RemoteSnapshot;
+        } catch {
+          snapshot = null;
+        }
+      }
+      if (!conflictMerged(handle.db, links, operationId, snapshot)) unresolvedForks.add(link.projectId);
     }
     const now = Date.now();
     const projects = new Map<string, RemoteProjectEvidence>();
