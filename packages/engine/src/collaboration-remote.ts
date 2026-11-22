@@ -214,6 +214,34 @@ function invalid(path: string, detail: string): never {
 }
 
 /**
+ * note: The named refusal for content whose fidelity the snapshot cannot keep. It
+ * is never silent: an imported field the portable representation cannot hold
+ * refuses the whole observation, and the lossless original stays in the local
+ * store the snapshot does not replace.
+ */
+function unsafeFidelity(path: string, detail: string): never {
+  throw new StoreError("remote.unsafe-fidelity", `${path}: ${detail}. Nothing was written.`);
+}
+
+/** note: A portable field is one bounded line that cannot name a filesystem location. */
+const PORTABLE_FIELD_LIMIT = 512;
+
+function portableValue(value: unknown, path: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    unsafeFidelity(path, "carries a structured value, which the reviewed portable representation cannot keep");
+  }
+  if (value.length > PORTABLE_FIELD_LIMIT) {
+    unsafeFidelity(path, `is longer than ${String(PORTABLE_FIELD_LIMIT)} characters`);
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) unsafeFidelity(path, "carries a control character");
+  if (/^(?:[A-Za-z]:[\\/]|[\\/~])/.test(value) || value.split(/[\\/]/).includes("..")) {
+    unsafeFidelity(path, "names a filesystem location, which the snapshot cannot represent");
+  }
+  return value;
+}
+
+/**
  * note: The one object guard for this boundary. The engine has no shared runtime-shape
  * module, and these are the only documents that cross it, so the parse lives
  * here and every field below is narrowed with its own `typeof` / `in` check.
@@ -563,41 +591,62 @@ function transitionEvidence(value: unknown, path: string): Record<string, unknow
 
 /**
  * invariant: An imported terminal transition carries the reviewed legacy register
- * row as its recorded evidence. Its portable form is that row's business identity
- * and closure labels, with camelCase names matching the snapshot vocabulary. A
- * credential, a raw error, a repository or checkout path, a detail/document
- * reference, free-form closure evidence, a supersession pointer or any other key
- * is excluded rather than persisted; the lossless row stays in the local
- * provenance record, which the snapshot does not replace.
+ * row as its recorded evidence, so its portable form is that row's complete
+ * business field set under camelCase names matching the snapshot vocabulary:
+ * identity, classification, closure and supersession pointers, the
+ * detail-document reference, and the source and plan anchors. A field outside
+ * that list, or a value that is not portable text (a structured payload, an
+ * absolute or home-anchored path, a control character, an over-long string),
+ * refuses the observation as `remote.unsafe-fidelity` instead of being dropped.
+ * The lossless row stays in the local store, which the snapshot does not replace.
  */
-const IMPORTED_EVIDENCE_FIELDS = [
+const IMPORTED_RECORD_FIELDS = [
   ["legacyId", "id"],
   ["title", "title"],
   ["severity", "severity"],
+  ["source", "source"],
   ["scope", "scope"],
   ["decision", "decision"],
   ["owner", "owner"],
   ["target", "target"],
   ["tracking", "tracking"],
+  ["detailDoc", "detail_doc"],
   ["lifecycle", "lifecycle"],
   ["closedAt", "closed_at"],
   ["closureNote", "closure_note"],
+  ["closureEvidence", "closure_evidence"],
+  ["supersededBy", "superseded_by"],
   ["sourcePlan", "source_plan"],
   ["registeredAt", "registered_at"],
 ] as const;
 
-function importedTransitionEvidence(value: unknown, path: string): Record<string, unknown> {
+const IMPORTED_RECORD_KEYS: ReadonlySet<string> = new Set(
+  IMPORTED_RECORD_FIELDS.flatMap(([portable, legacy]) => [portable, legacy]),
+);
+
+function importedRecord(value: unknown, path: string): Record<string, string | null> {
   const body = record(value, path);
-  const evidence: Record<string, unknown> = {};
-  for (const [portable, legacy] of IMPORTED_EVIDENCE_FIELDS) {
-    // note: The portable document is accepted again, so an export of a stored snapshot round-trips.
-    if (!(legacy in body) && !(portable in body)) continue;
-    evidence[portable] = nullableString(legacy in body ? body[legacy] : body[portable], `${path}.${portable}`);
+  for (const key of Object.keys(body)) {
+    if (!IMPORTED_RECORD_KEYS.has(key)) {
+      unsafeFidelity(`${path}.${key}`, "is not a field the reviewed portable representation defines");
+    }
   }
-  if (Object.keys(evidence).length === 0) {
+  const portable: Record<string, string | null> = {};
+  for (const [key, legacy] of IMPORTED_RECORD_FIELDS) {
+    // note: The portable document is accepted again, so an export of a stored snapshot round-trips.
+    // Only a name that differs can be sent twice; most legacy spellings are already the portable one.
+    if (key !== legacy && legacy in body && key in body) {
+      invalid(`${path}.${key}`, `duplicates ${legacy}; send one spelling`);
+    }
+    if (!(legacy in body) && !(key in body)) continue;
+    // note: A refusal names the spelling the sender used, so the offending field is findable.
+    const sent = legacy in body ? legacy : key;
+    portable[key] = portableValue(body[sent], `${path}.${sent}`);
+  }
+  if (Object.keys(portable).length === 0) {
     invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
   }
-  return evidence;
+  return portable;
 }
 
 function transition(value: unknown, path: string): Record<string, unknown> {
@@ -614,7 +663,7 @@ function transition(value: unknown, path: string): Record<string, unknown> {
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
     reason: text(body.reason, `${path}.reason`),
     evidence: imported
-      ? importedTransitionEvidence(body.evidence, `${path}.evidence`)
+      ? importedRecord(body.evidence, `${path}.evidence`)
       : transitionEvidence(body.evidence, `${path}.evidence`),
     issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
     imported,
@@ -633,24 +682,62 @@ function relation(value: unknown, path: string): Record<string, unknown> {
   };
 }
 
+/** note: Every provenance kind the store records: the domain links plus the capture and migration rows. */
+const PROVENANCE_KINDS = [...ISSUE_PROVENANCE_KINDS, "capture", "migration"] as const;
+
 const PROVENANCE_KEYS = [
   "eventId", "kind", "target", "sourceHash", "origin", "legacyProject", "legacyBucket", "legacyEntryId",
-  "legacyJson", "importedAt",
+  "legacyRecord", "legacyJson", "importedAt",
 ] as const;
+
+/**
+ * invariant: Provenance never carries the raw legacy register JSON. A migration
+ * row's full lossless text may be handed over as `legacyJson`; it is parsed and
+ * projected through the same reviewed portable record as imported transition
+ * evidence, so a credential-bearing structure, an absolute or home-anchored
+ * path, or an unknown field refuses the observation as `remote.unsafe-fidelity`.
+ * Only the portable projection is persisted, as `legacyRecord`, and a stored
+ * snapshot's `legacyRecord` is accepted again so an export round-trips.
+ */
+function provenanceRecord(body: Record<string, unknown>, path: string): Record<string, string | null> | null {
+  if ("legacyJson" in body && "legacyRecord" in body) {
+    invalid(`${path}.legacyRecord`, "duplicates legacyJson; send one representation");
+  }
+  if ("legacyRecord" in body) {
+    return body.legacyRecord === null ? null : importedRecord(body.legacyRecord, `${path}.legacyRecord`);
+  }
+  if (!("legacyJson" in body) || body.legacyJson === null) return null;
+  const raw = body.legacyJson;
+  if (typeof raw !== "string") unsafeFidelity(`${path}.legacyJson`, "must be the legacy row's JSON text or null");
+  // shortcut: one legacy register row is a small JSON document; 64 KiB is far above any
+  // observed row, and a larger one is refused rather than parsed unbounded.
+  if (raw.length > 64 * 1024) unsafeFidelity(`${path}.legacyJson`, "is too large to be one legacy register row");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    unsafeFidelity(`${path}.legacyJson`, "is not JSON the reviewed representation can read");
+  }
+  return importedRecord(parsed, `${path}.legacyJson`);
+}
 
 function provenanceLink(value: unknown, path: string): Record<string, unknown> {
   const body = record(value, path);
   allowOnly(body, path, PROVENANCE_KEYS);
+  const target = portableValue(text(body.target, `${path}.target`), `${path}.target`);
+  if (target === null) invalid(`${path}.target`, "must be a non-empty string");
+  const sourceHash = text(body.sourceHash, `${path}.sourceHash`);
+  if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
   return {
     eventId: eventId(body.eventId, `${path}.eventId`),
-    kind: oneOf(body.kind, ISSUE_PROVENANCE_KINDS, `${path}.kind`),
-    target: text(body.target, `${path}.target`),
-    sourceHash: text(body.sourceHash, `${path}.sourceHash`),
+    kind: oneOf(body.kind, PROVENANCE_KINDS, `${path}.kind`),
+    target,
+    sourceHash,
     origin: oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`),
-    legacyProject: nullableString(body.legacyProject, `${path}.legacyProject`),
-    legacyBucket: nullableString(body.legacyBucket, `${path}.legacyBucket`),
-    legacyEntryId: nullableString(body.legacyEntryId, `${path}.legacyEntryId`),
-    legacyJson: nullableString(body.legacyJson, `${path}.legacyJson`),
+    legacyProject: portableValue(body.legacyProject, `${path}.legacyProject`),
+    legacyBucket: portableValue(body.legacyBucket, `${path}.legacyBucket`),
+    legacyEntryId: portableValue(body.legacyEntryId, `${path}.legacyEntryId`),
+    legacyRecord: provenanceRecord(body, path),
     importedAt: nullableInstant(body.importedAt, `${path}.importedAt`),
   };
 }

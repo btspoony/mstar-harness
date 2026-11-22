@@ -1753,7 +1753,7 @@ function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
               legacyProject: null,
               legacyBucket: null,
               legacyEntryId: null,
-              legacyJson: null,
+              legacyRecord: null,
               importedAt: null,
             },
           ],
@@ -2404,7 +2404,6 @@ describe("remote observation cache", () => {
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { token: "leak" } }] }),
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { references: ["x"], headers: {} } }] }),
       withSubject({ transitions: [{ ...subject.transitions[0]!, evidence: { references: [{}] } }] }),
-      withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence: { reason: "fixed" } }] }),
       withSubject({ relations: [{ relation: "related", target: "I-000001" }] }),
       withSubject({ provenance: [{}] }),
       withSubject({ projectMoves: [{ fromProject: "a", toProject: "b" }] }),
@@ -2437,8 +2436,9 @@ describe("remote observation cache", () => {
     });
 
     // invariant: Imported history keeps its flag on both collections, and its transition
-    // evidence is the reviewed legacy row's portable projection: the business fields survive,
-    // a credential or a checkout path never enters the cache.
+    // evidence is the reviewed legacy row's complete portable projection: every business
+    // field survives, including closure evidence, the supersession pointer and the
+    // detail-document reference.
     const importedSubject = {
       ...subject,
       occurrences: [{ ...subject.occurrences[0]!, imported: true }],
@@ -2449,11 +2449,13 @@ describe("remote observation cache", () => {
           evidence: {
             id: "R9",
             title: "Imported finding",
+            source: "qc1.md F-001",
             lifecycle: "resolved",
             closed_at: "2026-09-02",
             closure_note: null,
-            token: "leak",
-            detail_doc: "/home/operator/notes.md",
+            closure_evidence: "PR #42 / commit abc1234",
+            superseded_by: "R2",
+            detail_doc: "plans/projects/_default/residuals/R9-finding.md",
           },
         },
       ],
@@ -2476,14 +2478,101 @@ describe("remote observation cache", () => {
           evidence: {
             legacyId: "R9",
             title: "Imported finding",
+            source: "qc1.md F-001",
             lifecycle: "resolved",
             closedAt: "2026-09-02",
             closureNote: null,
+            closureEvidence: "PR #42 / commit abc1234",
+            supersededBy: "R2",
+            detailDoc: "plans/projects/_default/residuals/R9-finding.md",
           },
         }),
       ],
     });
+
+    // invariant: An imported field the reviewed representation cannot keep refuses the whole
+    // observation by name (`remote.unsafe-fidelity`) instead of being silently dropped.
+    for (const evidence of [
+      { id: "R9", title: "Imported finding", token: "leak" },
+      { id: "R9", title: "Imported finding", detail_doc: "/home/operator/notes.md" },
+      { id: "R9", title: "Imported finding", superseded_by: "C:\\operator\\notes.md" },
+      { id: "R9", title: "Imported finding", closure_evidence: { token: "leak" } },
+    ]) {
+      await expect(
+        submit(withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] })),
+      ).rejects.toMatchObject({ code: "remote.unsafe-fidelity" });
+    }
+    await expect(
+      submit(
+        withSubject({
+          transitions: [
+            {
+              ...subject.transitions[0]!,
+              imported: true,
+              evidence: { id: "R9", title: "Imported finding", detail_doc: "/home/operator/notes.md" },
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/evidence\.detail_doc/);
+    // note: The refusals wrote nothing: the portable projection is still the stored revision.
+    expect(storedHistory()).toEqual({
+      occurrences: [expect.objectContaining({ imported: true })],
+      transitions: [
+        expect.objectContaining({
+          imported: true,
+          evidence: expect.objectContaining({ closureEvidence: "PR #42 / commit abc1234" }),
+        }),
+      ],
+    });
   });
+
+  /** note: Apply one reviewed legacy register import and return the source lane it wrote. */
+  async function migratedSource(name: string, entries: Record<string, unknown>[]): Promise<CollaborationLocation> {
+    const repo = makeRepo(`https://example.test/fixture/${name}.git`);
+    const context = contextAt(repo);
+    const register = join(context.harnessDir, "projects", "_default", "residuals.json");
+    mkdirSync(dirname(register), { recursive: true });
+    writeFileSync(register, JSON.stringify({ entries: { "plan-import": entries } }));
+    await applyStoreMigration(context, await planStoreMigration(context));
+    return locationAt(repo);
+  }
+
+  /** note: A reviewed legacy register row, in the register's own spelling. */
+  const migratedRow = (id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id,
+    title: `Imported finding ${id}`,
+    severity: "high",
+    source: "qc1.md",
+    scope: "plan-scope",
+    decision: "accept",
+    owner: "pm",
+    target: "next-iteration",
+    tracking: "issue",
+    source_plan: "plan-import",
+    registered_at: "2026-09-01",
+    lifecycle: "resolved",
+    closed_at: "2026-09-02",
+    closure_note: "fixed",
+    detail_doc: `plans/projects/_default/residuals/${id}-finding.md`,
+    closure_evidence: "PR #42 / commit abc1234",
+    superseded_by: "R2",
+    ...overrides,
+  });
+
+  /** note: The one imported transition evidence the migration recorded. */
+  function importedEvidence(location: CollaborationLocation): Record<string, unknown> {
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      const row = db.prepare("select evidence_json from issue_transitions where imported = 1").get() as
+        | { evidence_json: string }
+        | null;
+      if (row === null) throw new Error("the imported lane recorded no terminal transition");
+      return JSON.parse(row.evidence_json) as Record<string, unknown>;
+    } finally {
+      db.close();
+    }
+  }
 
   test("a real imported terminal transition round-trips as portable evidence", async () => {
     const fixture = remoteFixture("imported-evidence");
@@ -2492,56 +2581,8 @@ describe("remote observation cache", () => {
     const location = locationAt(fixture.repo);
 
     // note: A real reviewed register import records the whole legacy row as the imported
-    // transition's evidence; the boundary must keep its business fields and drop the rest.
-    const source = makeRepo("https://example.test/fixture/imported-evidence.git");
-    const sourceContext = contextAt(source);
-    const register = join(sourceContext.harnessDir, "projects", "_default", "residuals.json");
-    mkdirSync(dirname(register), { recursive: true });
-    writeFileSync(
-      register,
-      JSON.stringify({
-        entries: {
-          "plan-import": [
-            {
-              id: "R1",
-              title: "Fix the flaky gate",
-              severity: "high",
-              source: "qc1.md",
-              scope: "plan-scope",
-              decision: "accept",
-              owner: "pm",
-              target: "next-iteration",
-              tracking: "issue",
-              source_plan: "plan-import",
-              registered_at: "2026-09-01",
-              lifecycle: "resolved",
-              closed_at: "2026-09-02",
-              closure_note: "fixed",
-              detail_doc: "/Users/operator/notes.md",
-              closure_evidence: { token: "leak" },
-            },
-          ],
-        },
-      }),
-    );
-    await applyStoreMigration(sourceContext, await planStoreMigration(sourceContext));
-    const sourceDb = new DatabaseSync(locationAt(source).dbPath);
-    let legacyEvidence: Record<string, unknown>;
-    try {
-      const row = sourceDb.prepare("select evidence_json from issue_transitions where imported = 1").get() as
-        | { evidence_json: string }
-        | null;
-      if (row === null) throw new Error("the imported lane recorded no terminal transition");
-      legacyEvidence = JSON.parse(row.evidence_json) as Record<string, unknown>;
-    } finally {
-      sourceDb.close();
-    }
-    // note: The imported row carries the reviewed record, including its non-portable content.
-    expect(legacyEvidence).toMatchObject({
-      id: "R1",
-      detail_doc: "/Users/operator/notes.md",
-      closure_evidence: { token: "leak" },
-    });
+    // transition's evidence; every portable business field must survive the boundary.
+    const evidence = importedEvidence(await migratedSource("imported-evidence", [migratedRow("R1")]));
 
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
     const check = positiveCheck();
@@ -2557,7 +2598,7 @@ describe("remote observation cache", () => {
               mstar: {
                 ...subject,
                 occurrences: [{ ...subject.occurrences[0]!, imported: true }],
-                transitions: [{ ...subject.transitions[0]!, imported: true, evidence: legacyEvidence }],
+                transitions: [{ ...subject.transitions[0]!, imported: true, evidence }],
               },
             },
             base.issues[1]!,
@@ -2569,33 +2610,203 @@ describe("remote observation cache", () => {
     });
 
     const db = new DatabaseSync(location.dbPath);
-    let evidence: unknown;
+    let stored: unknown;
     try {
       const row = db.prepare("select snapshot_json from remote_observations").get() as { snapshot_json: string | null };
+      // note: The cache stores this boundary's own validated snapshot document.
       const snapshot = JSON.parse(String(row.snapshot_json)) as {
         issues: Array<{ mstar: { transitions: Array<{ imported: boolean; evidence: unknown }> } | null }>;
       };
-      evidence = snapshot.issues[0]!.mstar!.transitions[0]!.evidence;
+      stored = snapshot.issues[0]!.mstar!.transitions[0]!.evidence;
     } finally {
       db.close();
     }
-    // invariant: Exactly the portable business projection round-trips: no legacy key, credential
-    // or checkout path from the imported row reaches the cache.
-    expect(evidence).toEqual({
+    // invariant: Every portable business field of the migrated row round-trips; no legacy key
+    // spelling or non-portable value reaches the cache.
+    expect(stored).toEqual({
       legacyId: "R1",
-      title: "Fix the flaky gate",
+      title: "Imported finding R1",
       severity: "high",
+      source: "qc1.md",
       scope: "plan-scope",
       decision: "accept",
       owner: "pm",
       target: "next-iteration",
       tracking: "issue",
+      detailDoc: "plans/projects/_default/residuals/R1-finding.md",
       lifecycle: "resolved",
       closedAt: "2026-09-02",
       closureNote: "fixed",
+      closureEvidence: "PR #42 / commit abc1234",
+      supersededBy: "R2",
       sourcePlan: "plan-import",
       registeredAt: "2026-09-01",
     });
+  });
+
+  test("a real imported transition whose field cannot be represented refuses by name", async () => {
+    const fixture = remoteFixture("imported-unsafe");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+
+    const evidence = importedEvidence(
+      await migratedSource("imported-unsafe", [
+        migratedRow("R3", { detail_doc: "/Users/operator/notes.md", closure_evidence: { token: "leak" } }),
+      ]),
+    );
+
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const subject = base.issues[0]!.mstar!;
+    const refusal: unknown = await ingestRemoteObservation(context, {
+      ...observation(check, {
+        snapshot: {
+          ...base,
+          issues: [
+            {
+              ...base.issues[0]!,
+              mstar: { ...subject, transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] },
+            },
+            base.issues[1]!,
+          ],
+        },
+      }),
+      selectorCommit: commit,
+      generation: 3,
+    }).catch((error: unknown) => error);
+
+    // invariant: The unsafe field is named, never dropped, and the refusal wrote nothing.
+    expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
+    expect(String(refusal)).toContain("evidence.detail_doc");
+    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(0);
+  });
+
+  test("a real migrated provenance row enters only as its reviewed portable record", async () => {
+    const fixture = remoteFixture("imported-provenance");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const source = await migratedSource("imported-provenance", [
+      migratedRow("R1"),
+      migratedRow("R3", { detail_doc: "/Users/operator/notes.md", superseded_by: { token: "leak" } }),
+    ]);
+    type ProvenanceRow = {
+      kind: string;
+      target: string;
+      source_hash: string;
+      origin: string;
+      legacy_project: string | null;
+      legacy_bucket: string | null;
+      legacy_entry_id: string | null;
+      legacy_json: string | null;
+      imported_at: string | null;
+    };
+    const rows = ((): ProvenanceRow[] => {
+      const db = new DatabaseSync(source.dbPath);
+      try {
+        return db
+          .prepare(
+            "select kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance order by id",
+          )
+          .all() as ProvenanceRow[];
+      } finally {
+        db.close();
+      }
+    })();
+    const portable = rows.find((row) => row.legacy_entry_id === "R1");
+    const unsafe = rows.find((row) => row.legacy_entry_id === "R3");
+    if (portable === undefined || unsafe === undefined) throw new Error("the migrated lane recorded no provenance");
+    expect(portable.kind).toBe("migration");
+
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const subject = base.issues[0]!.mstar!;
+    const provenanceEntry = (row: ProvenanceRow): Record<string, unknown> => ({
+      eventId: "55555555-5555-4555-8555-555555555555",
+      kind: row.kind,
+      target: row.target,
+      sourceHash: row.source_hash,
+      origin: row.origin,
+      legacyProject: row.legacy_project,
+      legacyBucket: row.legacy_bucket,
+      legacyEntryId: row.legacy_entry_id,
+      legacyJson: row.legacy_json,
+      importedAt: row.imported_at,
+    });
+    const submitProvenance = (row: ProvenanceRow, expectRevision: number) =>
+      ingestRemoteObservation(context, {
+        ...observation(check, {
+          expectRevision,
+          snapshot: {
+            ...base,
+            issues: [
+              { ...base.issues[0]!, mstar: { ...subject, provenance: [provenanceEntry(row)] } },
+              base.issues[1]!,
+            ],
+          },
+        }),
+        selectorCommit: commit,
+        generation: 3,
+      });
+
+    expect(await submitProvenance(portable, 0)).toMatchObject({ revision: 1, completeness: "complete" });
+    const db = new DatabaseSync(location.dbPath);
+    let recorded: Record<string, unknown>;
+    let raw: string;
+    try {
+      const row = db.prepare("select snapshot_json from remote_observations").get() as { snapshot_json: string | null };
+      raw = String(row.snapshot_json);
+      // note: The cache stores this boundary's own validated snapshot document.
+      const snapshot = JSON.parse(raw) as {
+        issues: Array<{ mstar: { provenance: Array<Record<string, unknown>> } | null }>;
+      };
+      recorded = snapshot.issues[0]!.mstar!.provenance[0]!;
+    } finally {
+      db.close();
+    }
+    // invariant: The real row's portable fields survive; its raw legacy JSON and every path never do.
+    expect(recorded).toEqual({
+      eventId: "55555555-5555-4555-8555-555555555555",
+      kind: "migration",
+      target: portable.target,
+      sourceHash: portable.source_hash,
+      origin: "unscoped",
+      legacyProject: "_default",
+      legacyBucket: "plan-import",
+      legacyEntryId: "R1",
+      legacyRecord: {
+        legacyId: "R1",
+        title: "Imported finding R1",
+        severity: "high",
+        source: "qc1.md",
+        scope: "plan-scope",
+        decision: "accept",
+        owner: "pm",
+        target: "next-iteration",
+        tracking: "issue",
+        detailDoc: "plans/projects/_default/residuals/R1-finding.md",
+        lifecycle: "resolved",
+        closedAt: "2026-09-02",
+        closureNote: "fixed",
+        closureEvidence: "PR #42 / commit abc1234",
+        supersededBy: "R2",
+        sourcePlan: "plan-import",
+        registeredAt: "2026-09-01",
+      },
+      importedAt: portable.imported_at,
+    });
+    expect(recorded).not.toHaveProperty("legacyJson");
+    expect(raw).not.toContain("legacyJson");
+    expect(raw).not.toContain("Users/operator");
+
+    // invariant: A provenance row whose content is not portable refuses by name and leaves the
+    // stored revision untouched.
+    const refusal: unknown = await submitProvenance(unsafe, 1).catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
+    expect(String(refusal)).toContain("legacyJson.detail_doc");
+    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(1);
   });
 
   test("a rebind refuses a replaced cache identity and reinitializes a missing one", async () => {
