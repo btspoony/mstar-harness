@@ -96,6 +96,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 | 命令 | 何时 |
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
+| `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | 把每条代码注释归入 删除 / ADR / issue / 保留并定型 四类；按 PR 逐个收紧（ratchet）只读取本次 diff 触及的注释，因此未被触碰的**未分类**注释不会触发它——全树 bound gate 仍会拦下已存在的无界标记。 |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（无中断完成、必需领域全部打开、已解析的 diff basis 可读且完整）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；仅在三种情况下给出唯一派生的 `incomplete`：run 在综合之前被中止，必需领域从未打开，或已解析的 diff basis 不可读。超过 wall clock 预算不属于这三种情况：完整覆盖的 run 即使超时，仍按 tally 给出结论，并把超时作为 note 声明。 |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | 对测试面做只读审计 → 产出删除、修复、合并或迁移测试的计划。 |
 | `/amazing-e2e-check [environment] [scenarios]` | 在独立 workflow 中运行你明确要求的浏览器、真机或安装部署场景。 |
@@ -180,7 +181,7 @@ mstar-harness schema --command issue.close  # 同一份契约的机器可读 JSO
 
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) —— 组件、存储布局、角色与技能、CLI 与 MCP 参考。
 - [`INSTALL.md`](INSTALL.md) —— 各宿主的安装与校验，以及 `report` 命令的完整说明。
-- [`docs/commands.md`](docs/commands.md) —— 七条斜杠命令：参数、适用场景、归属 skill。
+- [`docs/commands.md`](docs/commands.md) —— 八条斜杠命令：参数、适用场景、归属 skill。
 - [`CONCEPTS.md`](CONCEPTS.md) —— harness 在 skills 与文档中使用的术语表。
 - 更新说明：[`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md)。CLI 参数：**`mstar-use-cli`** skill。
 - 维护者：[`AGENTS.md`](AGENTS.md)。

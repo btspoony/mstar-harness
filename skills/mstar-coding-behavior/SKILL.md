@@ -64,7 +64,7 @@ Completion means the requested behavior meets its acceptance criteria, supported
 - `references/evidence-selection.md` — load when choosing which checks evidence a change, or judging whether a result is enough to claim done.
 - `references/test-reliability.md` — load when the change adds, reviews or diagnoses a test that owns a port, process, clock, temporary root, global state or async teardown.
 - `references/constraint-ladder.md` — load when a correction recurs, to pick the strongest constraint that survives it.
-- `references/comments.md` — load when judging whether a comment should exist or which shape it needs.
+- `references/comments.md` + `references/comment-cleanup.md` — load the first when judging whether a comment should exist or which shape it needs; the second when triaging an existing comment corpus.
 - Only when working under Morning Star lifecycle or assignments, follow the existing authorities: `mstar-harness-core` (lifecycle, safeguards, gates, and Done ownership), `mstar-roles` (identity and Assignment skill-preset selection), and `mstar-branch-worktree` / `mstar-dispatch-gates` (assigned checkout and delegation authority when applicable).
 
 Standalone use requires no other Morning Star skill; this skill does not waive those contracts, grant dispatch permission, or authorize Done.

@@ -1,8 +1,8 @@
 # Command reference
 
-The slash commands this repository ships live in [`commands/`](../commands). This page indexes all seven: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
+The slash commands this repository ships live in [`commands/`](../commands). This page indexes all eight: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
 
-Two boundaries hold across the page. All seven are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
+Two boundaries hold across the page. All eight are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
 
 For project roadmap content, use the CLI `mstar roadmap` family (not a slash command): show, reviewed import, revision-guarded replace and transport export. The authoring/read/write rules live only in `mstar-project-governance`; `mstar-use-cli` indexes the family and the built command's `--help` owns its options.
 
@@ -65,6 +65,7 @@ Workflow notes are ordinary admitted append facts, not execution authority. Curr
 | [`/iteration-drive`](#iteration-drive) | Drive/resume the selected locked iteration with one primary coordinator | `mstar-iteration` |
 | [`/iteration-loop`](#iteration-loop) | The same lifecycle end to end, autonomous lock, minimal human intervention | `mstar-iteration` |
 | [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → a prioritized review report | `mstar-audit` |
+| [`/codebase-comment-cleanup`](#codebase-comment-cleanup) | Triage every code comment into delete / ADR / issue / keep-with-shape, ratcheted per PR | `mstar-coding-behavior` |
 | [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → findings to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
@@ -147,6 +148,22 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 **Hosts** — on dsh, the large-repo fan-out runs through the native `workflow` tool rather than `subagent`; other hosts keep their own invoke tool.
 
 **Defined in** — [`commands/codebase-audit.md`](../commands/codebase-audit.md); procedure → `mstar-audit` (common core in the skill, full-audit detail in `references/codebase-audit.md`); dsh fan-out script → `mstar-host` → `references/dsh-workflow-scripts.md`.
+
+## /codebase-comment-cleanup
+
+```text
+/codebase-comment-cleanup [path|subsystem] [dry-run]
+```
+
+**Purpose** — triage every code comment into four outcomes: a tautology or a stale comment is deleted; an Excuse is a confirmed defect, so it is captured per `mstar-project-governance` § Issue capture whether or not the fix lands here; the code is then corrected in this change when the correction fits, otherwise the fix stays with the captured issue; the excusing comment is deleted after that, and a failed capture keeps it; a decision record moves into `{ADR_DIR}` and leaves at most one contract pointer, and anything else must take a declared shape or go. The pass closes on the measured `unclassified-comment net change`, never an estimate.
+
+**When** — the comment corpus itself is the problem: a stale or noisy codebase, or a cleanup pass before the ratchet hardens. `/codebase-audit` surveys the code rather than its comments, and `/amazing-test-audit` audits the test surface.
+
+**Args** — a `path|subsystem` token narrows the pass; `dry-run` is a read-only exit that reports the triage and, optionally, the measured baseline, and claims no net-change figure; no token means the whole codebase.
+
+**Gate** — no repo-wide comment ban ships: the existing bound gate (`mstar lint packages --type code`, `mstar lint scripts --type code`) plus the per-PR `--diff-base` ratchet is the ban's equivalent. The ratchet only reads comments the diff touches, so an untouched *unclassified* comment does not trip it; the whole-tree bound gate still fails a pre-existing unbounded marker.
+
+**Defined in** — [`commands/codebase-comment-cleanup.md`](../commands/codebase-comment-cleanup.md); semantics → `mstar-coding-behavior` (`references/comments.md`, `references/comment-cleanup.md`); Decision Record promotion → `mstar-doc-corpus` → `references/adr.md`.
 
 ## /amazing-test-audit
 

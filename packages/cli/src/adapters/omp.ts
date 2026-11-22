@@ -413,7 +413,7 @@ const projectRoot = resolveProjectRoot();
     }
 
  notes.push("Verify with: omp plugin list");
- notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
+ notes.push("Enter PM with /skill:pm ; command examples: /iteration-start /iteration-drive /iteration-loop /codebase-audit /codebase-comment-cleanup");
  notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
  notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
 
@@ -432,7 +432,7 @@ const projectRoot = resolveProjectRoot();
 function postInstallNotes(): string[] {
  const notes: string[] = [];
  notes.push("Verify with: omp plugin list");
- notes.push("Enter PM with /skill:pm ; commands: /iteration-start /iteration-drive /iteration-loop /codebase-audit");
+ notes.push("Enter PM with /skill:pm ; command examples: /iteration-start /iteration-drive /iteration-loop /codebase-audit /codebase-comment-cleanup");
  notes.push(`Host adapter: mstar-host \u2192 references/omp.md (skill://mstar-host/references/omp.md)`);
  notes.push(`Alternate install without CLI link: omp plugin install @mstar-harness/omp`);
  return notes;
