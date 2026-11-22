@@ -6,13 +6,15 @@
  * route table, the query-parameter refusals, and the envelopes each view
  * answers with. No mocked database exists anywhere in this proof.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as storeDb from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { RemoteCollaborationFixture, REMOTE_PROJECT, TRACKED_BRANCH } from "./support/remote-collaboration-fixture";
 import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getCatalog, getIssue, initializeCollaborationStore, initializeStore, listCatalog, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
@@ -445,4 +447,199 @@ test("dashboard issue-detail accepts the project a remote native record needs", 
   expect(filters).toEqual({ id: "11111111-1111-4111-8111-111111111111", projectId: "fixture-project" });
   // invariant: A local display id keeps its existing filter shape (no project required).
   expect(dashboardFilters("issue-detail", {}, "I-000001")).toEqual({ id: "I-000001" });
+});
+
+// ---------------------------------------------------------------------------
+// Remote bootstrap at the CLI boundary: the Q3 sequence
+// (`status` -> `bind` -> `store init` -> `observe`) over the controlled host
+// fixture. Each sandbox is a separate checkout with its own `HOME` and an
+// allowlisted child environment; only public JSON documents cross into the CLI.
+// ---------------------------------------------------------------------------
+
+describe("remote collaboration bootstrap at the CLI boundary", () => {
+  const hosts: RemoteCollaborationFixture[] = [];
+
+  function host(): RemoteCollaborationFixture {
+    const created = new RemoteCollaborationFixture("remote-bootstrap-cli");
+    hosts.push(created);
+    return created;
+  }
+
+  afterEach(() => {
+    for (const created of hosts.splice(0)) created.dispose();
+  });
+
+  function rowCount(db: DatabaseSync, table: string): number {
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    return row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" ? row.n : -1;
+  }
+
+  /** note: A's prior execution lane: one workflow, one coordinator session, one lease. */
+  function seedPriorExecutionLane(storePath: string): void {
+    const db = new DatabaseSync(storePath);
+    const at = "2026-11-21T00:00:00.000Z";
+    try {
+      db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+          "values ('wf-sandbox-a', 1, 'session-a', ?, ?, ?)",
+      ).run(JSON.stringify({ schema_version: 2, id: "wf-sandbox-a", type: "plan", status: "running" }), at, at);
+      db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+          "values ('wf-sandbox-a', 'coordinator', 'session-a', 1, 1, 'active', ?)",
+      ).run(at);
+      db.prepare(
+        "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values ('wf-sandbox-a', 1, 1, ?)",
+      ).run(JSON.stringify({ owner: "sandbox-a" }));
+    } finally {
+      db.close();
+    }
+  }
+
+  test("remote bootstrap: an unbound checkout refuses and creates no execution state", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("unbound");
+
+    expect(sandbox.status().data.binding).toMatchObject({ state: "unbound" });
+    const refused = sandbox.init();
+    expect(refused.exitCode).toBe(1);
+    expect(refused.code).toBe("collaboration.stale-binding");
+    // invariant: The recovery names the bootstrap order, never the verb that just failed.
+    expect(refused.recovery).toContain("remote bind");
+    expect(refused.recovery).toContain("mstar store init");
+    expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
+  });
+
+  test("remote observation: a fresh sandbox bootstraps from Git and a host snapshot, then reads it", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandboxA = fixture.sandbox("a");
+    const sandboxB = fixture.sandbox("b");
+
+    // note: Sandbox A binds and initializes its execution lane, and records facts there.
+    expect(sandboxA.bind(fixture.verify()).ok).toBe(true);
+    const aInitialized = sandboxA.init();
+    expect(aInitialized.exitCode).toBe(0);
+    const aExecutionId = aInitialized.data.storeId;
+    seedPriorExecutionLane(join(sandboxA.harness, "store.db"));
+
+    // note: B binds from the fixture's complete host picture; until `observe` runs,
+    // the cache honestly reports an unavailable (partial) picture.
+    const bound = sandboxB.bind(fixture.verify());
+    expect(bound.exitCode).toBe(0);
+    expect(bound.data.binding).toMatchObject({ version: 3, mode: "remote", generation: 1 });
+    const awaitingSnapshot = sandboxB.status();
+    expect(awaitingSnapshot.data.available).toBe(false);
+    expect(awaitingSnapshot.data.projects).toEqual([
+      expect.objectContaining({ projectId: REMOTE_PROJECT.localProjectId, revision: 0, completeness: "unavailable" }),
+    ]);
+
+    // invariant: `store init` initializes EXECUTION only, with identifiers of its own;
+    // it never restores, copies or republishes A's execution lane.
+    const initialized = sandboxB.init();
+    expect(initialized.exitCode).toBe(0);
+    expect(initialized.data.collaboration).toMatchObject({ mode: "remote", state: "active" });
+    expect(initialized.data.storeId).not.toBe(aExecutionId);
+    const bStore = new DatabaseSync(join(sandboxB.harness, "store.db"));
+    try {
+      for (const table of ["execution_workflows", "execution_sessions", "execution_integration_leases"]) {
+        expect(rowCount(bStore, table)).toBe(0);
+      }
+    } finally {
+      bStore.close();
+    }
+
+    const observed = sandboxB.observe(fixture.observe(REMOTE_PROJECT, 0));
+    expect(observed.exitCode).toBe(0);
+    expect(observed.data).toMatchObject({ projectId: REMOTE_PROJECT.localProjectId, revision: 1, completeness: "complete" });
+
+    const status = sandboxB.status();
+    expect(status.data.available).toBe(true);
+    expect(status.data.projects).toEqual([
+      expect.objectContaining({ projectId: REMOTE_PROJECT.localProjectId, revision: 1, completeness: "complete", freshness: "fresh" }),
+    ]);
+
+    const listed = sandboxB.runJson(["issue", "list", "--harness", sandboxB.harness]);
+    expect(listed.exitCode).toBe(0);
+    expect(listed.data.total).toBe(0);
+    expect(listed.data.providerIssues).toEqual([
+      expect.objectContaining({ nativeStatus: "Todo", title: "Observed native issue", kind: "provider-only" }),
+    ]);
+
+    // invariant: B's children received only B's own HOME; no path, store or credential
+    // of A was handed over, and the two sandboxes resolve different cache lanes.
+    expect(sandboxB.environment.HOME).toBe(sandboxB.home);
+    expect(Object.keys(sandboxB.environment).sort()).toEqual(["HOME", "PATH", "TMPDIR", "TZ"]);
+    for (const value of Object.values(sandboxB.environment)) {
+      expect(value.includes(sandboxA.repo)).toBe(false);
+      expect(value.includes(sandboxA.home)).toBe(false);
+    }
+    expect(fixture.cachePath(sandboxB)).not.toBe(fixture.cachePath(sandboxA));
+  });
+
+  test("remote bootstrap: each sandbox is a fresh clone of the tracked branch", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("clone");
+    const git = (args: readonly string[]): string =>
+      execFileSync("git", [...args], { cwd: sandbox.repo, encoding: "utf8" }).trim();
+
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe(TRACKED_BRANCH);
+    // note: `remote get-url` expands the fixture's insteadOf mapping; the tracked
+    // origin identity the clone records is the canonical synthetic URL.
+    expect(git(["config", "--get", "remote.origin.url"])).toBe(`https://${fixture.repoKey}.git`);
+    // invariant: the collaboration declaration is tracked content obtained from Git,
+    // not a file the fixture wrote into the checkout.
+    expect(git(["ls-files", "--error-unmatch", ".mstarc"])).toBe(".mstarc");
+  });
+
+  test("remote bootstrap: children run the locally built CLI", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("built");
+
+    expect(sandbox.entry.endsWith(join("cli", "dist", "mstar-harness.js"))).toBe(true);
+    expect(existsSync(sandbox.entry)).toBe(true);
+    // invariant: the entry the sequence spawns answers from the built artifact itself.
+    const help = sandbox.run(["--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("mstar");
+  });
+
+  test("remote bootstrap: a moved selector refuses before execution state exists", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("moved");
+    expect(sandbox.bind(fixture.verify()).ok).toBe(true);
+    // note: A reviewed successor generation supersedes the checked-out binding.
+    const successor = fixture.publish(2);
+    expect(successor.generation).toBe(2);
+
+    const refused = sandbox.init();
+    expect(refused.exitCode).toBe(1);
+    expect(refused.code).toBe("collaboration.stale-binding");
+    expect(refused.recovery).toContain("remote bind");
+    expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
+  });
+
+  test("remote bootstrap: an absent cache lane refuses instead of rebuilding it", () => {
+    const fixture = host();
+    fixture.publish(1);
+    const sandbox = fixture.sandbox("absent");
+    expect(sandbox.bind(fixture.verify()).ok).toBe(true);
+    const cache = fixture.cachePath(sandbox);
+    rmSync(cache, { force: true });
+    rmSync(`${cache}-wal`, { force: true });
+    rmSync(`${cache}-shm`, { force: true });
+
+    const refused = sandbox.init();
+    expect(refused.exitCode).toBe(1);
+    // invariant: An absent cache is required data: the bootstrap refuses and rebuilds
+    // nothing, so the operator re-runs the reviewed bind instead of initializing around it.
+    expect(refused.code).toBe("remote.unavailable");
+    expect(refused.message).toContain("absent");
+    expect(refused.recovery).toContain("remote bind");
+    expect(existsSync(cache)).toBe(false);
+    expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
+  });
 });
