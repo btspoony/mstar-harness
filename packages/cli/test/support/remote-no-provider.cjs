@@ -88,15 +88,20 @@ guardRead("open", fs.promises);
 
 const allowedGit = process.env.MSTAR_NO_PROVIDER_GIT ?? "";
 
-/** note: Resolve through PATH exactly like the child would, so only the pinned executable is allowed. */
-function executablePath(command) {
+/**
+ * note: Resolve the executable from the options the child actually spawns with, so a caller
+ * cannot pin this process's PATH and then run a foreign binary from its own environment.
+ */
+function executablePath(command, options) {
   const value = String(command);
+  const cwd = options.cwd ?? process.cwd();
+  const searchPath = String((options.env ?? process.env).PATH ?? "");
   const candidates = value.includes(path.sep)
-    ? [value]
-    : (process.env.PATH ?? "")
+    ? [path.resolve(cwd, value)]
+    : searchPath
         .split(path.delimiter)
         .filter(Boolean)
-        .map((dir) => path.join(dir, value));
+        .map((dir) => path.resolve(cwd, dir, value));
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -108,9 +113,9 @@ function executablePath(command) {
   return null;
 }
 
-function isGit(command) {
+function isGit(command, options) {
   if (allowedGit === "") return false;
-  const resolved = executablePath(command);
+  const resolved = executablePath(command, options);
   if (resolved === null) return false;
   try {
     return resolved === fs.realpathSync(allowedGit);
@@ -119,10 +124,19 @@ function isGit(command) {
   }
 }
 
+/** note: The trailing options object of `(file[, args][, options])`; an args array is not one. */
+function spawnOptions(rest) {
+  const last = rest[rest.length - 1];
+  return last !== null && typeof last === "object" && !Array.isArray(last) ? last : {};
+}
+
 function guardSpawn(name) {
   const original = childProcess[name];
   childProcess[name] = function guardedSpawn(command, ...rest) {
-    if (!isGit(command)) record("spawn", command);
+    const options = spawnOptions(rest);
+    // note: A shell interprets the command itself, so pinning the Git path would mean nothing.
+    if (options.shell) record("spawn:shell", command);
+    if (!isGit(command, options)) record("spawn", command);
     return original.call(childProcess, command, ...rest);
   };
 }

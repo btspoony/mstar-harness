@@ -63,41 +63,78 @@ function forbiddenImport(specifier: string): boolean {
   return NETWORK_MODULES[specifier] === true || PROVIDER_MODULES.some((pattern) => pattern.test(specifier));
 }
 
-/** note: Resolve one production specifier to its source: relative, or a workspace package entry/subpath. */
+/** note: A declared workspace export: the source the walk enters, or why it must not. */
+type ExportSource = string | "data" | "unresolved";
+
+type WorkspacePackage = Readonly<{ sources: ReadonlyMap<string, ExportSource> }>;
+
+/**
+ * note: The TypeScript behind one declared export. Packages build from `src/`, so the export
+ * subpath names its source; an unmatched code export stays `unresolved` and fails the walk.
+ */
+function exportSource(root: string, subpath: string, target: unknown): ExportSource {
+  if (subpath === "") {
+    const entry = join(root, "src/index.ts");
+    return existsSync(entry) ? entry : "unresolved";
+  }
+  // note: A non-JavaScript target is data (package.json, CSS, wildcard assets), not a module graph.
+  if (typeof target !== "string" || target.includes("*") || !target.endsWith(".js")) return "data";
+  const candidates = [`${subpath}.ts`, `${subpath}/index.ts`, `src/${subpath}.ts`, `src/${subpath}/index.ts`].map((path) =>
+    join(root, path),
+  );
+  return candidates.find(existsSync) ?? "unresolved";
+}
+
+/** note: Each workspace package's name and every declared export mapped to its source. */
+function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): Map<string, WorkspacePackage> {
+  const packages = new Map<string, WorkspacePackage>();
+  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+    const root = join(packagesDir, entry.name);
+    const manifestPath = join(root, "package.json");
+    if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown; exports?: unknown };
+    if (typeof manifest.name !== "string") continue;
+    const declared =
+      typeof manifest.exports === "string"
+        ? { ".": manifest.exports }
+        : manifest.exports !== null && typeof manifest.exports === "object"
+          ? (manifest.exports as Record<string, unknown>)
+          : {};
+    const sources = new Map<string, ExportSource>();
+    for (const [key, value] of Object.entries(declared)) {
+      const target = typeof value === "string" ? value : (value as { default?: unknown } | null)?.default;
+      const subpath = key.replace(/^\.\/?/, "");
+      sources.set(subpath, exportSource(root, subpath, target));
+    }
+    if (!sources.has("")) sources.set("", exportSource(root, "", undefined));
+    packages.set(manifest.name, { sources });
+  }
+  return packages;
+}
+
+/** note: Resolve one production specifier to its source: relative, or a workspace package export. */
 function resolveProductionFile(
   specifier: string,
   fromFile: string,
-  workspace: ReadonlyMap<string, string>,
+  workspace: ReadonlyMap<string, WorkspacePackage>,
 ): string | null {
   if (specifier.startsWith(".")) return resolve(fromFile, "..", specifier.replace(/\.js$/, ".ts"));
-  for (const [name, entry] of workspace) {
-    if (specifier === name) return entry;
-    if (specifier.startsWith(`${name}/`)) {
-      const candidate = join(entry, "..", `${specifier.slice(name.length + 1)}.ts`);
-      return existsSync(candidate) ? candidate : null;
-    }
+  for (const [name, pkg] of workspace) {
+    if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
+    const subpath = specifier === name ? "" : specifier.slice(name.length + 1);
+    const source = pkg.sources.get(subpath);
+    // invariant: An unresolved workspace import fails the walk; it is never silently skipped.
+    if (source === undefined) throw new Error(`${fromFile} imports ${specifier}, which ${name} does not export`);
+    if (source === "unresolved") throw new Error(`${fromFile} imports ${specifier}, whose source cannot be resolved`);
+    return source === "data" ? null : source;
   }
   return null;
-}
-
-/** note: Each production workspace package's manifest name and the source entry it resolves to. */
-function workspaceSources(): Map<string, string> {
-  const packages = join(REPO_ROOT, "packages");
-  const sources = new Map<string, string>();
-  for (const entry of readdirSync(packages, { withFileTypes: true })) {
-    const manifestPath = join(packages, entry.name, "package.json");
-    if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown };
-    const source = join(packages, entry.name, "src/index.ts");
-    if (typeof manifest.name === "string" && existsSync(source)) sources.set(manifest.name, source);
-  }
-  return sources;
 }
 
 /** note: Every reachable production file (absolute), following workspace packages across their boundary. */
 function walkRemoteImports(
   roots: readonly string[] = REMOTE_ROOTS.map((path) => join(REPO_ROOT, path)),
-  workspace: ReadonlyMap<string, string> = workspaceSources(),
+  workspace: ReadonlyMap<string, WorkspacePackage> = workspacePackages(),
 ): Map<string, string> {
   const files = new Map<string, string>();
   const pending = [...roots];
@@ -271,24 +308,43 @@ describe("provider isolation: the shipped remote path", () => {
     const files = walkRemoteImports();
     // invariant: The commands family imports the engine by package name; the walk must enter it.
     expect([...files.keys()]).toContain(join(REPO_ROOT, "packages/engine/src/index.ts"));
+    // invariant: A declared non-root export resolves to its source instead of being dropped.
+    expect(
+      resolveProductionFile("@mstar-harness/engine/src/audit", join(REPO_ROOT, "packages/cli/src/index.ts"), workspacePackages()),
+    ).toBe(join(REPO_ROOT, "packages/engine/src/audit.ts"));
 
-    // note: Negative control - a provider SDK reached only through a workspace package boundary is
-    // still found, so the real walk cannot silently stop at the package specifier.
+    // note: Negative control - a provider SDK reached only through a non-root exported subpath is
+    // still found, so the walk cannot silently drop a workspace export it fails to map.
     const root = mkdtempSync(join(tmpdir(), "mstar-static-boundary-"));
     try {
       const entry = join(root, "entry.ts");
-      const inner = join(root, "pkg/inner.ts");
-      mkdirSync(join(root, "pkg"), { recursive: true });
-      writeFileSync(entry, 'import { value } from "@mstar-harness/synthetic";\n');
-      writeFileSync(join(root, "pkg/index.ts"), 'export { value } from "./inner.js";\n');
-      writeFileSync(inner, 'import { LinearClient } from "@linear/sdk";\n');
-      const walked = walkRemoteImports([entry], new Map([["@mstar-harness/synthetic", join(root, "pkg/index.ts")]]));
+      const pkg = join(root, "packages/synthetic");
+      const module = join(pkg, "src/audit.ts");
+      mkdirSync(join(pkg, "src"), { recursive: true });
+      writeFileSync(
+        join(pkg, "package.json"),
+        JSON.stringify({
+          name: "@mstar-harness/synthetic",
+          exports: {
+            ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+            "./src/audit": { types: "./dist/audit.d.ts", default: "./dist/audit.js" },
+          },
+        }),
+      );
+      writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/audit";\n');
+      writeFileSync(join(pkg, "src/index.ts"), 'export { audit } from "./audit.js";\n');
+      writeFileSync(module, 'import { LinearClient } from "@linear/sdk";\n');
+      const walked = walkRemoteImports([entry], workspacePackages(join(root, "packages")));
       const forbidden = [...walked.entries()].flatMap(([file, source]) =>
         importSpecifiers(source)
           .filter(forbiddenImport)
           .map((specifier) => `${file} imports ${specifier}`),
       );
-      expect(forbidden).toEqual([`${inner} imports @linear/sdk`]);
+      expect(forbidden).toEqual([`${module} imports @linear/sdk`]);
+
+      // invariant: An import outside the manifest's exports fails the walk instead of vanishing.
+      writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/private";\n');
+      expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/src\/private/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -340,6 +396,20 @@ describe("provider isolation: the shipped remote path", () => {
       ).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
 
+      // note: The spawn options, not this process, decide the executable; an option-level PATH
+      // must not pass the pin and then run the foreign `git` it points at.
+      expect(
+        attempt(
+          `require("node:child_process").execFileSync("git", ["--version"], { env: { PATH: ${JSON.stringify(root)} } })`,
+        ),
+      ).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+
+      // note: A shell wrapper interprets the command itself, so it is refused even for pinned Git.
+      expect(
+        attempt(`require("node:child_process").execFileSync(${JSON.stringify(git)}, ["--version"], { shell: true })`),
+      ).not.toBe(0);
+
       // note: A Node ESM child imports builtins by name; the same channels must deny it too.
       expect(attemptModule(`import { readFileSync } from "node:fs"; readFileSync(${JSON.stringify(guard.sentinel)});`)).not.toBe(0);
       expect(
@@ -358,7 +428,8 @@ describe("provider isolation: the shipped remote path", () => {
       expect(kinds).toContain("network:tls");
       expect(kinds).toContain("network:websocket");
       expect(kinds.filter((kind) => kind === "fs:credential-read")).toHaveLength(3);
-      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(3);
+      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(4);
+      expect(kinds.filter((kind) => kind === "spawn:shell")).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
