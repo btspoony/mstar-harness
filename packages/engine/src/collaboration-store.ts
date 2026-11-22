@@ -2970,15 +2970,50 @@ export async function retireLocalPredecessorLane(
 }
 
 /**
+ * note: Admission options for opening the remote cache. A draining selector keeps
+ * serving its PINNED previous binding so recovery reads and reconciliation of intents
+ * frozen under it stay possible; preparing or dispatching a new intent is refused by
+ * those verbs themselves, never by this gate.
+ */
+export type RemoteCacheAdmission = Readonly<{
+  previousDuringDraining?: boolean;
+}>;
+
+/**
  * invariant: A remote-cache entry's scope: the checkout resolves remote, its recorded v3 binding
  * is active and names the exact checked commit and generation, and the checked
  * selection exists. Anything else refuses before a lane is opened. A caller that
  * already resolved this pair passes it, so one request reads the selector and the
  * binding ONCE and the lane it opens is admitted for exactly that sample.
  */
+
+/**
+ * note: Whether this checkout's v3 binding is the generation a DRAINING selector pins as
+ * its previous active one. That is the only recovery scope a draining generation admits.
+ */
+function drainingPreviousBinding(
+  location: CollaborationLocation,
+  binding: CollaborationBinding,
+  admission: RemoteCacheAdmission,
+): boolean {
+  if (admission.previousDuringDraining !== true || binding.version !== 3) return false;
+  const selection = location.selection;
+  const previous = selection?.previous ?? null;
+  return (
+    selection?.phase === "draining" &&
+    previous !== null &&
+    previous.mode === "remote" &&
+    binding.repoKey === location.repoKey &&
+    binding.mode === location.mode &&
+    binding.selectorCommit === previous.selectorCommit &&
+    binding.generation === previous.generation
+  );
+}
+
 function remoteCacheScope(
   context: StoreContext,
   resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
+  options: RemoteCacheAdmission = {},
 ): { location: CollaborationLocation; binding: CollaborationBinding } {
   const location = resolved?.location ?? resolveCollaborationLocation(context);
   if (location.mode !== "remote") {
@@ -2997,7 +3032,7 @@ function remoteCacheScope(
         `("mstar store collaboration remote bind --input <file|->"); nothing was read or created.`,
     );
   }
-  assertBindingMatches(binding, location);
+  if (!drainingPreviousBinding(location, binding, options)) assertBindingMatches(binding, location);
   return { location, binding };
 }
 
@@ -3395,8 +3430,9 @@ export async function withCollaborationWrite<T>(
 export async function withRemoteCacheWrite<T>(
   context: StoreContext,
   apply: (handle: CollaborationStoreHandle) => T,
+  admission: RemoteCacheAdmission = {},
 ): Promise<T> {
-  return withWriteLane(context, apply, undefined, "remote-cache");
+  return withWriteLane(context, apply, undefined, "remote-cache", admission);
 }
 
 async function withWriteLane<T>(
@@ -3404,12 +3440,13 @@ async function withWriteLane<T>(
   apply: (handle: CollaborationStoreHandle) => T,
   expected: CollaborationStamp | undefined,
   lane: "domain" | "remote-cache",
+  admission: RemoteCacheAdmission = {},
 ): Promise<T> {
   assertStoreRuntimeSupported();
   let location: CollaborationLocation;
   let remoteBinding: CollaborationBinding | undefined;
   if (lane === "remote-cache") {
-    const scope = remoteCacheScope(context);
+    const scope = remoteCacheScope(context, undefined, admission);
     location = scope.location;
     remoteBinding = scope.binding;
   } else {
@@ -3502,9 +3539,10 @@ export async function openRemoteCache(
   context: StoreContext,
   mode: "read" | "write",
   resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
+  admission: RemoteCacheAdmission = {},
 ): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
-  const { location, binding } = remoteCacheScope(context, resolved);
+  const { location, binding } = remoteCacheScope(context, resolved, admission);
   if (mode === "write" && existsSync(location.dbPath)) {
     try {
       accessSync(location.dbPath, constants.W_OK);

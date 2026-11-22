@@ -112,19 +112,31 @@ import {
   assertTerminalDisposition,
   captureIssueOn,
   closeIssueOn,
+  closedRemoteSubject,
   issueWriteSeat,
   linkIssueScopedOn,
+  residualGenesisSubject,
   IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting } from "./path.js";
-import { openCollaborationStore, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
+import {
+  openCollaborationStore,
+  readRemoteCacheAuthority,
+  type CollaborationStamp,
+  type CollaborationStoreHandle,
+} from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { frozenIntent, prepareRemoteIssueWrite, type RemoteIntent } from "./collaboration-remote.js";
 import {
   advanceCollaborationRevision,
   assertNoPendingCompositeReservation,
   hasPreparedCompositeIntent,
   noteOutstandingAcknowledgement,
+  remoteCompositeEntryOperationId,
+  remoteCompositeOperationId,
+  remoteCompositePreparationPartial,
   repairCompositeAcknowledgement,
   reserveCompositeIntent,
   runCollaborationComposite,
@@ -144,7 +156,7 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { storeDbPath } from "./store-db.js";
+import { StoreError, storeDbPath, type StoreContext } from "./store-db.js";
 import {
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -1205,6 +1217,13 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
  * returns the same read-only handle; it only adds the binding preflight.
  */
 async function collaborationTarget(context: ExecutionContext): Promise<CollaborationStamp> {
+  // invariant: A `remote` checkout's composite addresses the provider through its private cache,
+  // never a local lane: the stamp is the cache's own identity, and the collaboration half of the
+  // composite becomes one durable outbox intent.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const authority = await readRemoteCacheAuthority(context);
+    return { repoKey: authority.repoKey, mode: "remote", storeId: authority.storeId, epoch: authority.epoch };
+  }
   const handle = await openCollaborationStore(context, "write");
   try {
     return {
@@ -1226,6 +1245,8 @@ type ResidualComposite = {
   freeze(witness: ExecutionPlanWitness): string;
   /** note: Apply the whole collaboration effect; runs inside the effect transaction. */
   apply(handle: CollaborationStoreHandle): string;
+  /** note: The remote half: freeze (or replay) the provider intents from the same admitted payload. */
+  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[]>;
 };
 
 /**
@@ -1361,6 +1382,7 @@ async function runResidualComposite(
   if (prepared.kind === "replay") return replayWithRepair(prepared.receipt);
   return runCollaborationComposite<ExecutionReceipt<ExecutionPlanView>>(context, prepared.intent, {
     apply: composite.apply,
+    ...(composite.remote === undefined ? {} : { remote: composite.remote }),
     finalize: (tx, receipt) =>
       finalizeResidualComposite(tx, resolved, prepared.intent, prepared.reservedRevision, requestHash, composite.kind, receipt),
   });
@@ -1471,7 +1493,7 @@ export async function residualAddExecutionPlan(
       // why: §3.1 ONE collaboration revision advance for the whole effect transaction:
       // every composed issue helper joins it instead of advancing the counter.
       const composed: ComposedTransactionRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
-      const captured: Array<{ issueId: string; occurrenceId?: number; revision: number; created: boolean }> = [];
+      const captured: Array<{ issueId: string; occurrenceId?: number | string; revision: number; created: boolean }> = [];
       for (const [entryIndex, input] of derived.entries()) {
         const occurrenceKey = input.occurrenceKey;
         let childOperation: "capture" | "plan-link" = "capture";
@@ -1518,6 +1540,38 @@ export async function residualAddExecutionPlan(
         }
       }
       return serializeExecutionValue({ planId, issues: captured });
+    },
+    async remote(context, intent) {
+      // invariant: A residual-add's provider effect is one genesis event per entry, each already
+      // carrying its plan link (a genesis document cannot be appended to before it is published, so
+      // the link is part of the frozen effect instead of a second intent). Every entry is frozen
+      // against the SAME complete observation; each is dispatched and confirmed in FIFO order.
+      // Each entry is its own transaction, so a failure part-way keeps the earlier intents: the
+      // refusal names them instead of reporting that nothing was frozen.
+      const at = new Date().toISOString();
+      const planId = address.planId;
+      const intents: RemoteIntent[] = [];
+      try {
+        for (const [index, input] of derived.entries()) {
+          const operationId = remoteCompositeEntryOperationId(intent.key, index);
+          const frozen = frozenIntent(
+            await prepareRemoteIssueWrite(context, {
+              projectId: input.projectId,
+              operationId,
+              kind: "issue-create",
+              executionKey: { ...intent.key, operationId },
+              next: () => residualGenesisSubject(input, planId, at),
+              origin: { verb: "residual-add", request: { planId, input } },
+            }),
+          );
+          intents.push(frozen);
+        }
+      } catch (error) {
+        throw remoteCompositePreparationPartial(intent, intents, error);
+      }
+      // note: Each entry is its own immutable intent; the composite is confirmed only when every
+      // one of them is, and the frame reports every durable one it has to wait for.
+      return intents;
     },
   });
 }
@@ -1585,6 +1639,53 @@ export async function residualCloseExecutionPlan(
         expectedRevision: operation.expectedIssueRevision,
       });
       return serializeExecutionValue({ issueId: operation.issueId, revision: closed.revision });
+    },
+    async remote(context, intent) {
+      // invariant: The remote half freezes ONE provider replacement from the same admitted payload,
+      // and re-checks the plan link and the issue revision against the OBSERVED subject, so a
+      // confirmed closure never lands on a base the operator did not read.
+      const at = new Date().toISOString();
+      return frozenIntent(
+        await prepareRemoteIssueWrite(context, {
+          operationId: remoteCompositeOperationId(intent.key),
+          kind: "issue-replace",
+          issueId: operation.issueId,
+          executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
+          next: (current) => {
+            const subject = current as Record<string, unknown>;
+            const fields = subject.fields as Record<string, unknown>;
+            const linked = (subject.provenance as Array<Record<string, unknown>>).some(
+              (row) => row.kind === "plan" && row.target === intent.scope.planId && row.origin === "scoped",
+            );
+            if (!linked) {
+              throw new IssueError(
+                "issue.scope-refused",
+                `Issue ${operation.issueId} is not linked to plan ${String(intent.scope.planId)} in the observed project, ` +
+                  `so a residual-close never addresses it. Nothing was enqueued.`,
+              );
+            }
+            if (fields.revision !== operation.expectedIssueRevision) {
+              throw new IssueError(
+                "issue.revision-conflict",
+                `Issue ${operation.issueId} is observed at revision ${String(fields.revision)}, not the admitted ` +
+                  `${operation.expectedIssueRevision}; nothing was enqueued.`,
+              );
+            }
+            return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
+          },
+          origin: {
+            verb: "residual-close",
+            request: {
+              issueId: operation.issueId,
+              disposition: operation.disposition,
+              evidence: operation.evidence,
+              expectedIssueRevision: operation.expectedIssueRevision,
+              planId: intent.scope.planId,
+              actor,
+            },
+          },
+        }),
+      );
     },
   });
 }

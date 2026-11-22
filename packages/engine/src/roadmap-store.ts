@@ -13,6 +13,7 @@ import {
   remoteCollaborationObservation,
   remoteRoadmapRead,
 } from "./collaboration-remote-read.js";
+import type { RemoteIntent } from "./collaboration-remote.js";
 import { type StoreContext, type StoreDb, StoreError } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
@@ -246,6 +247,89 @@ async function withWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Prom
 }
 
 /**
+ * note: The confirmed business result of a remote roadmap write: the frozen document is the
+ * recorded effect, so its roadmap revision and content hash are the receipt. A remote write owns
+ * no local collaboration revision.
+ */
+function confirmedRoadmapReceipt(intent: RemoteIntent, projectId: string, contentMarkdown: string): RoadmapWriteReceipt {
+  const confirmed = intent.confirmed;
+  if (confirmed === null) {
+    throw new RoadmapError(
+      "roadmap.operation-conflict",
+      `Operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
+    );
+  }
+  const change = confirmed.event.change;
+  const roadmap = change.kind === "project-replace" ? (change.project.roadmap as { revision?: unknown } | null) : null;
+  return {
+    projectId,
+    revision: typeof roadmap?.revision === "number" ? roadmap.revision : 0,
+    contentHash: sha256(contentMarkdown),
+    storeRevision: 0,
+  };
+}
+
+/**
+ * The remote branch of every roadmap write: freeze the new project journal document (the
+ * reviewed content plus the next roadmap revision) as one durable outbox intent. The caller's
+ * reviewed project/roadmap revisions are compared with the OBSERVED document before anything is
+ * frozen, so a stale reviewer can never overwrite content that moved under it. Roadmap content is
+ * portable text, so no checkout path or source hash enters the frozen subject.
+ */
+async function queueRoadmapWrite(
+  context: StoreContext,
+  projectId: string,
+  operationId: string,
+  verb: "roadmap-replace" | "roadmap-import",
+  contentMarkdown: string,
+  expected: { projectRevision: number; roadmapRevision: RoadmapExpected },
+): Promise<RoadmapWriteReceipt> {
+  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
+  // would close the cycle before the roadmap contract initializes.
+  const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
+  const at = new Date().toISOString();
+  const intent = await prepareRemoteProjectWrite(context, {
+    projectId,
+    operationId,
+    origin: {
+      verb,
+      request: {
+        projectId,
+        contentMarkdown,
+        expectedProjectRevision: expected.projectRevision,
+        expectedRoadmapRevision: expected.roadmapRevision,
+      },
+    },
+    next: (current) => {
+      const entities = current.catalogEntities as Array<Record<string, unknown>>;
+      const project = entities.find((entity) => entity.kind === "project" && entity.id === projectId);
+      if (project === undefined || project.revision !== expected.projectRevision) {
+        throw new RoadmapError(
+          "roadmap.revision-conflict",
+          `Catalog project ${projectId} is at revision ${String(project?.revision)} in the observed project, not the ` +
+            `expected ${expected.projectRevision}; nothing was enqueued.`,
+        );
+      }
+      const roadmap = current.roadmap as { revision: number } | null;
+      const currentRevision: RoadmapExpected = roadmap === null ? "absent" : roadmap.revision;
+      if (currentRevision !== expected.roadmapRevision) {
+        throw new RoadmapError(
+          "roadmap.revision-conflict",
+          `The roadmap of ${projectId} is at revision ${String(currentRevision)}, not the expected ` +
+            `${String(expected.roadmapRevision)}; nothing was enqueued.`,
+        );
+      }
+      return {
+        ...current,
+        roadmap: { contentMarkdown, revision: (roadmap?.revision ?? 0) + 1, updatedAt: at },
+      };
+    },
+  });
+  if (intent.confirmed !== null) return confirmedRoadmapReceipt(intent, projectId, contentMarkdown);
+  throw pendingRemoteEffect(intent);
+}
+
+/**
  * The one roadmap write (contract §6). `expected` carries the caller's
  * comparison claims; both are REQUIRED, because a claim derived from the same
  * read the write is built on can never disagree with it — the guard would be
@@ -335,6 +419,13 @@ export async function replaceRoadmapAuthority(
   },
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    validateContent(input.projectId, input.contentMarkdown);
+    return queueRoadmapWrite(context, input.projectId, operation.operationId, "roadmap-replace", input.contentMarkdown, {
+      projectRevision: input.expectedProjectRevision,
+      roadmapRevision: input.expectedRoadmapRevision,
+    });
+  }
   return withWrite(context, (db) =>
     writeAuthority(
       db,
@@ -352,6 +443,16 @@ export async function importRoadmapAuthority(
   review: RoadmapImportReview,
   operation: RoadmapOperation,
 ): Promise<RoadmapWriteReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    // note: The reviewed preview's content is the portable document; its checkout path and source
+    // hash pin what the operator read and never enter the frozen subject.
+    const source = sourceBytes(review.sourcePath);
+    validateContent(review.projectId, source.content);
+    return queueRoadmapWrite(context, review.projectId, operation.operationId, "roadmap-import", source.content, {
+      projectRevision: review.expectedProjectRevision,
+      roadmapRevision: review.expectedRoadmapRevision,
+    });
+  }
   return withWrite(context, (db) => {
     requireActive(db);
     const requestHash = sha256(JSON.stringify({

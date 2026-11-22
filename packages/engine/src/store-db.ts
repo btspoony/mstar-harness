@@ -117,6 +117,12 @@ export type StoreErrorCode =
   // note: One operation id is bound to one frozen request; a different request or binding
   // under the same id never replays and never overwrites the stored intent.
   | "remote.operation-conflict"
+  // note: The outbox lifecycle's own refusals: an unknown or unaddressable intent, a send
+  // that the binding's state does not admit, and a business write whose effect is only
+  // durably queued (never mapped to business success).
+  | "remote.intent-not-found"
+  | "remote.dispatch-refused"
+  | "remote.effect-pending"
   // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
   // partially cut store is not runtime authority, a competing source/mode/
   // manifest cannot win by force, pending catalog or mirror work must be

@@ -132,9 +132,11 @@ export type {
   RemoteBindResult,
   RemoteCatalogEntity,
   RemoteCatalogLink,
+  RemoteConfirmedEffect,
   RemoteMilestone,
   RemoteMstarIssue,
   RemoteObservationResult,
+  RemoteObservedSubject,
   RemoteEvent,
   RemoteEventChange,
   RemoteIntent,
@@ -148,7 +150,18 @@ export type {
   RemoteRoadmap,
   RemoteSnapshot,
   RemoteAdoptionRequest,
+  RemoteDispatchPermit,
+  RemoteDispatchResult,
+  ForkObservation,
+  RemoteIntentRead,
+  RemoteIssueWrite,
+  RemoteNoChange,
+  RemoteProjectWrite,
+  RemoteReceiptOutcome,
+  RemoteReceiptRecord,
+  RemoteResolution,
   RemoteStatus,
+  RemoteWriteOrigin,
   ScopeCapabilities,
   ScopeCheck,
   ScopeOutcome,
@@ -156,12 +169,23 @@ export type {
   VerificationBatch,
 } from "./collaboration-remote.js";
 export {
+  abandonRemoteIntent,
   bindRemoteAuthority,
+  dispatchRemoteIntent,
+  frozenIntent,
   ingestRemoteObservation,
+  pendingRemoteEffect,
   prepareRemoteAdoption,
   prepareRemoteIntent,
+  prepareRemoteIssueWrite,
+  prepareRemoteProjectWrite,
+  prepareRemoteResolution,
   readPendingIntents,
+  readRemoteIntent,
   readRemoteStatus,
+  recordRemoteReceipt,
+  reconcileRemoteIntent,
+  remoteEventHead,
 } from "./collaboration-remote.js";
 // note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
 // refuses a failed/partial/stale required scope rather than reading local rows.
@@ -797,11 +821,13 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // and the collaboration receipt. The frame itself stays internal to the engine;
 // only the admitted owning verb may run one.
 export type {
+  CollaborationCompositeEffects,
   CollaborationEffectReceipt,
   CompositeIntent,
   CompositeKey,
   CompositeKind,
 } from "./collaboration-operations.js";
+export { remoteCompositeEntryOperationId, remoteCompositeOperationId } from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
