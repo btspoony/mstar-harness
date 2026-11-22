@@ -6047,6 +6047,33 @@ function conflictRecordedAt(dbPath: string, operationId: string): string {
   }
 }
 
+/** note: The immutable records the fixture's conflict evidence bound to each fork digest. */
+function recordedConflictRecords(
+  dbPath: string,
+  operationId: string,
+): Array<{ recordId: string; issueRef: string | null; head: string }> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db
+      .prepare(
+        "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+          "order by recorded_at desc, receipt_hash desc limit 1",
+      )
+      .get(operationId) as { evidence_json?: unknown } | undefined;
+    if (typeof row?.evidence_json !== "string") throw new Error("the fixture conflict evidence carries no outcome");
+    const evidence = JSON.parse(row.evidence_json) as {
+      outcome: { observedRecords: Array<{ recordId: string; event: RemoteEvent }> };
+    };
+    return evidence.outcome.observedRecords.map((record) => ({
+      recordId: record.recordId,
+      issueRef: record.event.change.kind === "project-replace" ? null : record.event.change.issueRef,
+      head: remoteEventHead(record.event),
+    }));
+  } finally {
+    db.close();
+  }
+}
+
 /** note: The host-attested fork observation a reviewed resolution is dispatched with. */
 function forkObservationFor(
   cache: { commit: string; dbPath: string },
@@ -6054,6 +6081,7 @@ function forkObservationFor(
   heads: readonly string[],
   overrides: Record<string, unknown> = {},
 ): ForkObservation {
+  const records = recordedConflictRecords(cache.dbPath, conflictOperationId);
   return {
     version: 1,
     selectorCommit: cache.commit,
@@ -6063,11 +6091,14 @@ function forkObservationFor(
     // note: Strictly after the conflict evidence, as a traversal started after it would be.
     asOf: new Date(Date.parse(conflictRecordedAt(cache.dbPath, conflictOperationId)) + 1_000).toISOString(),
     coverage: "complete",
-    heads: [...heads].sort().map((head, index) => ({
-      recordId: `bbbbbbbb-cccc-4ddd-8eee-${String(index + 1).padStart(12, "0")}`,
-      issueRef: FORGED_ISSUE_REF,
-      head,
-    })),
+    heads: [...heads].sort().map((head, index) => {
+      const record = records.find((entry) => entry.head === head);
+      return {
+        recordId: record?.recordId ?? `bbbbbbbb-cccc-4ddd-8eee-${String(index + 1).padStart(12, "0")}`,
+        issueRef: record?.issueRef ?? FORGED_ISSUE_REF,
+        head,
+      };
+    }),
     ...overrides,
   } as ForkObservation;
 }
@@ -6314,6 +6345,65 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
+  }, 30_000);
+
+  test("a fresh traversal names the recorded immutable fork records, not just their digests", async () => {
+    const cache = await outboxCache("outbox-fork-records");
+    const conflictedId = "00000000-0000-4000-8000-000000000751";
+    const intent = await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, conflictedId));
+    const frozen = frozenOperation(cache.dbPath, conflictedId).event as RemoteEvent;
+    const records = ["00000000-0000-4000-8000-000000000761", "00000000-0000-4000-8000-000000000762"].map(
+      (conflicting, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea1" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea2",
+        event: { ...frozen, operationId: conflicting, parents: ["8".repeat(64)] },
+      }),
+    );
+    const heads = records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, conflictedId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: records,
+      }),
+    );
+    const resolutionId = "00000000-0000-4000-8000-000000000752";
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: { ...issueEvent(cache.fixture, resolutionId), parents: heads },
+    });
+    const complete = forkObservationFor(cache, conflictedId, heads);
+    // invariant: Matching digests under other immutable records never prove the recorded fork.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...complete,
+        heads: complete.heads.map((entry, index) => ({
+          ...entry,
+          recordId: `cccccccc-dddd-4eee-9fff-${String(index + 1).padStart(12, "0")}`,
+        })),
+      }),
+    ).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("immutable record"),
+    });
+    // invariant: The same record under another portable issue is a fork of another issue.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, {
+        ...complete,
+        heads: complete.heads.map((entry) => ({ ...entry, issueRef: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc" })),
+      }),
+    ).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("portable issue"),
+    });
+    // invariant: Neither refusal consumed the one permit; the exact recorded records send once.
+    expect(outboxStateOf(cache.dbPath, resolutionId)).toBe("enqueued");
+    expect((await dispatchRemoteIntent(cache.context, resolutionId, complete)).kind).toBe("permit");
   }, 30_000);
 
   test("a complete fork observation that began after the conflict permits and binds the send", async () => {

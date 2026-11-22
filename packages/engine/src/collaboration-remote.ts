@@ -3774,13 +3774,13 @@ function assertDispatchBase(
     // that evidence is proved by a host-attested traversal which began AFTER the conflict and
     // terminated over the whole fork: a partial, pre-conflict or mismatched observation never
     // issues the permit. The cached snapshot is not fork evidence.
-    let fork: readonly string[];
+    let recorded: Extract<RemoteReceiptOutcome, { kind: "conflict" }>;
     try {
-      fork = recordedFork(db, row.resolves).observedHeads;
+      recorded = recordedFork(db, row.resolves);
     } catch {
       return refuse(`The resolution of ${row.resolves} has no readable fork evidence to prove its base against.`);
     }
-    if (canonicalJson(fork) !== canonicalJson(event.parents)) {
+    if (canonicalJson(recorded.observedHeads) !== canonicalJson(event.parents)) {
       return refuse(`The resolution's parents are not the fork heads ${row.resolves} recorded.`);
     }
     if (observation === null) {
@@ -3789,7 +3789,7 @@ function assertDispatchBase(
           `after the conflict evidence is the only proof of its base.`,
       );
     }
-    assertForkObservation(db, row, stored, observation, fork);
+    assertForkObservation(db, row, stored, observation, recorded);
     return;
   }
   let snapshot: RemoteSnapshot | null = null;
@@ -3828,15 +3828,16 @@ function assertDispatchBase(
 
 /**
  * invariant: A reviewed resolution's permit is bound to the observation that proves it: the same
- * binding, generation, project and conflict; the exact recorded fork-head digests under complete
- * coverage; and a traversal that BEGAN strictly after the conflict evidence was recorded.
+ * binding, generation, project and conflict; every recorded fork head under its own immutable
+ * record id and portable issue reference; complete coverage; and a traversal that BEGAN strictly
+ * after the conflict evidence was recorded.
  */
 function assertForkObservation(
   db: StoreDb,
   row: OutboxIntentRow,
   stored: StoredRequest,
   observation: ForkObservation,
-  fork: readonly string[],
+  recorded: Extract<RemoteReceiptOutcome, { kind: "conflict" }>,
 ): void {
   const refuse = (detail: string, details: Record<string, unknown> = {}): never => {
     throw new StoreError(
@@ -3858,6 +3859,7 @@ function assertForkObservation(
       { observedConflict: observation.conflictOperationId, conflict: row.resolves },
     );
   }
+  const fork = recorded.observedHeads;
   const heads = observation.heads.map((entry) => entry.head);
   if (canonicalJson(heads) !== canonicalJson(fork)) {
     return refuse(
@@ -3865,6 +3867,34 @@ function assertForkObservation(
         `a changed provider base is never permission to send a resolution.`,
       { observedHeads: heads, fork },
     );
+  }
+  // invariant: A head is the immutable record the conflict bound to its digest. The same digests
+  // under other record ids or another portable issue do not prove the recorded fork still stands.
+  const bound = new Map(
+    recorded.observedRecords.map((entry) => [
+      entry.recordId,
+      {
+        head: remoteEventHead(entry.event),
+        issueRef: entry.event.change.kind === "project-replace" ? null : entry.event.change.issueRef,
+      },
+    ]),
+  );
+  for (const entry of observation.heads) {
+    const record = bound.get(entry.recordId);
+    if (record === undefined || record.head !== entry.head) {
+      return refuse(
+        `The fork observation of ${row.operationId} names immutable record ${entry.recordId}, which the recorded fork ` +
+          `does not bind to that digest; only the records ${String(row.resolves)} recorded prove its base.`,
+        { recordId: entry.recordId },
+      );
+    }
+    if (record.issueRef !== null && record.issueRef !== entry.issueRef) {
+      return refuse(
+        `The fork observation of ${row.operationId} names record ${entry.recordId} under portable issue ` +
+          `${entry.issueRef}, not the recorded ${record.issueRef}; evidence of another issue proves nothing.`,
+        { recordId: entry.recordId, observedIssueRef: entry.issueRef, issueRef: record.issueRef },
+      );
+    }
   }
   const conflictAt = conflictEvidenceRecordedAt(db, row.resolves!);
   if (conflictAt === null) {
