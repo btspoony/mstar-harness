@@ -700,6 +700,45 @@ function encodeSegment(segment: string): string {
 }
 
 /**
+ * invariant: The commit-boundary selector fence for one mutation. The caller already
+ * resolved a selection before it opened a writer; a Git ref can move while the
+ * writer waits for the database lock, so the checked commit (and the configured
+ * mode) are re-proved immediately before commit. A selector payload is immutable
+ * at its commit, so one live ref lookup is the whole recheck; a moved, vanished
+ * or newly published ref refuses instead of letting the mutation land under a
+ * selection this process no longer holds. This does not make Git and SQLite
+ * atomic: it only refuses the stale window it can observe.
+ */
+export function assertSelectionUnchanged(context: StoreContext, location: CollaborationLocation): void {
+  const mainRoot = mainWorktreeRoot(context.checkoutRoot ?? context.harnessDir);
+  if (mainRoot === null) unresolved("Git could not name the main checkout that owns this harness");
+  if (resolveMode(readConfig(mainRoot).mode) !== location.mode) {
+    selectorStale(
+      `The ${MSTARC_FILE} collaboration mode changed while this mutation was being prepared (resolved ${location.mode})`,
+    );
+  }
+  if (readOrigin(mainRoot) === null) {
+    // note: An origin-less scope has no selector to move: the resolved lane is the whole selection.
+    if (location.selection !== undefined) selectorStale("an origin-less scope cannot hold a checked selector");
+    return;
+  }
+  const live = lookupSelector(mainRoot);
+  if (location.selection !== undefined) {
+    if (live !== location.selection.commit) {
+      selectorStale(
+        `The origin's ${AUTHORITY_REF} no longer names the checked commit ${location.selection.commit} ` +
+          `(${live === null ? "the ref was deleted" : `it now names ${live}`})`,
+      );
+    }
+    return;
+  }
+  if (live === null) return;
+  // note: A selector published during a local/mirror mutation decides this scope's phase:
+  // re-resolve fully so a draining selector refuses and an active one keeps its verdict.
+  resolveCollaborationLocation(context);
+}
+
+/**
  * Canonical collaboration identity, explicit mode and user-level database path
  * for this control harness. Every origin-backed checkout proves its selection
  * from the origin's protected selector ref first: a local/mirror checkout keeps

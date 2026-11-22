@@ -1242,7 +1242,7 @@ export async function listIssues(
     const { openRemoteReadView, remoteCollaborationObservation, remoteIssuePage, requireRemoteProjects } = await import(
       "./collaboration-remote-read.js"
     );
-    const view = await openRemoteReadView(context);
+    const view = await openRemoteReadView(context, filter.projectId === undefined ? undefined : [filter.projectId]);
     const projects = filter.projectId === undefined ? view.projectIds : [filter.projectId];
     requireRemoteProjects(view, projects);
     const collaboration = requiredObservation(
@@ -1576,11 +1576,15 @@ export async function showIssue(context: StoreContext, id: string, projectId?: s
         "`--project <local-project-id>`. A project is never guessed in remote mode.",
     );
   }
+  // note: Dynamic on purpose: remote-read imports this module, so a static import would close a
+  // module cycle before the issue vocabulary initializes.
   const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
-  const view = await openRemoteReadView(context);
+  // note: A stable reference reads every selected project; a native id reads only the project it names.
+  const nativeProject = ISSUE_REF_PATTERN.test(target) ? undefined : projectId;
+  const view = await openRemoteReadView(context, nativeProject === undefined ? undefined : [nativeProject]);
   const read = remoteIssueRead(view, target, projectId);
   // note: A stable reference reads every selected project; a native id reads the one it names.
-  const projects = ISSUE_REF_PATTERN.test(target) ? view.projectIds : projectId === undefined ? view.projectIds : [projectId];
+  const projects = nativeProject === undefined ? view.projectIds : [nativeProject];
   const collaboration = remoteCollaborationObservation(view, { kind: "query", key: `issue:${target}` }, projects);
   return { ...read.detail, collaboration };
 }

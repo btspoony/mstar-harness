@@ -26,7 +26,7 @@
  * - a store that cannot be served (missing, staged) fails instead of returning
  *   an empty result set.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -2293,6 +2293,233 @@ describe("remote read boundary", () => {
       asOf: null,
       authority: null,
       code: "collaboration.observation-stale",
+    });
+  });
+
+  test("a current access check over an old traversal never serves a count, rollup or findings gate", async () => {
+    const { context, commit, check } = await boundScope("remote-read-traversal-age");
+    // note: The traversal started two minutes ago while the check it is submitted with is current:
+    // the access clock alone would call this fresh.
+    const oldTraversal = { ...completeSnapshot(check), asOf: new Date(Date.now() - 120_000).toISOString() };
+    await ingestRemoteObservation(context, submission(commit, check, oldTraversal, 1));
+
+    await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+    await expect(withStoreRead(context, queryOpenIssueRollup())).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+    await expect(observePlanFindings(context, "20261122-remote-authority")).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+    await expect(
+      findingsCleanupGate(context, "20261122-remote-authority", { mode: "allow-residual" }),
+    ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+
+    // invariant: An optional view discloses the stale traversal instead of a complete stamp.
+    await initializeStore(context);
+    const optional = await withStoreRead(context, queryDashboard("workflows"));
+    expect(optional.collaboration).toMatchObject({
+      completeness: "unavailable",
+      asOf: null,
+      authority: null,
+      code: "collaboration.observation-stale",
+    });
+  });
+
+  test("a completion witness from a previous selector generation is never reused after a rebind", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-read-rebind-witness");
+    const commit3 = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit3));
+    const first = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit3, first, completeSnapshot(first), 0));
+    const observed = await observePlanFindings(context, "20261122-remote-authority");
+    expect(observed).toMatchObject({ source: "remote", selectorCommit: commit3, generation: 3 });
+    expect(observed.open).toEqual([{ id: REMOTE_IDS.issueRef, severity: "high" }]);
+
+    // note: The reviewed successor restarts the per-generation counters and carries a different
+    // open finding, so a revision-only comparison would accept the predecessor's decision.
+    const commit4 = fixture.publish({
+      generation: 4,
+      previous: { selectorCommit: commit3, generation: 3, mode: "remote" },
+      cutover: {
+        operator: "fixture-operator",
+        reviewedAt: FIXTURE_AT,
+        sourceFenced: true,
+        pendingOperationIds: [],
+        verifiedTargetDigest: "d".repeat(64),
+      },
+    });
+    await bindRemoteAuthority(context, fixture.batch(commit4, 4));
+    const second = positiveCheck();
+    const base = completeSnapshot(second);
+    const template = base.issues[0]!.mstar;
+    if (template === null) throw new Error("fixture: the base snapshot carries no marked issue");
+    const changed: RemoteSnapshot = {
+      ...base,
+      issues: [
+        ...base.issues,
+        {
+          identity: { ...second.scope, issueId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+          nativeTitle: "Second finding",
+          nativeStatus: "Todo",
+          providerUpdatedAt: FIXTURE_AT,
+          mstar: {
+            ...template,
+            issueRef: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            head: ["4".repeat(64)],
+            fields: { ...template.fields, title: "Second finding", severity: "critical" },
+          },
+        },
+      ],
+    };
+    await ingestRemoteObservation(context, { ...submission(commit4, second, changed, 0), generation: 4 });
+
+    const resampled = await observePlanFindings(context, "20261122-remote-authority");
+    expect(resampled).toMatchObject({ selectorCommit: commit4, generation: 4 });
+    // invariant: The aggregate revision number is reused, but the selector identity is not.
+    expect(resampled.revision).toBe(observed.revision);
+    expect(resampled.open).toHaveLength(2);
+    await expect(assertPlanFindingsCurrent(context, observed)).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+  });
+
+  test("a missing cache never substitutes for the recorded selector lineage", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-read-missing-cache");
+    const commit3 = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit3));
+    const dbPath = resolveCollaborationLocation(context).dbPath;
+    // note: The private cache is disposable bytes; its loss is not evidence of a fresh clone.
+    rmSync(dbPath);
+
+    const commit4 = fixture.publish({
+      generation: 4,
+      previous: { selectorCommit: "0".repeat(40), generation: 2, mode: "remote" },
+      cutover: {
+        operator: "fixture-operator",
+        reviewedAt: FIXTURE_AT,
+        sourceFenced: true,
+        pendingOperationIds: [],
+        verifiedTargetDigest: "d".repeat(64),
+      },
+    });
+    await expect(bindRemoteAuthority(context, fixture.batch(commit4, 4))).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    // invariant: The refused bind created no lane and kept the checkout's recorded generation.
+    expect(existsSync(dbPath)).toBe(false);
+    expect(resolveCollaborationLocation(context).selection).toMatchObject({ commit: commit4, generation: 4 });
+  });
+
+  test("a project-scoped overview never carries another project's catalog identity", async () => {
+    const { context, commit } = await twoProjectBind("remote-read-overview-scope");
+    await initializeStore(context);
+    await withExecutionWrite(context, (db) => {
+      db.prepare("update projection_meta set generation = 1, checked_at = ?, freshness = 'current' where id = 1").run(FIXTURE_AT);
+      db.prepare(
+        "insert into projection_workflows(generation, id, type, status, phase, started_at, ended_at, updated_at, " +
+          "branch_base, branch_source, branch_integration, branch_target, active_registration) " +
+          "values (1, 'plan-1', 'plan', 'running', null, ?, null, null, null, null, null, null, 1)",
+      ).run(FIXTURE_AT);
+    });
+    // invariant: A holds only the workflow's membership; its catalog identity exists only in B.
+    const checkA = positiveCheck();
+    const baseA = completeSnapshot(checkA);
+    const scopedA: RemoteSnapshot = {
+      ...baseA,
+      project: {
+        ...baseA.project,
+        catalogEntities: baseA.project.catalogEntities.filter((entity) => entity.kind !== "plan"),
+        catalogLinks: [
+          ...baseA.project.catalogLinks.filter((link) => link.fromKind !== "plan"),
+          { fromKind: "plan", fromId: "plan-1", relation: "belongs-to", toKind: "project", toId: REMOTE_IDS.projectId, ordinal: 0 },
+        ],
+      },
+    };
+    await ingestRemoteObservation(context, submission(commit, checkA, scopedA, 1));
+    const checkB = secondCheck();
+    const baseB = secondSnapshot(checkB);
+    const withIdentityB: RemoteSnapshot = {
+      ...baseB,
+      project: {
+        ...baseB.project,
+        catalogEntities: [
+          ...baseB.project.catalogEntities,
+          { kind: "plan", id: "plan-1", title: "Plan from B", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+        ],
+      },
+    };
+    await ingestRemoteObservation(context, submission(commit, checkB, withIdentityB, 0));
+
+    const overviewFor = (projectId?: string) =>
+      withStoreRead(context, {
+        ...queryDashboard("overview", projectId === undefined ? {} : { projectId }),
+        needsProjection: false,
+      });
+    const scoped = await overviewFor(REMOTE_IDS.projectId);
+    const workflows = scoped.data.workflows;
+    if (workflows.state !== "read") throw new Error(`fixture: overview workflows is ${workflows.state}`);
+    // invariant: The A-only response never discloses B's title; its own catalog has no such row.
+    expect(workflows.data.items).toEqual([
+      expect.objectContaining({ id: "plan-1", catalog: null, badges: ["catalog-missing"] }),
+    ]);
+    expect(scoped.collaboration).toMatchObject({
+      completeness: "complete",
+      providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+    });
+
+    // invariant: B's unparseable snapshot never refuses an A-only overview, while the
+    // repository-wide overview must refuse it.
+    const corrupt = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      corrupt.prepare("update remote_observations set snapshot_json = 'not json' where project_key = ?").run(SECOND_IDS.projectId);
+    } finally {
+      corrupt.close();
+    }
+    await expect(overviewFor(REMOTE_IDS.projectId)).resolves.toMatchObject({ collaboration: { completeness: "complete" } });
+    await expect(overviewFor()).rejects.toMatchObject({ code: "collaboration.unreadable" });
+  });
+
+  test("an execution-only workflow view degrades when the selector or the cache is unavailable", async () => {
+    // note: A readable execution lane whose collaboration dependency is optional.
+    const originOutage = createRemoteScope(ROOT, "remote-read-origin-outage");
+    const commit = originOutage.publish();
+    const context = originOutage.context();
+    await bindRemoteAuthority(context, originOutage.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+    await initializeStore(context);
+    rmSync(originOutage.bare, { recursive: true, force: true });
+
+    const degraded = await withStoreRead(context, queryDashboard("workflows"));
+    expect(degraded.data).toMatchObject({ total: 0 });
+    expect(degraded.collaboration).toMatchObject({
+      completeness: "unavailable",
+      asOf: null,
+      authority: null,
+      code: "remote.selector-unavailable",
+    });
+
+    // note: An unbound remote cache keeps its own refusal AND the checked source metadata.
+    const unbound = createRemoteScope(ROOT, "remote-read-unbound-cache");
+    const cachedCommit = unbound.publish();
+    const unboundContext = unbound.context();
+    await bindRemoteAuthority(unboundContext, unbound.batch(cachedCommit));
+    await initializeStore(unboundContext);
+    rmSync(join(unbound.harness, "collaboration-binding.json"), { force: true });
+
+    const unboundList = await withStoreRead(unboundContext, queryDashboard("workflows"));
+    expect(unboundList.data).toMatchObject({ total: 0 });
+    expect(unboundList.collaboration).toMatchObject({
+      source: "remote",
+      selectorCommit: cachedCommit,
+      generation: 3,
+      completeness: "unavailable",
+      authority: null,
+      code: "collaboration.stale-binding",
     });
   });
 });

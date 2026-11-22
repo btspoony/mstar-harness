@@ -19,7 +19,10 @@ import { existsSync } from "node:fs";
 import {
   readCollaborationBinding,
   initializeRemoteCacheStore,
+  localPredecessorRetiredPath,
   openRemoteCache,
+  readLocalPredecessorLane,
+  retireLocalPredecessorLane,
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
   withRemoteCacheWrite,
@@ -1272,6 +1275,8 @@ export type RemoteBindResult = Readonly<{
   replayed: boolean;
   binding: CollaborationBinding;
   availability: readonly RemoteAvailability[];
+  /** note: The local/mirror predecessor this reviewed transition retired, or null. */
+  retiredPredecessor: Readonly<{ mode: "local" | "mirror"; storeId: string; epoch: number; path: string }> | null;
 }>;
 
 function availabilityOf(db: StoreDb, generation: number, projects: readonly string[]): readonly RemoteAvailability[] {
@@ -1344,6 +1349,58 @@ function publishStagedLane(db: StoreDb, authority: CollaborationAuthority, selec
     }),
     at,
   );
+}
+
+/**
+ * invariant: The reviewed lineage a successor must carry to REPLACE a predecessor: it names
+ * that exact generation and mode as `previous`, and its cutover is fenced with no
+ * pending operation. Anything else refuses before a byte moves.
+ */
+function assertSelectorLineage(
+  selection: CollaborationSelection,
+  predecessor: { selectorCommit: string; generation: number; mode: "local" | "mirror" | "remote" },
+): void {
+  const previous = selection.previous;
+  const fence = selection.cutover;
+  const lineage =
+    previous !== null &&
+    previous.generation === predecessor.generation &&
+    previous.selectorCommit === predecessor.selectorCommit &&
+    previous.mode === predecessor.mode;
+  const fenced = fence !== null && fence.sourceFenced && fence.pendingOperationIds.length === 0;
+  if (!lineage || !fenced) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The checked selector generation ${String(selection.generation)} does not name the recorded ${predecessor.mode} ` +
+        `predecessor generation ${String(predecessor.generation)} (${predecessor.selectorCommit}) with a fenced, ` +
+        `pending-free cutover, so it never retires or replaces that authority. Nothing was written.`,
+    );
+  }
+}
+
+/**
+ * invariant: A local/mirror lane is retired only by a reviewed transition: the checked active
+ * selector must supersede a local/mirror generation as its `previous` and carry a
+ * fenced, pending-free cutover. The lane itself records no selector commit, so the
+ * selector's own reviewed `previous` plus the matching lane metadata is the
+ * lineage evidence available locally; an unfenced selector never retires anything.
+ */
+function assertPredecessorTransition(
+  selection: CollaborationSelection,
+  mode: "local" | "mirror",
+): void {
+  const previous = selection.previous;
+  const fence = selection.cutover;
+  const lineage = previous !== null && previous.mode === mode && previous.generation < selection.generation;
+  const fenced = fence !== null && fence.sourceFenced && fence.pendingOperationIds.length === 0;
+  if (!lineage || !fenced) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This scope's canonical lane is a ${mode} predecessor, and the checked selector generation ` +
+        `${String(selection.generation)} does not supersede a ${mode} generation with a fenced, pending-free cutover. ` +
+        `The predecessor is not proven fenced, so it is never retired. Nothing was written.`,
+    );
+  }
 }
 
 /**
@@ -1422,14 +1479,68 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
         `older generation ${String(batch.generation)}; a bind never downgrades a generation. Nothing was changed.`,
     );
   }
+
+  // invariant: A local/mirror lane at this scope's canonical path - recorded by this checkout or
+  // not - is the PREDECESSOR a reviewed transition retires, never a lane a bind re-keys in place.
+  const predecessor = await readLocalPredecessorLane(location);
   if (recorded !== null && recorded.version === 2) {
-    throw new StoreError(
-      "collaboration.stale-binding",
-      `This checkout holds a ${recorded.mode} binding for ${recorded.repoKey}; switching a lane to remote is the ` +
-        `reviewed transition that publishes this selector, not a bind of an existing local authority. Nothing was changed.`,
-    );
+    if (recorded.state !== "active") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This checkout holds an unfinished ${recorded.mode} binding (state ${recorded.state}); finish that activation ` +
+          `before the reviewed transition to remote. Nothing was changed.`,
+      );
+    }
+    if (predecessor === null) {
+      // note: A crash after retirement leaves the preserved image and no lane: replaying the same
+      // reviewed bind continues from there instead of re-creating an authority from nothing.
+      if (!existsSync(localPredecessorRetiredPath(location, recorded))) {
+        throw new StoreError(
+          "collaboration.stale-binding",
+          `This checkout is bound to the ${recorded.mode} predecessor store ${recorded.storeId} epoch ` +
+            `${String(recorded.epoch)}, but that lane is missing and has no preserved image. Restore it or resolve the ` +
+            `transition again; nothing was changed.`,
+        );
+      }
+      assertPredecessorTransition(selection, recorded.mode);
+    } else if (
+      predecessor.mode !== recorded.mode ||
+      predecessor.storeId !== recorded.storeId ||
+      predecessor.epoch !== recorded.epoch
+    ) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This checkout is bound to the ${recorded.mode} predecessor store ${recorded.storeId} epoch ` +
+          `${String(recorded.epoch)}, but the lane at ${location.dbPath} is ${predecessor.mode} store ` +
+          `${predecessor.storeId} epoch ${String(predecessor.epoch)}; a bind never retires another generation. ` +
+          `Nothing was changed.`,
+      );
+    }
+  }
+  if (predecessor !== null) {
+    if (predecessor.state !== "active") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The ${predecessor.mode} lane at ${location.dbPath} is ${predecessor.state}; only a published predecessor is ` +
+          `retired by the reviewed transition. Finish or discard that bootstrap first; nothing was changed.`,
+      );
+    }
+    assertPredecessorTransition(selection, predecessor.mode);
+  }
+  // invariant: A recorded v3 binding that a higher generation supersedes is replaced only through
+  // the reviewed lineage. The private cache is disposable, but its loss never substitutes for the
+  // checkout's own binding evidence that this predecessor was reviewed and fenced.
+  if (recorded !== null && recorded.version === 3 && recorded.generation < batch.generation) {
+    assertSelectorLineage(selection, {
+      selectorCommit: recorded.selectorCommit,
+      generation: recorded.generation,
+      mode: "remote",
+    });
   }
 
+  // note: The reviewed transition retires the matched local/mirror lane under write exclusion
+  // BEFORE the cache exists; its rows survive as inaccessible history beside the lane.
+  const retiredPath = predecessor === null ? null : await retireLocalPredecessorLane(location, predecessor);
   // invariant: A rebind continues the cache this checkout is bound to. A lane that is
   // present under another store id or epoch is a replacement and is refused; only a
   // vanished cache (Data Model: bind initializes a missing lane) may adopt a new identity.
@@ -1530,7 +1641,7 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
       replayed: recordedGeneration === batch.generation,
       availability: availabilityOf(db, batch.generation, [...checks.keys()]),
     };
-  });
+  }, context);
 
   const binding = writeRemoteCollaborationBinding(context, {
     repoKey: location.repoKey,
@@ -1546,6 +1657,10 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     replayed: outcome.replayed,
     binding,
     availability: outcome.availability,
+    retiredPredecessor:
+      predecessor === null || retiredPath === null
+        ? null
+        : { mode: predecessor.mode, storeId: predecessor.storeId, epoch: predecessor.epoch, path: retiredPath },
   };
 }
 

@@ -58,6 +58,8 @@ export type RemoteScopeFixture = {
   repo: string;
   harness: string;
   origin: string;
+  /** note: The local bare origin directory, so a case can make the origin unavailable. */
+  bare: string;
   repoKey: string;
   context(): StoreContext;
   /** Publish (or republish) the selector; returns the checked commit. */
@@ -96,6 +98,7 @@ export function createRemoteScope(root: string, name: string): RemoteScopeFixtur
     repo,
     harness,
     origin,
+    bare: bare,
     repoKey,
     context: () => context,
     publish(overrides = {}) {

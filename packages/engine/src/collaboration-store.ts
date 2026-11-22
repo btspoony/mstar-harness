@@ -28,6 +28,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -36,6 +37,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   AUTHORITY_REF,
   COLLABORATION_BINDING_FILE,
+  assertSelectionUnchanged,
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationMode,
@@ -1921,6 +1923,22 @@ export async function upgradeCollaborationStore(
 }
 
 /**
+ * note: The public upgrade's collaboration half: `store upgrade` advances an EXISTING
+ * admitted old lane through the v2 migration before any current-only admission
+ * runs. A missing lane is the fresh-bootstrap path (the caller creates it
+ * complete) and a remote checkout's cache is created by `remote bind`, so both
+ * answer `null` without touching anything.
+ */
+export async function upgradeExistingCollaborationStore(
+  context: StoreContext,
+  operator: string,
+): Promise<CollaborationUpgradeReceipt | null> {
+  const location = resolveCollaborationLocation(context);
+  if (location.mode === "remote" || !existsSync(location.dbPath)) return null;
+  return upgradeCollaborationStore(context, operator);
+}
+
+/**
  * invariant: Open the scope's active collaboration authority. Never creates a database:
  * a missing one is `collaboration.not-initialized`, an inert staged one is
  * `collaboration.not-active`, and an invalid/corrupt/inaccessible one is
@@ -2543,6 +2561,142 @@ function remoteLaneRefusal(): never {
 }
 
 /**
+ * note: The canonical lane as a LOCAL/MIRROR predecessor: what a reviewed
+ * local/mirror -> remote transition retires. `null` means the path holds no lane
+ * (fresh scope, or an already-retired replay) or already a remote cache.
+ */
+export type LocalPredecessorLane = Readonly<{
+  mode: "local" | "mirror";
+  storeId: string;
+  epoch: number;
+  state: "staged" | "active";
+  schemaVersion: number;
+}>;
+
+/**
+ * note: Read the canonical path as a predecessor WITHOUT admitting it as this checkout's
+ * lane: a remote selection cannot admit a local/mirror record, and the transition
+ * must inspect it before retiring it. A foreign repository key refuses here so no
+ * rename ever touches another scope's bytes.
+ */
+export async function readLocalPredecessorLane(location: CollaborationLocation): Promise<LocalPredecessorLane | null> {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(location.dbPath);
+  if (!existsSync(location.dbPath)) return null;
+  const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
+  try {
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+    const meta = readMeta(db);
+    if (meta.repoKey !== location.repoKey) {
+      throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+    }
+    if (meta.mode === "remote") return null;
+    return { mode: meta.mode, storeId: meta.storeId, epoch: meta.epoch, state: meta.state, schemaVersion };
+  } finally {
+    db.close();
+  }
+}
+
+/** note: Where one retired predecessor's bytes are preserved: beside the lane, outside every read path. */
+export function localPredecessorRetiredPath(
+  location: CollaborationLocation,
+  identity: { storeId: string; epoch: number },
+): string {
+  return join(dirname(location.dbPath), `collaboration.retired-${identity.storeId}-${String(identity.epoch)}.db`);
+}
+
+/**
+ * invariant: Retire the matched predecessor under write exclusion. The lane is proved to
+ * be exactly this record (repository key, mode, store id, epoch) inside a
+ * `BEGIN IMMEDIATE`, then renamed beside itself: its rows survive as
+ * inaccessible history and the canonical name is free for the verified cache.
+ *
+ * A replay after a crash between the rename and the cache publication finds the
+ * already-retired image and continues; a vanished predecessor with no retired
+ * image refuses, so a lost authority is never re-created from nothing.
+ */
+export async function retireLocalPredecessorLane(
+  location: CollaborationLocation,
+  predecessor: LocalPredecessorLane,
+): Promise<string> {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(location.dbPath);
+  const retiredPath = localPredecessorRetiredPath(location, predecessor);
+  if (!existsSync(location.dbPath)) {
+    if (existsSync(retiredPath)) return retiredPath;
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The recorded ${predecessor.mode} predecessor lane at ${location.dbPath} is missing and has no retired image, so ` +
+        `this checkout cannot prove it supersedes that authority. Restore the lane or resolve the transition again; ` +
+        `nothing was changed.`,
+    );
+  }
+  if (existsSync(retiredPath)) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `A preserved ${predecessor.mode} predecessor image already exists at ${retiredPath}; it is never overwritten. ` +
+        `Inspect the transition before repeating it; nothing was changed.`,
+    );
+  }
+  // why: The proof runs in one immediate transaction, but the rename happens AFTER that
+  // transaction closes: SQLite may still need the file's own name to finish a commit, so
+  // moving it under an open connection is unsafe. The commit-time selector fence keeps a
+  // writer admitted before the transition from landing afterwards.
+  const before = statSync(location.dbPath);
+  const db = await connectAt(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
+  try {
+    db.exec("begin immediate");
+    try {
+      validateAppliedMigrations(readAppliedMigrations(db, false), COLLABORATION_MIGRATIONS);
+      const meta = readMeta(db);
+      if (
+        meta.repoKey !== location.repoKey ||
+        meta.mode !== predecessor.mode ||
+        meta.storeId !== predecessor.storeId ||
+        meta.epoch !== predecessor.epoch ||
+        meta.state !== predecessor.state
+      ) {
+        throw staleBinding(
+          location.dbPath,
+          meta,
+          `the recorded predecessor ${predecessor.mode} store ${predecessor.storeId} epoch ${String(predecessor.epoch)}`,
+        );
+      }
+      db.exec("commit");
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // note: nothing was written either way
+      }
+      throw error instanceof StoreError ? error : asRefusal(location.dbPath, error);
+    }
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // note: connection-level failure; the transaction above already settled
+    }
+  }
+  // invariant: The path still holds the file this proof examined; a replacement is never renamed.
+  const after = statSync(location.dbPath);
+  if (after.ino !== before.ino) {
+    throw staleBinding(
+      location.dbPath,
+      { repoKey: location.repoKey, mode: predecessor.mode, storeId: predecessor.storeId, epoch: predecessor.epoch },
+      `the predecessor lane this transition proved`,
+    );
+  }
+  renameSync(location.dbPath, retiredPath);
+  try {
+    syncDirectoryEntry(dirname(location.dbPath));
+  } catch (error) {
+    throw barrierRefusal(location.dbPath, error);
+  }
+  return retiredPath;
+}
+
+/**
  * invariant: A remote-cache entry's scope: the checkout resolves remote, its recorded v3 binding
  * is active and names the exact checked commit and generation, and the checked
  * selection exists. Anything else refuses before a lane is opened.
@@ -2859,28 +3013,33 @@ export async function readCollaborationStage<T>(
 export async function writeCollaborationStage<T>(
   location: CollaborationLocation,
   apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+  context?: StoreContext,
 ): Promise<T> {
   assertStoreRuntimeSupported();
   if (location.mode === "remote") remoteLaneRefusal();
-  return writeStage(location, apply);
+  return writeStage(location, apply, context);
 }
 
 /**
  * note: The remote lane's own staging transaction: `remote bind` creates or advances the cache
  * under the same `BEGIN IMMEDIATE` + guarded connection, admitted in either state
  * so a fresh staged lane can be published and its binding rows committed once.
+ * When the caller passes its context, the checked selection is re-proved on the
+ * live ref immediately before commit.
  */
 export async function writeRemoteCacheStage<T>(
   location: CollaborationLocation,
   apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+  context?: StoreContext,
 ): Promise<T> {
   assertStoreRuntimeSupported();
-  return writeStage(location, apply);
+  return writeStage(location, apply, context);
 }
 
 async function writeStage<T>(
   location: CollaborationLocation,
   apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+  context?: StoreContext,
 ): Promise<T> {
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
@@ -2911,6 +3070,9 @@ async function writeStage<T>(
             "nothing was written.",
         );
       }
+      // invariant: The checked selection is re-proved on the live ref under the write lock:
+      // a bind staged against a moved selector rolls back instead of committing.
+      if (context !== undefined) assertSelectionUnchanged(context, location);
       db.exec("commit");
       return result;
     } catch (error) {
@@ -3006,6 +3168,9 @@ async function withWriteLane<T>(
     db.exec("begin immediate");
     try {
       const authority = admit(db, location, expected, "active");
+      // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
+      // the refusing probe: a replaced lane is never written through this binding.
+      if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
       const result = apply({
@@ -3026,6 +3191,11 @@ async function withWriteLane<T>(
             "nothing was written.",
         );
       }
+      // invariant: The checked selection (and, for a remote lane, the private cache stamp) is
+      // re-proved immediately before commit: a selector that moved to a draining or successor
+      // generation while this writer waited refuses, and the effect rolls back.
+      assertSelectionUnchanged(context, location);
+      if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
       db.exec("commit");
       return result;
     } catch (error) {

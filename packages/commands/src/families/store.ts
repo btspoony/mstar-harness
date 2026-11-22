@@ -21,6 +21,7 @@ import {
   adoptCollaborationBinding,
   restoreCollaborationBackup,
   retireStoreSources,
+  upgradeExistingCollaborationStore,
   upgradeStoreMinimal,
   bindRemoteAuthority,
   ingestRemoteObservation,
@@ -337,6 +338,10 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
+        const operator = required(input.operator, "--operator");
+        // invariant: An existing v1 collaboration lane is advanced by the v2 migration BEFORE
+        // current-only admission can refuse it with the very command the operator ran.
+        const collaborationUpgrade = await upgradeExistingCollaborationStore(context, operator);
         // invariant: The two owners meet here: this checkout's collaboration authority is
         // established (create/reuse, never cleared) before the execution half
         // can report any imported state. A combined source with collaboration
@@ -361,16 +366,17 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             code: "store.upgrade-dsh-ack-unmatched",
           });
         }
-        return ok(id, await upgradeStoreMinimal({
+        const upgraded = await upgradeStoreMinimal({
           context,
-          operator: required(input.operator, "--operator"),
+          operator,
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
           ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
           ...(input.ackSkipCompass === undefined ? {} : { acknowledgedCompassSkips: input.ackSkipCompass }),
           ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
-        }));
+        });
+        return ok(id, collaborationUpgrade === null ? upgraded : { ...upgraded, collaboration: collaborationUpgrade });
       }
       case "store.backup": {
         // invariant: A repository backup is the verified PAIR of both domains, never one
