@@ -13,7 +13,12 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, openCollaborationStore } from "./collaboration-store.js";
+import {
+  assertControlCheckoutScope,
+  initializeCollaborationStore,
+  openCollaborationStore,
+  readCollaborationBinding,
+} from "./collaboration-store.js";
 import { parseMstarc } from "./mstarc.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-identity-")));
@@ -228,8 +233,14 @@ describe("collaboration identity", () => {
     const invalid = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=server\n")));
     expect(invalid.code).toBe("collaboration.mode-invalid");
 
-    const remote = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=remote\n")));
-    expect(remote.code).toBe("collaboration.mode-unavailable");
+    // invariant: `remote` is a supported mode, but only a checked selector selects it: an
+    // unreachable origin and an origin-less scope both refuse instead of falling back.
+    const unreachable = refusal(() =>
+      resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=remote\n")),
+    );
+    expect(unreachable.code).toBe("remote.selector-unavailable");
+    const originless = refusal(() => resolveAt(makeRepo(undefined, "[collaboration]\nmode=remote\nrepo_id=fixture\n")));
+    expect(originless.code).toBe("remote.selector-unavailable");
 
     expect(resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")).mode).toBe("local");
     expect(resolveAt(makeRepo(origin, "[collaboration]\nmode=mirror\n")).mode).toBe("mirror");
@@ -399,5 +410,253 @@ describe("collaboration identity", () => {
     expect(parseMstarc("[collaboration]\nmode=local\nmode=\n").collaboration).toEqual({ mode: "" });
     expect(parseMstarc("[collaboration]\nmode=local\nmode=mirror\n").collaboration).toEqual({ mode: "mirror" });
     expect(parseMstarc("[collaboration]\nrepo_id=first\nrepo_id=second\n").collaboration).toEqual({ repoId: "second" });
+  });
+});
+
+/**
+ * note: Remote selection fixtures. The checkout records the canonical HTTPS origin the
+ * selector payload names, and its own Git config routes that URL to a local bare
+ * origin, so the real `git ls-remote` / `git fetch` path is exercised without a
+ * network transport.
+ */
+const CANONICAL_ORIGIN = "https://github.com/acme/widgets.git";
+const CANONICAL_REPO_KEY = "github.com/acme/widgets";
+const SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
+
+const SELECTED_PROJECT = {
+  localProjectId: "fixture-project",
+  provider: "linear",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  teamId: "22222222-2222-4222-8222-222222222222",
+  projectId: "33333333-3333-4333-8333-333333333333",
+  journalIssueId: "44444444-4444-4444-8444-444444444444",
+  writerId: "55555555-5555-4555-8555-555555555555",
+} as const;
+
+/** note: A bare origin whose selector ref one published commit names. */
+function makeSelectorOrigin(): { bare: string; publish(payload: unknown | string): string } {
+  const bare = join(ROOT, `selector-origin-${sequence++}.git`);
+  git(ROOT, "init", "-q", "--bare", bare);
+  return {
+    bare,
+    publish(payload) {
+      const publisher = join(ROOT, `selector-publisher-${sequence++}`);
+      mkdirSync(publisher, { recursive: true });
+      git(publisher, "init", "-q");
+      git(publisher, "config", "user.name", "Selector Test");
+      git(publisher, "config", "user.email", "selector@example.test");
+      writeFileSync(
+        join(publisher, "authority.json"),
+        typeof payload === "string" ? payload : `${JSON.stringify(payload, null, 2)}\n`,
+      );
+      git(publisher, "add", "authority.json");
+      git(publisher, "commit", "-q", "-m", "publish selector");
+      // why: A fixture republishes unrelated payloads to one ref; production selectors are
+      // append-only, and this helper exists only to present each payload for a read.
+      git(publisher, "push", "-q", "--force", bare, `HEAD:${SELECTOR_REF}`);
+      return git(publisher, "rev-parse", "HEAD");
+    },
+  };
+}
+
+/** note: The reviewed payload this canonical repository publishes, with case overrides. */
+function selectorPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 1,
+    repoKey: CANONICAL_REPO_KEY,
+    generation: 3,
+    mode: "remote",
+    phase: "active",
+    projects: [SELECTED_PROJECT],
+    previous: null,
+    cutover: null,
+    ...overrides,
+  };
+}
+
+/** note: A checkout whose canonical origin is routed to the bare fixture. */
+function remoteRepo(bare: string, mode: "local" | "mirror" | "remote" = "remote"): string {
+  const repo = makeRepo(CANONICAL_ORIGIN, `[collaboration]\nmode=${mode}\n`);
+  git(repo, "config", `url.${bare}.insteadOf`, CANONICAL_ORIGIN);
+  return repo;
+}
+
+/** note: The checkout's recorded v3 binding, as the reviewed remote bind would write it. */
+function writeRemoteBinding(root: string, commit: string, generation: number): void {
+  const harness = join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  writeFileSync(
+    join(harness, "collaboration-binding.json"),
+    `${JSON.stringify(
+      {
+        version: 3,
+        state: "active",
+        repoKey: CANONICAL_REPO_KEY,
+        mode: "remote",
+        selectorCommit: commit,
+        generation,
+        storeId: "fixture-remote-store",
+        epoch: 1,
+        boundAt: "2026-11-22T00:00:00.000Z",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+describe("remote selector resolution", () => {
+  test("a remote selection with no published selector refuses instead of selecting local authority", () => {
+    const origin = makeSelectorOrigin();
+    const result = refusal(() => resolveAt(remoteRepo(origin.bare)));
+    expect(result.code).toBe("remote.selector-unavailable");
+    expect(result.message).toContain("mstar-collaboration-authority");
+  });
+
+  test("a published selector is read from its checked commit, never the checkout copy", () => {
+    const origin = makeSelectorOrigin();
+    const commit = origin.publish(selectorPayload({ generation: 4 }));
+    const repo = remoteRepo(origin.bare);
+    // note: A same-named file in the checkout is not selector input.
+    writeFileSync(join(repo, "authority.json"), JSON.stringify(selectorPayload({ generation: 99 })));
+
+    const location = resolveAt(repo);
+    expect(location.mode).toBe("remote");
+    expect(location.selection).toEqual({
+      commit,
+      generation: 4,
+      phase: "active",
+      projects: [SELECTED_PROJECT],
+    });
+  });
+
+  test("an unavailable origin refuses remote selection, never reads it as absence", () => {
+    const unreachable = refusal(() =>
+      resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=remote\n")),
+    );
+    expect(unreachable.code).toBe("remote.selector-unavailable");
+    expect(unreachable.message).toContain("could not check");
+
+    const originless = refusal(() => resolveAt(makeRepo(undefined, "[collaboration]\nmode=remote\nrepo_id=fixture\n")));
+    expect(originless.code).toBe("remote.selector-unavailable");
+    expect(originless.message).toContain("origin");
+  });
+
+  test("a selector that disagrees with this checkout is a stale binding", () => {
+    const origin = makeSelectorOrigin();
+    const repo = remoteRepo(origin.bare);
+
+    origin.publish(selectorPayload({ mode: "local", projects: [] }));
+    expect(refusal(() => resolveAt(repo)).code).toBe("collaboration.stale-binding");
+
+    origin.publish(selectorPayload({ repoKey: "github.com/other/repo" }));
+    const foreign = refusal(() => resolveAt(repo));
+    expect(foreign.code).toBe("collaboration.stale-binding");
+    expect(foreign.message).toContain("github.com/other/repo");
+  });
+
+  test("a malformed published selector refuses remote selection", () => {
+    const origin = makeSelectorOrigin();
+    const repo = remoteRepo(origin.bare);
+    const cases: unknown[] = [
+      selectorPayload({ version: 2 }),
+      selectorPayload({ generation: 0 }),
+      selectorPayload({ projects: [] }),
+      selectorPayload({ projects: [{ ...SELECTED_PROJECT, projectId: "ENG-42" }] }),
+      selectorPayload({ projects: [SELECTED_PROJECT, SELECTED_PROJECT] }),
+      selectorPayload({ projects: [{ ...SELECTED_PROJECT, journalIssueId: "https://linear.app/issue" }] }),
+      selectorPayload({ previous: { selectorCommit: "a".repeat(40), generation: 4, mode: "local" } }),
+      selectorPayload({ phase: "pending" }),
+    ];
+    for (const payload of cases) {
+      origin.publish(payload);
+      expect(refusal(() => resolveAt(repo)).code).toBe("remote.selector-unavailable");
+    }
+    origin.publish("{not json");
+    expect(refusal(() => resolveAt(repo)).code).toBe("remote.selector-unavailable");
+
+    // invariant: An active generation is published only with a source-fenced cutover.
+    origin.publish(
+      selectorPayload({
+        previous: { selectorCommit: "a".repeat(40), generation: 2, mode: "local" },
+        cutover: {
+          operator: "ops-engineer",
+          reviewedAt: "2026-11-21T00:00:00Z",
+          sourceFenced: false,
+          pendingOperationIds: [],
+          verifiedTargetDigest: "d".repeat(64),
+        },
+      }),
+    );
+    expect(refusal(() => resolveAt(repo)).code).toBe("collaboration.stale-binding");
+  });
+
+  test("a recorded remote binding makes selector absence a stale binding", () => {
+    const origin = makeSelectorOrigin();
+    const repo = remoteRepo(origin.bare);
+    writeRemoteBinding(repo, "c".repeat(40), 2);
+    const result = refusal(() => resolveAt(repo));
+    expect(result.code).toBe("collaboration.stale-binding");
+    expect(result.message).toContain("mstar-collaboration-authority");
+  });
+
+  test("a remote binding must name the current selector generation", async () => {
+    const origin = makeSelectorOrigin();
+    const commit = origin.publish(selectorPayload({ generation: 5 }));
+    const repo = remoteRepo(origin.bare);
+    writeRemoteBinding(repo, commit, 5);
+    const context = contextAt(repo);
+    const location = resolveAt(repo);
+    expect(location.selection?.commit).toBe(commit);
+    await assertControlCheckoutScope(context, location);
+    expect(readCollaborationBinding(context)).toMatchObject({
+      version: 3,
+      mode: "remote",
+      selectorCommit: commit,
+      generation: 5,
+    });
+
+    writeRemoteBinding(repo, commit, 4);
+    await expect(assertControlCheckoutScope(context, location)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+
+    writeRemoteBinding(repo, "b".repeat(40), 5);
+    await expect(assertControlCheckoutScope(context, location)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+  });
+
+  test("a remote selection never opens or creates the local lane", async () => {
+    const origin = makeSelectorOrigin();
+    const commit = origin.publish(selectorPayload({ generation: 2 }));
+
+    const bound = remoteRepo(origin.bare);
+    writeRemoteBinding(bound, commit, 2);
+    const location = resolveAt(bound);
+    await expect(openCollaborationStore(contextAt(bound), "read")).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+    await expect(initializeCollaborationStore(location)).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+    expect(existsSync(location.dbPath)).toBe(false);
+
+    // invariant: An unbound remote checkout is never admitted either: its selector is not
+    // proof this checkout may use that generation.
+    const unbound = remoteRepo(origin.bare);
+    await expect(openCollaborationStore(contextAt(unbound), "read")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+  });
+
+  test("local and mirror resolution never consults the selector", () => {
+    const origin = makeSelectorOrigin();
+    origin.publish(selectorPayload({ generation: 7 }));
+    for (const mode of ["local", "mirror"] as const) {
+      const location = resolveAt(remoteRepo(origin.bare, mode));
+      expect(location.mode).toBe(mode);
+      expect("selection" in location).toBe(false);
+    }
   });
 });

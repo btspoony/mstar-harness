@@ -91,6 +91,9 @@ export type StoreErrorCode =
   // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
   | "collaboration.not-active"
+  // note: A `remote` selection resolves, but this build has no remote lane: the persisted cache
+  // and its bind verb land with the v2 schema, so no domain I/O may stand in for them.
+  | "collaboration.mode-unavailable"
   | "collaboration.operation-partial"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"

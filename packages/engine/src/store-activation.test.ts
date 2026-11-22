@@ -2976,6 +2976,7 @@ function cutoverOptionsFor(
   source: { storeId: string; epoch: number; schemaVersion: number },
 ): { operator: string; attestation: ActivationAttestation } {
   const location = resolveCollaborationLocation(context);
+  if (location.mode === "remote") throw new Error("a cutover attestation belongs to a local or mirror authority");
   return {
     operator: "ops-engineer",
     attestation: {

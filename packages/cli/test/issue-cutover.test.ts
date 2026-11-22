@@ -486,6 +486,31 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     expect(jsonOf(gate).data).toBeUndefined();
   });
 
+  test("a remote-selected checkout refuses the rollup at selection, never reading local rows", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-remote-")));
+    roots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    // invariant: An origin-less scope cannot enroll in remote, so selection refuses before any
+    // collaboration lane is opened; no local row or empty rollup may stand in for it.
+    writeFileSync(
+      join(root, ".mstarc"),
+      "[linear]\nenabled=true\nworkspace=acme\nteam=ENG\n[collaboration]\nmode=remote\nrepo_id=remote-fixture\n",
+    );
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+
+    const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
+    expect(rollup.exitCode).toBe(1);
+    expect(jsonOf(rollup).code).toBe("remote.selector-unavailable");
+    expect(jsonOf(rollup).data).toBeUndefined();
+
+    // invariant: The mirror delivery lane opens the same collaboration store, so a remote
+    // selection never becomes its route: it refuses at selection, before any ledger work.
+    const sync = runCli(["issue-sync", "pending", "--project", PROJECT_ID, "--harness", harness], root);
+    expect(sync.exitCode).toBe(1);
+    expect(jsonOf(sync).code).toBe("remote.selector-unavailable");
+  });
+
   test("a corrupt lane refuses the rollup instead of reporting no findings", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-corrupt-")));
     roots.push(root);
