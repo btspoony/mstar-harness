@@ -721,12 +721,15 @@ const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>>
  * lost a key or a CHECK can never admit a handle whose invariants it cannot
  * enforce.
  */
+type ForeignKeyLayout = readonly (readonly [column: string, table: string, target: string])[];
+type UniqueIndexLayout = Readonly<{ columns: readonly string[]; where: string | null }>;
+
 type KeyLayout = Readonly<{
   table: string;
   notNull: readonly string[];
   primaryKey?: readonly string[];
-  foreignKeys: readonly (readonly [column: string, table: string, target: string])[];
-  uniqueIndexes: readonly (readonly string[])[];
+  foreignKeys: readonly ForeignKeyLayout[];
+  uniqueIndexes: readonly UniqueIndexLayout[];
   checks: readonly string[];
 }>;
 
@@ -741,8 +744,8 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
   {
     table: "issues",
     notNull: ["issue_ref"],
-    foreignKeys: [["milestone_id", "project_milestones", "milestone_id"]],
-    uniqueIndexes: [["issue_ref"]],
+    foreignKeys: [[["milestone_id", "project_milestones", "milestone_id"]]],
+    uniqueIndexes: [{ columns: ["issue_ref"], where: null }],
     checks: [],
   },
   {
@@ -753,7 +756,7 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
     ],
     primaryKey: ["generation", "project_key"],
     foreignKeys: [],
-    uniqueIndexes: [["generation", "provider", "workspace_id", "provider_project_id"]],
+    uniqueIndexes: [{ columns: ["generation", "provider", "workspace_id", "provider_project_id"], where: null }],
     checks: ["check (typeof(generation) = 'integer' and generation > 0)", "check (provider = 'linear')"],
   },
   {
@@ -761,8 +764,10 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
     notNull: ["generation", "project_key", "revision", "completeness", "received_at"],
     primaryKey: ["generation", "project_key"],
     foreignKeys: [
-      ["generation", "remote_bindings", "generation"],
-      ["project_key", "remote_bindings", "project_key"],
+      [
+        ["generation", "remote_bindings", "generation"],
+        ["project_key", "remote_bindings", "project_key"],
+      ],
     ],
     uniqueIndexes: [],
     checks: [
@@ -777,12 +782,14 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
     notNull: ["generation", "project_key", "provider_issue_id"],
     primaryKey: ["generation", "project_key", "provider_issue_id"],
     foreignKeys: [
-      ["generation", "remote_observations", "generation"],
-      ["project_key", "remote_observations", "project_key"],
+      [
+        ["generation", "remote_observations", "generation"],
+        ["project_key", "remote_observations", "project_key"],
+      ],
     ],
     uniqueIndexes: [
-      ["generation", "issue_ref"],
-      ["generation", "provider_issue_id"],
+      { columns: ["generation", "issue_ref"], where: "where issue_ref is not null" },
+      { columns: ["generation", "provider_issue_id"], where: null },
     ],
     checks: [],
   },
@@ -1163,6 +1170,56 @@ function columnDrift(
   return damaged;
 }
 
+/** note: The database's foreign keys, one string per constraint in `id`/`seq` order - never flattened. */
+function foreignKeyGroups(db: StoreDb, table: string): string[] {
+  const rows = db.prepare(`pragma foreign_key_list(${table})`).all() as Array<{
+    id?: unknown;
+    seq?: unknown;
+    from?: unknown;
+    table?: unknown;
+    to?: unknown;
+  }>;
+  const groups = new Map<number, Array<{ seq: number; entry: string }>>();
+  for (const row of rows) {
+    if (typeof row.id !== "number" || typeof row.seq !== "number") continue;
+    const entry = `${String(row.from)}->${String(row.table)}.${String(row.to)}`;
+    const group = groups.get(row.id) ?? [];
+    group.push({ seq: row.seq, entry });
+    groups.set(row.id, group);
+  }
+  return [...groups.values()]
+    .map((group) => group.sort((left, right) => left.seq - right.seq).map((item) => item.entry).join(","))
+    .sort();
+}
+
+/** note: The trailing `WHERE` clause of a declared index, normalized; `null` for a full index. */
+function indexPredicate(sql: string | null): string | null {
+  if (sql === null) return null;
+  const match = /\bon\s+\S+\s*\([^)]*\)\s*(.*)$/i.exec(sql.replace(/\s+/g, " ").trim());
+  const predicate = match === null ? "" : (match[1] ?? "").trim().toLowerCase();
+  return predicate === "" ? null : predicate;
+}
+
+/** note: The database's unique indexes with their columns and predicates: `WHERE 0` is not the declared index. */
+function uniqueIndexLayouts(db: StoreDb, table: string): UniqueIndexLayout[] {
+  const rows = (db.prepare(`pragma index_list(${table})`).all() as Array<{ name?: unknown; unique?: unknown }>).filter(
+    (index) => index.unique === 1 && typeof index.name === "string",
+  );
+  return rows.map((index) => {
+    const name = String(index.name);
+    const columns = (db.prepare(`pragma index_info(${name})`).all() as Array<{ name?: unknown }>).map((column) =>
+      String(column.name),
+    );
+    const declared = db.prepare("select sql from sqlite_master where type = 'index' and name = ?").get(name) as
+      | { sql?: unknown }
+      | undefined;
+    return {
+      columns,
+      where: indexPredicate(declared !== undefined && typeof declared.sql === "string" ? declared.sql : null),
+    };
+  });
+}
+
 /**
  * invariant: The v2 delta's actual keys and vocabulary, read from the database's own
  * catalog: `table_info` for nullability and primary-key order,
@@ -1192,32 +1249,21 @@ function assertKeyLayout(db: StoreDb, dbPath: string): void {
       const wanted = layout.primaryKey.join(",");
       if (actual !== wanted) refusal(layout.table, `primary key is (${actual}) instead of (${wanted})`);
     }
-    const foreignKeys = (db.prepare(`pragma foreign_key_list(${layout.table})`).all() as Array<{
-      from?: unknown;
-      table?: unknown;
-      to?: unknown;
-    }>)
-      .map((row) => `${String(row.from)}->${String(row.table)}.${String(row.to)}`)
-      .sort()
-      .join("|");
+    const foreignKeys = foreignKeyGroups(db, layout.table);
     const wantedKeys = layout.foreignKeys
-      .map(([column, table, target]) => `${column}->${table}.${target}`)
-      .sort()
-      .join("|");
-    if (foreignKeys !== wantedKeys) refusal(layout.table, `foreign keys are (${foreignKeys || "none"})`);
-    const uniqueIndexes = (db.prepare(`pragma index_list(${layout.table})`).all() as Array<{
-      name?: unknown;
-      unique?: unknown;
-    }>)
-      .filter((index) => index.unique === 1 && typeof index.name === "string")
-      .map((index) =>
-        (db.prepare(`pragma index_info(${String(index.name)})`).all() as Array<{ name?: unknown }>)
-          .map((column) => String(column.name))
-          .join(","),
-      );
+      .map((group) => group.map(([column, table, target]) => `${column}->${table}.${target}`).join(","))
+      .sort();
+    if (foreignKeys.join("|") !== wantedKeys.join("|")) {
+      refusal(layout.table, `foreign keys are (${foreignKeys.join(" | ") || "none"})`);
+    }
+    const uniqueIndexes = uniqueIndexLayouts(db, layout.table);
     for (const wanted of layout.uniqueIndexes) {
-      if (!uniqueIndexes.includes(wanted.join(","))) {
-        refusal(layout.table, `lacks a unique index on (${wanted.join(", ")})`);
+      const columns = wanted.columns.join(",");
+      if (!uniqueIndexes.some((index) => index.columns.join(",") === columns && index.where === wanted.where)) {
+        refusal(
+          layout.table,
+          `lacks a unique index on (${wanted.columns.join(", ")})${wanted.where === null ? "" : ` ${wanted.where}`}`,
+        );
       }
     }
     const declared = db

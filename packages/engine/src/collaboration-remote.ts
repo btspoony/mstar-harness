@@ -209,9 +209,6 @@ const CAPABILITY_KEYS = ["fullRead", "appendOnly", "exactLookup", "fieldFidelity
 /** note: A positive access check expires 60 seconds after `checkedAt`. */
 const SCOPE_CHECK_TTL_MS = 60_000;
 
-/** note: How much clock skew a host may claim ahead of this process before its time is refused. */
-const MAX_CLOCK_SKEW_MS = 5_000;
-
 function invalid(path: string, detail: string): never {
   throw new StoreError("remote.input-invalid", `${path}: ${detail}. Nothing was written.`);
 }
@@ -283,6 +280,11 @@ function nonNegativeInteger(value: unknown, path: string): number {
   const raw = integer(value, path);
   if (raw < 0) invalid(path, "must be a non-negative integer");
   return raw;
+}
+
+function boolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") invalid(path, "must be a boolean");
+  return value;
 }
 
 function oneOf<const T extends string>(value: unknown, allowed: readonly T[], path: string): T {
@@ -510,7 +512,7 @@ function mstarFields(value: unknown, path: string): Record<string, unknown> {
 
 const OCCURRENCE_KEYS = [
   "eventId", "occurrenceKey", "sourceKind", "sourceIdentity", "rootCauseKey", "acceptanceKey", "location",
-  "observedBehavior", "evidence", "discoveredAt", "recordedAt",
+  "observedBehavior", "evidence", "discoveredAt", "recordedAt", "imported",
 ] as const;
 
 function occurrence(value: unknown, path: string): Record<string, unknown> {
@@ -528,13 +530,36 @@ function occurrence(value: unknown, path: string): Record<string, unknown> {
     evidence: stringList(body.evidence, `${path}.evidence`),
     discoveredAt: nullableInstant(body.discoveredAt, `${path}.discoveredAt`),
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
+    // note: The domain's imported provenance is a business field of the history, not a private detail.
+    imported: boolean(body.imported, `${path}.imported`),
   };
 }
 
 const TRANSITION_KEYS = [
   "eventId", "fromDisposition", "toDisposition", "actor", "occurredAt", "recordedAt", "reason", "evidence",
-  "issueRevision",
+  "issueRevision", "imported",
 ] as const;
+
+/**
+ * invariant: The portable transition evidence is the closure document the domain
+ * records - reason, scope, references, canonical issue and alignment reference.
+ * Anything else (a token, a header, a raw provider error, a nested payload) is
+ * refused before it can be persisted, and every member is validated rather than
+ * carried through as unknown JSON.
+ */
+const TRANSITION_EVIDENCE_KEYS = ["reason", "scope", "references", "canonicalIssueId", "alignmentRef"] as const;
+
+function transitionEvidence(value: unknown, path: string): Record<string, unknown> {
+  const body = record(value, path);
+  allowOnly(body, path, TRANSITION_EVIDENCE_KEYS);
+  const evidence: Record<string, unknown> = {};
+  for (const key of TRANSITION_EVIDENCE_KEYS) {
+    if (!(key in body)) continue;
+    evidence[key] =
+      key === "references" ? stringList(body.references, `${path}.references`) : nullableString(body[key], `${path}.${key}`);
+  }
+  return evidence;
+}
 
 function transition(value: unknown, path: string): Record<string, unknown> {
   const body = record(value, path);
@@ -548,8 +573,9 @@ function transition(value: unknown, path: string): Record<string, unknown> {
     occurredAt: nullableInstant(body.occurredAt, `${path}.occurredAt`),
     recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
     reason: text(body.reason, `${path}.reason`),
-    evidence: body.evidence,
+    evidence: transitionEvidence(body.evidence, `${path}.evidence`),
     issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+    imported: boolean(body.imported, `${path}.imported`),
   };
 }
 
@@ -807,7 +833,7 @@ function assertCheckAddresses(check: ScopeCheck, selected: CollaborationSelector
  */
 function assertCheckCurrent(check: ScopeCheck, now: number): void {
   const checkedAt = Date.parse(check.checkedAt);
-  if (checkedAt > now + MAX_CLOCK_SKEW_MS || now - checkedAt > SCOPE_CHECK_TTL_MS) {
+  if (checkedAt > now || now - checkedAt > SCOPE_CHECK_TTL_MS) {
     throw new StoreError(
       "collaboration.observation-stale",
       `The check for ${check.projectId} at ${check.checkedAt} is not current: a positive access check must be dated ` +
@@ -1248,22 +1274,12 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     for (const check of checks.values()) {
       const selected = selectedProject(selection, check.projectId);
       if (check.outcome.kind !== "verified") throw negativeRefusal(check.outcome);
-      // invariant: A verification never moves a binding's evidence backwards: an older check
-      // cannot overwrite a newer one (an identical replay carries the same instant).
+      // invariant: A verification never moves a binding's evidence backwards, and a tie only
+      // replays the identical check; a conflicting tie cannot replace the recorded one.
       const previous = db
-        .prepare("select verified_at from remote_bindings where generation = ? and project_key = ?")
+        .prepare("select verified_at, verification_json from remote_bindings where generation = ? and project_key = ?")
         .get(batch.generation, selected.localProjectId);
-      if (
-        isRecord(previous) &&
-        typeof previous.verified_at === "string" &&
-        Date.parse(check.checkedAt) < Date.parse(previous.verified_at)
-      ) {
-        throw new StoreError(
-          "collaboration.observation-stale",
-          `The check for ${selected.localProjectId} is older than the binding's recorded verification ` +
-            `(${previous.verified_at}); out-of-order host times are refused. Nothing was written.`,
-        );
-      }
+      if (isRecord(previous)) assertCheckAdvances(selected.localProjectId, check, previous);
       upsert.run(
         batch.generation,
         selected.localProjectId,
@@ -1317,6 +1333,26 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
     binding,
     availability: outcome.availability,
   };
+}
+
+/**
+ * invariant: A check never rewrites a binding's evidence at an older or tied host
+ * time: only a strictly later check, or a byte-identical replay, is admitted. A
+ * conflicting tie therefore can never replace the recorded one, so an equal
+ * timestamp cannot reverse a revocation or resurrect a stale verification.
+ */
+function assertCheckAdvances(projectId: string, check: ScopeCheck, recorded: Record<string, unknown>): void {
+  if (typeof recorded.verified_at !== "string") return;
+  const prior = Date.parse(recorded.verified_at);
+  const current = Date.parse(check.checkedAt);
+  const identical = recorded.verification_json === JSON.stringify(serializeCheck(check));
+  if (current < prior || (current === prior && !identical)) {
+    throw new StoreError(
+      "collaboration.observation-stale",
+      `The check for ${projectId} is dated ${check.checkedAt}, which does not advance the binding's recorded ` +
+        `verification (${recorded.verified_at}); only a later check or an identical replay is accepted. Nothing was written.`,
+    );
+  }
 }
 
 /** note: The persisted verification document: the allowlisted check, never the raw input. */
@@ -1388,7 +1424,7 @@ export async function ingestRemoteObservation(
   assertCheckAddresses(submission.check, selected);
   const checkedAt = Date.parse(submission.check.checkedAt);
   const now = Date.now();
-  if (checkedAt > now + MAX_CLOCK_SKEW_MS) {
+  if (checkedAt > now) {
     throw new StoreError(
       "collaboration.observation-stale",
       `The check for ${submission.check.projectId} is dated in the future (${submission.check.checkedAt}); a host time is ` +
@@ -1412,7 +1448,7 @@ export async function ingestRemoteObservation(
   }
 
   const outcome = await withRemoteCacheWrite(context, ({ db }) =>
-    recordObservation(db, submission, checkedAt, negative),
+    recordObservation(db, submission, negative),
   );
 
   // invariant: The invalidation is durable BEFORE its refusal is reported: a caller that saw
@@ -1425,11 +1461,12 @@ export async function ingestRemoteObservation(
 function recordObservation(
   db: StoreDb,
   submission: ObservationSubmission,
-  checkedAt: number,
   negative: StoreError | null,
 ): { recorded: RemoteObservationResult } | { refused: StoreError } {
   const stored = db
-    .prepare("select verified_at, selector_commit from remote_bindings where generation = ? and project_key = ?")
+    .prepare(
+      "select verified_at, verification_json, selector_commit from remote_bindings where generation = ? and project_key = ?",
+    )
     .get(submission.generation, submission.check.projectId);
   if (!isRecord(stored)) {
     throw new StoreError(
@@ -1444,13 +1481,7 @@ function recordObservation(
       `The cache binds ${submission.check.projectId} to another selector commit than the submission names. Nothing was written.`,
     );
   }
-  if (typeof stored.verified_at === "string" && checkedAt < Date.parse(stored.verified_at)) {
-    throw new StoreError(
-      "collaboration.observation-stale",
-      `The check for ${submission.check.projectId} is older than its binding's verification (${stored.verified_at}); ` +
-        `out-of-order host times are refused. Nothing was written.`,
-    );
-  }
+  assertCheckAdvances(submission.check.projectId, submission.check, stored);
   const current = db
     .prepare("select revision from remote_observations where generation = ? and project_key = ?")
     .get(submission.generation, submission.check.projectId);
