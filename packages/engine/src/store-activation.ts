@@ -58,7 +58,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { resolveCollaborationLocation, type CollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
 import {
-  COLLABORATION_COLUMNS,
+  COLLABORATION_CURRENT_COLUMNS,
   admitCollaborationImage,
   beginBindingClaim,
   clearBindingClaim,
@@ -70,6 +70,7 @@ import {
   readCollaborationAuthority,
   readCollaborationBinding,
   readCollaborationStage,
+  readRemoteCacheAuthority,
   writeCollaborationBinding,
   writeCollaborationStage,
   type CollaborationAuthority,
@@ -1142,7 +1143,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       throw incompletePair(`The collaboration image ${path} holds ${violations.length} row(s) violating its foreign keys.`);
     }
     const tables = tableNamesOn(db);
-    for (const [table, columns] of Object.entries(COLLABORATION_COLUMNS)) {
+    for (const [table, columns] of Object.entries(COLLABORATION_CURRENT_COLUMNS)) {
       if (!tables.has(table)) {
         throw incompletePair(`The collaboration image ${path} is missing the collaboration table ${table}.`);
       }
@@ -1188,7 +1189,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       );
     }
     const counts: Record<string, number> = {};
-    for (const table of Object.keys(COLLABORATION_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
+    for (const table of Object.keys(COLLABORATION_CURRENT_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
     const operations = (
       db
         .prepare(`select ${LANE_OPERATION_COLUMNS} from collaboration_operations order by operation_id`)
@@ -2003,8 +2004,19 @@ export async function restoreCollaborationBackup(
   receipt: RepositoryBackupReceipt,
   options: { operator: string; attestation: ActivationAttestation; manifestPath?: string },
 ): Promise<CollaborationAuthority> {
-  const supplied = requireRepositoryBackupReceipt(receipt);
   const location = resolveCollaborationLocation(context);
+  // invariant: A restored SQLite image is never provider authority: a remote checkout's
+  // binding and cache are re-established by the reviewed bind and a fresh
+  // observation, so no backup can reauthorize Linear.
+  if (location.mode === "remote") {
+    throw new StoreError(
+      "collaboration.mode-unavailable",
+      `This checkout selects remote collaboration, where the provider is the authority: restoring a local image ` +
+        `cannot restore or retarget that authority. Re-establish the cache with "mstar store collaboration remote bind" ` +
+        `and a complete "remote observe". Nothing was written.`,
+    );
+  }
+  const supplied = requireRepositoryBackupReceipt(receipt);
   // invariant: Two pre-publication guards come FIRST: the addressed CHECKOUT must be able to
   // own this authority (no unfenced legacy owner, no retargeted binding), and the
   // canonical target must pass its private-path admission. Both refuse before a
@@ -2408,6 +2420,34 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
         `finish that activation under its own scope or remove the claim deliberately (mstar path resolve). Nothing was ` +
         `created or changed.`,
     );
+  }
+  // invariant: A remote checkout's `store init` initializes EXECUTION state only: the
+  // collaboration cache was created and verified by the reviewed `remote bind`
+  // under this exact selector generation, and initialization never creates a
+  // local authority in its place.
+  if (location.mode === "remote") {
+    try {
+      return await readRemoteCacheAuthority(context);
+    } catch (error) {
+      // why: An absent or unpublished cache lane is rebuilt only by the reviewed bind.
+      // The lane-level refusal would otherwise name `store init` itself, which is the
+      // verb the operator just ran and which never creates a remote cache.
+      if (
+        error instanceof StoreError &&
+        (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active")
+      ) {
+        throw new StoreError(
+          "remote.unavailable",
+          `This control checkout resolves remote collaboration but its verified cache lane at ${location.dbPath} is ` +
+            `${error.code === "collaboration.not-initialized" ? "absent" : "not published"}. A remote checkout initializes ` +
+            `execution only, after the reviewed remote bind has created that lane for the checked selector generation: ` +
+            `run mstar store collaboration remote status --harness ${context.harnessDir}, have the Host Agent verify the ` +
+            `selected scope, then run mstar store collaboration remote bind --harness ${context.harnessDir} ` +
+            `--input <file|-> and retry this verb. Nothing was created.`,
+        );
+      }
+      throw error;
+    }
   }
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {

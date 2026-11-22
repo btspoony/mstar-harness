@@ -144,6 +144,12 @@ function controlRoot(label: string): StoreContext {
     { cwd: root, stdio: "ignore" },
   );
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${label}.git`], { cwd: root, stdio: "ignore" });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${label}.git`], {
+    cwd: root,
+    stdio: "ignore",
+  });
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -2907,6 +2913,7 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
   const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
   legacyGit(repoRoot, ["init", "-q", "-b", "main"]);
   legacyGit(repoRoot, ["remote", "add", "origin", `https://github.com/acme/${label}.git`]);
+  legacyGit(repoRoot, ["config", `url.${repoRoot}.insteadOf`, `https://github.com/acme/${label}.git`]);
   writeFileSync(join(repoRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   writeFileSync(join(repoRoot, "base.txt"), "base\n");
   legacyCommit(repoRoot, "init");

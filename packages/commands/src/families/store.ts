@@ -21,7 +21,12 @@ import {
   adoptCollaborationBinding,
   restoreCollaborationBackup,
   retireStoreSources,
+  upgradeExistingCollaborationStore,
   upgradeStoreMinimal,
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  prepareRemoteAdoption,
+  readRemoteStatus,
   type ActivationAttestation,
   type CutoverManifest,
   type MigrationManifest,
@@ -29,6 +34,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { getStoreRemoteOutboxCommandDefinitions } from "./store-remote-outbox.js";
 import { resolveCliPath } from "../host-health.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../envelope.js";
@@ -62,10 +68,15 @@ const inputSchema = z.object({
   ackSkipWorkflow: z.array(z.string()).optional(),
   ackSkipCompass: z.array(z.string()).optional(),
   delivery: z.array(deliveryDeclarationSchema).optional(),
+  input: z.string().optional(),
+  project: z.string().optional(),
+  issue: z.string().optional(),
+  operation: z.string().optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
 const collaborationVerbs = ["plan", "apply", "activate", "restore", "adopt"] as const;
+const remoteVerbs = ["status", "bind", "observe", "adopt-issue"] as const;
 
 /** note: The one flag table both store families publish. */
 const optionFlags: Record<keyof StoreInput, string> = {
@@ -77,6 +88,10 @@ const optionFlags: Record<keyof StoreInput, string> = {
   ackSkipWorkflow: "--ack-skip-workflow <id...>",
   ackSkipCompass: "--ack-skip-compass <iteration-id...>",
   delivery: "--delivery <json...>",
+  input: "--input <file|->",
+  project: "--project <local-project-id>",
+  issue: "--issue <provider-issue-id>",
+  operation: "--operation <uuid>",
 };
 
 function ok(id: string, data: unknown): CommandEnvelope {
@@ -100,10 +115,19 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       code,
       exitCode: 1,
       message,
+      // invariant: Execution initialization is the one store verb a remote checkout
+      // runs AFTER its cache exists, so its recovery names the bootstrap order and
+      // never the binding-free `store init` route the generic branches assume.
       // Literal branches only: the repository's refusal-quality lint proves the
       // text statically, so every code the engine can emit carries the family's
       // own words for the exact route instead of a composed variable.
-      recovery: (code === "store.attestation-invalid"
+      recovery: (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable")
+        ? "Store init never creates a remote cache: access to the canonical origin and the protected selector ref is the prerequisite, and the checkout is inspected with mstar path resolve. Then check mstar store collaboration remote status --harness <abs>, have the Host Agent verify the selected scope, complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->, and retry mstar store init --harness <abs>."
+        // invariant: A stale binding is mode-specific, so the recovery names both modes instead of
+        // replacing the local/mirror adoption route with instructions for another checkout.
+        : id === "store.init" && code === "collaboration.stale-binding"
+        ? "Store init never creates or adopts an authority this checkout is not bound to: inspect the checkout with mstar path resolve and correct its origin or .mstarc mode. A remote checkout whose selector moved or whose binding is stale re-establishes its cache with mstar store collaboration remote bind --harness <abs> --input <file|->, then retries mstar store init --harness <abs>. A local or mirror checkout that holds no finalized binding for its own published authority adopts it with mstar store collaboration adopt --harness <abs> --expect-store <store-id>; a checkout that now resolves to another repository starts a new checkout instead."
+        : code === "store.attestation-invalid"
         // The generated-attestation refusal: Bun is never an admissible attested
         // consumer, and the supported route is the installed Node CLI (or an
         // explicit document that overrides the generated one).
@@ -126,7 +150,11 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
                       ? "This checkout has no collaboration authority yet: run mstar store init for a fresh scope, mstar store upgrade --operator <name> for file-era execution state, or mstar store collaboration restore --backup <abs-manifest> for a verified pair."
                       : code === "collaboration.unreadable" || code === "collaboration.stale-binding"
                         ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id>, and store init is never the binding route; a bound checkout is never retargeted by editing its mode."
-                        : code === "store.upgrade-attestation-missing"
+        : code === "remote.selector-unavailable" || code === "remote.unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale"
+          ? "Restore Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs>; the Host Agent refreshes the scope and resubmits mstar store collaboration remote observe --input <file|->. A required read is never answered from local rows."
+          : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked" || code === "remote.unsafe-fidelity"
+              ? "Correct the document or the host's verified tenant/team/project scope, permissions and field fidelity, then resubmit mstar store collaboration remote bind|observe --input <file|-> for the checked selector commit and generation."
+              : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
           : code === "store.runtime-unsupported"
@@ -318,12 +346,9 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
-        // invariant: The two owners meet here: this checkout's collaboration authority is
-        // established (create/reuse, never cleared) before the execution half
-        // can report any imported state. A combined source with collaboration
-        // rows refuses with the cutover route, and the import itself refuses a
-        // staged lane.
-        await ensureCollaborationAuthority(context);
+        const operator = required(input.operator, "--operator");
+        // invariant: Caller-input usage is decided before any lane is touched, so a malformed
+        // selector or an unreadable attestation file leaves an existing v1 lane exactly as it was.
         // The schema cutover's safety disposal needs the existing operator/stop
         // attestation when a retired plan-PM claim is present. The engine's own
         // validator is the authority; the CLI reads the absolute JSON file and
@@ -342,16 +367,26 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             code: "store.upgrade-dsh-ack-unmatched",
           });
         }
-        return ok(id, await upgradeStoreMinimal({
+        // invariant: An existing v1 collaboration lane is advanced by the v2 migration BEFORE
+        // current-only admission can refuse it with the very command the operator ran.
+        const collaborationUpgrade = await upgradeExistingCollaborationStore(context, operator);
+        // invariant: The two owners meet here: this checkout's collaboration authority is
+        // established (create/reuse, never cleared) before the execution half
+        // can report any imported state. A combined source with collaboration
+        // rows refuses with the cutover route, and the import itself refuses a
+        // staged lane.
+        await ensureCollaborationAuthority(context);
+        const upgraded = await upgradeStoreMinimal({
           context,
-          operator: required(input.operator, "--operator"),
+          operator,
           operationId: randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
           ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
           ...(input.ackSkipCompass === undefined ? {} : { acknowledgedCompassSkips: input.ackSkipCompass }),
           ...(input.delivery === undefined ? {} : { deliveryDeclarations: input.delivery }),
-        }));
+        });
+        return ok(id, collaborationUpgrade === null ? upgraded : { ...upgraded, collaboration: collaborationUpgrade });
       }
       case "store.backup": {
         // invariant: A repository backup is the verified PAIR of both domains, never one
@@ -528,6 +563,120 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
   };
 }
 
+/**
+ * note: Read a JSON argument for a remote verb: a file path, or `-` for stdin. An
+ * unreadable path or a body that is not JSON is a USAGE refusal (exit 2) naming
+ * the flag; no store work has happened yet.
+ */
+async function readRemoteJson(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
+  if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
+  let raw: string;
+  if (value === "-") {
+    raw = await invocation.effects.readInput();
+  } else {
+    try {
+      raw = readFileSync(value, "utf8");
+    } catch (error) {
+      throw new SddScriptError(`${flag} ${value} cannot be read: ${error instanceof Error ? error.message : String(error)}`, 2);
+    }
+  }
+  if (raw.trim() === "") throw new SddScriptError(`${flag} received no content; pass a JSON document`, 2);
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new SddScriptError(`${flag} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
+  }
+}
+
+/**
+ * note: The remote observation lane: `status|bind|observe|adopt-issue` under
+ * `store collaboration remote`. `--harness` names this checkout's harness
+ * explicitly, exactly like the collaboration cutover family; no provider call,
+ * credential or transport exists here.
+ */
+async function executeRemote(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const verb = id.slice("store.collaboration.remote.".length) as (typeof remoteVerbs)[number];
+  try {
+    const target = absoluteFile(required(input.harness, "--harness"), "--harness");
+    const context: StoreContext = { harnessDir: path.resolve(target) };
+    if (verb === "status") {
+      return ok(id, await readRemoteStatus(context, input.project));
+    }
+    if (verb === "bind") {
+      const batch = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await bindRemoteAuthority(context, batch));
+    }
+    if (verb === "observe") {
+      const submission = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await ingestRemoteObservation(context, submission));
+    }
+    if (verb === "adopt-issue") {
+      const adoption = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await prepareRemoteAdoption(context, {
+        projectId: required(input.project, "--project"),
+        issueId: required(input.issue, "--issue"),
+        operationId: required(input.operation, "--operation"),
+        adoption,
+      }));
+    }
+    throw new SddScriptError(`unknown store collaboration remote verb ${verb}`, 2);
+  } catch (error) {
+    return refused(id, error);
+  }
+}
+
+function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition<StoreInput, unknown> {
+  const id = `store.collaboration.remote.${verb}`;
+  const optionsByVerb: Record<(typeof remoteVerbs)[number], (keyof StoreInput)[]> = {
+    status: ["harness", "project"],
+    bind: ["harness", "input"],
+    observe: ["harness", "input"],
+    "adopt-issue": ["harness", "project", "issue", "operation", "input"],
+  };
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
+  const optionHelp: Partial<Record<keyof StoreInput, string>> = {
+    harness: "absolute path to this checkout's harness (the operation target, never discovered from the working directory)",
+    project: "the local project id this cache binds; native issue detail and adoption require it, and it is never guessed",
+    issue: "the exact immutable Linear provider issue id (a UUID, never a display id such as ENG-42)",
+    operation: "caller-owned UUID for this adoption intent; unique across the repository",
+    input: "path to the strict JSON document, or - for stdin",
+  };
+  const descriptions: Record<(typeof remoteVerbs)[number], string> = {
+    status:
+      "Report the checked selector/phase, this checkout's remote binding, and each bound project's latest revision, completeness, asOf, provider scope and access verdict. Reads and creates nothing; no provider content is printed.",
+    bind:
+      "Verify one ScopeCheck per selected project and create or advance this checkout's private remote cache lane. Every check must prove the exact selected tenant/team/project and all five capabilities; the lane records the reviewed selector commit/generation.",
+    observe:
+      "Accept one verification/observation submission and replace one project's cache evidence atomically. A negative check records the invalidation and returns its named refusal; a partial snapshot is stored as partial. It never creates or adopts an issue.",
+    "adopt-issue":
+      "Validate a strict adoption document against the exact observed, UNMARKED native issue and freeze it as ONE durable outbox intent under --operation. The returned state is the durable fact: an enqueued intent is not an adopted issue. A marked or differently referenced issue refuses, and no title, native status or caller-supplied project adopts.",
+  };
+  const effects: Record<(typeof remoteVerbs)[number], readonly CommandEffect[]> = {
+    status: ["read"],
+    bind: ["read", "write"],
+    observe: ["read", "write"],
+    "adopt-issue": ["read", "write"],
+  };
+  const options = optionKeys.map((key) => ({
+    key,
+    flags: optionFlags[key],
+    required: key === "harness" || (verb === "adopt-issue" && (key === "project" || key === "issue" || key === "operation" || key === "input")),
+    ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
+  }));
+  return {
+    id,
+    cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
+    input: inputSchema.pick(shape),
+    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
+    rootInputs: [],
+    output: commandEnvelopeSchema,
+    effects: effects[verb],
+    description: descriptions[verb],
+    execute: (input, invocation) => executeRemote(id, input, invocation),
+  };
+}
+
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
@@ -577,7 +726,9 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
     description: `${verb === "upgrade"
       ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items. The optional --ack-skip-workflow <id>... explicitly skips importing named workflows whose legacy source this run refuses: a registered source that is not a real in-root directory (a linked or non-directory path), a registered source whose nested bytes cannot be read as a workflow (a linked entry, a non-regular snapshot, a session path that is not a real directory, a plan row that is missing, duplicated or unconvertible), a converted v1 lifecycle whose converted plan rows cannot be imported, or a recognized legacy id the native authority already holds with NO retained import receipt for this run's exact source bytes. A collision this store's own retained import receipt already records as imported from these exact bytes is a proven replay: it needs no acknowledgement and reports verdict \"nothing-to-import\" with the id named in dispositions. Because source bytes cannot prove which --delivery/--ack-skip-compass input an earlier import consumed, a run that carries neither relies on those bytes alone (so an older receipt still proves the replay), while a run that carries either needs the receipt to record the same input or its colliding id stays unproven. A duplicated v1 plan id is that id's own refused, skippable source: the first row in stable order (plan id, owning lifecycle id, row ordinal) survives and --ack-skip-workflow <plan id> acknowledges losing exactly the later duplicate rows. The separate --ack-skip-compass <iteration-id>... answers a non-regular v1 iteration compass: the compass is not read, that iteration produces no lifecycle, and the plans it registered convert as standalone plan rows. Every skip is reported with its loss."
-      : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
+      : verb === "init"
+        ? "Initialize this checkout's execution store create-only with fresh identifiers. A remote checkout initializes execution ONLY, after the reviewed remote bind created and verified its cache under the checked selector generation; it never restores, copies or republishes a prior execution lane."
+        : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }
@@ -586,5 +737,7 @@ export function getStoreCommandDefinitions(): readonly CommandDefinition[] {
   return [
     ...verbs.map((verb) => cliDefinition(`store.${verb}`)),
     ...collaborationVerbs.map((verb) => collaborationDefinition(verb)),
+    ...remoteVerbs.map((verb) => remoteDefinition(verb)),
+    ...getStoreRemoteOutboxCommandDefinitions(),
   ];
 }

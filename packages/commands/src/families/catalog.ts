@@ -86,13 +86,23 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  const details = { operation: id, ...(paths.length === 0 ? {} : { paths }) };
+  // note: An engine-authored refusal carries the durable facts of its own outcome; a remote
+  // enqueue's operation id and state are exactly what the caller must not lose.
+  const engineDetails = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  const details = { operation: id, ...(paths.length === 0 ? {} : { paths }), ...(engineDetails ?? {}) };
   if (error instanceof SddScriptError) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details });
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: id === "catalog.discover"
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: code === "remote.effect-pending"
+    // invariant: A durable enqueue is never a catalog success: the recorded outbox state is
+    // the outcome, and the same verb replays only after its provider intent is settled.
+    ? "The write is durably enqueued, not a catalog success. Inspect it with mstar store collaboration remote outbox-show --harness <abs> --operation <intent-id>, dispatch the one permit with mstar store collaboration remote outbox-dispatch --harness <abs> --operation <intent-id>, record the provider result with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->, then reissue this same verb with the same operation id."
+    : id === "catalog.discover"
         ? "Set readable repository roots and resolve any inaccessible paths. Run mstar catalog discover."
         : id === "catalog.import"
           ? "Correct the reviewed catalog plan and source identities. Run mstar catalog import --plan <reviewed-plan>."
@@ -253,7 +263,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
           rootKind: derived.rootKind, relativePath: derived.relativePath,
           ...(input.lifecycle === undefined ? {} : { lifecycle: oneOf(input.lifecycle, lifecycles, "lifecycle") }),
           ...(input.sourceHash === undefined ? {} : { sourceHash: input.sourceHash }),
-        }, { operationId: input.operationId!, actor: input.actor! }));
+        }, { operationId: input.operationId!, actor: input.actor!, ...(input.project === undefined ? {} : { projectId: input.project }) }));
       }
       requireAll(
         input,
@@ -268,7 +278,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
         description: input.description ?? null, rootKind: oneOf(input.rootKind, rootKinds, "rootKind"), relativePath: requireValue(input.path, "path"),
         ...(documentKind === undefined ? {} : { documentKind }), ...(lifecycle === undefined ? {} : { lifecycle }),
         ...(input.sourceHash === undefined ? {} : { sourceHash: input.sourceHash }),
-      }, { operationId: input.operationId!, actor: input.actor! }));
+      }, { operationId: input.operationId!, actor: input.actor!, ...(input.project === undefined ? {} : { projectId: input.project }) }));
     }
     if (verb === "update") {
       requireAll(input, ["kind", "id", "operationId", "actor"]);
@@ -284,7 +294,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       requireAll(input, ["expect"]);
       return envelope(id, await updateCatalogEntity(context, {
         kind: oneOf(input.kind, entityKinds, "kind"), id: requireValue(input.id, "id"),
-      }, patch, input.expect!, { operationId: input.operationId!, actor: input.actor! }));
+      }, patch, input.expect!, { operationId: input.operationId!, actor: input.actor!, ...(input.project === undefined ? {} : { projectId: input.project }) }));
     }
     if (verb === "link") {
       requireAll(input, ["fromKind", "fromId", "relation", "toKind", "toId", "operationId", "actor"]);
@@ -292,7 +302,7 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
         from: { kind: oneOf(input.fromKind, entityKinds, "fromKind"), id: requireValue(input.fromId, "fromId") },
         relation: oneOf(input.relation, relations, "relation"),
         to: { kind: oneOf(input.toKind, entityKinds, "toKind"), id: requireValue(input.toId, "toId") }, ordinal: input.ordinal ?? null,
-      } as CatalogLinkInput, { operationId: input.operationId!, actor: input.actor! }));
+      } as CatalogLinkInput, { operationId: input.operationId!, actor: input.actor!, ...(input.project === undefined ? {} : { projectId: input.project }) }));
     }
     if (verb === "list") {
       const filter: CatalogFilter = {};
@@ -351,9 +361,9 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
 const optionsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
   discover: ["out", "harness"],
   import: ["plan", "inputs", "dryRun", "operationId", "actor", "harness"],
-  register: ["kind", "id", "title", "description", "rootKind", "path", "file", "documentKind", "lifecycle", "sourceHash", "operationId", "actor", "harness"],
-  update: ["expect", "title", "description", "rootKind", "path", "documentKind", "lifecycle", "sourceHash", "operationId", "actor", "harness"],
-  link: ["fromKind", "fromId", "relation", "toKind", "toId", "ordinal", "operationId", "actor", "harness"],
+  register: ["kind", "id", "title", "description", "rootKind", "path", "file", "documentKind", "lifecycle", "sourceHash", "operationId", "actor", "project", "harness"],
+  update: ["expect", "title", "description", "rootKind", "path", "documentKind", "lifecycle", "sourceHash", "operationId", "actor", "project", "harness"],
+  link: ["fromKind", "fromId", "relation", "toKind", "toId", "ordinal", "operationId", "actor", "project", "harness"],
   list: ["kind", "documentKind", "lifecycle", "project", "iteration", "limit", "offset", "harness"],
   show: ["harness"],
   export: ["out", "harness"],

@@ -8,8 +8,11 @@ import * as nodeOs from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
 import { captureIssue, listIssues } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
@@ -40,6 +43,13 @@ function checkout(name: string): { root: string; context: StoreContext } {
     cwd: root,
     stdio: ["ignore", "ignore", "ignore"],
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${root}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: root, stdio: ["ignore", "ignore", "ignore"] },
+  );
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -306,3 +316,43 @@ async function snapshotIssueTables(context: StoreContext): Promise<Record<string
     handle.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// note: Remote selection: the provider tuple comes from the admitted snapshot
+// ---------------------------------------------------------------------------
+
+describe("remote project binding", () => {
+  test("a remote checkout reads the selected provider tuple and refuses a local binding write", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-binding");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const read = await readProjectBinding(context, REMOTE_IDS.projectId);
+    expect(read).toMatchObject({
+      kind: "bound",
+      binding: {
+        projectId: REMOTE_IDS.projectId,
+        provider: "linear",
+        workspace: REMOTE_IDS.workspaceId,
+        team: REMOTE_IDS.teamId,
+        remoteProject: REMOTE_IDS.providerProjectId,
+      },
+      collaboration: { source: "remote", completeness: "complete" },
+    });
+
+    // invariant: An unselected project has no evidence, and the local binding writer never
+    // becomes a remote route.
+    await expect(readProjectBinding(context, "proj-other")).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    await expect(
+      bindProject(
+        context,
+        REMOTE_IDS.projectId,
+        { provider: "linear", workspace: "acme", team: "eng", remoteProject: "Team Roadmap" },
+        { operationId: randomUUID() },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+  });
+});

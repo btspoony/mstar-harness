@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
+import { COLLABORATION_MIGRATIONS, SCHEMA_VERSION_TABLE_SQL, captureIssue, createExecutionWorkflow, initializeStore, migrationChecksum, openStore, readExecutionState, resolveCollaborationLocation } from "@mstar-harness/engine";
 import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -100,11 +101,17 @@ async function storeSnapshot(harnessDir: string): Promise<{ revision: number; ep
 }
 
 describe("store and execution command surface", () => {
-  test("registers six surviving store verbs, the five collaboration operator verbs and three independent execution utilities", () => {
+  test("registers six surviving store verbs, the nine collaboration operator verbs and three independent execution utilities", () => {
     expect(getStoreCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.init", "store.upgrade", "store.migrate", "store.backup", "store.activate", "store.retire",
       "store.collaboration.plan", "store.collaboration.apply", "store.collaboration.activate", "store.collaboration.restore",
       "store.collaboration.adopt",
+      "store.collaboration.remote.status", "store.collaboration.remote.bind", "store.collaboration.remote.observe",
+      "store.collaboration.remote.adopt-issue",
+      "store.collaboration.remote.outbox-pending", "store.collaboration.remote.outbox-show",
+      "store.collaboration.remote.outbox-dispatch", "store.collaboration.remote.outbox-receipt",
+      "store.collaboration.remote.outbox-reconcile", "store.collaboration.remote.outbox-resolve",
+      "store.collaboration.remote.outbox-abandon",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
@@ -507,6 +514,46 @@ describe("store and execution command surface", () => {
       findings: [expect.objectContaining({ kind: "dropped-by-ack", selector: "dsh-ledger:wf-recovery" })],
     });
     expect(readFileSync(identityPath, "utf8")).toBe(source);
+  });
+  test("store upgrade settles caller-input usage before it advances an existing v1 lane", async () => {
+    const root = fixture("store-upgrade-usage-first");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    // invariant: A real un-upgraded lane, so "nothing was mutated" is observable on the bytes
+    // the migration would have rewritten.
+    const lane = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
+    mkdirSync(dirname(lane), { recursive: true, mode: 0o700 });
+    const v1 = COLLABORATION_MIGRATIONS[0]!;
+    const seeded = new DatabaseSync(lane);
+    try {
+      seeded.exec(SCHEMA_VERSION_TABLE_SQL);
+      seeded.exec(v1.sql);
+      seeded.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
+        .run(v1.version, v1.name, migrationChecksum(v1), "2026-11-21T00:00:00.000Z");
+      seeded.prepare(
+        "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, " +
+          "catalog_revision, created_at, activated_at) values (1, ?, 'local', 'usage-first-store', 'active', 1, 2, 0, ?, ?)",
+      ).run(resolveCollaborationLocation({ harnessDir: harness }).repoKey, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    } finally {
+      seeded.close();
+    }
+    chmodSync(lane, 0o600);
+    const laneVersions = (): number[] => {
+      const db = new DatabaseSync(lane);
+      try { return (db.prepare("select version from schema_version order by version").all() as Array<{ version: number }>).map((row) => row.version); }
+      finally { db.close(); }
+    };
+    expect(laneVersions()).toEqual([1]);
+
+    const command = definition("store.upgrade");
+    const badSelector = await invoke(command, { harness, operator: "fixture", ackSkipDsh: ["dsh-ledger:../escape"] }, root);
+    expect(badSelector).toMatchObject({ status: "usage", code: "store.upgrade-dsh-ack-unmatched", exitCode: 2 });
+    expect(laneVersions()).toEqual([1]);
+
+    const absentAttestation = await invoke(command, { harness, operator: "fixture", attestation: join(root, "absent-attestation.json") }, root);
+    expect(absentAttestation).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(laneVersions()).toEqual([1]);
+    expect(existsSync(join(harness, "store.db"))).toBe(false);
   });
   test("a refused DSH phase leaves the earlier execution import committed with its real workflow rows and reports it truthfully", async () => {
     const root = fixture("store-upgrade-dsh-partial");

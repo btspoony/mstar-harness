@@ -62,6 +62,13 @@ function context(name: string): StoreContext {
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
     cwd: checkoutRoot,
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
+    { cwd: checkoutRoot },
+  );
   writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(checkoutRoot, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -107,10 +114,13 @@ async function openedStore(name: string): Promise<{ context: StoreContext; db: S
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-t', 'T', 'projects', 'p-t/roadmap.md', 'now', 'now')",
   ).run();
   const insertIssue = db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?)",
+    "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?, ?)",
   );
-  for (const id of ["I-000301", "I-000302", "I-000303"]) insertIssue.run(id, `sync-issue-${id}`);
+  // invariant: v2 made the stable reference NOT NULL and unique; the mirror fixture seeds real ones.
+  for (const [index, id] of ["I-000301", "I-000302", "I-000303"].entries()) {
+    insertIssue.run(id, `sync-issue-${id}`, `mstar:issue:00000000-0000-4000-8000-00000000030${String(index + 1)}`);
+  }
   return { context: storeContext, db, close: () => db.close() };
 }
 

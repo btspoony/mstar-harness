@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import type { RemoteEvent, RemoteIntent, RemoteIssue, RemoteWriteOrigin } from "./collaboration-remote.js";
 import { withCollaborationWrite } from "./collaboration-store.js";
+import { remoteMilestones } from "./collaboration-remote-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
@@ -40,8 +43,153 @@ function validTarget(target: unknown): target is string | null {
 }
 function validName(name: unknown): name is string { return typeof name === "string" && name.trim().length > 0; }
 function validOrdinal(ordinal: unknown): ordinal is number { return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal >= 0; }
+/** note: The status transitions one milestone update admits, shared by both transports. */
+const MILESTONE_TRANSITIONS: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
 function write<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   return withCollaborationWrite(context, (handle) => fn(handle.db));
+}
+
+/**
+ * note: A REMOTE milestone's id is derived from its own operation id, so a replay of the verb
+ * names the same row it froze instead of minting a second identity for the same write.
+ */
+function milestoneIdForOperation(operationId: string): string {
+  const digest = createHash("sha256").update(`milestone:${operationId}`, "utf8").digest();
+  const hex = Buffer.from(digest.subarray(0, 16)).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** note: The business result one remote milestone write derives from the observed document it froze against. */
+type MilestoneWriteResult = Readonly<{ changed: boolean; revision: number }>;
+
+/** note: The recorded result of one confirmed milestone write, or null when none was recorded. */
+function recordedMilestoneResult(value: unknown): MilestoneWriteResult | null {
+  if (value === null || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  if (typeof body.changed !== "boolean" || !Number.isSafeInteger(body.revision) || (body.revision as number) < 0) {
+    return null;
+  }
+  return { changed: body.changed, revision: body.revision as number };
+}
+
+/**
+ * note: The business result of one milestone request, derived from the same observed document the
+ * request froze against: a no-op update keeps its revision and reports no change, a removal reports
+ * the revision it removed, an add reports the first revision. Recorded at preparation, because the
+ * confirmed document no longer carries the before-state.
+ */
+function milestoneWriteResult(
+  milestoneId: string,
+): (current: Record<string, unknown>, subject: Record<string, unknown>) => MilestoneWriteResult {
+  return (current, subject) => {
+    const before = observedMilestones(current).find((entry) => entry.milestoneId === milestoneId);
+    const after = observedMilestones(subject).find((entry) => entry.milestoneId === milestoneId);
+    if (after === undefined) {
+      return { changed: before !== undefined, revision: typeof before?.revision === "number" ? before.revision : 0 };
+    }
+    return {
+      changed: before === undefined || after.revision !== before.revision,
+      revision: typeof after.revision === "number" ? after.revision : 0,
+    };
+  };
+}
+
+/**
+ * note: The confirmed business result of a remote milestone write, read from the result recorded
+ * with the frozen request. A remote write owns no local collaboration revision.
+ */
+function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, milestoneId: string): MilestoneReceipt {
+  if (intent.confirmed === null) {
+    throw new MilestoneError(
+      "milestone.operation-conflict",
+      `Operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
+    );
+  }
+  const result = recordedMilestoneResult(intent.result);
+  if (result === null) {
+    throw new MilestoneError(
+      "milestone.operation-conflict",
+      `Operation ${intent.operationId} is confirmed without its recorded business result, so its change and revision ` +
+        `cannot be reported. Inspect it with mstar store collaboration remote outbox-show --harness <abs>; ` +
+        `nothing was read or changed.`,
+    );
+  }
+  return {
+    projectId,
+    milestoneId,
+    revision: result.revision,
+    storeRevision: 0,
+    changed: result.changed,
+  };
+}
+
+/**
+ * note: The remote branch of every milestone write: freeze the new project journal document as one
+ * durable outbox intent and report it. A confirmed intent reports the recorded business result of
+ * an identical replay; anything else is `remote.effect-pending`. A milestone row is never written
+ * locally in `remote` mode.
+ */
+async function queueMilestoneWrite(
+  context: StoreContext,
+  projectId: string,
+  operationId: string,
+  milestoneId: string,
+  expectedStoreRevision: number,
+  origin: RemoteWriteOrigin,
+  next: (current: Record<string, unknown>, issues: readonly RemoteIssue[]) => Record<string, unknown>,
+): Promise<MilestoneReceipt> {
+  if (!Number.isSafeInteger(expectedStoreRevision) || expectedStoreRevision < 0) {
+    fail("milestone.invalid-input", "A non-negative expected store revision is required.");
+  }
+  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
+  // would close the cycle before the milestone contract initializes.
+  const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
+  const intent = await prepareRemoteProjectWrite(context, {
+    projectId,
+    operationId,
+    origin,
+    next,
+    result: milestoneWriteResult(milestoneId),
+    // invariant: `expectedStoreRevision` is the caller's observed base in remote mode too. The
+    // guard runs inside the freeze transaction, so a competing write or a newer observation that
+    // landed after the caller read the project refuses instead of silently superseding it.
+    guard: ({ observationRevision }) => {
+      if (observationRevision === expectedStoreRevision) return;
+      fail(
+        "milestone.revision-conflict",
+        `Project ${projectId}'s observed base is revision ${String(observationRevision)}, not the ` +
+          `${String(expectedStoreRevision)} this write was planned against; another write or observation moved it. ` +
+          `Re-read the project revision with \`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, ` +
+          `then retry with a fresh --operation. Nothing was enqueued.`,
+      );
+    },
+  });
+  if (intent.confirmed !== null) return confirmedMilestoneReceipt(intent, projectId, milestoneId);
+  throw pendingRemoteEffect(intent);
+}
+
+/** note: The observed milestone rows of one project document, as the projection reads them. */
+function observedMilestones(current: Record<string, unknown>): Array<Record<string, unknown>> {
+  return current.milestones as Array<Record<string, unknown>>;
+}
+
+/**
+ * note: The open issues assigned to one milestone. The snapshot's issue list is ALREADY the bound
+ * project's scope, so its entries are never re-filtered by the local project key: that key and the
+ * provider project id are different identifiers, and comparing them counts nothing.
+ */
+function openIssuesOf(issues: readonly RemoteIssue[], milestoneId: string): number {
+  return issues.filter(
+    (issue) =>
+      issue.mstar !== null &&
+      issue.mstar.fields.milestoneId === milestoneId &&
+      issue.mstar.fields.disposition === "open",
+  ).length;
+}
+
+/** note: Every issue assigned to one milestone — settled rows included, exactly as the local rule counts. */
+function assignedIssuesOf(issues: readonly RemoteIssue[], milestoneId: string): number {
+  return issues.filter((issue) => issue.mstar !== null && issue.mstar.fields.milestoneId === milestoneId).length;
 }
 function requestHash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
@@ -70,7 +218,7 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     const nextStatus = update.status ?? row.status;
     const statuses: ProjectMilestoneStatus[] = ["planned","active","delivered","dropped"];
     if (!statuses.includes(nextStatus)) fail("milestone.invalid-input", "Milestone status is invalid.");
-    const transitions: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
+    const transitions = MILESTONE_TRANSITIONS;
     if (!transitions[row.status].includes(nextStatus)) fail("milestone.invalid-transition", `Cannot transition ${row.status} to ${nextStatus}.`);
     if (nextStatus === "delivered") {
       // Contract §Gates: a complete observation that proves zero open issues
@@ -92,13 +240,98 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
   db.prepare("insert into collaboration_operations(key_space,operation_id,request_hash,result_json,committed_at) values('standalone',?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
   return receipt;
 }
-export function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> { return write(context, db => mutate(db,input.projectId,"",input,mutation,true)); }
-export function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+export async function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    if (!validName(input.name) || !validOrdinal(input.ordinal) || !validTarget(input.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    const at = new Date().toISOString();
+    const milestoneId = milestoneIdForOperation(mutation.operationId);
+    return queueMilestoneWrite(
+      context,
+      input.projectId,
+      mutation.operationId,
+      milestoneId,
+      mutation.expectedStoreRevision,
+      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal, expectedStoreRevision: mutation.expectedStoreRevision } },
+      (current) => ({
+        ...current,
+        milestones: [
+          ...observedMilestones(current),
+          { milestoneId, name: input.name.trim(), target: input.target, status: "planned", ordinal: input.ordinal, revision: 1, createdAt: at, updatedAt: at },
+        ],
+      }),
+    );
+  }
+  return write(context, db => mutate(db,input.projectId,"",input,mutation,true));
+}
+export async function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
   if (!patch || !Object.keys(patch).length || Object.keys(patch).some(key => !["name","target","ordinal","status"].includes(key))) return Promise.reject(new MilestoneError("milestone.invalid-input", "A non-empty milestone patch is required."));
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (patch.target !== undefined && !validTarget(patch.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (patch.ordinal !== undefined && !validOrdinal(patch.ordinal)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    const at = new Date().toISOString();
+    return queueMilestoneWrite(
+      context,
+      projectId,
+      mutation.operationId,
+      milestoneId,
+      mutation.expectedStoreRevision,
+      { verb: "milestone-update", request: { projectId, milestoneId, patch, expectedStoreRevision: mutation.expectedStoreRevision } },
+      (current, issues) => {
+        const rows = observedMilestones(current);
+        const row = rows.find((entry) => entry.milestoneId === milestoneId);
+        if (row === undefined) throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} is not observed in project ${projectId}.`);
+        const nextStatus = (patch.status ?? row.status) as ProjectMilestoneStatus;
+        if (!Object.hasOwn(MILESTONE_TRANSITIONS, nextStatus)) fail("milestone.invalid-input", "Milestone status is invalid.");
+        if (!MILESTONE_TRANSITIONS[row.status as ProjectMilestoneStatus].includes(nextStatus)) {
+          fail("milestone.invalid-transition", `Cannot transition ${String(row.status)} to ${nextStatus}.`);
+        }
+        if (nextStatus === "delivered" && openIssuesOf(issues, milestoneId) > 0) {
+          fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
+        }
+        const name = patch.name === undefined ? String(row.name) : patch.name.trim();
+        const target = patch.target === undefined ? (row.target as string | null) : patch.target;
+        const ordinal = patch.ordinal === undefined ? (row.ordinal as number) : patch.ordinal;
+        const changed = name !== row.name || target !== row.target || ordinal !== row.ordinal || nextStatus !== row.status;
+        return {
+          ...current,
+          milestones: rows.map((entry) =>
+            entry.milestoneId === milestoneId
+              ? { ...entry, name, target, ordinal, status: nextStatus, revision: (entry.revision as number) + (changed ? 1 : 0), updatedAt: changed ? at : entry.updatedAt }
+              : entry,
+          ),
+        };
+      },
+    );
+  }
   return write(context, db => mutate(db,projectId,milestoneId,patch,mutation,false));
 }
 /** Remove an empty milestone (idempotent via the shared operation ledger; refuses `milestone.not-empty` while issues remain). */
-export function removeMilestone(context: StoreContext, projectId: string, milestoneId: string, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+export async function removeMilestone(context: StoreContext, projectId: string, milestoneId: string, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
+    return queueMilestoneWrite(
+      context,
+      projectId,
+      mutation.operationId,
+      milestoneId,
+      mutation.expectedStoreRevision,
+      { verb: "milestone-remove", request: { projectId, milestoneId, expectedStoreRevision: mutation.expectedStoreRevision } },
+      (current, issues) => {
+        const rows = observedMilestones(current);
+        if (!rows.some((entry) => entry.milestoneId === milestoneId)) {
+          throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} is not observed in project ${projectId}.`);
+        }
+        const held = assignedIssuesOf(issues, milestoneId);
+        if (held > 0) {
+          fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held} issue(s); settled rows count too, so reassign or clear them before the removal. Nothing was enqueued.`);
+        }
+        return { ...current, milestones: rows.filter((entry) => entry.milestoneId !== milestoneId) };
+      },
+    );
+  }
   return write(context, db => {
     guard(db);
     if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
@@ -145,4 +378,4 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
 }
-export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true }, execution: "not-requested", run: sources => { if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }
+export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true, projectIds: [projectId] }, execution: "not-requested", run: sources => { if (sources.remote !== null) return { data: remoteMilestones(sources.remote, projectId, milestoneId) }; if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }

@@ -14,7 +14,8 @@ import {
   type CollaborationEffectReceipt,
   type CompositeIntent,
 } from "./collaboration-operations.js";
-import { openCollaborationStore, type CollaborationStamp } from "./collaboration-store.js";
+import { openCollaborationStore, readRemoteCacheAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { SettlementAttestationNeeded, initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
@@ -1190,6 +1191,10 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         catalogRevision: versions.catalogRevision,
       });
     },
+    // invariant: A legacy execution import carries no provider event: the rows it moves are the
+    // whole effect, and the remote lane was already proven active before the reservation. The
+    // composite still reserves, declines and finalizes through the one shared frame.
+    remote: async () => null,
     finalize: (tx, effect) =>
       commitExecutionImport(tx, {
         source,
@@ -1203,6 +1208,12 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
 
 /** note: The frozen collaboration target stamp of this repository's ACTIVE lane. */
 async function collaborationTargetOf(context: StoreContext): Promise<CollaborationStamp> {
+  // invariant: A `remote` checkout's import moves execution state only; its collaboration half is
+  // the verified active cache lane, so the stamp is that cache's own identity.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const authority = await readRemoteCacheAuthority(context);
+    return { repoKey: authority.repoKey, mode: "remote", storeId: authority.storeId, epoch: authority.epoch };
+  }
   // invariant: WRITE admission: the binding must hold before this verb reserves an intent,
   // so an unbound checkout refuses here instead of after the reservation.
   const handle = await openCollaborationStore(context, "write");

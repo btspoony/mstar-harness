@@ -37,7 +37,7 @@ import { join, resolve } from "node:path";
 import { discoverCatalog, type CatalogImportPlan } from "./catalog-import.js";
 import { catalogRootDir } from "./catalog.js";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
+import { initializeCollaborationStore, mintIssueRef, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
 import { heldCollaborationSourceTables, openStore, readCollaborationFence, storeDbPath, tableNamesOn, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 import { computeIdentityKey, type Disposition, type IssueKind, type Severity } from "./issue.js";
 import { isOpenResidual, normalizeSeverity } from "./status.js";
@@ -863,8 +863,8 @@ function insertMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at: s
   const impact = verbatimString(entry, "impact", "scope");
   const acceptance = verbatimString(entry, "acceptance", "decision");
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, identity_key) " +
-      "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, identity_key, issue_ref) " +
+      "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
   ).run(
     issueId,
     source.project,
@@ -881,6 +881,7 @@ function insertMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at: s
     at,
     at,
     identityKey,
+    mintIssueRef(),
   );
   // One imported capture occurrence per row (§3).
   db.prepare(

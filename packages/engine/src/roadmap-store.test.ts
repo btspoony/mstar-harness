@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "b
 import { registerCatalogEntity } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import {
   importRoadmapAuthority,
   initializeStore,
@@ -34,6 +36,12 @@ function checkout(name: string): StoreContext {
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${repo}.insteadOf`, `https://github.com/acme/${name}.git`], {
+    cwd: repo,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(repo, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -216,3 +224,34 @@ async function collaborationOperation(context: StoreContext, operationId: string
     db.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// note: Remote selection: the roadmap authority comes from admitted evidence
+// ---------------------------------------------------------------------------
+
+describe("remote roadmap authority", () => {
+  test("a remote checkout reads the observed roadmap and milestones, never a local row", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-roadmap");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const read = await readRoadmapAuthority(context, REMOTE_IDS.projectId);
+    expect(read).toMatchObject({
+      projectId: REMOTE_IDS.projectId,
+      roadmap: { projectId: REMOTE_IDS.projectId, revision: 2 },
+      collaboration: { source: "remote", completeness: "complete" },
+    });
+    if (read.roadmap === null) throw new Error("the observed fixture roadmap must be present");
+    expect(read.content.frontmatter.project_id).toBe(REMOTE_IDS.projectId);
+    expect(read.content.direction).toContain("One verified remote scope.");
+
+    const listed = await listRoadmapAuthority(context);
+    expect(listed.map((entry) => entry.projectId)).toEqual([REMOTE_IDS.projectId]);
+
+    // invariant: A project outside the selected scope has no evidence, never an empty roadmap.
+    await expect(readRoadmapAuthority(context, "proj-other")).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+  });
+});

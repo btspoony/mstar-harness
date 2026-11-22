@@ -21,6 +21,8 @@ import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITI
 import { addMilestone } from "./milestone-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
@@ -60,6 +62,13 @@ async function workspace(name: string): Promise<StoreContext> {
     cwd: dir,
     stdio: ["ignore", "ignore", "ignore"],
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: dir, stdio: ["ignore", "ignore", "ignore"] },
+  );
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
@@ -225,6 +234,10 @@ describe("readDashboardView over a real store", () => {
     const dir = mkdtempSync(join(ROOT, "uninitialized-"));
     execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
     execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/uninitialized.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    execFileSync("git", ["config", `url.${dir}.insteadOf`, "https://github.com/acme/uninitialized.git"], {
       cwd: dir,
       stdio: ["ignore", "ignore", "ignore"],
     });
@@ -957,5 +970,39 @@ describe("overview read model", () => {
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Remote selection: the dashboard transport never collapses to an empty page
+// ---------------------------------------------------------------------------
+
+describe("remote dashboard transport", () => {
+  test("a complete remote scope serves the issue page and discloses its source", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const envelope = await readDashboardView({ context, view: "issues" });
+    const page = envelope.data as IssuePage;
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ issueRef: REMOTE_IDS.issueRef, severity: "high" });
+    expect(page.providerIssues).toEqual([expect.objectContaining({ kind: "provider-only", nativeStatus: "Done" })]);
+    expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    const detail = await readDashboardView({ context, view: "issue-detail", id: REMOTE_IDS.providerOnlyIssueId, params: { project: REMOTE_IDS.projectId } });
+    expect(detail.data).toMatchObject({ kind: "provider-only", nativeStatus: "Done" });
+  });
+
+  test("an unobserved remote scope refuses instead of answering an empty dashboard", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard-empty");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "remote.unavailable" });
   });
 });

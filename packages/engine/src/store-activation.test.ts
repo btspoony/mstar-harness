@@ -34,6 +34,7 @@ import {
   writeCollaborationStage,
 } from "./collaboration-store.js";
 import { registerCatalogEntity } from "./catalog.js";
+import { bindRemoteAuthority, type ScopeCheck } from "./collaboration-remote.js";
 import { captureIssue } from "./issue.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
 import {
@@ -2965,6 +2966,12 @@ describe("repository backup pair", () => {
 function originCheckout(name: string, origin: string): Fixture {
   const fixture = repoWorkspace(name);
   execFileSync("git", ["remote", "add", "origin", origin], { cwd: fixture.checkout, stdio: ["ignore", "pipe", "pipe"] });
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  execFileSync("git", ["config", `url.${fixture.checkout}.insteadOf`, origin], {
+    cwd: fixture.checkout,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   // note: The repository identity comes from the ORIGIN; the checkout only declares its mode.
   writeFileSync(join(fixture.checkout, ".mstarc"), "[collaboration]\nmode=local\n");
   return fixture;
@@ -2976,6 +2983,7 @@ function cutoverOptionsFor(
   source: { storeId: string; epoch: number; schemaVersion: number },
 ): { operator: string; attestation: ActivationAttestation } {
   const location = resolveCollaborationLocation(context);
+  if (location.mode === "remote") throw new Error("a cutover attestation belongs to a local or mirror authority");
   return {
     operator: "ops-engineer",
     attestation: {
@@ -3715,5 +3723,230 @@ describe("explicit adoption verb", () => {
     });
     await expect(adoptCollaborationBinding(clone.context)).rejects.toThrow(/ambiguous/);
     expect(existsSync(join(clone.harness, "collaboration-binding.json"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Remote bootstrap admission: a fresh remote checkout initializes EXECUTION
+// only, from the cache the reviewed `remote bind` published under the checked
+// selector generation. The bootstrap never creates a local authority, never
+// rebuilds an absent cache, and never restores a prior execution lane.
+// ---------------------------------------------------------------------------
+
+const REMOTE_AUTHORITY_REF = "refs/heads/mstar-collaboration-authority";
+
+const REMOTE_PROJECT = {
+  localProjectId: "fixture-project",
+  provider: "linear",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  teamId: "22222222-2222-4222-8222-222222222222",
+  projectId: "33333333-3333-4333-8333-333333333333",
+  journalIssueId: "44444444-4444-4444-8444-444444444444",
+  writerId: "55555555-5555-4555-8555-555555555555",
+} as const;
+
+const REMOTE_CUTOVER = {
+  operator: "fixture-operator",
+  reviewedAt: "2026-11-22T00:00:00Z",
+  sourceFenced: true,
+  pendingOperationIds: [],
+  verifiedTargetDigest: "f".repeat(64),
+};
+
+let remoteSequence = 0;
+
+/**
+ * note: One isolated remote checkout: a unique canonical origin (so its cache lane
+ * path is its own), the bare origin its selector is published to, and the
+ * Host Agent's positive scope check for the selected project.
+ */
+function remoteFixture(name: string): {
+  context: StoreContext;
+  harness: string;
+  publish(generation: number): { commit: string; generation: number };
+  check(): ScopeCheck;
+} {
+  const slug = `${name}-${remoteSequence++}`;
+  const origin = `https://github.com/remote-bootstrap/${slug}.git`;
+  const repoKey = `github.com/remote-bootstrap/${slug}`;
+  const bare = join(ROOT, `remote-bare-${slug}.git`);
+  execFileSync("git", ["init", "-q", "--bare", bare], { stdio: ["ignore", "pipe", "pipe"] });
+  const checkout = join(ROOT, `remote-checkout-${slug}`);
+  mkdirSync(checkout, { recursive: true });
+  const run = (cwd: string, args: readonly string[]): string =>
+    execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  run(checkout, ["init", "-q"]);
+  run(checkout, ["config", "user.name", "Remote Bootstrap"]);
+  run(checkout, ["config", "user.email", "remote-bootstrap@example.test"]);
+  run(checkout, ["config", "remote.origin.url", origin]);
+  run(checkout, ["config", `url.${bare}.insteadOf`, origin]);
+  writeFileSync(join(checkout, ".mstarc"), "[collaboration]\nmode=remote\n");
+  const harness = join(checkout, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const publisher = join(ROOT, `remote-publisher-${slug}`);
+  mkdirSync(publisher, { recursive: true });
+  run(publisher, ["init", "-q"]);
+  run(publisher, ["config", "user.name", "Remote Selector"]);
+  run(publisher, ["config", "user.email", "selector@example.test"]);
+  let published: { commit: string; generation: number } | null = null;
+  return {
+    context: { harnessDir: harness, checkoutRoot: checkout },
+    harness,
+    publish(generation) {
+      const previous = published;
+      writeFileSync(
+        join(publisher, "authority.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            repoKey,
+            generation,
+            mode: "remote",
+            phase: "active",
+            projects: [REMOTE_PROJECT],
+            previous:
+              previous === null
+                ? null
+                : { selectorCommit: previous.commit, generation: previous.generation, mode: "remote" },
+            cutover: previous === null ? null : REMOTE_CUTOVER,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      // note: A successor commit must differ even when only its generation number does.
+      writeFileSync(join(publisher, "generation.txt"), `${generation}-${Date.now()}-${Math.random()}\n`);
+      run(publisher, ["add", "authority.json", "generation.txt"]);
+      run(publisher, ["commit", "-q", "-m", `publish generation ${generation}`]);
+      run(publisher, ["push", "-q", "--force", bare, `HEAD:${REMOTE_AUTHORITY_REF}`]);
+      published = { commit: run(publisher, ["rev-parse", "HEAD"]), generation };
+      return published;
+    },
+    check() {
+      return {
+        projectId: REMOTE_PROJECT.localProjectId,
+        scope: {
+          provider: "linear",
+          workspaceId: REMOTE_PROJECT.workspaceId,
+          teamId: REMOTE_PROJECT.teamId,
+          projectId: REMOTE_PROJECT.projectId,
+        },
+        journalIssueId: REMOTE_PROJECT.journalIssueId,
+        checkedAt: new Date(Date.now() - 1_000).toISOString(),
+        outcome: {
+          kind: "verified",
+          readerId: "fixture-reader",
+          writerId: REMOTE_PROJECT.writerId,
+          capabilities: {
+            fullRead: true,
+            appendOnly: true,
+            exactLookup: true,
+            fieldFidelity: true,
+            privateAudience: true,
+          },
+        },
+      };
+    },
+  };
+}
+
+/** note: The row count of one execution table, read through the store's own handle. */
+async function executionRows(context: StoreContext, table: string): Promise<number> {
+  const handle = await openStore(context, "read");
+  try {
+    const row = handle.db.prepare(`select count(*) as n from ${table}`).get();
+    return row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" ? row.n : -1;
+  } finally {
+    handle.close();
+  }
+}
+
+describe("remote bootstrap admission", () => {
+  test("remote bootstrap: a bound checkout initializes execution with fresh identifiers", async () => {
+    const fixture = remoteFixture("bound");
+    const { commit } = fixture.publish(1);
+    await bindRemoteAuthority(fixture.context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 1,
+      checks: [fixture.check()],
+    });
+
+    // note: The admitted cache identity IS the collaboration authority; the bootstrap
+    // returns it instead of creating, adopting or republishing a lane.
+    const authority = await ensureCollaborationAuthority(fixture.context);
+    expect(authority).toMatchObject({ mode: "remote", state: "active" });
+
+    // invariant: Execution gets its OWN identifiers: the fresh lane is never the cache's.
+    const handle = await initializeStore(fixture.context);
+    try {
+      expect(handle.storeId).not.toBe(authority.storeId);
+      expect(handle.epoch).toBe(1);
+    } finally {
+      handle.close();
+    }
+    for (const table of ["execution_workflows", "execution_sessions", "execution_integration_leases"]) {
+      expect(await executionRows(fixture.context, table)).toBe(0);
+    }
+
+    // note: Initialization is create-only, so a prior execution lane is never restored.
+    await expect(initializeStore(fixture.context)).rejects.toMatchObject({ code: "store.already-exists" });
+    // note: A repeated bootstrap still reports the same admitted cache identity.
+    expect(await ensureCollaborationAuthority(fixture.context)).toMatchObject({
+      mode: "remote",
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+    });
+  });
+
+  test("remote bootstrap: an unbound checkout refuses without creating execution state", async () => {
+    const fixture = remoteFixture("unbound");
+    fixture.publish(1);
+    const error = await ensureCollaborationAuthority(fixture.context).catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: "collaboration.stale-binding" });
+    // invariant: The refusal names the reviewed bind, never `store init`, which cannot bind.
+    expect((error as Error).message).toContain("remote bind");
+    expect(existsSync(join(fixture.harness, "store.db"))).toBe(false);
+  });
+
+  test("remote bootstrap: a bound checkout whose cache lane is absent refuses instead of rebuilding it", async () => {
+    const fixture = remoteFixture("absent");
+    const { commit } = fixture.publish(1);
+    await bindRemoteAuthority(fixture.context, {
+      version: 1,
+      selectorCommit: commit,
+      generation: 1,
+      checks: [fixture.check()],
+    });
+    const location = resolveCollaborationLocation(fixture.context);
+    rmSync(location.dbPath, { force: true });
+    rmSync(`${location.dbPath}-wal`, { force: true });
+    rmSync(`${location.dbPath}-shm`, { force: true });
+
+    const error = await ensureCollaborationAuthority(fixture.context).catch((failure: unknown) => failure);
+    // invariant: An absent cache is required data: the bootstrap refuses and rebuilds nothing,
+    // so the operator re-runs the reviewed bind instead of initializing around the loss.
+    expect(error).toMatchObject({ code: "remote.unavailable" });
+    expect((error as Error).message).toContain("mstar store collaboration remote bind");
+    expect(existsSync(location.dbPath)).toBe(false);
+    expect(existsSync(join(fixture.harness, "store.db"))).toBe(false);
+  });
+
+  test("remote bootstrap: a moved selector refuses the previously bound checkout", async () => {
+    const fixture = remoteFixture("moved");
+    const first = fixture.publish(1);
+    await bindRemoteAuthority(fixture.context, {
+      version: 1,
+      selectorCommit: first.commit,
+      generation: 1,
+      checks: [fixture.check()],
+    });
+    const successor = fixture.publish(2);
+    expect(successor.commit).not.toBe(first.commit);
+
+    const error = await ensureCollaborationAuthority(fixture.context).catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: "collaboration.stale-binding" });
+    expect((error as Error).message).toContain("generation 2");
+    expect(existsSync(join(fixture.harness, "store.db"))).toBe(false);
   });
 });

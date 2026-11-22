@@ -253,6 +253,15 @@ describe("mstar path resolve — collaboration diagnostic", () => {
         execFileSync("git", ["-C", root, "remote", "add", "origin", "https://github.com/Acme/Repo.git"], {
           stdio: "ignore",
         });
+        // note: Every origin-backed checkout now proves selector absence with a live lookup;
+        // route the synthetic origin to an empty local bare instead of a network transport.
+        const emptyOrigin = join(root, "empty-origin.git");
+        execFileSync("git", ["init", "-q", "--bare", emptyOrigin], { stdio: "ignore" });
+        execFileSync(
+          "git",
+          ["-C", root, "config", `url.${emptyOrigin}.insteadOf`, "https://github.com/Acme/Repo.git"],
+          { stdio: "ignore" },
+        );
         mkdirSync(join(root, ".mstar"), { recursive: true });
         writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=mirror\n");
         const expected = {

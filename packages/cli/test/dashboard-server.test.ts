@@ -47,6 +47,13 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   // invariant: The origin and `.mstarc` select the collaboration lane; a fresh checkout with
   // neither cannot resolve a repository authority.
   spawnSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], { cwd: dir });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  spawnSync(
+    "git",
+    ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: dir },
+  );
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(dir, ".mstar") };

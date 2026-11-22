@@ -36,7 +36,7 @@ export const MAX_DASHBOARD_SEARCH_LENGTH = 200;
 /** Accepted query fields per view; anything else is a usage refusal. */
 const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   issues: ["project", "disposition", "kind", "severity", "q", "limit", "offset"],
-  "issue-detail": [],
+  "issue-detail": ["project"],
   workflows: ["project", "limit", "offset"],
   "workflow-detail": [],
   iterations: ["project", "limit", "offset"],
@@ -132,7 +132,14 @@ export function dashboardFilters(
     return { issue };
   }
 
-  if (view === "issue-detail" || view === "workflow-detail" || view === "iteration-detail") {
+  if (view === "issue-detail") {
+    if (id === undefined) refuse(`the ${view} route requires an id`);
+    // note: A remote native detail addresses the exact provider id under its project; a
+    // local/mirror detail keeps filtering by the display id alone.
+    return { id: requireSafeId(`${view} id`, id), ...(scoped === undefined ? {} : { projectId: scoped }) };
+  }
+
+  if (view === "workflow-detail" || view === "iteration-detail") {
     if (id === undefined) refuse(`the ${view} route requires an id`);
     return { id: requireSafeId(`${view} id`, id) };
   }

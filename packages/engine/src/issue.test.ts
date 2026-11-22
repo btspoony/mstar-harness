@@ -10,7 +10,15 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
+import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation, type RemoteSnapshot } from "./collaboration-remote.js";
+import {
+  completeSnapshot,
+  createRemoteScope,
+  positiveCheck,
+  REMOTE_IDS,
+  submission,
+} from "./remote-scope.fixture.js";
 import { readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -28,6 +36,7 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  showIssue,
   reopenIssue,
   computeIdentityKey,
   linkIssue,
@@ -87,6 +96,13 @@ function ctx(name: string) {
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
     cwd: checkoutRoot,
   });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
+    { cwd: checkoutRoot },
+  );
   writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(checkoutRoot, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
@@ -251,8 +267,8 @@ describe("collaboration issues", () => {
     const at = "2026-11-21T00:00:00.000Z";
     await seedCollab(context, (db) => {
       db.prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, revision, provider, identity_key)" +
-          " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row')",
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, revision, provider, identity_key, issue_ref)" +
+          " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row', 'mstar:issue:11111111-1111-4111-8111-111111111111')",
       ).run(at, at);
     });
     // note: The sync ledger records its own standalone receipt under this id.
@@ -266,6 +282,38 @@ describe("collaboration issues", () => {
       code: "store.operation-conflict",
     });
     expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
+  });
+
+  test("capture mints one portable IssueRef per issue and a recurrence keeps it", async () => {
+    const context = ctx("issue-ref-");
+    await activeIssueStore(context);
+    const created = await captureIssue(context, baseInput(), mut("ref-first"));
+    const rows = await readCollab(context, (db) =>
+      db.prepare("select id, issue_ref from issues order by id").all(),
+    );
+    expect(rows).toHaveLength(1);
+    const first = rows[0] as { id: string; issue_ref: string };
+    expect(first.id).toBe(created.issueId);
+    assertIssueRef(first.issue_ref);
+
+    // invariant: A recurrence appends history to the same issue and never re-keys it.
+    const recurrence = await captureIssue(context, baseInput({ occurrenceKey: "run-2" }), mut("ref-second"));
+    expect(recurrence.issueId).toBe(created.issueId);
+    // invariant: A different semantic identity is a different issue with its own reference.
+    const other = await captureIssue(
+      context,
+      baseInput({ rootCauseKey: "other-cause", occurrenceKey: "run-3" }),
+      mut("ref-third"),
+    );
+    expect(other.issueId).not.toBe(created.issueId);
+    const after = await readCollab(context, (db) =>
+      db.prepare("select id, issue_ref from issues order by id").all(),
+    );
+    const refs = after.map((row) => {
+      if (row === null || typeof row !== "object" || !("issue_ref" in row)) throw new Error("a row has no issue_ref");
+      return String(row.issue_ref);
+    });
+    expect(refs).toEqual([first.issue_ref, expect.stringMatching(/^mstar:issue:[0-9a-f-]{36}$/)]);
   });
 
   test("a staged collaboration store is not issue read authority", async () => {
@@ -698,22 +746,22 @@ describe("query order and literal search", () => {
     await seedCollab(context, (db) => {
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'null-activity', 'bug', 'high', 'open', 'i', 'a', null, ?, ?, 1, 'k-null', 'mstar:issue:10000000-0000-4000-8000-000000000000')",
         )
         .run("I-000010", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'older-high', 'bug', 'high', 'open', 'i', 'a', ?, ?, ?, 1, 'k-old', 'mstar:issue:11000000-0000-4000-8000-000000000000')",
         )
         .run("I-000011", "2026-09-01T00:00:00.000Z", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'newer-medium', 'bug', 'medium', 'open', 'i', 'a', ?, ?, ?, 1, 'k-med', 'mstar:issue:12000000-0000-4000-8000-000000000000')",
         )
         .run("I-000012", "2026-09-18T00:00:00.000Z", now, now);
       db
         .prepare(
-          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit')",
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key, issue_ref) values (?, 'p', 'critical-old', 'bug', 'critical', 'open', 'i', 'a', ?, ?, ?, 1, 'k-crit', 'mstar:issue:13000000-0000-4000-8000-000000000000')",
         )
         .run("I-000013", "2026-08-01T00:00:00.000Z", now, now);
     });
@@ -793,6 +841,9 @@ async function liveAuthority(name: string): Promise<LiveAuthority> {
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
   git(["remote", "add", "origin", `https://github.com/acme/${basename(root)}.git`], root);
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  git(["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`], root);
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   const workflowId = LIVE_WORKFLOW_ID;
@@ -1551,5 +1602,131 @@ describe("issue action vocabulary", () => {
       const disposition = ISSUE_ACTIONS[verb].disposition;
       return disposition === null ? [] : [[verb, disposition]];
     })).toEqual([["close", "resolved"], ["waive", "waived"], ["duplicate", "duplicate"], ["supersede", "superseded"]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Remote selection: portable reference, native detail and a refused write path
+// ---------------------------------------------------------------------------
+
+describe("remote issue reads", () => {
+  test("a remote checkout reads admitted findings and keeps an unmarked issue visible", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const page = await listIssues(context, {});
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ id: REMOTE_IDS.issueRef, issueRef: REMOTE_IDS.issueRef, nativeStatus: "Todo" });
+    expect(page.providerIssues).toEqual([
+      expect.objectContaining({ kind: "provider-only", issueRef: null, nativeStatus: "Done" }),
+    ]);
+    expect(page.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    const shown = await showIssue(context, REMOTE_IDS.issueRef);
+    expect(shown).toMatchObject({ issueRef: REMOTE_IDS.issueRef, projectId: REMOTE_IDS.projectId });
+    const native = await showIssue(context, REMOTE_IDS.providerOnlyIssueId, REMOTE_IDS.projectId);
+    expect(native).toMatchObject({ kind: "provider-only", issueRef: null, nativeStatus: "Done" });
+
+    // invariant: The unmarked issue has no MStar detail; a display id and a guessed project never resolve.
+    await expect(getIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(showIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(showIssue(context, "I-000001", REMOTE_IDS.projectId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    // invariant: A remote closure is never a local write: it freezes one outbox intent and reports
+    // the pending effect. The CAS baseline is mandatory, and a missing one writes nothing.
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: crypto.randomUUID(), actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: crypto.randomUUID(), actor: "project-manager", expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+  });
+
+  test("provider-only issues answer the requested bounded, stably ordered page", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote-page");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const native = (issueId: string, title: string, providerUpdatedAt: string) => ({
+      identity: { ...check.scope, issueId },
+      nativeTitle: title,
+      nativeStatus: "Todo",
+      providerUpdatedAt,
+      mstar: null,
+    });
+    const snapshot: RemoteSnapshot = {
+      ...base,
+      issues: [
+        ...base.issues,
+        native("aaaaaaaa-0000-4000-8000-000000000001", "Native newest", "2026-11-20T00:00:01.000Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000002", "Native middle", "2026-11-20T00:00:00.500Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000003", "Native oldest", "2026-11-19T00:00:00.000Z"),
+      ],
+    };
+    await ingestRemoteObservation(context, submission(commit, check, snapshot, 0));
+
+    // invariant: The MStar total stays its own; the provider list honours the same page, ordered
+    // by provider update so an offset names the same rows on a re-read.
+    const first = await listIssues(context, { limit: 2 });
+    expect(first.total).toBe(1);
+    expect(first.providerIssues?.map((issue) => issue.title)).toEqual(["Native newest", "Native middle"]);
+
+    const second = await listIssues(context, { limit: 2, offset: 2 });
+    expect(second.providerIssues?.map((issue) => issue.title)).toEqual(["Unmarked native issue", "Native oldest"]);
+
+    const last = await listIssues(context, { limit: 1, offset: 3 });
+    expect(last.providerIssues?.map((issue) => issue.title)).toEqual(["Native oldest"]);
+  });
+
+  test("provider-only pages order mixed timestamp spellings by instant", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote-page-instants");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const native = (issueId: string, title: string, providerUpdatedAt: string) => ({
+      identity: { ...check.scope, issueId },
+      nativeTitle: title,
+      nativeStatus: "Todo",
+      providerUpdatedAt,
+      mstar: null,
+    });
+    const snapshot: RemoteSnapshot = {
+      ...base,
+      issues: [
+        // note: Only MStar subjects carry findings semantics; the page's native arm is under test.
+        ...base.issues.filter((issue) => issue.mstar !== null),
+        // invariant: Within one second `00.500Z` is NEWER than whole-second `00Z`; a text
+        // comparison puts `Z` after `.` and would page the earlier issue first.
+        native("aaaaaaaa-0000-4000-8000-000000000001", "Fractional half", "2026-11-20T00:00:00.500Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000002", "Whole second", "2026-11-20T00:00:00Z"),
+        native("aaaaaaaa-0000-4000-8000-000000000003", "Earlier", "2026-11-19T23:59:59.999Z"),
+      ],
+    };
+    await ingestRemoteObservation(context, submission(commit, check, snapshot, 0));
+
+    const first = await listIssues(context, { limit: 1 });
+    expect(first.providerIssues?.map((issue) => issue.title)).toEqual(["Fractional half"]);
+    const second = await listIssues(context, { limit: 2, offset: 1 });
+    expect(second.providerIssues?.map((issue) => issue.title)).toEqual(["Whole second", "Earlier"]);
   });
 });

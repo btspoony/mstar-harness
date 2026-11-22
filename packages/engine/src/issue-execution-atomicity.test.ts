@@ -124,6 +124,9 @@ function checkout(name: string): { root: string; harnessDir: string; context: St
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-q", "--allow-empty", "-m", "fixture"]);
   git(root, ["remote", "add", "origin", `https://github.com/acme/${basename(root)}.git`]);
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  git(root, ["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`]);
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });

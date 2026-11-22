@@ -21,6 +21,7 @@ import {
   withCollaborationWrite,
   writeCollaborationBinding,
   PUSH_DIRECTION,
+  normalizeRepoRemote,
   type ProviderItem,
   type StoreDb,
 } from "@mstar-harness/engine";
@@ -103,8 +104,17 @@ async function fixture(
   const repoRoot = join(dir, "repo");
   mkdirSync(repoRoot, { recursive: true });
   git(repoRoot, ["init", "-q"]);
-  const repo = REPO_PREFIX + "-" + basename(dir);
-  git(repoRoot, ["remote", "add", "origin", "git@github.com:" + repo + ".git"]);
+  const canonical = "git@github.com:" + REPO_PREFIX + "-" + basename(dir) + ".git";
+  git(repoRoot, ["remote", "add", "origin", canonical]);
+  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
+  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
+  git(repoRoot, ["config", `url.${repoRoot}.insteadOf`, canonical]);
+  // note: The mirror derives its repository identity from `get-url`, which applies that rewrite;
+  // the fixture's markers and ledger rows must carry the same value the command stamps.
+  const repo = normalizeRepoRemote(execFileSync("git", ["-C", repoRoot, "remote", "get-url", "origin"], {
+    encoding: "utf8",
+  }).trim());
+  if (repo === null) throw new Error("fixture origin must name a repository");
   git(repoRoot, ["config", "user.name", "Ada Lovelace"]);
   git(repoRoot, ["config", "user.email", options.email ?? "ada@example.com"]);
   writeFileSync(
@@ -138,10 +148,11 @@ async function fixture(
         " values (?, 'linear', 'acme', 'ENG', 'Remote', 1, ?)",
     ).run(PROJECT, new Date().toISOString());
     for (const [index, localId] of (options.localIds ?? LOCAL_IDS).entries()) {
+      // invariant: v2 made the stable reference NOT NULL and unique; the mirror fixture seeds real ones.
       db.prepare(
-        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
-          " values (?, ?, ?, ?, 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
-      ).run(localId, PROJECT, "Issue " + localId, index === 1 ? "risk" : "bug", "sync-issue-" + localId);
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+          " values (?, ?, ?, ?, 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
+      ).run(localId, PROJECT, "Issue " + localId, index === 1 ? "risk" : "bug", "sync-issue-" + localId, `mstar:issue:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`);
     }
   });
   if (options.bind === false) {

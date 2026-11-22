@@ -906,6 +906,14 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   // why: adopt is the replacement clone's binding verb — an unbound checkout
   // has no control root yet, so it must admit on an unpinned connection.
   "store.collaboration.plan": "none", "store.collaboration.restore": "none", "store.collaboration.adopt": "none",
+  // note: The remote verbs take their own absolute --harness operation target and are not
+  // admitted root-free, so an unpinned shared connection classifies them as root.
+  "store.collaboration.remote.status": "root", "store.collaboration.remote.bind": "root",
+  "store.collaboration.remote.observe": "root", "store.collaboration.remote.adopt-issue": "root",
+  "store.collaboration.remote.outbox-pending": "root", "store.collaboration.remote.outbox-show": "root",
+  "store.collaboration.remote.outbox-dispatch": "root", "store.collaboration.remote.outbox-receipt": "root",
+  "store.collaboration.remote.outbox-reconcile": "root", "store.collaboration.remote.outbox-resolve": "root",
+  "store.collaboration.remote.outbox-abandon": "root",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
   "workflow.adopt-terminal": "root", "workflow.compass-ref": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",

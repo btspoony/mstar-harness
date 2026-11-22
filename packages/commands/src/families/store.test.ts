@@ -1,12 +1,24 @@
 import { expect, beforeAll, afterAll, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { DatabaseSync } from "node:sqlite";
-import { WORKFLOW_SNAPSHOT_FILE, initializeStore, MIGRATIONS, migrationChecksum, openStore, SCHEMA_VERSION_TABLE_SQL } from "@mstar-harness/engine";
+import {
+  COLLABORATION_MIGRATIONS,
+  WORKFLOW_SNAPSHOT_FILE,
+  initializeStore,
+  listIssues,
+  MIGRATIONS,
+  migrationChecksum,
+  openStore,
+  readCollaborationBinding,
+  resolveCollaborationLocation,
+  SCHEMA_VERSION_TABLE_SQL,
+  writeCollaborationBinding,
+} from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
 import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
@@ -455,6 +467,196 @@ test("a report destination is create-only: an existing file is never truncated, 
     if (result.status !== "ok") throw new Error("expected the preview to succeed");
     expect(result.data).toMatchObject({ manifestFile: null, reportError: { code: "store.report-not-published" } });
     expect(readFileSync(destination, "utf8")).toBe("operator bytes\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * note: A real v1 collaboration lane at this checkout's canonical path, plus the v2
+ * checkout binding a normal activation records. The history it seeds is what the
+ * public upgrade must advance rather than refuse with its own recovery text.
+ */
+function writeV1Lane(root: string): string {
+  const context = { harnessDir: join(root, ".mstar"), checkoutRoot: root };
+  const location = resolveCollaborationLocation(context);
+  mkdirSync(dirname(location.dbPath), { recursive: true, mode: 0o700 });
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    const v1 = COLLABORATION_MIGRATIONS[0]!;
+    db.exec(v1.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v1.version,
+      v1.name,
+      migrationChecksum(v1),
+      "2026-11-21T00:00:00.000Z",
+    );
+    db.prepare(
+      "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, " +
+        "catalog_revision, created_at, activated_at) values (1, ?, 'local', 'v1-store', 'active', 1, 1, 0, ?, ?)",
+    ).run(location.repoKey, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+        "identity_key) values ('I-000001', 'proj-issues', 'Retained v1 finding', 'bug', 'high', 'open', 'i', 'a', ?, ?, 'v1-key')",
+    ).run("2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: "local", storeId: "v1-store", epoch: 1 });
+  return location.dbPath;
+}
+
+test("store.upgrade advances an admitted v1 collaboration lane and replays without losing history", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-v1-lane-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    writeV1Lane(root);
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = (operator: string) =>
+      definition.execute(definition.input.parse({ harness, operator }), invocation(root));
+
+    // invariant: The public verb advances the old lane; it never refuses with the command it just ran.
+    const first = await upgrade("fixture-operator");
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
+    expect(first.data).toMatchObject({
+      verdict: "upgraded",
+      collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 },
+    });
+
+    // note: A committed upgrade replays by revalidating instead of re-backfilling.
+    const replay = await upgrade("fixture-operator");
+    expect(replay.status).toBe("ok");
+    if (replay.status !== "ok") throw new Error(`expected the replay to succeed: ${replay.message}`);
+    expect(replay.data).toMatchObject({ collaboration: { fromVersion: 3, toVersion: 3, issuesBackfilled: 0 } });
+
+    // invariant: The retained issue is readable through the public read interface.
+    const listed = await listIssues({ harnessDir: harness, checkoutRoot: root }, { disposition: "open" });
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]).toMatchObject({ id: "I-000001", title: "Retained v1 finding", projectId: "proj-issues" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** note: The v1 lane's schema and data facts a refusal must leave untouched. */
+function v1LaneState(dbPath: string): { versions: number[]; issueRef: boolean; issues: number } {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const versions = (db.prepare("select version from schema_version order by version").all() as Array<{ version?: unknown }>)
+      .map((row) => (typeof row.version === "number" ? row.version : -1));
+    const columns = (db.prepare("pragma table_info(issues)").all() as Array<{ name?: unknown }>)
+      .map((row) => row.name);
+    const count = db.prepare("select count(*) as n from issues").get() as { n?: unknown } | undefined;
+    return { versions, issueRef: columns.includes("issue_ref"), issues: typeof count?.n === "number" ? count.n : -1 };
+  } finally {
+    db.close();
+  }
+}
+
+test("store.upgrade refuses a v1 lane this checkout is not bound to and leaves it untouched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-stale-binding-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const dbPath = writeV1Lane(root);
+    const context = { harnessDir: harness, checkoutRoot: root };
+    const location = resolveCollaborationLocation(context);
+    const untouched = { versions: [1], issueRef: false, issues: 1 };
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // note: The canonical lane is a same-repository generation this checkout does not record.
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: "local",
+      storeId: "superseded-store",
+      epoch: 4,
+    });
+
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = () =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
+
+    const stale = await upgrade();
+    expect(stale).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    // invariant: No DDL, backfill or receipt landed on another generation's bytes.
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // note: An unbound checkout (a replacement clone) reads the lane but never upgrades it.
+    rmSync(join(harness, "collaboration-binding.json"), { force: true });
+    const unbound = await upgrade();
+    expect(unbound).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    expect(v1LaneState(dbPath)).toEqual(untouched);
+
+    // invariant: The owning checkout still advances exactly that lane.
+    writeCollaborationBinding(context, { repoKey: location.repoKey, mode: "local", storeId: "v1-store", epoch: 1 });
+    const owned = await upgrade();
+    expect(owned.status).toBe("ok");
+    if (owned.status !== "ok") throw new Error(`expected the owned upgrade to succeed: ${owned.message}`);
+    expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 } });
+    expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2, 3], issueRef: true, issues: 1 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("store.init names the executable adopt recovery for a replacement checkout of a published authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-init-adopt-"));
+  const repoId = `fixture-adopt-${String(Date.now())}`;
+  try {
+    const publisher = join(root, "publisher");
+    const replacement = join(root, "replacement");
+    for (const dir of [publisher, replacement]) {
+      mkdirSync(dir, { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+      // note: The same repository id in both checkouts is what makes them one scope.
+      writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId}\n`);
+      mkdirSync(join(dir, ".mstar"), { recursive: true });
+    }
+    const storeInit = getStoreCommandDefinitions().find(({ id }) => id === "store.init");
+    const adopt = getStoreCommandDefinitions().find(({ id }) => id === "store.collaboration.adopt");
+    if (storeInit === undefined || adopt === undefined) throw new Error("missing store.init/store.collaboration.adopt definitions");
+    const harnessOf = (dir: string): string => join(dir, ".mstar");
+    const initAt = (dir: string) => storeInit.execute(storeInit.input.parse({ harness: harnessOf(dir) }), invocation(dir));
+
+    expect((await initAt(publisher)).status).toBe("ok");
+    const bound = readCollaborationBinding({ harnessDir: harnessOf(publisher), checkoutRoot: publisher });
+    if (bound === null) throw new Error("store.init recorded no collaboration binding");
+    const storeId = bound.storeId;
+
+    // note: A replacement checkout resolves the same repository but records no binding, so
+    // `store init` must name the explicit adoption instead of creating another authority.
+    const refused = await initAt(replacement);
+    expect(refused).toMatchObject({ status: "refused", code: "collaboration.stale-binding", exitCode: 1 });
+    if (refused.status === "ok") throw new Error("expected the unbound init to refuse");
+    const details: unknown = refused.details;
+    const recovery =
+      details !== null && typeof details === "object" && "recovery" in details && typeof details.recovery === "string"
+        ? details.recovery
+        : "";
+    // invariant: The local/mirror route is the adoption of the authority that checkout already
+    // published, complete with the target and the exact store it must match — never advice to
+    // start a checkout for another repository.
+    expect(recovery).toContain("mstar store collaboration adopt --harness <abs> --expect-store <store-id>");
+    expect(recovery).not.toContain("starts a new checkout for the other repository");
+    expect(existsSync(join(harnessOf(replacement), "store.db"))).toBe(false);
+
+    // invariant: The named recovery is accepted and binds this checkout to that authority.
+    const adopted = await adopt.execute(
+      adopt.input.parse({ harness: harnessOf(replacement), expectStore: storeId, out: join(root, "adopt-receipt.json") }),
+      invocation(replacement),
+    );
+    expect(adopted.status).toBe("ok");
+    expect(await initAt(replacement)).toMatchObject({ status: "ok" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -98,17 +98,105 @@ export type {
   CollaborationBinding,
   CollaborationStamp,
   CollaborationStoreHandle,
+  CollaborationUpgradeReceipt,
+  IssueRef,
 } from "./collaboration-store.js";
 export {
   adoptCollaborationBinding,
+  assertIssueRef,
+  COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  ISSUE_REF_PATTERN,
+  mintIssueRef,
   openCollaborationStore,
+  openRemoteCache,
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  readRemoteCacheAuthority,
+  upgradeCollaborationStore,
+  upgradeExistingCollaborationStore,
   withCollaborationWrite,
+  withRemoteCacheWrite,
   writeCollaborationBinding,
+  writeRemoteCollaborationBinding,
 } from "./collaboration-store.js";
+// note: The remote authority boundary: strict verification/observation DTOs, the explicit bind
+// that materializes the selected provider scope, scoped observation ingest into the cache, and
+// the status read. No provider call, credential or transport lives here.
+export type {
+  ObservationSubmission,
+  ProviderIssueIdentity,
+  ProviderProjectScope,
+  RemoteAvailability,
+  RemoteBindResult,
+  RemoteCatalogEntity,
+  RemoteCatalogLink,
+  RemoteConfirmedEffect,
+  RemoteMilestone,
+  RemoteMstarIssue,
+  RemoteObservationResult,
+  RemoteObservedSubject,
+  RemoteEvent,
+  RemoteEventChange,
+  RemoteIntent,
+  RemoteIntentBinding,
+  RemoteIntentExecutionKey,
+  RemoteIntentRequest,
+  RemoteIntentState,
+  RemotePendingIntent,
+  RemotePendingIntents,
+  RemoteProjectStatus,
+  RemoteRoadmap,
+  RemoteSnapshot,
+  RemoteAdoptionRequest,
+  RemoteDispatchPermit,
+  RemoteDispatchResult,
+  ForkObservation,
+  RemoteIntentRead,
+  RemoteIssueWrite,
+  RemoteNoChange,
+  RemoteProjectWrite,
+  RemoteReceiptOutcome,
+  RemoteReceiptRecord,
+  RemoteResolution,
+  RemoteStatus,
+  RemoteWriteOrigin,
+  ScopeCapabilities,
+  ScopeCheck,
+  ScopeOutcome,
+  SnapshotCoverage,
+  VerificationBatch,
+} from "./collaboration-remote.js";
+export {
+  abandonRemoteIntent,
+  bindRemoteAuthority,
+  dispatchRemoteIntent,
+  frozenIntent,
+  ingestRemoteObservation,
+  pendingRemoteEffect,
+  prepareRemoteAdoption,
+  prepareRemoteIntent,
+  prepareRemoteIssueWrite,
+  prepareRemoteProjectWrite,
+  prepareRemoteResolution,
+  readPendingIntents,
+  readRemoteIntent,
+  readRemoteStatus,
+  recordRemoteReceipt,
+  reconcileRemoteIntent,
+  remoteEventHead,
+} from "./collaboration-remote.js";
+// note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
+// refuses a failed/partial/stale required scope rather than reading local rows.
+export type {
+  RemoteCatalogLinks,
+  RemoteCatalogRow,
+  RemoteIssueRead,
+  RemoteProjectEvidence,
+  RemoteReadView,
+} from "./collaboration-remote-read.js";
+export { openRemoteReadView } from "./collaboration-remote-read.js";
 // note: The one-way authority cutover: reviewed manifest, verified staged copy,
 // activation claim, durable source fence, guarded publication and replay.
 export type {
@@ -341,6 +429,7 @@ export {
 export type {
   BindingErrorCode,
   CollaborationObservation,
+  CollaborationProviderScope,
   CollaborationScope,
   FindingsObservation,
   ProjectBinding,
@@ -732,11 +821,13 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // and the collaboration receipt. The frame itself stays internal to the engine;
 // only the admitted owning verb may run one.
 export type {
+  CollaborationCompositeEffects,
   CollaborationEffectReceipt,
   CompositeIntent,
   CompositeKey,
   CompositeKind,
 } from "./collaboration-operations.js";
+export { remoteCompositeEntryOperationId, remoteCompositeOperationId } from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
@@ -760,7 +851,9 @@ export type {
   IssueLink,
   IssueMove,
   IssuePage,
+  IssueProvenanceKind,
   IssueReceipt,
+  IssueRelationKind,
   IssueReopen,
   IssueTriage,
   MutationContext,
@@ -779,6 +872,7 @@ export {
   closeIssue,
   computeIdentityKey,
   getIssue,
+  showIssue,
   linkIssue,
   listIssues,
   moveIssue,
@@ -791,6 +885,8 @@ export {
   ISSUE_ACTION_NAMES,
   ISSUE_DISPOSITIONS,
   ISSUE_KINDS,
+  ISSUE_PROVENANCE_KINDS,
+  ISSUE_RELATIONS,
   ISSUE_SEVERITIES,
   ISSUE_PAYLOAD_SCHEMAS,
   TERMINAL_DISPOSITIONS,
