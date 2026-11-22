@@ -6,7 +6,7 @@
  * real user home or opens a database.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -752,5 +752,26 @@ describe("remote selector resolution", () => {
       resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=local\n", false)),
     );
     expect(unreachable.code).toBe("remote.selector-unavailable");
+  });
+
+  test("a selector deleted after this checkout observed it is never a fresh absence", () => {
+    for (const mode of ["local", "mirror"] as const) {
+      const origin = makeSelectorOrigin();
+      const commit = origin.publish(selectorPayload({ mode, projects: [], generation: 3 }));
+      const observed = remoteRepo(origin.bare, mode);
+      expect(resolveAt(observed).mode).toBe(mode);
+      // invariant: The successful lookup is recorded beside the harness before absence is accepted.
+      expect(
+        JSON.parse(readFileSync(join(observed, ".mstar", "collaboration-selector-observation.json"), "utf8")),
+      ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: commit, generation: 3 });
+
+      git(origin.bare, "update-ref", "-d", SELECTOR_REF);
+      const gone = refusal(() => resolveAt(observed));
+      expect(gone.code).toBe("collaboration.stale-binding");
+      expect(gone.message).toContain(commit);
+
+      // invariant: Only a checkout with no observation keeps the legacy lane on the same absent ref.
+      expect(resolveAt(remoteRepo(origin.bare, mode)).mode).toBe(mode);
+    }
   });
 });

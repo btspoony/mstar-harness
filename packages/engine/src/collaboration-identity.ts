@@ -5,13 +5,14 @@
  * Identity is the origin repository, never a checkout path, Git author,
  * per-store UUID or current branch. The configured Git main checkout supplies
  * the origin and `.mstarc`, so a linked worktree cannot answer as its own
- * repository. Resolution is side-effect free: it opens no database and creates
- * no directory.
+ * repository. Resolution opens no database; its only write is the observation
+ * recorded beside the harness when this checkout sees a published selector.
  */
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, type Stats } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { exitStatusOf, gitProbeTimeoutMs, mainWorktreeRoot } from "./git-probe.js";
 import { COLLABORATION_SECTION, MSTARC_FILE, parseMstarc } from "./mstarc.js";
 import type { StoreContext } from "./store-db.js";
@@ -28,6 +29,11 @@ export const AUTHORITY_FILE = "authority.json";
  * repository once published a selector — never as authority.
  */
 export const COLLABORATION_BINDING_FILE = "collaboration-binding.json";
+/**
+ * note: The checkout's durable record that its origin once named a selector this checkout
+ * observed. Absence is never fresh for that checkout again, whatever its binding version.
+ */
+const SELECTOR_OBSERVATION_FILE = "collaboration-selector-observation.json";
 
 /** note: One selected project: the local key and the dedicated provider project it is bound to. */
 export type CollaborationSelectorProject = Readonly<{
@@ -420,7 +426,7 @@ function parseSelectorPrevious(raw: unknown, generation: number): CollaborationS
   if (raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) selectorUnavailable("The selector's previous is not an object");
   const previous = raw as Record<string, unknown>;
-  if (typeof previous.selectorCommit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(previous.selectorCommit)) {
+  if (typeof previous.selectorCommit !== "string" || !GIT_OBJECT_ID.test(previous.selectorCommit)) {
     selectorUnavailable("The selector's previous selectorCommit is not a Git object ID");
   }
   const prior = positiveInteger(previous.generation, "previous generation");
@@ -502,6 +508,74 @@ function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): 
   };
 }
 
+/** note: A Git object ID: SHA-1 or SHA-256 spelling, lowercase hex. */
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** note: What this checkout last observed of a published selector: evidence, never authority. */
+type SelectorObservation = Readonly<{ repoKey: string; selectorCommit: string; generation?: number }>;
+
+/**
+ * invariant: The selector this checkout observed before, or `null` when it observed none. An
+ * unreadable or malformed record refuses: forgetting it would restore the legacy lane.
+ */
+function observedSelector(context: StoreContext): SelectorObservation | null {
+  const path = join(context.harnessDir, SELECTOR_OBSERVATION_FILE);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return null;
+    selectorStale(`The selector observation at ${path} exists but cannot be read (${code || "unknown"})`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = null;
+  }
+  const body = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const generation = body.generation;
+  const valid =
+    typeof body.repoKey === "string" &&
+    body.repoKey !== "" &&
+    typeof body.selectorCommit === "string" &&
+    GIT_OBJECT_ID.test(body.selectorCommit) &&
+    (generation === undefined ||
+      (typeof generation === "number" && Number.isSafeInteger(generation) && generation > 0));
+  if (!valid) selectorStale(`The selector observation at ${path} is malformed`);
+  return {
+    repoKey: body.repoKey as string,
+    selectorCommit: body.selectorCommit as string,
+    ...(generation === undefined ? {} : { generation: generation as number }),
+  };
+}
+
+/** invariant: Record the observed selector before any absence can be accepted. */
+function recordObservedSelector(context: StoreContext, seen: SelectorObservation): void {
+  const path = join(context.harnessDir, SELECTOR_OBSERVATION_FILE);
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify({ version: 1, ...seen }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch {
+    // invariant: An unrecorded observation would let a later deletion pass as never-seen.
+    selectorUnavailable(
+      `Git read selector commit ${seen.selectorCommit}, but this checkout could not record that observation beside its harness`,
+    );
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** note: The payload's generation when it is readable, for the observation message only. */
+function readableGeneration(raw: unknown): number | undefined {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const value = (raw as Record<string, unknown>).generation;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 /** note: A recorded v3 checkout binding is evidence a selector was published once; it selects nothing. */
 function remoteBindingRecorded(context: StoreContext): boolean {
   try {
@@ -526,15 +600,27 @@ function resolvePublishedSelector(
 ): CollaborationSelection | null {
   const commit = lookupSelector(mainRoot);
   if (commit === null) {
+    const seen = observedSelector(context);
+    if (seen !== null && seen.repoKey === repoKey) {
+      selectorStale(
+        `This checkout observed selector ${seen.selectorCommit}` +
+          `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+      );
+    }
     if (remoteBindingRecorded(context)) {
       selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
     }
     return null;
   }
-  const selector = parseSelector(selectorPayload(mainRoot, commit), repoKey, mode);
+  const payload = selectorPayload(mainRoot, commit);
   // invariant: The commit is read only if the ref still names it: a selector that moved mid-read selects nothing.
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
+  // invariant: Any selector the origin named is recorded before its payload can refuse, so its
+  // later deletion is never read as a checkout that never saw one.
+  const generation = readableGeneration(payload);
+  recordObservedSelector(context, { repoKey, selectorCommit: commit, ...(generation === undefined ? {} : { generation }) });
+  const selector = parseSelector(payload, repoKey, mode);
   return {
     commit,
     generation: selector.generation,
