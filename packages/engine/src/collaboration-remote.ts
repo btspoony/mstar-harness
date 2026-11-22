@@ -227,10 +227,19 @@ function unsafeFidelity(path: string, detail: string): never {
 const PORTABLE_FIELD_LIMIT = 512;
 
 /**
- * note: A complete URL stays portable whatever its path says, so mask it before
- * the path check; its `/<segment>` tail would otherwise read as an absolute path.
+ * note: A complete URL is inspected instead of trusted: its path or query can name
+ * a home directory, and its authority or query key can carry a credential. It is
+ * masked after that inspection so its `/<segment>` tail does not read as an
+ * absolute path; an ordinary URL stays portable.
  */
 const URL_TOKEN = /https?:\/\/[^\s"'`<>()[\]{}]+/gi;
+
+/** note: An absolute home path is machine detail wherever it appears, a URL included. */
+const HOME_PATH = /\/(?:Users|home|root|Volumes)\//i;
+
+/** note: Credential-bearing URL query keys: a whole key, or a vendor-prefixed one after `_`/`-`. */
+const URL_CREDENTIAL_KEY =
+  /(?:^|[_-])(?:authorization|token|secret|password|passwd|passphrase|credential|api[_-]?key|apikey|access[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key)$/i;
 
 /**
  * note: A path leaks the same machine detail embedded in a sentence as it does at
@@ -243,13 +252,45 @@ const URL_TOKEN = /https?:\/\/[^\s"'`<>()[\]{}]+/gi;
 const EMBEDDED_PATH = /(?:^|[^\w])\/(?!\/)\S|\b[A-Za-z]:[\\/]|\\\\|~\/|file:\/\//i;
 
 /**
- * note: A reviewed conservative shape rule, not a credential scanner: the header,
- * a credential label only when an assignment follows it, and the common key
- * shapes. A bare word such as `Token expiration` is business prose, so the label
- * alone is not refused.
+ * note: A reviewed conservative shape rule, not a credential scanner: the HTTP auth
+ * header, the common key shapes, and a credential label only when an assigned value
+ * follows it. A phrase such as `Token: rotation scheduled` is business prose, so the
+ * value shape decides, never the bare label.
  */
 const CREDENTIAL_SHAPE =
-  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:authorization|token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b\s*[:=]\s*\S|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
+  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
+const AUTHORIZATION_HEADER = /\bauthorization\b\s*[:=]\s*\S/i;
+const CREDENTIAL_ASSIGNMENT =
+  /\b(?:token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b\s*[:=]\s*/gi;
+
+/** note: A URL that names a home path or carries a credential in its authority or query is not portable. */
+function urlRefusal(raw: string): string | null {
+  if (HOME_PATH.test(raw)) return "names an absolute home path";
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    // shortcut: a URL the parser rejects is refused only by its visible home path; upgrade if a malformed form can carry a credential.
+    return null;
+  }
+  if (url.username !== "" || url.password !== "") return "carries URL userinfo credentials";
+  const keys = [...url.searchParams.keys(), ...new URLSearchParams(url.hash.slice(1)).keys()];
+  if (keys.some((key) => URL_CREDENTIAL_KEY.test(key))) return "carries a credential query key";
+  return null;
+}
+
+/** note: Only a single-token value after a credential label is an assignment; a phrase is business prose. */
+function assignedCredential(value: string): boolean {
+  if (CREDENTIAL_SHAPE.test(value) || AUTHORIZATION_HEADER.test(value)) return true;
+  for (const match of value.matchAll(CREDENTIAL_ASSIGNMENT)) {
+    const rest = value.slice((match.index ?? 0) + match[0].length);
+    const token = /^\S+/.exec(rest)?.[0];
+    if (token === undefined) continue;
+    // note: Anything other than a further word means the label owns the value.
+    if (!/^\s+\S/.test(rest.slice(token.length))) return true;
+  }
+  return false;
+}
 
 function portableValue(value: unknown, path: string): string | null {
   if (value === undefined || value === null) return null;
@@ -260,12 +301,16 @@ function portableValue(value: unknown, path: string): string | null {
     unsafeFidelity(path, `is longer than ${String(PORTABLE_FIELD_LIMIT)} characters`);
   }
   if (/[\u0000-\u001f\u007f]/.test(value)) unsafeFidelity(path, "carries a control character");
+  for (const match of value.matchAll(URL_TOKEN)) {
+    const refusal = urlRefusal(match[0]);
+    if (refusal !== null) unsafeFidelity(path, `${refusal}, which the snapshot cannot represent`);
+  }
   const withoutUrls = value.replace(URL_TOKEN, " ");
   if (
     /^(?:[A-Za-z]:[\\/]|[\\/~])/.test(value) ||
     value.split(/[\\/]/).includes("..") ||
     EMBEDDED_PATH.test(withoutUrls) ||
-    CREDENTIAL_SHAPE.test(value)
+    assignedCredential(value)
   ) {
     unsafeFidelity(path, "carries a filesystem location or credential material, which the snapshot cannot represent");
   }

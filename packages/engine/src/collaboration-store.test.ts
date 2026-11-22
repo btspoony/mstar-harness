@@ -2505,6 +2505,13 @@ describe("remote observation cache", () => {
       { id: "R9", title: "Imported finding", detail_doc: "path)/Users/alice/private.txt" },
       { id: "R9", title: "Imported finding", detail_doc: "note /opt/home/alice/x" },
       { id: "R9", title: "Imported finding", detail_doc: "path)/Volumes/Work/alice/private.txt" },
+      { id: "R9", title: "Imported finding", closure_evidence: "token:abc" },
+      { id: "R9", title: "Imported finding", closure_evidence: "Authorization: xyz" },
+      { id: "R9", title: "Imported finding", closure_evidence: "https://alice:password@example.test/" },
+      { id: "R9", title: "Imported finding", closure_evidence: "See https://example.test/runs?token=example-secret" },
+      { id: "R9", title: "Imported finding", closure_evidence: "See https://example.test/runs?x-api-key=example-secret" },
+      { id: "R9", title: "Imported finding", detail_doc: "https://example.test/home/alice/notes.md" },
+      { id: "R9", title: "Imported finding", closure_evidence: "https://example.test/?file=/Users/alice/private.txt" },
     ]) {
       await expect(
         submit(withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] })),
@@ -2589,8 +2596,8 @@ describe("remote observation cache", () => {
       }),
     ).toMatchObject({ revision: 4, completeness: "complete" });
 
-    // note: Control - a bare credential word in prose and a URL whose path looks like a
-    // filesystem root stay portable; only an assigned credential or a real path refuses.
+    // note: Control - a bare credential word in prose and an ordinary URL stay portable;
+    // only an assigned credential, a credential-bearing URL or a home path refuses.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(check, {
@@ -2604,7 +2611,7 @@ describe("remote observation cache", () => {
                   id: "R12",
                   title: "Token expiration and refresh window",
                   detail_doc: "plans/projects/_default/residuals/R12-finding.md",
-                  closure_evidence: "See https://example.test/home/7 for the follow-up",
+                  closure_evidence: "See https://example.test/runs/7?tab=summary for the follow-up",
                 },
               },
             ],
@@ -2614,6 +2621,35 @@ describe("remote observation cache", () => {
         generation: 3,
       }),
     ).toMatchObject({ revision: 5, completeness: "complete" });
+
+    // invariant: A credential label followed by a phrase is business prose, not an
+    // assignment, so the historical note survives the boundary unchanged.
+    expect(
+      await ingestRemoteObservation(context, {
+        ...observation(check, {
+          expectRevision: 5,
+          snapshot: withSubject({
+            transitions: [
+              {
+                ...subject.transitions[0]!,
+                imported: true,
+                evidence: {
+                  id: "R13",
+                  title: "Imported finding",
+                  detail_doc: "plans/projects/_default/residuals/R13-finding.md",
+                  closure_evidence: "Token: rotation scheduled",
+                },
+              },
+            ],
+          }),
+        }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).toMatchObject({ revision: 6, completeness: "complete" });
+    expect(storedHistory().transitions[0]!.evidence).toMatchObject({
+      closureEvidence: "Token: rotation scheduled",
+    });
   });
 
   /** note: Apply one reviewed legacy register import and return the source lane it wrote. */
@@ -2780,6 +2816,10 @@ describe("remote observation cache", () => {
       migratedRow("R1"),
       migratedRow("R3", { detail_doc: "/Users/operator/notes.md", superseded_by: { token: "leak" } }),
       migratedRow("R4", { closure_evidence: "Bearer secret" }),
+      migratedRow("R5", { closure_evidence: "See https://alice:password@example.test/run" }),
+      migratedRow("R6", { closure_evidence: "See https://example.test/runs?token=example-secret" }),
+      migratedRow("R7", { detail_doc: "https://example.test/home/operator/notes.md" }),
+      migratedRow("R8", { closure_evidence: "Token: rotation scheduled" }),
     ]);
     type ProvenanceRow = {
       kind: string;
@@ -2804,12 +2844,16 @@ describe("remote observation cache", () => {
         db.close();
       }
     })();
-    const portable = rows.find((row) => row.legacy_entry_id === "R1");
-    const unsafe = rows.find((row) => row.legacy_entry_id === "R3");
-    const credential = rows.find((row) => row.legacy_entry_id === "R4");
-    if (portable === undefined || unsafe === undefined || credential === undefined) {
-      throw new Error("the migrated lane recorded no provenance");
-    }
+    const pick = (id: string): ProvenanceRow => {
+      const row = rows.find((entry) => entry.legacy_entry_id === id);
+      if (row === undefined) throw new Error("the migrated lane recorded no provenance");
+      return row;
+    };
+    const portable = pick("R1");
+    const unsafe = pick("R3");
+    const credential = pick("R4");
+    const prose = pick("R8");
+    const refused = ["R5", "R6", "R7"].map(pick);
     expect(portable.kind).toBe("migration");
 
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
@@ -2902,7 +2946,16 @@ describe("remote observation cache", () => {
     const credentialRefusal: unknown = await submitProvenance(credential, 1).catch((error: unknown) => error);
     expect(credentialRefusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(credentialRefusal)).toContain("legacyJson.closure_evidence");
+    for (const row of refused) {
+      const urlShapeRefusal: unknown = await submitProvenance(row, 1).catch((error: unknown) => error);
+      expect(urlShapeRefusal).toMatchObject({ code: "remote.unsafe-fidelity" });
+      expect(String(urlShapeRefusal)).toContain("legacyJson.");
+    }
     expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(1);
+
+    // invariant: The same label-plus-phrase note is business prose, so it stays portable.
+    expect(await submitProvenance(prose, 1)).toMatchObject({ revision: 2, completeness: "complete" });
+    expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(2);
   });
 
   test("a rebind refuses a replaced cache identity and reinitializes a missing one", async () => {
