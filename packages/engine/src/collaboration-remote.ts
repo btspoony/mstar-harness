@@ -1831,6 +1831,14 @@ function assertCheckAdvances(projectId: string, check: ScopeCheck, recorded: Rec
   if (current > prior) return;
   if (current === prior) {
     if (recorded.verification_json === JSON.stringify(serializeCheck(check))) return;
+    // invariant: A decoder-detected fidelity refusal records the submitted check under its
+    // effective negative outcome, so resubmitting exactly that check is a replay rather than a
+    // stale timestamp; any other same-instant change keeps the staleness refusal.
+    if (
+      check.outcome.kind === "verified" &&
+      recordedOutcome(recorded) === "unsafe-fidelity" &&
+      recorded.verification_json === JSON.stringify(serializeCheck({ ...check, outcome: { kind: "unsafe-fidelity" } }))
+    ) return;
     if (check.outcome.kind !== "verified" && recordedOutcome(recorded) === "verified") return;
   }
   throw new StoreError(
@@ -2012,20 +2020,25 @@ function recordObservation(
   }
   const next = revision + 1;
   const at = nowRfc3339();
+  const refusal = negative ?? unsafe;
   // invariant: The check itself becomes the binding's latest evidence before either branch,
-  // so status, freshness and ordering all read the verification a reader can see. A
-  // negative check carries no writer: it proves no authorized sender exists.
+  // so status, freshness and ordering all read the verification a reader can see. A negative
+  // check stands as submitted, and a snapshot the portable representation cannot keep is
+  // recorded under that same named outcome: the submitted verification alone must never keep
+  // disclosing frozen content or naming a writer. Either refusal revokes the writer in this
+  // same transaction, so no permit — reviewed resolutions included — survives behind it.
+  const recordedCheck =
+    negative === null && unsafe !== null ? { ...submission.check, outcome: { kind: "unsafe-fidelity" as const } } : submission.check;
   db.prepare(
     "update remote_bindings set verified_at = ?, verification_json = ?, writer_id = ? " +
       "where generation = ? and project_key = ?",
   ).run(
     submission.check.checkedAt,
-    JSON.stringify(serializeCheck(submission.check)),
-    submission.check.outcome.kind === "verified" ? submission.check.outcome.writerId : null,
+    JSON.stringify(serializeCheck(recordedCheck)),
+    refusal === null && submission.check.outcome.kind === "verified" ? submission.check.outcome.writerId : null,
     submission.generation,
     submission.check.projectId,
   );
-  const refusal = negative ?? unsafe;
   if (refusal !== null) {
     // invariant: A revocation or a snapshot the portable representation cannot keep invalidates
     // serving as soon as it is submitted. It never waits for the snapshot replacement CAS to

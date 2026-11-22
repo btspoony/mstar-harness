@@ -6833,6 +6833,55 @@ function shapedEvent(
 }
 
 describe("remote outbox qc fixes", () => {
+  test("an unsafe-fidelity snapshot revokes the writer, so no permit, a reviewed resolution included, survives it", async () => {
+    const cache = await outboxCache("outbox-unsafe-revokes");
+    const conflictedId = "00000000-0000-4000-8000-000000000811";
+    const fork = await conflictedJournal(cache, conflictedId);
+    const resolutionId = "00000000-0000-4000-8000-000000000812";
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, resolutionId, fork.heads),
+    });
+    // note: The reviewed repair is fully dispatchable while the scope is verified.
+    expect(await readRemoteIntent(cache.context, resolutionId)).toMatchObject({ disclosure: "full" });
+
+    // note: The host's check verifies, but its snapshot carries a portable field the cache
+    // cannot keep, so the decoder refuses the observation by name and invalidates the cache.
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const subject = base.issues[0]!.mstar!;
+    const unsafe: unknown = await ingestRemoteObservation(cache.context, {
+      ...observation(check, {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: observationRevision(cache.dbPath),
+      }),
+      snapshot: {
+        ...base,
+        issues: [
+          {
+            ...base.issues[0]!,
+            mstar: {
+              ...subject,
+              provenance: [{ ...subject.provenance[0]!, legacyRecord: { title: "x".repeat(600), lifecycle: "active" } }],
+            },
+          },
+          base.issues[1]!,
+        ],
+      },
+    }).catch((error: unknown) => error);
+    expect(unsafe).toMatchObject({ code: "remote.unsafe-fidelity" });
+
+    // invariant: The invalidation and the writer revocation are one transaction, so the
+    // otherwise valid fork evidence never yields a permit and frozen content is withheld.
+    await expect(
+      dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads)),
+    ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
+    expect(await readRemoteIntent(cache.context, resolutionId)).toMatchObject({ disclosure: "metadata", event: null });
+  }, 30_000);
+
   test("an abandoned outbox resolution is replaceable and keeps its audit row", async () => {
     const cache = await outboxCache("outbox-replace-abandoned");
     const conflictedId = "00000000-0000-4000-8000-000000000801";
