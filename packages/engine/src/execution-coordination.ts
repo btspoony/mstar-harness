@@ -1685,7 +1685,10 @@ export async function residualCloseExecutionPlan(
             // `fromDisposition: "open"` that never happened), and a multi-plan obligation
             // answers its whole acceptance against the observed subject's own links.
             if (fields.disposition !== "open") {
-              throw terminalTransitionRefusal(String(fields.disposition), operation.disposition);
+              throw terminalTransitionRefusal(String(fields.disposition), operation.disposition, {
+                issueId: operation.issueId,
+                projectId: observed.projectId,
+              });
             }
             // note: The same canonical gate the ordinary closure body runs: a duplicate/superseded
             // target must be observed here, must not be the closing issue itself, and is stored by

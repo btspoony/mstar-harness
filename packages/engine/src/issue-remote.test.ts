@@ -31,7 +31,7 @@ import {
   setRemoteWriteScopeGapForTest,
   type RemoteSnapshot,
 } from "./collaboration-remote.js";
-import { assignIssueMilestone, captureIssue, closeIssue, type CaptureInput, type ClosureEvidence } from "./issue.js";
+import { assignIssueMilestone, captureIssue, closeIssue, showIssue, type CaptureInput, type ClosureEvidence } from "./issue.js";
 import {
   completeSnapshot,
   confirmFrozenIntent,
@@ -53,7 +53,7 @@ import {
 import { mutateExecutionPlan } from "./execution-coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
-import { initializeStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-remote-"));
 const HOME = join(ROOT, "home");
@@ -67,6 +67,19 @@ afterAll(() => {
   homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
+
+/** note: The phases of every recorded reservation for one operation id. */
+async function intentPhases(context: StoreContext, operationId: string): Promise<string[]> {
+  const handle = await openStore(context, "read");
+  try {
+    const rows = handle.db
+      .prepare("select phase from execution_collaboration_intents where operation_id = ? order by created_at")
+      .all(operationId);
+    return rows.map((row) => String((row as Record<string, unknown>).phase));
+  } finally {
+    handle.close();
+  }
+}
 
 /** note: The cache's outbox rows, newest last, as the verbs froze them. */
 function outboxRows(context: StoreContext): Array<Record<string, unknown>> {
@@ -490,13 +503,20 @@ test("the same identity appends one occurrence through one issue-replace", async
   expect(occurrences[1]).toMatchObject({ occurrenceKey: "run-2" });
 
   // invariant: The confirmed append receipt answers the observed occurrence: the recorded
-  // provider effect, not a pending row, is the business outcome a replay reports.
+  // provider effect, not a pending row, is the business outcome a replay reports, and the
+  // receipt's occurrenceId names the occurrence ACTUALLY in the confirmed event.
   await confirmFrozenIntent(fixture.context, rows[0]!.operation_id as string);
+  const appendedEventId = (occurrences[1] as Record<string, unknown>).eventId;
   const confirmed = await captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), {
     operationId: "30000000-0000-4000-8000-000000000002",
     actor: "project-manager",
   });
-  expect(confirmed).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, revision: 2, created: false });
+  expect(confirmed).toMatchObject({
+    issueId: REMOTE_IDS.markedIssueId,
+    occurrenceId: appendedEventId,
+    revision: 2,
+    created: false,
+  });
   expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 
@@ -620,6 +640,74 @@ test("an operation id with a frozen entry answers through the replay gate, not a
   expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 
+test("a key another subject carries answers the established receipt, never a second append", async () => {
+  const fixture = await remoteFixture("capture-cross-subject-key");
+  const input = captureInput({ occurrenceKey: "cross-key" });
+  // note: A re-observation installs the SAME identity and key on a DIFFERENT subject between the
+  // capture's dedupe read and the replacement's own scope read, so the project-wide key now
+  // belongs to the other subject and the append callback's target-only scan would miss it.
+  let sampled = false;
+  setRemoteWriteScopeGapForTest(async () => {
+    if (sampled) return;
+    sampled = true;
+    setRemoteWriteScopeGapForTest(undefined);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, positiveCheck(), withAdoptedOccurrence(completeSnapshot(positiveCheck()), input), 1),
+    );
+  });
+  const established = await captureIssue(fixture.context, input, {
+    operationId: "30000000-0000-4000-8000-00000000000a",
+    actor: "project-manager",
+  });
+  expect(sampled).toBe(true);
+  // invariant: The project-wide key decides: the occurrence the OTHER subject already carries is
+  // the established answer, and nothing is appended a second time.
+  expect(established).toMatchObject({
+    issueId: REMOTE_IDS.providerOnlyIssueId,
+    occurrenceId: "11111111-1111-4111-8111-199999999999",
+    created: false,
+  });
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a scope that moves after the last sample refuses the freeze and keeps retrying the same id", async () => {
+  const fixture = await remoteFixture("capture-moved-after-sample");
+  const identity = { occurrenceKey: "late-move", sourceIdentity: "review:late", rootCauseKey: "late.cause", acceptanceKey: "late.acceptance" };
+  // note: The move lands AFTER the LAST scope sample (the write's own read), so every sampled
+  // view the verb decided from is already stale when the freeze transaction opens. Only the
+  // freeze-time observation revision can prove that; the samples cannot.
+  let samples = 0;
+  setRemoteWriteScopeGapForTest(async () => {
+    samples += 1;
+    if (samples < 2) return;
+    setRemoteWriteScopeGapForTest(undefined);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, positiveCheck(), withAdoptedOccurrence(completeSnapshot(positiveCheck()), identity), 1),
+    );
+  });
+  const refused = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput(identity), {
+      operationId: "30000000-0000-4000-8000-00000000000b",
+      actor: "project-manager",
+    }),
+  );
+  expect(samples).toBe(2);
+  expect(refused.code).toBe("collaboration.observation-stale");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+
+  // invariant: The refusal is an environment state, so the SAME capture (same operation id,
+  // same payload) proceeds after the refresh and answers the established occurrence instead of
+  // creating a second subject.
+  const established = await captureIssue(fixture.context, captureInput(identity), {
+    operationId: "30000000-0000-4000-8000-00000000000b",
+    actor: "project-manager",
+  });
+  expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
 // ---------------------------------------------------------------------------
 // I-001225 — remote close gates
 // ---------------------------------------------------------------------------
@@ -637,6 +725,126 @@ test("a remote closure refuses an already-terminal issue", async () => {
   // invariant: The refusal names the usable next steps: inspect, reopen only deliberately.
   expect(JSON.stringify(refused.details)).toContain("mstar issue show");
   expect(JSON.stringify(refused.details)).toContain("mstar issue reopen");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a terminal refusal addressed by provider id names an executable inspect command", async () => {
+  const fixture = await remoteFixture("close-terminal-native-id", withTerminalSubject);
+  const refused = await refusalOf(() =>
+    closeIssue(fixture.context, REMOTE_IDS.markedIssueId, "resolved", resolvedEvidence, {
+      operationId: "30000000-0000-4000-8000-00000000000c",
+      actor: "project-manager",
+      expectedRevision: 1,
+    }),
+  );
+  expect(refused.code).toBe("issue.invalid-disposition");
+  const details = (refused.details ?? {}) as Record<string, unknown>;
+  const recovery = String(details.recovery);
+  // invariant: A provider UUID refuses `issue show` without --project in remote mode, so the
+  // terminal refusal of a UUID-addressed closure names the command WITH its project — the exact
+  // command this checkout can run.
+  expect(recovery).toContain(`mstar issue show --id ${REMOTE_IDS.markedIssueId} --project ${REMOTE_IDS.projectId}`);
+  // note: And it is executable: the printed inspect form reads the addressed issue.
+  const shown = await showIssue(fixture.context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
+  // note: The marked subject's provider id surfaces as the detail's externalId either way.
+  expect(JSON.stringify(shown)).toContain(REMOTE_IDS.markedIssueId);
+  // invariant: Reopening is never the default suggestion: the recovery states the deliberate
+  // inputs a reopen needs instead of pointing at reopen as the next step.
+  expect(recovery).toContain("mstar issue reopen");
+  expect(recovery).toContain("--reason");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a terminal refusal addressed by portable reference names the reference form", async () => {
+  const fixture = await remoteFixture("close-terminal-ref", withTerminalSubject);
+  const refused = await refusalOf(() =>
+    closeIssue(fixture.context, REMOTE_IDS.issueRef, "resolved", resolvedEvidence, {
+      operationId: "30000000-0000-4000-8000-00000000000d",
+      actor: "project-manager",
+      expectedRevision: 1,
+    }),
+  );
+  expect(refused.code).toBe("issue.invalid-disposition");
+  const recovery = String(((refused.details ?? {}) as Record<string, unknown>).recovery);
+  // invariant: A stable reference needs no --project, so the refusal prints exactly the form the
+  // caller addressed — and that form reads the same issue.
+  expect(recovery).toContain(`mstar issue show --id ${REMOTE_IDS.issueRef}`);
+  expect(recovery).not.toContain("--project");
+  const shown = await showIssue(fixture.context, REMOTE_IDS.issueRef);
+  expect(JSON.stringify(shown)).toContain(REMOTE_IDS.markedIssueId);
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a closure whose scope moves after its sample refuses the freeze on the freeze revision", async () => {
+  const fixture = await remoteFixture("close-moved-scope", withCanonicalTarget);
+  // note: The re-observation removes the canonical target AFTER the closure's own scope read, so
+  // the sampled gate decision (duplicate-of observed) is stale when the freeze transaction opens.
+  let sampled = false;
+  setRemoteWriteScopeGapForTest(async () => {
+    if (sampled) return;
+    sampled = true;
+    setRemoteWriteScopeGapForTest(undefined);
+    const check = positiveCheck();
+    const full = completeSnapshot(check);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, check, { ...full, issues: full.issues.filter((issue) => issue.identity.issueId !== "88888888-8888-4888-8888-888888888888") }, 1),
+    );
+  });
+  const refused = await refusalOf(() =>
+    closeIssue(fixture.context, REMOTE_IDS.markedIssueId, "duplicate", {
+      reason: "same defect",
+      references: ["qa/run.md"],
+      canonicalIssueId: "88888888-8888-4888-8888-888888888888",
+      alignmentRef: "QA gate: Approve",
+    }, {
+      operationId: "30000000-0000-4000-8000-00000000000e",
+      actor: "project-manager",
+      expectedRevision: 1,
+    }),
+  );
+  // invariant: The gates hold on the revision that can actually freeze: a sample the freeze
+  // transaction no longer observes refuses, and nothing is enqueued behind it.
+  expect(refused.code).toBe("collaboration.observation-stale");
+  expect(outboxRows(fixture.context)).toHaveLength(0);
+});
+
+test("a plan-scoped closure whose scope moves after its sample keeps its reservation", async () => {
+  const fixture = await remotePlanFixture("residual-close-moved-scope", (snapshot) =>
+    withCanonicalTarget(withResidualPlanLinks(snapshot)),
+  );
+  let sampled = false;
+  setRemoteWriteScopeGapForTest(async () => {
+    if (sampled) return;
+    sampled = true;
+    setRemoteWriteScopeGapForTest(undefined);
+    const check = positiveCheck();
+    const full = completeSnapshot(check);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(fixture.commit, check, { ...full, issues: full.issues.filter((issue) => issue.identity.issueId !== "88888888-8888-4888-8888-888888888888") }, 1),
+    );
+  });
+  const refused = await refusalOf(async () => mutateExecutionPlan({ ...fixture.context, caller: fixture.caller }, {
+    operationId: "residual-moved-scope",
+    session: fixture.session,
+    expected: await fixture.token(),
+    planId: RESIDUAL_PLAN_ID,
+    operation: {
+      kind: "residual-close" as const,
+      issueId: REMOTE_IDS.markedIssueId,
+      disposition: "duplicate" as const,
+      expectedIssueRevision: 1,
+      evidence: { reason: "same defect", references: ["qa/run.md"], canonicalIssueId: "88888888-8888-4888-8888-888888888888", alignmentRef: "QA gate: Approve" },
+    },
+  }));
+  // invariant: A scope that moved under the sampled base is an environment state: the composite
+  // reports a partial naming it and RETAINS the reservation for the same-id reissue after the
+  // refresh, instead of declining an operation that proved no pre-freeze failure.
+  expect(refused.code).toBe("collaboration.operation-partial");
+  const details = (refused.details ?? {}) as Record<string, unknown>;
+  expect(details).toMatchObject({ phase: "prepared", cause_code: "collaboration.observation-stale" });
+  expect(await intentPhases(fixture.context, "residual-moved-scope")).toEqual(["prepared"]);
   expect(outboxRows(fixture.context)).toHaveLength(0);
 });
 

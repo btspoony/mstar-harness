@@ -74,6 +74,7 @@ import {
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
   setRemoteIntentSampleGapForTest,
+  setRemoteWriteScopeGapForTest,
   type ForkObservation,
   type RemoteEvent,
   type RemoteIntentState,
@@ -102,7 +103,7 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
 } from "./execution-store.js";
-import { residualAddExecutionPlan, residualCloseExecutionPlan } from "./execution-coordination.js";
+import { deriveResidualEntries, residualAddExecutionPlan, residualCloseExecutionPlan } from "./execution-coordination.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import { importExecutionMinimal } from "./execution-minimal-import.js";
 import type { WorkflowEntry } from "./status.js";
@@ -6283,6 +6284,85 @@ describe("remote composite flows", () => {
     expect(outboxRows(cache.dbPath)).toHaveLength(2);
   });
 
+  test("a same-ID overlap keeps the reservation when the losing attempt meets the winner's frozen intent", async () => {
+    const cache = await outboxCache("composite-same-id-overlap");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-overlap",
+      operation: { kind: "residual-add" as const, entries: [residualEntry("overlap-a")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    // note: The bounded overlap of two identical same-ID calls: the loser passes replay admission
+    // (no outbox row yet), and the WINNER freezes the entry's intent inside the loser's sampled
+    // gap. The loser's independently built event carries a different request hash, so its freeze
+    // meets `remote.operation-conflict` at entry zero — the one refusal that must NEVER release
+    // the shared reservation, because the winner's outbox row is already durable.
+    let overlapped = false;
+    setRemoteWriteScopeGapForTest(async () => {
+      if (overlapped) return;
+      overlapped = true;
+      setRemoteWriteScopeGapForTest(undefined);
+      const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "residual-remote-overlap"), 0);
+      // note: The winner's event is the SAME create arm, derived reference, execution reservation
+      // and business origin with DIFFERENT subject content — exactly what two independent builds
+      // of one request produce (fresh event material, same admitted identity).
+      await prepareRemoteIntent(cache.context, {
+        binding: intentBindingFor(cache.commit),
+        event: {
+          version: 1,
+          repoKey: cache.fixture.repoKey,
+          projectId: SELECTED_PROJECT.localProjectId,
+          operationId: entryId,
+          parents: [],
+          change: { kind: "issue-create", issueRef: issueRefForOperation(entryId), mstar: completeIssueSubject() },
+        },
+        target: null,
+        expectedHeads: [],
+        executionKey: { ...compositeKeyOf(cache.context, "residual-remote-overlap"), operationId: entryId },
+        origin: {
+          verb: "residual-add",
+          request: {
+            planId: workflow.planId,
+            input: deriveResidualEntries([residualEntry("overlap-a")], SELECTED_PROJECT.localProjectId)[0],
+          },
+        },
+      });
+    });
+    const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(overlapped).toBe(true);
+    // invariant: A deterministic refusal is only a decline when it PROVES the failure happened
+    // before any freeze. `remote.operation-conflict` proves the opposite — the operation id
+    // already holds a durable intent — so the reservation stays prepared and resumable.
+    expect(refused.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(refused)).toMatchObject({ phase: "prepared", operation_id: "residual-remote-overlap" });
+    expect(String(detailsOf(refused).recovery)).toContain("SAME");
+    const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "residual-remote-overlap"), 0);
+    expect(await intentPhases(cache.context, "residual-remote-overlap")).toEqual(["prepared"]);
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+    expect(outboxStateOf(cache.dbPath, entryId)).toBe("enqueued");
+
+    // invariant: The reservation is genuinely resumable: settling the winner's intent and
+    // reissuing the SAME operation id finalizes from that intent, never a second freeze.
+    await confirmIntent(cache, entryId, "77777777-7777-4777-8777-777777777783");
+    const completed = await residualAddExecutionPlan(execution, request);
+    expect(completed.operationId).toBe("residual-remote-overlap");
+    expect(await intentPhases(cache.context, "residual-remote-overlap")).toEqual(["confirmed"]);
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+  }, 30_000);
+
   test("a frozen intent behind expired read permission keeps its reservation and resumes after re-observation", async () => {
     const cache = await outboxCache("composite-frozen-permission");
     const workflow = await remoteExecutionWorkflow(cache);
@@ -8107,9 +8187,10 @@ function writeV2RemoteLane(location: CollaborationLocation): void {
 }
 
 describe("pre-v3 remote cache recovery", () => {
-  // note: The predecessor ledger is this fixture's own input; the destination version comes from
-  // the migration registry, so adding a migration never reddens these cases.
+  // note: The predecessor ledger is this fixture's own input; the destination ledger is the WHOLE
+  // migration registry, so adding an intermediate migration never reddens these cases or hides one.
   const PREDECESSOR_VERSIONS = COLLABORATION_MIGRATIONS.slice(0, 2).map(({ version }) => version);
+  const REGISTRY_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
   const CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
 
   /** note: The generation the predecessor cache itself records, read from its own meta row. */
@@ -8149,7 +8230,7 @@ describe("pre-v3 remote cache recovery", () => {
     // invariant: The replacement kept the recorded store identity, so the checkout binding still
     // names the cache the bind published.
     expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
-    expect(ledgerVersions(location.dbPath)).toEqual([...PREDECESSOR_VERSIONS, CURRENT_VERSION]);
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(metaRecord(location.dbPath)).toMatchObject({
       mode: "remote",
       store_id: recorded.storeId,
@@ -8193,7 +8274,7 @@ describe("pre-v3 remote cache recovery", () => {
     // invariant: The documented recovery still completes on the same bytes afterwards.
     const bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
-    expect(ledgerVersions(location.dbPath)).toEqual([...PREDECESSOR_VERSIONS, CURRENT_VERSION]);
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
   }, 30_000);
 
   test("a replacement refuses a cache its checkout did not record", async () => {
@@ -8270,7 +8351,7 @@ describe("pre-v3 remote cache recovery", () => {
       store_id: competitor!.storeId,
       authority_epoch: competitor!.epoch,
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([...PREDECESSOR_VERSIONS, CURRENT_VERSION]);
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "enqueued" }));
   }, 30_000);
 });

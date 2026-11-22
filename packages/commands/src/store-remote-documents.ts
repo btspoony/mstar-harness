@@ -194,8 +194,13 @@ const subjectHistory = {
 /** note: The event's issue subject: the complete normalized document minus the derived `head`. */
 const issueSubject = z.object({ fields: mstarSubjectFields, ...subjectHistory }).strict();
 
+/**
+ * note: The complete portable subject a snapshot carries: exactly the shape the engine's
+ * `mstarIssue` parser requires, `fields` included, so the descriptor accepts every marked
+ * observation the runtime accepts.
+ */
 const portableSubject = z
-  .object({ issueRef, head: z.array(sha256Digest), ...subjectHistory })
+  .object({ issueRef, head: z.array(sha256Digest), fields: mstarSubjectFields, ...subjectHistory })
   .strict()
   .describe("the complete portable subject the snapshot carries");
 

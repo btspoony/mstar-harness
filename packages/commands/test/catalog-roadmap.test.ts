@@ -668,6 +668,28 @@ describe("catalog and roadmap command families", () => {
     // invariant: A recorded identity with no usable date (a remote snapshot's null, a blank
     // legacy row) leaves the field out; an empty scalar would fail `YYYY-MM-DD`.
     const undated = await activeFixture("roadmap-created-at-absent");
+    // note: The fixture AUTHORS a Direction before the dates are blanked, so the undated
+    // round-trip proves the stored content survives export/import instead of comparing two
+    // renders of the same empty template. The authored document itself omits `created_at`:
+    // the omission is the form under test, in the store's content and in the export alike.
+    const authored = [
+      "---",
+      'project_id: "proj"',
+      'title: "Authored undated roadmap"',
+      'status: "active"',
+      "---",
+      "",
+      "## Direction",
+      "",
+      "Reviewed roadmap content.",
+      "",
+    ].join("\n");
+    writeFileSync(join(undated.cwd, "roadmap-authored.md"), authored);
+    const authoredReplaced = await roadmap["roadmap.replace"]!.execute(
+      { project: "proj", file: join(undated.cwd, "roadmap-authored.md"), expectProject: 1, expectRoadmap: "absent", operation: "created-at-authored", harness: undated.harness },
+      invocation(undated.cwd),
+    );
+    expect(authoredReplaced.status).toBe("ok");
     const lane = resolveCollaborationLocation({ harnessDir: undated.harness }).dbPath;
     const writer = new DatabaseSync(lane);
     try {
@@ -679,17 +701,25 @@ describe("catalog and roadmap command families", () => {
     expect(blank.status).toBe("ok");
     const blankMarkdown = String(blank.data);
     expect(blankMarkdown).not.toContain("created_at");
+    // invariant: The authored Direction SURVIVES the undated export: its title and its reviewed
+    // body are the stored content, not two renders of the generated empty template.
+    expect(blankMarkdown).toContain("Authored undated roadmap");
+    expect(blankMarkdown).toContain("Reviewed roadmap content.");
     // invariant: The omitted `created_at` is an importable form, not a dead end: the exported
     // document round-trips through the same validation `roadmap.replace` runs, so export and
     // import agree for a roadmap with no usable date.
     const blankFile = join(undated.cwd, "created-at-blank.md");
     writeFileSync(blankFile, blankMarkdown);
     const blankReplaced = await roadmap["roadmap.replace"]!.execute(
-      { project: "proj", file: blankFile, expectProject: 1, expectRoadmap: "absent", operation: "created-at-blank", harness: undated.harness },
+      // note: The authored replace above created the roadmap at revision 1, so this replacement
+      // states that revision instead of "absent".
+      { project: "proj", file: blankFile, expectProject: 1, expectRoadmap: 1, operation: "created-at-blank", harness: undated.harness },
       invocation(undated.cwd),
     );
     expect(blankReplaced.status).toBe("ok");
     const blankReexported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness: undated.harness }, invocation(undated.cwd));
+    // invariant: The re-export's own success status is asserted, not assumed from its data.
+    expect(blankReexported.status).toBe("ok");
     const blankReexportedMarkdown = String(blankReexported.data);
     expect(blankReexportedMarkdown).not.toContain("created_at");
     // invariant: The undated candidate round-trips unchanged - frontmatter and authored body

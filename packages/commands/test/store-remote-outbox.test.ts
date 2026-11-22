@@ -817,6 +817,140 @@ describe("remote outbox commands", () => {
     expect(result.details?.recovery).toContain("outbox-receipt");
   });
 
+  test("a known-good marked observation passes the published observe document and the runtime", async () => {
+    const fixture = remoteFixture("published-marked-observation");
+    await fixture.bind();
+    const check = {
+      projectId: IDS.projectId,
+      scope: fixture.scope,
+      journalIssueId: IDS.journalIssueId,
+      checkedAt: new Date(Date.now() - 1_000).toISOString(),
+      outcome: {
+        kind: "verified",
+        readerId: "reader-one",
+        writerId: IDS.writerId,
+        capabilities: { fullRead: true, appendOnly: true, exactLookup: true, fieldFidelity: true, privateAudience: true },
+      },
+    };
+    const markedIssueRef = "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const observedAt = new Date(Date.now() - 5_000).toISOString();
+    const document = {
+      version: 1,
+      selectorCommit: fixture.commit,
+      generation: 3,
+      check,
+      expectRevision: 0,
+      snapshot: {
+        asOf: observedAt,
+        coverage: { kind: "complete" },
+        project: {
+          projectId: IDS.projectId,
+          head: ["1".repeat(64)],
+          binding: fixture.scope,
+          milestones: [],
+          roadmap: null,
+          catalogEntities: [
+            { kind: "project", id: IDS.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+          ],
+          catalogLinks: [],
+        },
+        issues: [
+          {
+            identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+            nativeTitle: "Marked native issue",
+            nativeStatus: "Todo",
+            providerUpdatedAt: observedAt,
+            mstar: {
+              issueRef: markedIssueRef,
+              head: ["2".repeat(64)],
+              fields: {
+                title: "Marked finding",
+                kind: "bug",
+                severity: "high",
+                disposition: "open",
+                impact: "the published schema must accept a marked observation",
+                acceptance: "the engine and the descriptor agree",
+                owner: null,
+                registeredAt: observedAt,
+                closedAt: null,
+                closureNote: null,
+                createdAt: observedAt,
+                updatedAt: observedAt,
+                revision: 1,
+                milestoneId: null,
+              },
+              occurrences: [],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          },
+        ],
+      },
+    };
+    // invariant: The published document accepts the marked observation shape the engine itself
+    // requires — `fields` included — so discovery never refuses a document the runtime accepts.
+    const schema = definition("store.collaboration.remote.observe").payloads?.inputDocument?.schema;
+    expect(schema).toBeDefined();
+    expect(schema!.safeParse(document).success).toBe(true);
+    // invariant: The same document through the real command: accepted end to end.
+    const result = await invoke("store.collaboration.remote.observe", {
+      harness: fixture.harness,
+      input: fixture.path("marked-observe", document),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "ok", exitCode: 0 });
+  });
+
+  test("one refusal aggregates unknown keys and every nested defect of a receipt", async () => {
+    const fixture = remoteFixture("aggregate-nested-defects");
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-nested", {
+        version: 1,
+        selectorCommit: fixture.commit,
+        generation: 3,
+        projectId: IDS.projectId,
+        operationId: "00000000-0000-4000-8000-0000000000d1",
+        attemptId: "00000000-0000-4000-8000-0000000000d2",
+        requestHash: "a".repeat(64),
+        observedAt: new Date().toISOString(),
+        outcome: {
+          kind: "confirmed",
+          identity: { ...fixture.scope, issueId: "not-a-uuid", workspaceId: "not-a-uuid", teamId: "also-not", surplusKey: true },
+          recordId: "00000000-0000-4000-8000-0000000000d3",
+          event: {
+            version: 1,
+            repoKey: 7,
+            projectId: "",
+            operationId: "also-not",
+            parents: "not-a-list",
+            change: { kind: "issue-create", issueRef: "not-a-reference", mstar: {} },
+          },
+        },
+      }),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: ONE refusal answers every structural defect — the unknown identity key, BOTH bad
+    // scope ids, the bad issue id, and each bad event member — instead of one defect per attempt.
+    for (const diagnostic of [
+      "receipt.outcome.identity.surplusKey",
+      "receipt.outcome.identity.workspaceId",
+      "receipt.outcome.identity.teamId",
+      "receipt.outcome.identity.issueId",
+      "receipt.outcome.event.repoKey",
+      "receipt.outcome.event.projectId",
+      "receipt.outcome.event.operationId",
+      "receipt.outcome.event.parents",
+      "receipt.outcome.event.change.issueRef",
+      "receipt.outcome.event.change.mstar",
+    ]) {
+      expect(message).toContain(diagnostic);
+    }
+    expect(message).toContain("mstar schema --command store.collaboration.remote.outbox-receipt");
+  });
+
   test("one receipt refusal lists every invalid envelope field at once", async () => {
     const fixture = remoteFixture("aggregate-refusal");
     const result = await invoke("store.collaboration.remote.outbox-receipt", {

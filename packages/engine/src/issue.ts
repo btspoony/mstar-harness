@@ -1078,8 +1078,10 @@ export function captureIssueOn(
  * note: The recorded business result of a confirmed remote issue write. The provider effect IS the
  * business outcome: the issue is the confirmed record, the revision is the frozen subject's own,
  * and a remote write owns no local collaboration revision (exactly as a remote composite does not).
+ * With `occurrenceKey`, the receipt names the eventId of THAT occurrence in the CONFIRMED event —
+ * the recorded occurrence, not a guessed one.
  */
-function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
+function confirmedIssueReceipt(intent: RemoteIntent, occurrenceKey?: string): IssueReceipt {
   const confirmed = intent.confirmed;
   if (confirmed === null) {
     throw new StoreError(
@@ -1088,11 +1090,18 @@ function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
     );
   }
   const change = confirmed.event.change;
+  const occurrence =
+    occurrenceKey === undefined || change.kind === "project-replace"
+      ? undefined
+      : ((change.mstar.occurrences as ReadonlyArray<Record<string, unknown>>) ?? []).find(
+          (row) => row.occurrenceKey === occurrenceKey,
+        );
   return {
     issueId: confirmed.identity.issueId,
     revision: change.kind === "project-replace" ? 0 : Number((change.mstar.fields as Record<string, unknown>).revision ?? 0),
     storeRevision: 0,
     created: change.kind === "issue-create",
+    ...(occurrence !== undefined && typeof occurrence.eventId === "string" ? { occurrenceId: occurrence.eventId } : {}),
   };
 }
 
@@ -1110,7 +1119,7 @@ async function queueRemoteIssueWrite(context: StoreContext, write: RemoteIssueWr
   // note: A write the observed authority already carries is the domain's own no-change outcome:
   // nothing was frozen, and the established receipt stands.
   if ("noChange" in outcome) return outcome.noChange as IssueReceipt;
-  if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome);
+  if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome, write.occurrenceKey);
   throw pendingRemoteEffect(outcome);
 }
 
@@ -1433,6 +1442,7 @@ async function captureIssueRemote(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId: issueRef,
+      occurrenceKey: cols.occurrenceKey,
       next: (current, observed) => {
         const subject = current!;
         // note: The same identity check the replacement path always runs: the authority
@@ -1457,25 +1467,44 @@ async function captureIssueRemote(
       },
       // invariant: The freeze-time subject answers the established occurrence, exactly as the
       // local body answers its own tables: an occurrence that arrived between the dedupe read and
-      // this freeze is answered, never appended a second time.
-      unchanged: (current, observed) => {
-        const subject = current!;
-        const occurrences = (subject.occurrences ?? []) as Record<string, unknown>[];
-        const sameKey = occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
-        if (sameKey === undefined) return null;
-        if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
-          throw new IssueError(
-            "issue.occurrence-conflict",
-            "occurrence_key was reused with a different observation; the original occurrence is retained.",
-          );
+      // this freeze is answered, never appended a second time. The scan is PROJECT-WIDE: a key
+      // another subject carries is that subject's established occurrence (or a conflict), never
+      // a second append behind a target-only scan.
+      unchanged: (_current, observed) => {
+        for (const issue of observed.issues) {
+          const mstar = issue.mstar;
+          if (mstar === null) continue;
+          const sameKey = mstar.occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
+          if (sameKey === undefined) continue;
+          // note: The genesis occurrence defines the issue's identity, exactly as the local
+          // identity_key column does: a key that belongs to another identity is never merged.
+          const genesis = mstar.occurrences[0];
+          if (
+            genesis === undefined ||
+            genesis.sourceIdentity !== cols.sourceIdentity ||
+            genesis.rootCauseKey !== cols.rootCauseKey ||
+            genesis.acceptanceKey !== cols.acceptanceKey
+          ) {
+            throw new IssueError(
+              "issue.ambiguous-identity",
+              "occurrence_key already belongs to a different identity; refusing a guessed merge",
+            );
+          }
+          if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
+            throw new IssueError(
+              "issue.occurrence-conflict",
+              "occurrence_key was reused with a different observation; the original occurrence is retained.",
+            );
+          }
+          return {
+            issueId: issue.identity.issueId,
+            ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
+            revision: Number((mstar.fields as Record<string, unknown>).revision ?? 0),
+            storeRevision: 0,
+            created: false,
+          } satisfies IssueReceipt;
         }
-        return {
-          issueId: observedIssue(observed, issueRef)?.identity.issueId ?? issueRef,
-          ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
-          revision: Number((subject.fields as Record<string, unknown>).revision ?? 0),
-          storeRevision: 0,
-          created: false,
-        } satisfies IssueReceipt;
+        return null;
       },
       origin,
     });
@@ -1485,6 +1514,7 @@ async function captureIssueRemote(
       projectId: input.projectId,
       operationId: mutation.operationId,
       kind: "issue-create",
+      occurrenceKey: cols.occurrenceKey,
       next: (_current, observed) => {
         // invariant: The freeze-time snapshot decides the create: an identity the authority
         // already carries is never created twice, whatever the older dedupe read sampled.
@@ -1498,6 +1528,20 @@ async function captureIssueRemote(
               `the capture's read. Refresh it with \`remote observe\` and retry \u2014 the capture then answers append or the ` +
               `established receipt. Nothing was enqueued.`,
             { issueRef: movedRef },
+          );
+        }
+        // invariant: The occurrence key is project-wide, not identity-local: a create whose key
+        // another subject already carries would mint a second occurrence for one key.
+        const keyRef = observed.issues.find(
+          (issue) => issue.mstar !== null && issue.mstar.occurrences.some((row) => row.occurrenceKey === cols.occurrenceKey),
+        )?.mstar?.issueRef;
+        if (keyRef !== undefined) {
+          throw new StoreError(
+            "remote.scope-mismatch",
+            `The observed authority already carries this occurrence key on ${keyRef}; the observation moved under ` +
+              `the capture's read. Refresh it with \`remote observe\` and retry \u2014 the capture then answers the ` +
+              `established receipt or refuses the conflict. Nothing was enqueued.`,
+            { issueRef: keyRef, occurrenceKey: cols.occurrenceKey },
           );
         }
         return genesisIssueSubject(input, nowRfc3339());
@@ -1528,38 +1572,16 @@ async function captureIssueRemote(
     if (!(error instanceof StoreError && error.code === "remote.intent-not-found")) throw error;
   }
   const issues = await readRemoteObservedIssues(context, input.projectId);
+  // note: The project-wide OCCURRENCE KEY routes before the identity: a key that already exists
+  // on ANY subject is that subject's occurrence, so the append's freeze-time unchanged answer
+  // (inside the replay boundary) decides established/conflict — never an early no-op answer that
+  // a durable intent could bypass.
   for (const issue of issues) {
     const mstar = issue.mstar;
     if (mstar === null) continue;
-    const sameKey = mstar.occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
-    if (sameKey === undefined) continue;
-    // note: The genesis occurrence defines the issue's identity, exactly as the local
-    // identity_key column does: a key that belongs to another identity is never merged.
-    const genesis = mstar.occurrences[0];
-    if (
-      genesis === undefined ||
-      genesis.sourceIdentity !== cols.sourceIdentity ||
-      genesis.rootCauseKey !== cols.rootCauseKey ||
-      genesis.acceptanceKey !== cols.acceptanceKey
-    ) {
-      throw new IssueError(
-        "issue.ambiguous-identity",
-        "occurrence_key already belongs to a different identity; refusing a guessed merge",
-      );
+    if (mstar.occurrences.some((row) => row.occurrenceKey === cols.occurrenceKey)) {
+      return appendToIssue(mstar.issueRef);
     }
-    if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
-      throw new IssueError(
-        "issue.occurrence-conflict",
-        "occurrence_key was reused with a different observation; the original occurrence is retained.",
-      );
-    }
-    return {
-      issueId: issue.identity.issueId,
-      ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
-      revision: Number(mstar.fields.revision ?? 0),
-      storeRevision: 0,
-      created: false,
-    } satisfies IssueReceipt;
   }
   for (const issue of issues) {
     const mstar = issue.mstar;
@@ -1589,6 +1611,7 @@ export async function appendOccurrence(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
+      occurrenceKey: cols.occurrenceKey,
       next: (current, observed) => {
         const subject = current!;
         const fields = subject.fields as Record<string, unknown>;
@@ -2328,10 +2351,20 @@ export function assertObservedMultiPlanAcceptance(plans: readonly string[], evid
 
 /**
  * note: The terminal-state transition refusal with its usable next steps, shared by the local
- * closure body and both remote paths: inspect first; reopen only when a terminal issue is
- * intentionally being changed.
+ * closure body and both remote paths. The inspect command is valid for the ADDRESSED alias: a
+ * provider UUID needs `--project` in remote mode, a stable reference does not. Reopening a
+ * terminal issue is never the default suggestion — the recovery states the deliberate inputs a
+ * reopen requires instead of pointing at reopen as the next step.
  */
-export function terminalTransitionRefusal(observedDisposition: string, disposition: TerminalDisposition): IssueError {
+export function terminalTransitionRefusal(
+  observedDisposition: string,
+  disposition: TerminalDisposition,
+  address: { issueId: string; projectId?: string } = { issueId: "<id>" },
+): IssueError {
+  const showId =
+    ISSUE_REF_PATTERN.test(address.issueId) || address.projectId === undefined
+      ? address.issueId
+      : `${address.issueId} --project ${address.projectId}`;
   return refusalWithDetails(
     "issue.invalid-disposition",
     `Only open\u2192terminal is accepted; ${observedDisposition} cannot transition to ${disposition}`,
@@ -2339,7 +2372,9 @@ export function terminalTransitionRefusal(observedDisposition: string, dispositi
       observed_disposition: observedDisposition,
       requested_disposition: disposition,
       recovery:
-        "Inspect the issue with `mstar issue show --id <id>`; reopen it with `mstar issue reopen` only if you intend to change a terminal issue.",
+        `Inspect the issue with \`mstar issue show --id ${showId}\`. Reopening a terminal issue is a deliberate ` +
+        `change, never a default step: \`mstar issue reopen\` needs --actor project-manager, a non-empty --reason, ` +
+        `and the issue's current revision as --expect.`,
     },
   );
 }
@@ -2621,7 +2656,7 @@ export async function closeIssue(
         const fields = subject.fields as Record<string, unknown>;
         requireExpectedRevision(mutation, Number(fields.revision));
         if (fields.disposition !== "open") {
-          throw terminalTransitionRefusal(String(fields.disposition), disposition);
+          throw terminalTransitionRefusal(String(fields.disposition), disposition, { issueId, projectId: observed.projectId });
         }
         const canonicalRef = resolveObservedCanonicalTarget(observed, issueId, disposition, evidence);
         if (disposition === "resolved") {

@@ -128,6 +128,9 @@ const RECOVERABLE_CODES: Readonly<Record<string, true>> = {
   "collaboration.not-active": true,
   "collaboration.unreadable": true,
   "collaboration.stale-binding": true,
+  // note: A scope that moved under a write's sampled base is an observation state, not a decision
+  // about this request: the SAME operation id reissues after a fresh observe and freezes then.
+  "collaboration.observation-stale": true,
   // note: Provider read availability (a denied or expired access check, an unreadable scope) is
   // an environment state, never a decision about this request: a replay of an ALREADY FROZEN
   // outbox row fails through it too, so releasing the reservation could expose a duplicate send.
@@ -1212,7 +1215,13 @@ async function runRemoteComposite<T>(
     // partially frozen multi-entry preparation reports its own `collaboration.operation-partial`
     // above). Retaining the reservation would block the addressed row and every corrected
     // retry, so it is declined durably and the corrected request proceeds under a new id.
-    if (isDeterministicRefusal(error)) {
+    //
+    // A `remote.operation-conflict` that READ a durable outbox row (`durable_intent`) proves the
+    // opposite: another same-id attempt already froze the entry, so this is a race-safe proof of
+    // POST-freeze state, never a pre-freeze failure. Declining here would release the winner's
+    // reservation out from under its durable intent; the reservation is retained and the same-id
+    // replay completes from the frozen intent instead.
+    if (isDeterministicRefusal(error) && detailsOf(error)?.durable_intent !== true) {
       const cause: DeclineCause = {
         code: codeOf(error) as string,
         message:
@@ -1223,6 +1232,18 @@ async function runRemoteComposite<T>(
       const settlement = await markDeclined(context, intent, cause);
       if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
       throw recordedRefusal(intent.key.operationId, cause);
+    }
+    if (codeOf(error) === "remote.operation-conflict") {
+      throw partialRefusal({
+        intent,
+        phase: "prepared",
+        confirmed: [],
+        cause: error,
+        recovery:
+          `A provider intent is already frozen under this operation id, so this attempt proves no pre-freeze ` +
+          `failure: the reservation is retained. Reissue the SAME verb with the SAME --operation id and payload: ` +
+          `the frozen intent is reused (settled by dispatch, receipt and confirmation), never re-frozen or re-sent.`,
+      });
     }
     throw partialRefusal({
       intent,
