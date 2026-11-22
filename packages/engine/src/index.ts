@@ -154,11 +154,13 @@ export type {
   RemoteDispatchResult,
   RemoteIntentRead,
   RemoteIssueWrite,
+  RemoteNoChange,
   RemoteProjectWrite,
   RemoteReceiptOutcome,
   RemoteReceiptRecord,
   RemoteResolution,
   RemoteStatus,
+  RemoteWriteOrigin,
   ScopeCapabilities,
   ScopeCheck,
   ScopeOutcome,
@@ -169,6 +171,7 @@ export {
   abandonRemoteIntent,
   bindRemoteAuthority,
   dispatchRemoteIntent,
+  frozenIntent,
   ingestRemoteObservation,
   pendingRemoteEffect,
   prepareRemoteAdoption,
@@ -181,6 +184,7 @@ export {
   readRemoteStatus,
   recordRemoteReceipt,
   reconcileRemoteIntent,
+  remoteEventHead,
 } from "./collaboration-remote.js";
 // note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
 // refuses a failed/partial/stale required scope rather than reading local rows.

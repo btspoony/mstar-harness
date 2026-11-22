@@ -113,10 +113,8 @@ import {
   captureIssueOn,
   closeIssueOn,
   closedRemoteSubject,
-  closedSubjectMatches,
   issueWriteSeat,
   linkIssueScopedOn,
-  residualGenesisMatches,
   residualGenesisSubject,
   IssueError,
   type CaptureInput,
@@ -130,7 +128,7 @@ import {
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { prepareRemoteIssueWrite, type RemoteIntent } from "./collaboration-remote.js";
+import { frozenIntent, prepareRemoteIssueWrite, type RemoteIntent } from "./collaboration-remote.js";
 import {
   advanceCollaborationRevision,
   assertNoPendingCompositeReservation,
@@ -138,6 +136,7 @@ import {
   noteOutstandingAcknowledgement,
   remoteCompositeEntryOperationId,
   remoteCompositeOperationId,
+  remoteCompositePreparationPartial,
   repairCompositeAcknowledgement,
   reserveCompositeIntent,
   runCollaborationComposite,
@@ -1246,8 +1245,8 @@ type ResidualComposite = {
   freeze(witness: ExecutionPlanWitness): string;
   /** note: Apply the whole collaboration effect; runs inside the effect transaction. */
   apply(handle: CollaborationStoreHandle): string;
-  /** note: The remote half: freeze (or replay) the provider intent from the same admitted payload. */
-  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent>;
+  /** note: The remote half: freeze (or replay) the provider intents from the same admitted payload. */
+  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[]>;
 };
 
 /**
@@ -1547,27 +1546,32 @@ export async function residualAddExecutionPlan(
       // carrying its plan link (a genesis document cannot be appended to before it is published, so
       // the link is part of the frozen effect instead of a second intent). Every entry is frozen
       // against the SAME complete observation; each is dispatched and confirmed in FIFO order.
+      // Each entry is its own transaction, so a failure part-way keeps the earlier intents: the
+      // refusal names them instead of reporting that nothing was frozen.
       const at = new Date().toISOString();
       const planId = address.planId;
       const intents: RemoteIntent[] = [];
-      for (const [index, input] of derived.entries()) {
-        const operationId = remoteCompositeEntryOperationId(intent.key, index);
-        intents.push(
-          await prepareRemoteIssueWrite(context, {
-            projectId: input.projectId,
-            operationId,
-            kind: "issue-create",
-            executionKey: { ...intent.key, operationId },
-            next: () => residualGenesisSubject(input, planId, at),
-            replay: (event) => event.change.kind === "issue-create" && residualGenesisMatches(event.change.mstar, input, planId),
-          }),
-        );
+      try {
+        for (const [index, input] of derived.entries()) {
+          const operationId = remoteCompositeEntryOperationId(intent.key, index);
+          const frozen = frozenIntent(
+            await prepareRemoteIssueWrite(context, {
+              projectId: input.projectId,
+              operationId,
+              kind: "issue-create",
+              executionKey: { ...intent.key, operationId },
+              next: () => residualGenesisSubject(input, planId, at),
+              origin: { verb: "residual-add", request: { planId, input } },
+            }),
+          );
+          intents.push(frozen);
+        }
+      } catch (error) {
+        throw remoteCompositePreparationPartial(intent, intents, error);
       }
       // note: Each entry is its own immutable intent; the composite is confirmed only when every
-      // one of them is, and the pending one names the phase the operator resumes from.
-      const pending = intents.find((entry) => entry.state !== "confirmed");
-      if (pending !== undefined) return pending;
-      return { ...intents[0]!, state: "confirmed" };
+      // one of them is, and the frame reports every durable one it has to wait for.
+      return intents;
     },
   });
 }
@@ -1641,41 +1645,47 @@ export async function residualCloseExecutionPlan(
       // and re-checks the plan link and the issue revision against the OBSERVED subject, so a
       // confirmed closure never lands on a base the operator did not read.
       const at = new Date().toISOString();
-      return prepareRemoteIssueWrite(context, {
-        operationId: remoteCompositeOperationId(intent.key),
-        kind: "issue-replace",
-        issueId: operation.issueId,
-        executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
-        next: (current) => {
-          const subject = current as Record<string, unknown>;
-          const fields = subject.fields as Record<string, unknown>;
-          const linked = (subject.provenance as Array<Record<string, unknown>>).some(
-            (row) => row.kind === "plan" && row.target === intent.scope.planId && row.origin === "scoped",
-          );
-          if (!linked) {
-            throw new IssueError(
-              "issue.scope-refused",
-              `Issue ${operation.issueId} is not linked to plan ${String(intent.scope.planId)} in the observed project, ` +
-                `so a residual-close never addresses it. Nothing was enqueued.`,
+      return frozenIntent(
+        await prepareRemoteIssueWrite(context, {
+          operationId: remoteCompositeOperationId(intent.key),
+          kind: "issue-replace",
+          issueId: operation.issueId,
+          executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
+          next: (current) => {
+            const subject = current as Record<string, unknown>;
+            const fields = subject.fields as Record<string, unknown>;
+            const linked = (subject.provenance as Array<Record<string, unknown>>).some(
+              (row) => row.kind === "plan" && row.target === intent.scope.planId && row.origin === "scoped",
             );
-          }
-          if (fields.revision !== operation.expectedIssueRevision) {
-            throw new IssueError(
-              "issue.revision-conflict",
-              `Issue ${operation.issueId} is observed at revision ${String(fields.revision)}, not the admitted ` +
-                `${operation.expectedIssueRevision}; nothing was enqueued.`,
-            );
-          }
-          return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
-        },
-        replay: (event) => {
-          const change = event.change;
-          return (
-            change.kind === "issue-replace" &&
-            closedSubjectMatches(change.mstar, operation.disposition, operation.evidence, actor)
-          );
-        },
-      });
+            if (!linked) {
+              throw new IssueError(
+                "issue.scope-refused",
+                `Issue ${operation.issueId} is not linked to plan ${String(intent.scope.planId)} in the observed project, ` +
+                  `so a residual-close never addresses it. Nothing was enqueued.`,
+              );
+            }
+            if (fields.revision !== operation.expectedIssueRevision) {
+              throw new IssueError(
+                "issue.revision-conflict",
+                `Issue ${operation.issueId} is observed at revision ${String(fields.revision)}, not the admitted ` +
+                  `${operation.expectedIssueRevision}; nothing was enqueued.`,
+              );
+            }
+            return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
+          },
+          origin: {
+            verb: "residual-close",
+            request: {
+              issueId: operation.issueId,
+              disposition: operation.disposition,
+              evidence: operation.evidence,
+              expectedIssueRevision: operation.expectedIssueRevision,
+              planId: intent.scope.planId,
+              actor,
+            },
+          },
+        }),
+      );
     },
   });
 }

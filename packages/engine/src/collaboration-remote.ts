@@ -2237,19 +2237,17 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
     assertCaptureRequest({ ...adoption.capture, projectId, title: native.nativeTitle });
   }
   const subject = adoptionSubject(adoption, native.nativeTitle, projectId);
-  return prepareRemoteIssueWrite(context, {
+  return frozenIntent(await prepareRemoteIssueWrite(context, {
     projectId,
     operationId,
     ...(adoption.kind === "retain" ? { issueRef: adoption.issueRef } : {}),
     issueId,
     kind: "issue-adopt",
     next: () => subject,
-    // invariant: A replay compares the reviewed adoption, never the ids and times its first freeze
-    // generated: only the identical adoption document replays under this operation id.
-    replay: (event) =>
-      event.change.kind === "issue-adopt" &&
-      canonicalJson(withoutGenerated(event.change.mstar)) === canonicalJson(withoutGenerated(subject)),
-  });
+    // invariant: A replay compares the reviewed adoption document, never the ids and times its
+    // first freeze generated: only the identical adoption replays under this operation id.
+    origin: { verb: "issue-adopt", request: { projectId, issueId, adoption } },
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2294,12 +2292,26 @@ export type RemoteIntentExecutionKey = Readonly<{
   operationId: string;
 }>;
 
+/**
+ * note: The business verb and its COMPLETE normalized request, as the ordinary writer that froze
+ * the intent received them. Two different verbs (or payloads) never replay as one operation, and
+ * neither does a changed request: the final document they produced is not their identity.
+ */
+export type RemoteWriteOrigin = Readonly<{
+  verb: string;
+  request: Record<string, unknown>;
+}>;
+
 export type RemoteIntentRequest = Readonly<{
   binding: RemoteIntentBinding;
   event: RemoteEvent;
   target: string | null;
   expectedHeads: readonly string[];
   executionKey?: RemoteIntentExecutionKey | null;
+  /** note: Present on an ordinary writer's intent; the low-level prepare and a resolution carry none. */
+  origin?: RemoteWriteOrigin | null;
+  /** note: The business result the writer derived from the observed document, recorded for its replay. */
+  result?: unknown;
 }>;
 
 export type RemoteIntentState = "enqueued" | "unconfirmed" | "confirmed" | "conflict" | "abandoned";
@@ -2323,6 +2335,8 @@ export type RemoteIntent = Readonly<{
   executionKey: RemoteIntentExecutionKey | null;
   /** note: The recorded confirmed effect, so a replay of the business verb reports it instead of pending. */
   confirmed: RemoteConfirmedEffect | null;
+  /** note: The business result recorded when the request was frozen, so its replay reports that exact result. */
+  result: unknown | null;
   replayed: boolean;
   createdAt: string;
   updatedAt: string;
@@ -2360,25 +2374,39 @@ function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
-/** note: The generated members a replay never re-derives: ids and timestamps, never request content. */
-const GENERATED_SUBJECT_KEYS: ReadonlySet<string> = new Set([
-  "eventId",
-  "recordedAt",
-  "createdAt",
-  "updatedAt",
-  "registeredAt",
-]);
+/**
+ * note: The canonical content digest of one event: the head a child event cites as its parent, so
+ * a conflict's named heads are proved against the records they claim to name.
+ */
+export function remoteEventHead(event: RemoteEvent): string {
+  return createHash("sha256").update(canonicalJson(event), "utf8").digest("hex");
+}
 
-/** note: The same document with its generated members dropped, for replay-identity comparison. */
-function withoutGenerated(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((entry) => withoutGenerated(entry));
-  if (value === null || typeof value !== "object") return value;
-  const body = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.entries(body)
-      .filter(([key]) => !GENERATED_SUBJECT_KEYS.has(key))
-      .map(([key, entry]) => [key, withoutGenerated(entry)]),
-  );
+/** note: Plain JSON, normalized: what a frozen business request or result may carry, nothing else. */
+function plainJson(value: unknown, path: string): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  // note: JSON has no undefined: an absent optional member is dropped, an absent array slot is null.
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map((entry, index) => plainJson(entry, `${path}[${index}]`));
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, plainJson(entry, `${path}.${key}`)]),
+    );
+  }
+  return invalid(path, "must be plain JSON");
+}
+
+/** note: The frozen origin of one ordinary write: its verb and the complete request it was made from. */
+function writeOrigin(value: unknown, path: string): RemoteWriteOrigin {
+  const body = record(value, path);
+  allowOnly(body, path, ["verb", "request"]);
+  return {
+    verb: text(body.verb, `${path}.verb`),
+    request: record(plainJson(body.request, `${path}.request`), `${path}.request`),
+  };
 }
 
 /**
@@ -2539,11 +2567,15 @@ function intentTarget(raw: unknown, change: RemoteEventChange, binding: RemoteIn
  */
 export async function prepareRemoteIntent(context: StoreContext, request: unknown): Promise<RemoteIntent> {
   const body = record(request, "request");
-  allowOnly(body, "request", ["binding", "event", "target", "expectedHeads", "executionKey"]);
+  allowOnly(body, "request", [
+    "binding", "event", "target", "expectedHeads", "executionKey", "origin", "result",
+  ]);
   const binding = intentBinding(body.binding);
   const event = remoteEvent(body.event, binding);
   const target = intentTarget(body.target, event.change, binding);
   const expectedHeads = digestHead(body.expectedHeads, "request.expectedHeads");
+  const origin = body.origin === undefined || body.origin === null ? null : writeOrigin(body.origin, "request.origin");
+  const result = body.result === undefined ? null : plainJson(body.result, "request.result");
   const executionKey = body.executionKey === undefined || body.executionKey === null
     ? null
     : intentExecutionKey(body.executionKey, event.operationId);
@@ -2578,11 +2610,14 @@ export async function prepareRemoteIntent(context: StoreContext, request: unknow
         `${String(selection.generation)} for project ${selected.localProjectId}; nothing was enqueued.`,
     );
   }
-  // note: The frozen request is exactly the contract's four members; the execution key is its own
-  // column, so an ordinary intent and a composite intent never differ in their request hash scope.
+  // note: The request hash covers exactly the contract's four members; the business origin and the
+  // result it derived are recorded beside them, so neither changes an operation's identity.
   const frozenRequest = { binding, event, target, expectedHeads };
-  const requestJson = canonicalJson(frozenRequest);
-  const requestHash = createHash("sha256").update(requestJson, "utf8").digest("hex");
+  const requestHash = createHash("sha256").update(canonicalJson(frozenRequest), "utf8").digest("hex");
+  const requestJson =
+    origin === null && result === null
+      ? canonicalJson(frozenRequest)
+      : canonicalJson({ ...frozenRequest, origin, result });
   const executionJson = executionKey === null ? null : canonicalJson(executionKey);
 
   return withRemoteCacheWrite(context, (handle) => {
@@ -2611,7 +2646,7 @@ export async function prepareRemoteIntent(context: StoreContext, request: unknow
     }
     const existing = db
       .prepare(
-        "select generation, project_key, request_hash, state, created_at, updated_at, execution_key_json " +
+        "select generation, project_key, request_hash, state, created_at, updated_at, execution_key_json, request_json " +
           "from remote_outbox where operation_id = ?",
       )
       .get(event.operationId) as Record<string, unknown> | undefined;
@@ -2637,6 +2672,7 @@ export async function prepareRemoteIntent(context: StoreContext, request: unknow
         binding,
         executionKey,
         confirmedEffectOf(db, event.operationId),
+        recordedResult(existing.request_json, event.operationId),
         true,
       );
     }
@@ -2655,6 +2691,7 @@ export async function prepareRemoteIntent(context: StoreContext, request: unknow
       target,
       executionKey,
       confirmed: null,
+      result,
       replayed: false,
       createdAt: at,
       updatedAt: at,
@@ -2694,6 +2731,19 @@ function confirmedEffectOf(db: StoreDb, operationId: string): RemoteConfirmedEff
   }
 }
 
+/** note: The recorded business result of one frozen request, or null when the writer recorded none. */
+function recordedResult(requestJson: unknown, operationId: string): unknown {
+  if (typeof requestJson !== "string") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(requestJson);
+  } catch {
+    throw malformedIntent(operationId, "carries no readable frozen request");
+  }
+  const body = record(parsed, "request");
+  return body.result === undefined ? null : plainJson(body.result, "request.result");
+}
+
 /** note: The stored row projected for a caller, never a send permit: no attempt id leaves this module. */
 function intentOf(
   operationId: string,
@@ -2702,6 +2752,7 @@ function intentOf(
   binding: RemoteIntentBinding,
   executionKey: RemoteIntentExecutionKey | null,
   confirmed: RemoteConfirmedEffect | null,
+  result: unknown,
   replayed: boolean,
 ): RemoteIntent {
   if (
@@ -2726,6 +2777,7 @@ function intentOf(
     target,
     executionKey,
     confirmed,
+    result,
     replayed,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2841,6 +2893,10 @@ export type RemoteIntentRead = Readonly<{
   target: string | null;
   expectedHeads: readonly string[];
   executionKey: RemoteIntentExecutionKey | null;
+  /** note: The business verb and request the writer froze; withheld with the content. */
+  origin: RemoteWriteOrigin | null;
+  /** note: The business result recorded at preparation; withheld with the content. */
+  result: unknown | null;
   operator: string | null;
   reason: string | null;
   resolves: string | null;
@@ -2878,6 +2934,8 @@ type StoredRequest = Readonly<{
   request: RemoteIntentRequest;
   operator: string | null;
   reason: string | null;
+  origin: RemoteWriteOrigin | null;
+  result: unknown | null;
 }>;
 
 type OutboxIntentRow = Readonly<{
@@ -2963,7 +3021,9 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
   }
   try {
     const body = record(parsed, "request");
-    allowOnly(body, "request", ["binding", "event", "target", "expectedHeads", "executionKey", "operator", "reason"]);
+    allowOnly(body, "request", [
+      "binding", "event", "target", "expectedHeads", "executionKey", "operator", "reason", "origin", "result",
+    ]);
     const binding = intentBinding(body.binding);
     const event = remoteEvent(body.event, binding);
     const target = intentTarget(body.target, event.change, binding);
@@ -2976,6 +3036,8 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
       request: { binding, event, target, expectedHeads, executionKey },
       operator: typeof body.operator === "string" ? body.operator : null,
       reason: typeof body.reason === "string" ? body.reason : null,
+      origin: body.origin === undefined || body.origin === null ? null : writeOrigin(body.origin, "request.origin"),
+      result: body.result === undefined ? null : plainJson(body.result, "request.result"),
     };
   } catch {
     throw malformedIntent(row.operationId, "carries a frozen request the contract cannot read");
@@ -3197,6 +3259,8 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
   }
   const frozenEvent = canonicalJson(frozen.event);
   const seen = new Set<string>();
+  const recordIds = new Set<string>();
+  const heads: string[] = [];
   for (const observed of outcome.observedRecords) {
     const identity = observed.identity;
     if (
@@ -3207,6 +3271,10 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
     ) {
       return foreign("observes a record outside the intent's bound target", { observedIssue: identity.issueId });
     }
+    if (recordIds.has(observed.recordId)) {
+      return conflict("names one immutable record id for two heads", { recordId: observed.recordId });
+    }
+    recordIds.add(observed.recordId);
     const event = observed.event;
     if (
       event.repoKey !== frozen.event.repoKey ||
@@ -3226,6 +3294,16 @@ function assertConflictEvidence(outcome: RemoteReceiptOutcome, request: StoredRe
     if (rendered === frozenEvent) return conflict("names the frozen effect itself as a competing head");
     if (seen.has(rendered)) return conflict("repeats one observed record for two heads");
     seen.add(rendered);
+    heads.push(remoteEventHead(event));
+  }
+  // invariant: A named head IS the canonical content digest of the record it claims to name, so
+  // arbitrary digests can never be paired with unrelated records and cited as a complete fork.
+  heads.sort();
+  if (canonicalJson(heads) !== canonicalJson(outcome.observedHeads)) {
+    return conflict("does not cite the content digest of each observed record", {
+      observedHeads: outcome.observedHeads,
+      recordHeads: heads,
+    });
   }
 }
 
@@ -3466,6 +3544,8 @@ function intentRead(
     target: full ? stored.request.target : null,
     expectedHeads: full ? stored.request.expectedHeads : [],
     executionKey: full ? (stored.request.executionKey ?? null) : null,
+    origin: full ? stored.origin : null,
+    result: full ? stored.result : null,
     operator: full ? stored.operator : null,
     reason: full ? stored.reason : null,
     resolves: row.resolves,
@@ -3576,7 +3656,7 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     );
   };
   let snapshot: RemoteSnapshot | null = null;
-  if (scope !== undefined && scope.completeness === "complete" && typeof scope.snapshot_json === "string") {
+  if (scope !== undefined && typeof scope.snapshot_json === "string") {
     try {
       snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
     } catch {
@@ -3590,8 +3670,11 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     return refuse(`The frozen base and the frozen parents of ${row.operationId} disagree.`);
   }
   if (row.resolves !== null) {
-    // invariant: A reviewed resolution's base is the fresh FULL fork evidence, not a complete
-    // snapshot head: an unresolved fork cannot produce a complete observation.
+    // invariant: A reviewed resolution's base is the fork evidence that conflict recorded, and that
+    // evidence must be FRESHLY observed: the records it names are proved against a current
+    // observation, so an obsolete or rewritten fork never receives a permit. Completeness is not
+    // required - a forked chain does not yield a complete observation - but an absent one proves
+    // nothing.
     let fork: readonly string[];
     try {
       fork = recordedFork(db, row.resolves).observedHeads;
@@ -3601,7 +3684,13 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     if (canonicalJson(fork) !== canonicalJson(event.parents)) {
       return refuse(`The resolution's parents are not the fork heads ${row.resolves} recorded.`);
     }
-    if (snapshot !== null && canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(fork)) {
+    if (snapshot === null) {
+      return refuse(
+        `The fork ${row.resolves} recorded is not observed in the current state of ${row.projectKey}; a resolution is ` +
+          `never sent against an unobserved base.`,
+      );
+    }
+    if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(fork)) {
       return refuse(
         `The scope observed for ${row.projectKey} no longer carries the fork ${row.resolves} recorded; a changed provider ` +
           `base is never permission to send a resolution.`,
@@ -3609,7 +3698,7 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
     }
     return;
   }
-  if (snapshot === null) {
+  if (snapshot === null || scope?.completeness !== "complete") {
     return refuse(`The current observation of ${row.projectKey} is not complete, so no base can be proven for it.`);
   }
   if (event.change.kind === "issue-create") {
@@ -3721,13 +3810,18 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         { operationId: target, state: row.state },
       );
     }
+    // invariant: An in-flight attempt or an unresolved conflict serializes sends. A conflict a
+    // reviewed resolution has taken over stops blocking once that resolution exists: the
+    // resolution's own row carries its state, so an abandoned resolution restores the block.
     const unresolved = db
       .prepare(
-        "select operation_id, state from remote_outbox where generation = ? and project_key = ? and operation_id <> ? " +
-          "and (resolved_by is null or resolved_by <> ?) and state in ('unconfirmed','conflict') " +
-          "order by created_at, operation_id limit 1",
+        "select o.operation_id, o.state from remote_outbox o where o.generation = ? and o.project_key = ? " +
+          "and o.operation_id <> ? and o.state in ('unconfirmed','conflict') " +
+          "and (o.resolved_by is null or exists (select 1 from remote_outbox r " +
+          "where r.operation_id = o.resolved_by and r.state = 'abandoned')) " +
+          "order by o.created_at, o.operation_id limit 1",
       )
-      .get(row.generation, row.projectKey, target, target) as { operation_id?: unknown; state?: unknown } | undefined;
+      .get(row.generation, row.projectKey, target) as { operation_id?: unknown; state?: unknown } | undefined;
     if (unresolved !== undefined) {
       const aheadId = typeof unresolved.operation_id === "string" ? unresolved.operation_id : "?";
       const aheadState = typeof unresolved.state === "string" ? unresolved.state : "?";
@@ -3738,19 +3832,24 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         { operationId: target, ahead: aheadId, aheadState },
       );
     }
-    const oldest = db
-      .prepare(
-        "select operation_id from remote_outbox where generation = ? and project_key = ? and state = 'enqueued' " +
-          "order by created_at, operation_id limit 1",
-      )
-      .get(row.generation, row.projectKey) as { operation_id?: unknown } | undefined;
-    if (typeof oldest?.operation_id === "string" && oldest.operation_id !== target) {
-      throw new StoreError(
-        "remote.dispatch-refused",
-        `Operation ${oldest.operation_id} was enqueued before ${target} and is still pending; sends are serialized in ` +
-          `FIFO order per binding, so this intent waits. Nothing was sent.`,
-        { operationId: target, ahead: oldest.operation_id, aheadState: "enqueued" },
-      );
+    // invariant: A reviewed resolution is not an ordinary send: it repairs the fork the ordinary
+    // intents ahead of it were prepared against, and each of those is refused by its OWN base
+    // check once the fork moved, so queueing the repair behind them would deadlock both.
+    if (row.resolves === null) {
+      const oldest = db
+        .prepare(
+          "select operation_id from remote_outbox where generation = ? and project_key = ? and state = 'enqueued' " +
+            "order by created_at, operation_id limit 1",
+        )
+        .get(row.generation, row.projectKey) as { operation_id?: unknown } | undefined;
+      if (typeof oldest?.operation_id === "string" && oldest.operation_id !== target) {
+        throw new StoreError(
+          "remote.dispatch-refused",
+          `Operation ${oldest.operation_id} was enqueued before ${target} and is still pending; sends are serialized in ` +
+            `FIFO order per binding, so this intent waits. Nothing was sent.`,
+          { operationId: target, ahead: oldest.operation_id, aheadState: "enqueued" },
+        );
+      }
     }
     const scope = scopeRow(db, row.generation, row.projectKey);
     if (scope === undefined) {
@@ -3866,6 +3965,7 @@ export async function prepareRemoteResolution(
           target: recordedRequest.request.target,
           executionKey: recordedRequest.request.executionKey ?? null,
           confirmed: confirmedEffectOf(db, operationId),
+          result: recordedResult(recorded.requestJson, operationId),
           replayed: true,
           createdAt: recorded.createdAt,
           updatedAt: recorded.updatedAt,
@@ -3884,6 +3984,14 @@ export async function prepareRemoteResolution(
         `Operation ${conflicted} is ${original.state}, not conflicted, so there is no fork a resolution may replace. ` +
           `Nothing was enqueued.`,
         { operationId: conflicted, state: original.state },
+      );
+    }
+    if (original.resolvedBy !== null) {
+      throw new StoreError(
+        "remote.operation-conflict",
+        `Operation ${conflicted} is already taken over by resolution ${original.resolvedBy}; one reviewed resolution ` +
+          `per fork is admitted. Inspect it with outbox-show, or abandon it before submitting another. Nothing was enqueued.`,
+        { operationId: conflicted, resolvedBy: original.resolvedBy },
       );
     }
     const fork = recordedFork(db, conflicted).observedHeads;
@@ -3924,6 +4032,7 @@ export async function prepareRemoteResolution(
       target,
       executionKey: null,
       confirmed: null,
+      result: null,
       replayed: false,
       createdAt: at,
       updatedAt: at,
@@ -3997,6 +4106,7 @@ export async function abandonRemoteIntent(
       target: stored.request.target,
       executionKey: stored.request.executionKey ?? null,
       confirmed: null,
+      result: stored.result,
       replayed: false,
       createdAt: row.createdAt,
       updatedAt: at,
@@ -4168,6 +4278,13 @@ export type RemoteObservedSubject = Readonly<{
   issues: readonly RemoteIssue[];
 }>;
 
+/**
+ * note: A write the observed authority ALREADY carries: the domain's own idempotent outcome, with
+ * nothing frozen. The local verb returns the established receipt for the same observation; freezing
+ * a second event for it would append duplicate history.
+ */
+export type RemoteNoChange = Readonly<{ noChange: unknown }>;
+
 export type RemoteIssueWrite = Readonly<{
   projectId?: string;
   operationId: string;
@@ -4180,11 +4297,18 @@ export type RemoteIssueWrite = Readonly<{
   /** note: The complete normalized subject, derived from the observed one (null for a create/adoption). */
   next(current: Record<string, unknown> | null, observed: RemoteObservedSubject): Record<string, unknown>;
   /**
-   * note: The replay identity: true only when the stored event is this caller's identical business
-   * request. Derived ids, recorded times and revisions never participate, so a changed payload,
-   * another verb or another target under the same operation id refuses instead of replaying.
+   * note: The replay identity: the business verb and its COMPLETE normalized request. Only the
+   * identical request replays; another verb, target or payload under the same operation id refuses.
    */
-  replay(event: RemoteEvent): boolean;
+  origin: RemoteWriteOrigin;
+  /**
+   * note: The domain's no-change outcome when the observed subject already carries this very
+   * observation; a non-null answer freezes nothing and is returned to the caller.
+   */
+  unchanged?(
+    current: Record<string, unknown> | null,
+    observed: RemoteObservedSubject,
+  ): unknown | null;
   /** note: A composite's execution reservation, so the provider effect settles it. */
   executionKey?: RemoteIntentExecutionKey | null;
 }>;
@@ -4208,8 +4332,9 @@ function derivedUuid(bytes: Buffer): string {
 /**
  * The replay of one ordinary write: an operation id that already holds a frozen intent returns
  * THAT intent, so a retried verb never re-derives a different subject (a minted reference, a
- * milestone id, a recorded time) and never rewrites the accepted request. The outbox remains the
- * authority for the identity: only the same id, kind and stable reference replay.
+ * milestone id, a recorded time) and never rewrites the accepted request. The identity is the
+ * recorded business verb and its complete normalized request: a different verb, target or payload
+ * under the same id is a conflict, never a replay.
  */
 async function replayedIntent(
   context: StoreContext,
@@ -4219,7 +4344,7 @@ async function replayedIntent(
   target: string | null | undefined,
   issueRef: string | null,
   executionKey: RemoteIntentExecutionKey | null,
-  accepts: (event: RemoteEvent) => boolean,
+  origin: RemoteWriteOrigin,
 ): Promise<RemoteIntent | null> {
   let read: RemoteIntentRead;
   try {
@@ -4262,7 +4387,9 @@ async function replayedIntent(
   if (canonicalJson(read.executionKey) !== canonicalJson(executionKey)) {
     return conflict("was frozen under another execution reservation");
   }
-  if (!accepts(event)) return conflict("is frozen under a different request");
+  if (read.origin === null || canonicalJson(read.origin) !== canonicalJson(origin)) {
+    return conflict(`is frozen under the business request ${read.origin === null ? "of no recorded verb" : `"${read.origin.verb}"`}`);
+  }
   return {
     version: 1,
     operationId: read.operationId,
@@ -4273,6 +4400,7 @@ async function replayedIntent(
     target: read.target,
     executionKey: read.executionKey,
     confirmed: read.confirmed,
+    result: read.result,
     replayed: true,
     createdAt: read.createdAt,
     updatedAt: read.updatedAt,
@@ -4285,9 +4413,13 @@ async function replayedIntent(
  * the project and the binding before anything is enqueued. The caller then refuses with
  * `remote.effect-pending`: a durable enqueue is never business success.
  */
-export async function prepareRemoteIssueWrite(context: StoreContext, write: RemoteIssueWrite): Promise<RemoteIntent> {
+export async function prepareRemoteIssueWrite(
+  context: StoreContext,
+  write: RemoteIssueWrite,
+): Promise<RemoteIntent | RemoteNoChange> {
   const operationId = linearId(write?.operationId, "operationId");
   const kind = oneOf(write?.kind, ["issue-create", "issue-adopt", "issue-replace"] as const, "kind");
+  const origin = writeOrigin(write?.origin, "origin");
   const executionKey = write?.executionKey ?? null;
   const declaredRef = write?.issueRef === undefined ? null : assertIssueRef(write.issueRef);
   // invariant: A create/adoption reference is derived from its operation id, so a replay repeats it.
@@ -4311,7 +4443,7 @@ export async function prepareRemoteIssueWrite(context: StoreContext, write: Remo
     replayTarget,
     replayRef,
     executionKey,
-    write.replay,
+    origin,
   );
   if (replay !== null) return replay;
   if (kind === "issue-create") {
@@ -4341,6 +4473,7 @@ export async function prepareRemoteIssueWrite(context: StoreContext, write: Remo
       target: null,
       expectedHeads: [],
       executionKey,
+      origin,
     });
   }
   const addressed = text(write?.issueId, "issueId");
@@ -4370,6 +4503,11 @@ export async function prepareRemoteIssueWrite(context: StoreContext, write: Remo
   }
   const parents = native.mstar === null ? [] : native.mstar.head;
   const observed = { projectId, project: scope.snapshot.project, issues: scope.snapshot.issues };
+  const current = native.mstar === null ? null : currentIssueSubject(native.mstar);
+  // invariant: A write the observed authority already carries is the domain's own no-op, decided
+  // BEFORE a second event is frozen; a conflicting payload refuses through the same callback.
+  const established = write.unchanged?.(current, observed) ?? null;
+  if (established !== null) return { noChange: established };
   return prepareRemoteIntent(context, {
     binding: scope.binding,
     event: {
@@ -4381,13 +4519,29 @@ export async function prepareRemoteIssueWrite(context: StoreContext, write: Remo
       change: {
         kind,
         issueRef,
-        mstar: write.next(native.mstar === null ? null : currentIssueSubject(native.mstar), observed),
+        mstar: write.next(current, observed),
       },
     },
     target: native.identity.issueId,
     expectedHeads: parents,
     executionKey,
+    origin,
   });
+}
+
+/**
+ * note: The intent a prepare froze. Only a write that declared a no-change callback can answer
+ * otherwise, so a caller that admits no such outcome refuses instead of mapping it to a success.
+ */
+export function frozenIntent(outcome: RemoteIntent | RemoteNoChange): RemoteIntent {
+  if ("noChange" in outcome) {
+    throw new StoreError(
+      "store.corrupt",
+      "A write the observed authority already carries reached a caller that admits no no-change outcome; nothing was " +
+        "enqueued and nothing was changed.",
+    );
+  }
+  return outcome;
 }
 
 /** note: The frozen issue subject is the stored one minus its derived members. */
@@ -4407,8 +4561,17 @@ export type RemoteProjectWrite = Readonly<{
   operationId: string;
   /** note: The complete normalized project document, derived from the observed one and its project's issues. */
   next(current: Record<string, unknown>, issues: readonly RemoteIssue[]): Record<string, unknown>;
-  /** note: The replay identity, exactly as `RemoteIssueWrite.replay`: only the identical request replays. */
-  replay(event: RemoteEvent): boolean;
+  /**
+   * note: The replay identity, exactly as `RemoteIssueWrite.origin`: only the identical business
+   * verb and complete request replay; a different verb or payload refuses.
+   */
+  origin: RemoteWriteOrigin;
+  /**
+   * note: The business result of this request, derived from the SAME observed document `next` read.
+   * It is recorded with the intent, because the post-write observation no longer carries the
+   * before-state a replay would need to re-derive it.
+   */
+  result?(current: Record<string, unknown>, subject: Record<string, unknown>): unknown;
   executionKey?: RemoteIntentExecutionKey | null;
 }>;
 
@@ -4419,6 +4582,7 @@ export type RemoteProjectWrite = Readonly<{
 export async function prepareRemoteProjectWrite(context: StoreContext, write: RemoteProjectWrite): Promise<RemoteIntent> {
   const projectId = text(write?.projectId, "projectId");
   const operationId = linearId(write?.operationId, "operationId");
+  const origin = writeOrigin(write?.origin, "origin");
   const replay = await replayedIntent(
     context,
     operationId,
@@ -4427,21 +4591,19 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     undefined,
     null,
     write.executionKey ?? null,
-    write.replay,
+    origin,
   );
   if (replay !== null) return replay;
   const scope = await readWriteScope(context, projectId);
   const parents = scope.snapshot.project.head ?? [];
-  const subject = write.next(
-    {
-      projectId,
-      milestones: scope.snapshot.project.milestones,
-      roadmap: scope.snapshot.project.roadmap,
-      catalogEntities: scope.snapshot.project.catalogEntities,
-      catalogLinks: scope.snapshot.project.catalogLinks,
-    },
-    scope.snapshot.issues,
-  );
+  const current = {
+    projectId,
+    milestones: scope.snapshot.project.milestones,
+    roadmap: scope.snapshot.project.roadmap,
+    catalogEntities: scope.snapshot.project.catalogEntities,
+    catalogLinks: scope.snapshot.project.catalogLinks,
+  };
+  const subject = write.next(current, scope.snapshot.issues);
   return prepareRemoteIntent(context, {
     binding: scope.binding,
     event: {
@@ -4455,6 +4617,8 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     target: scope.binding.journalIssueId,
     expectedHeads: parents,
     executionKey: write.executionKey ?? null,
+    origin,
+    ...(write.result === undefined ? {} : { result: write.result(current, subject) }),
   });
 }
 

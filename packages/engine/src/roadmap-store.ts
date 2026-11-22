@@ -13,7 +13,7 @@ import {
   remoteCollaborationObservation,
   remoteRoadmapRead,
 } from "./collaboration-remote-read.js";
-import type { RemoteEvent, RemoteIntent } from "./collaboration-remote.js";
+import type { RemoteIntent } from "./collaboration-remote.js";
 import { type StoreContext, type StoreDb, StoreError } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
@@ -280,6 +280,7 @@ async function queueRoadmapWrite(
   context: StoreContext,
   projectId: string,
   operationId: string,
+  verb: "roadmap-replace" | "roadmap-import",
   contentMarkdown: string,
   expected: { projectRevision: number; roadmapRevision: RoadmapExpected },
 ): Promise<RoadmapWriteReceipt> {
@@ -290,6 +291,15 @@ async function queueRoadmapWrite(
   const intent = await prepareRemoteProjectWrite(context, {
     projectId,
     operationId,
+    origin: {
+      verb,
+      request: {
+        projectId,
+        contentMarkdown,
+        expectedProjectRevision: expected.projectRevision,
+        expectedRoadmapRevision: expected.roadmapRevision,
+      },
+    },
     next: (current) => {
       const entities = current.catalogEntities as Array<Record<string, unknown>>;
       const project = entities.find((entity) => entity.kind === "project" && entity.id === projectId);
@@ -313,13 +323,6 @@ async function queueRoadmapWrite(
         ...current,
         roadmap: { contentMarkdown, revision: (roadmap?.revision ?? 0) + 1, updatedAt: at },
       };
-    },
-    replay: (event: RemoteEvent) => {
-      const change = event.change;
-      return (
-        change.kind === "project-replace" &&
-        (change.project.roadmap as { contentMarkdown?: unknown } | null)?.contentMarkdown === contentMarkdown
-      );
     },
   });
   if (intent.confirmed !== null) return confirmedRoadmapReceipt(intent, projectId, contentMarkdown);
@@ -418,7 +421,7 @@ export async function replaceRoadmapAuthority(
 ): Promise<RoadmapWriteReceipt> {
   if (resolveCollaborationLocation(context).mode === "remote") {
     validateContent(input.projectId, input.contentMarkdown);
-    return queueRoadmapWrite(context, input.projectId, operation.operationId, input.contentMarkdown, {
+    return queueRoadmapWrite(context, input.projectId, operation.operationId, "roadmap-replace", input.contentMarkdown, {
       projectRevision: input.expectedProjectRevision,
       roadmapRevision: input.expectedRoadmapRevision,
     });
@@ -445,7 +448,7 @@ export async function importRoadmapAuthority(
     // hash pin what the operator read and never enter the frozen subject.
     const source = sourceBytes(review.sourcePath);
     validateContent(review.projectId, source.content);
-    return queueRoadmapWrite(context, review.projectId, operation.operationId, source.content, {
+    return queueRoadmapWrite(context, review.projectId, operation.operationId, "roadmap-import", source.content, {
       projectRevision: review.expectedProjectRevision,
       roadmapRevision: review.expectedRoadmapRevision,
     });

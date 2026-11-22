@@ -65,6 +65,7 @@ import {
   readRemoteStatus,
   recordRemoteReceipt,
   reconcileRemoteIntent,
+  remoteEventHead,
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
   type RemoteEvent,
@@ -79,6 +80,7 @@ import {
   remoteCompositeOperationId,
   reserveCompositeIntent,
   runCollaborationComposite,
+  type CollaborationEffectReceipt,
   type CompositeIntent,
 } from "./collaboration-operations.js";
 import {
@@ -90,6 +92,7 @@ import {
   type ExecutionCaller,
   type ExecutionSessionRef,
   type ExecutionToken,
+  type ExecutionTransaction,
 } from "./execution-store.js";
 import { residualAddExecutionPlan, residualCloseExecutionPlan } from "./execution-coordination.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
@@ -97,7 +100,7 @@ import { importExecutionMinimal } from "./execution-minimal-import.js";
 import type { WorkflowEntry } from "./status.js";
 import type { ResidualInput } from "./coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
-import { assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
+import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -4765,14 +4768,16 @@ describe("remote outbox lifecycle", () => {
     const conflicted = "00000000-0000-4000-8000-000000000311";
     const intent = await prepareRemoteIntent(forked.context, journalIntent(forked.fixture, forked.commit, conflicted));
     const attemptId = attemptOf(await dispatchRemoteIntent(forked.context, conflicted));
-    const fork = ["6".repeat(64), "7".repeat(64)].sort();
+    // invariant: A conflict's heads are the content digests of the records it names.
+    const competing = forkRecords(forked.fixture);
+    const fork = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
     const conflictedRead = await recordRemoteReceipt(
       forked.context,
       receiptInput(forked.commit, conflicted, attemptId, intent.requestHash, {
         kind: "conflict",
         expectedHeads: [OBSERVED_PROJECT_HEAD],
         observedHeads: fork,
-        observedRecords: forkRecords(forked.fixture),
+        observedRecords: competing,
       }),
     );
     expect(conflictedRead.state).toBe("conflict");
@@ -5276,16 +5281,18 @@ describe("remote outbox review fixes", () => {
     const conflictedId = "00000000-0000-4000-8000-000000000622";
     const conflicted = await prepareRemoteIntent(forked.context, issueIntent(forked.fixture, forked.commit, conflictedId));
     const forkedAttempt = attemptOf(await dispatchRemoteIntent(forked.context, conflictedId));
-    const heads = ["6".repeat(64), "7".repeat(64)].sort();
-    const records = heads.map((_, index) => ({
-      identity: { ...providerScope(), issueId: MSTAR_ISSUE },
-      recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea",
-      event: {
-        ...(frozenOperation(forked.dbPath, conflictedId).event as RemoteEvent),
-        operationId: index === 0 ? "00000000-0000-4000-8000-0000000009a1" : "00000000-0000-4000-8000-0000000009a2",
-        parents: ["8".repeat(64)],
-      },
-    }));
+    const records = ["00000000-0000-4000-8000-0000000009a1", "00000000-0000-4000-8000-0000000009a2"].map(
+      (conflicting, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea",
+        event: {
+          ...(frozenOperation(forked.dbPath, conflictedId).event as RemoteEvent),
+          operationId: conflicting,
+          parents: ["8".repeat(64)],
+        },
+      }),
+    );
+    const heads = records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
     const conflictInput = (outcome: Record<string, unknown>): Record<string, unknown> =>
       receiptInput(forked.commit, conflictedId, forkedAttempt, conflicted.requestHash, outcome);
     // invariant: Partial, foreign and duplicated evidence is refused instead of stored.
@@ -5518,15 +5525,17 @@ describe("remote outbox review fixes", () => {
     const conflictedId = "00000000-0000-4000-8000-000000000681";
     const conflicted = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, conflictedId));
     const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, conflictedId));
-    const heads = ["6".repeat(64), "7".repeat(64)].sort();
-    const records = heads.map((_, index) => ({
-      identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
-      recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeec" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeed",
-      event: {
-        ...journalEvent(cache.fixture, index === 0 ? "00000000-0000-4000-8000-0000000009b1" : "00000000-0000-4000-8000-0000000009b2"),
-        parents: ["8".repeat(64)],
-      },
-    }));
+    const records = ["00000000-0000-4000-8000-0000000009b1", "00000000-0000-4000-8000-0000000009b2"].map(
+      (operationId, index) => ({
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeec" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeed",
+        event: {
+          ...journalEvent(cache.fixture, operationId),
+          parents: ["8".repeat(64)],
+        },
+      }),
+    );
+    const heads = records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
     await recordRemoteReceipt(
       cache.context,
       receiptInput(cache.commit, conflictedId, attemptId, conflicted.requestHash, {
@@ -6002,4 +6011,402 @@ describe("remote confirmed business results", () => {
     expect(registered).toEqual({ kind: "document", id: "spec-2", revision: 1, storeRevision: 0 });
     expect(outboxRows(cache.dbPath)).toHaveLength(3);
   });
+});
+
+// ---------------------------------------------------------------------------
+// note: Task 2 re-review: fork recovery ordering and freshness, digest-bound
+// conflict evidence, business-verb replay identity, occurrence idempotency,
+// multi-entry composites and the recorded milestone result.
+// ---------------------------------------------------------------------------
+
+/** note: The observation revision the fixture cache currently holds. */
+function observationRevision(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select revision from remote_observations order by project_key limit 1").get() as
+      | { revision?: unknown }
+      | undefined;
+    if (typeof row?.revision !== "number") throw new Error("the fixture observation row carries no revision");
+    return row.revision;
+  } finally {
+    db.close();
+  }
+}
+
+/** note: Drop the served snapshot without touching the binding, as an unavailable observation leaves it. */
+function withdrawSnapshot(dbPath: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare(
+      "update remote_observations set completeness = 'unavailable', code = 'remote.unavailable', " +
+        "snapshot_json = null, as_of = null",
+    ).run();
+  } finally {
+    db.close();
+  }
+}
+
+/** note: The competing journal records behind one fork, with the digest each one's head carries. */
+function journalFork(fixture: { repoKey: string }): { heads: string[]; records: Array<Record<string, unknown>> } {
+  const records = ["00000000-0000-4000-8000-0000000009d1", "00000000-0000-4000-8000-0000000009d2"].map(
+    (operationId, index) => ({
+      identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+      recordId: index === 0 ? "bbbbbbbb-cccc-4ddd-8eee-fffffffffff1" : "bbbbbbbb-cccc-4ddd-8eee-fffffffffff2",
+      event: { ...journalEvent(fixture, operationId), parents: ["8".repeat(64)] },
+    }),
+  );
+  return { records, heads: records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort() };
+}
+
+/** note: One conflicted journal intent together with the fork evidence it recorded. */
+async function conflictedJournal(
+  cache: { fixture: { repoKey: string }; commit: string; context: StoreContext; dbPath: string },
+  operationId: string,
+): Promise<{ heads: string[]; records: Array<Record<string, unknown>>; requestHash: string }> {
+  const intent = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+  const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
+  const fork = journalFork(cache.fixture);
+  await recordRemoteReceipt(
+    cache.context,
+    receiptInput(cache.commit, operationId, attemptId, intent.requestHash, {
+      kind: "conflict",
+      expectedHeads: [OBSERVED_PROJECT_HEAD],
+      observedHeads: fork.heads,
+      observedRecords: fork.records,
+    }),
+  );
+  return { ...fork, requestHash: intent.requestHash };
+}
+
+/** note: Re-observe the fixture project with its journal head replaced by the named heads. */
+async function observeHead(
+  cache: { context: StoreContext; commit: string; dbPath: string },
+  head: readonly string[],
+  coverage: RemoteSnapshot["coverage"] = { kind: "complete" },
+): Promise<void> {
+  const snapshot = completeSnapshot();
+  await ingestRemoteObservation(cache.context, {
+    ...observation(positiveCheck(), {
+      selectorCommit: cache.commit,
+      generation: 3,
+      expectRevision: observationRevision(cache.dbPath),
+    }),
+    snapshot: { ...snapshot, coverage, project: { ...snapshot.project, head } },
+  });
+}
+
+describe("remote outbox re-review", () => {
+  test("a reviewed resolution dispatches past older intents and stops blocking unrelated sends", async () => {
+    const cache = await outboxCache("outbox-resolve-order");
+    const conflictedId = "00000000-0000-4000-8000-000000000711";
+    const fork = await conflictedJournal(cache, conflictedId);
+    // note: The ordinary intent is enqueued BEFORE the repair, which strict FIFO would deadlock.
+    const queuedId = "00000000-0000-4000-8000-000000000712";
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, queuedId));
+    const resolutionId = "00000000-0000-4000-8000-000000000713";
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, resolutionId, fork.heads),
+    });
+    // invariant: The intent ahead of the repair is stale, which is never a reason to hold the repair.
+    await observeHead(cache, fork.heads);
+    await expect(dispatchRemoteIntent(cache.context, queuedId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("base moved"),
+    });
+    expect((await dispatchRemoteIntent(cache.context, resolutionId)).kind).toBe("permit");
+    const read = await readRemoteIntent(cache.context, resolutionId);
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, resolutionId, read.attemptId!, read.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffffff3",
+        event: recordedEvent(cache.dbPath, resolutionId),
+      }),
+    );
+    // invariant: The original stays conflicted, yet it no longer blocks an unrelated send once the
+    // stale intent ahead of the repair is explicitly abandoned.
+    expect(await readRemoteIntent(cache.context, conflictedId)).toMatchObject({
+      state: "conflict",
+      resolvedBy: resolutionId,
+    });
+    await abandonRemoteIntent(cache.context, { operationId: queuedId, reason: "superseded by the reviewed resolution" });
+    const nextHead = ["9".repeat(64)];
+    await observeHead(cache, nextHead);
+    const nextId = "00000000-0000-4000-8000-000000000714";
+    await prepareRemoteIntent(
+      cache.context,
+      journalIntent(cache.fixture, cache.commit, nextId, {
+        event: journalEvent(cache.fixture, nextId, nextHead),
+        expectedHeads: nextHead,
+      }),
+    );
+    expect((await dispatchRemoteIntent(cache.context, nextId)).kind).toBe("permit");
+  }, 30_000);
+
+  test("a resolution is proven against a fresh observation of its fork", async () => {
+    const cache = await outboxCache("outbox-resolve-evidence");
+    const conflictedId = "00000000-0000-4000-8000-000000000721";
+    const fork = await conflictedJournal(cache, conflictedId);
+    const resolutionId = "00000000-0000-4000-8000-000000000722";
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, resolutionId, fork.heads),
+    });
+    const partial: RemoteSnapshot["coverage"] = {
+      kind: "partial",
+      stream: "journal",
+      nextCursor: null,
+      code: "remote.partial-journal",
+    };
+    // invariant: A PARTIAL observation is compared, never skipped: a differing head refuses.
+    await observeHead(cache, ["9".repeat(64)], partial);
+    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("no longer carries the fork"),
+    });
+    // invariant: An absent observation proves nothing, so the recorded receipt alone never sends.
+    withdrawSnapshot(cache.dbPath);
+    await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      message: expect.stringContaining("not observed"),
+    });
+    // invariant: A partial observation that DOES carry the fork proves the base; completeness is
+    // not required, because a forked chain does not yield a complete observation.
+    await observeHead(cache, fork.heads, partial);
+    expect((await dispatchRemoteIntent(cache.context, resolutionId)).kind).toBe("permit");
+  }, 30_000);
+
+  test("a conflict is bound to the digest of each record and a unique record id", async () => {
+    const cache = await outboxCache("outbox-conflict-digest");
+    const conflictedId = "00000000-0000-4000-8000-000000000731";
+    const intent = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, conflictedId));
+    const fork = journalFork(cache.fixture);
+    const conflictReceipt = (outcome: Record<string, unknown>): Record<string, unknown> =>
+      receiptInput(cache.commit, conflictedId, attemptId, intent.requestHash, { kind: "conflict", ...outcome });
+    // invariant: Heads that do not digest the records they name are refused.
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        conflictReceipt({
+          expectedHeads: [OBSERVED_PROJECT_HEAD],
+          observedHeads: ["6".repeat(64), "7".repeat(64)],
+          observedRecords: fork.records,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: One immutable record never stands for two heads.
+    const reused = [fork.records[0]!, { ...fork.records[1]!, recordId: fork.records[0]!.recordId }];
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        conflictReceipt({
+          expectedHeads: [OBSERVED_PROJECT_HEAD],
+          observedHeads: reused.map((record) => remoteEventHead(record.event as RemoteEvent)).sort(),
+          observedRecords: reused,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: A record of another scope is never accepted as this fork.
+    const foreign = [{ ...fork.records[0]!, identity: { ...providerScope(), issueId: MSTAR_ISSUE } }, fork.records[1]!];
+    await expect(
+      recordRemoteReceipt(
+        cache.context,
+        conflictReceipt({
+          expectedHeads: [OBSERVED_PROJECT_HEAD],
+          observedHeads: fork.heads,
+          observedRecords: foreign,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    // invariant: A refused record settles nothing.
+    expect(await readRemoteIntent(cache.context, conflictedId)).toMatchObject({ state: "unconfirmed", receipts: [] });
+  });
+
+  test("an operation id replays only its identical business verb and payload", async () => {
+    const cache = await outboxCache("outbox-replay-origin");
+    const project = SELECTED_PROJECT.localProjectId;
+    const operationId = "00000000-0000-4000-8000-000000000741";
+    const mutation = { operationId, expectedStoreRevision: 0 };
+    await expect(
+      updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, mutation),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, operationId), JOURNAL_ANCHOR);
+    // invariant: A no-op update reports the RECORDED result: no change, its own revision.
+    expect(await updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, mutation)).toEqual({
+      projectId: project,
+      milestoneId: "milestone-1",
+      revision: 1,
+      storeRevision: 0,
+      changed: false,
+    });
+    // invariant: Another payload under the same id is a conflict, not a replay.
+    await expect(
+      updateMilestone(cache.context, project, "milestone-1", { name: "Renamed" }, mutation),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: Another VERB under the same id never replays, even though the observed document
+    // already satisfies what its old final-document predicate looked for.
+    await expect(removeMilestone(cache.context, project, "milestone-1", mutation)).rejects.toMatchObject({
+      code: "remote.operation-conflict",
+    });
+  });
+
+  test("a confirmed removal reports the revision it removed", async () => {
+    const cache = await outboxCache("outbox-milestone-removal");
+    const project = SELECTED_PROJECT.localProjectId;
+    const operationId = "00000000-0000-4000-8000-000000000751";
+    const mutation = { operationId, expectedStoreRevision: 0 };
+    await expect(removeMilestone(cache.context, project, "milestone-1", mutation)).rejects.toMatchObject({
+      code: "remote.effect-pending",
+    });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, operationId), JOURNAL_ANCHOR);
+    expect(await removeMilestone(cache.context, project, "milestone-1", mutation)).toEqual({
+      projectId: project,
+      milestoneId: "milestone-1",
+      revision: 1,
+      storeRevision: 0,
+      changed: true,
+    });
+    // invariant: The confirmed document really dropped the row.
+    expect(recordedProject(cache.dbPath, outboxIdFor(cache.dbPath, operationId)).milestones).toEqual([]);
+  });
+
+  test("a repeated occurrence returns the established result instead of appending history", async () => {
+    const cache = await outboxCache("outbox-occurrence-repeat");
+    const actor = "project-manager";
+    const observedOccurrence = {
+      sourceIdentity: "review:fixture",
+      rootCauseKey: "remote.observation",
+      acceptanceKey: "remote.observation.stored",
+      occurrenceKey: "occurrence-one",
+      sourceKind: "review",
+      location: "packages/engine/src/collaboration-remote.ts",
+      observedBehavior: "The store refused a complete scope.",
+      evidence: ["review-fixture"],
+      discoveredAt: "2026-11-20T00:00:00.000Z",
+    };
+    // invariant: The observed authority already carries this observation: nothing is frozen.
+    expect(
+      await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, {
+        operationId: "00000000-0000-4000-8000-000000000761",
+        actor,
+      }),
+    ).toEqual({ issueId: MSTAR_ISSUE, revision: 1, storeRevision: 0, created: false });
+    expect(outboxRows(cache.dbPath)).toHaveLength(0);
+    // invariant: The same key with another observation is a conflict, never a second history row.
+    await expect(
+      appendOccurrence(
+        cache.context,
+        FORGED_ISSUE_REF,
+        { ...observedOccurrence, observedBehavior: "another reading" },
+        { operationId: "00000000-0000-4000-8000-000000000762", actor },
+      ),
+    ).rejects.toMatchObject({ code: "issue.occurrence-conflict" });
+    expect(outboxRows(cache.dbPath)).toHaveLength(0);
+    // invariant: A new observation of the same issue still freezes exactly one intent.
+    await expect(
+      appendOccurrence(
+        cache.context,
+        FORGED_ISSUE_REF,
+        { ...observedOccurrence, occurrenceKey: "occurrence-two" },
+        { operationId: "00000000-0000-4000-8000-000000000763", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "remote.effect-pending" });
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
+  });
+
+  test("a multi-entry residual-add reports every durable component and resumes", async () => {
+    const cache = await outboxCache("composite-residual-partial");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const operationId = "residual-remote-partial";
+    const request = {
+      planId: workflow.planId,
+      operationId,
+      operation: { kind: "residual-add" as const, entries: [residualEntry("first"), residualEntry("second")] },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const key = { executionStoreId: workflow.storeId, executionEpoch: workflow.epoch, operationId };
+    const firstEntry = remoteCompositeEntryOperationId(key, 0);
+    const secondEntry = remoteCompositeEntryOperationId(key, 1);
+    // note: The second entry's provider id is already taken by another request, so preparing it
+    // fails AFTER the first entry is durable.
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, secondEntry));
+    const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(refused.code).toBe("collaboration.operation-partial");
+    // invariant: The refusal names the durable entry instead of claiming nothing was frozen.
+    expect(detailsOf(refused)).toMatchObject({
+      phase: "prepared",
+      frozen_components: [firstEntry],
+      confirmed_components: [],
+      cause_code: "remote.operation-conflict",
+    });
+    expect(outboxStateOf(cache.dbPath, firstEntry)).toBe("enqueued");
+    // invariant: The retry reuses the durable entry instead of minting a second identity.
+    const retried = await refusalOf(() => residualAddExecutionPlan(execution, request));
+    expect(detailsOf(retried).frozen_components).toEqual([firstEntry]);
+    expect(outboxRows(cache.dbPath)).toHaveLength(2);
+  });
+
+  test("a multi-entry remote composite names every confirmed effect and issue", async () => {
+    const cache = await outboxCache("composite-multi-facts");
+    (await initializeStore(cache.context)).close();
+    const state = await readExecutionState(cache.context);
+    const key = { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-multi-facts" };
+    const intent: CompositeIntent = {
+      key,
+      kind: "residual-add",
+      requestHash: "composite-multi-facts-hash",
+      target: { repoKey: cache.fixture.repoKey, mode: "remote", storeId: state.storeId, epoch: state.epoch },
+      scope: { workflowId: null, planId: null },
+      actor: "project-manager",
+      expectedExecution: state.token,
+      frozenPayload: JSON.stringify({ entries: 2 }),
+    };
+    await withExecutionTransaction(cache.context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: tx.execution.revision }),
+    );
+    const first = "00000000-0000-4000-8000-000000000771";
+    const second = "00000000-0000-4000-8000-000000000772";
+    await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, first));
+    await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, second));
+    let facts = "";
+    const effects = {
+      apply: () => {
+        throw new Error("a remote composite never writes the local collaboration lane");
+      },
+      finalize: (_tx: ExecutionTransaction, receipt: CollaborationEffectReceipt) => {
+        facts = receipt.facts;
+        return "finalized";
+      },
+      remote: async (context: StoreContext) => [
+        await prepareRemoteIntent(context, issueIntent(cache.fixture, cache.commit, first)),
+        await prepareRemoteIntent(context, issueIntent(cache.fixture, cache.commit, second)),
+      ],
+    };
+    // invariant: A pending entry is reported with every durable component, never as "none".
+    const queued = await refusalOf(() => runCollaborationComposite(cache.context, intent, effects));
+    expect(detailsOf(queued)).toMatchObject({ frozen_components: [first, second], confirmed_components: [] });
+    // note: Both provider effects confirm, the second after the base moved; then ONE finalization.
+    await confirmIntent(cache, first, MSTAR_ISSUE);
+    await reobserve(cache, observationRevision(cache.dbPath));
+    await confirmIntent(cache, second, MSTAR_ISSUE);
+    expect(await runCollaborationComposite(cache.context, intent, effects)).toBe("finalized");
+    const parsedFacts: unknown = JSON.parse(facts);
+    if (parsedFacts === null || typeof parsedFacts !== "object" || !("remote" in parsedFacts)) {
+      throw new Error("the composite receipt carries no remote facts");
+    }
+    expect(parsedFacts.remote).toEqual([
+      expect.objectContaining({ operationId: first, issueId: MSTAR_ISSUE }),
+      expect.objectContaining({ operationId: second, issueId: MSTAR_ISSUE }),
+    ]);
+  }, 30_000);
 });

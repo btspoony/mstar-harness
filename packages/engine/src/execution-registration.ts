@@ -591,26 +591,9 @@ export async function commitExecutionRegistration(
           });
           return { ...current, catalogEntities: [...entities, ...published], catalogLinks: [...links, ...appended] };
         },
-        replay: (event) => {
-          const change = event.change;
-          if (change.kind !== "project-replace") return false;
-          const entities = change.project.catalogEntities as Array<Record<string, unknown>>;
-          const links = change.project.catalogLinks as Array<Record<string, unknown>>;
-          return (
-            plan.request.delta.entities.every((entity) =>
-              entities.some((row) => row.kind === entity.kind && row.id === entity.id),
-            ) &&
-            (plan.request.delta.links ?? []).every((link) =>
-              links.some(
-                (row) =>
-                  row.fromKind === link.from.kind &&
-                  row.fromId === link.from.id &&
-                  row.relation === link.relation &&
-                  row.toKind === link.to.kind &&
-                  row.toId === link.to.id,
-              ),
-            )
-          );
+        origin: {
+          verb: "execution-register",
+          request: { projectId: journalProject, delta: plan.request.delta },
         },
       });
     },

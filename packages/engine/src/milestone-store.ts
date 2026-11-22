@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import type { RemoteEvent, RemoteIntent, RemoteIssue } from "./collaboration-remote.js";
+import type { RemoteEvent, RemoteIntent, RemoteIssue, RemoteWriteOrigin } from "./collaboration-remote.js";
 import { withCollaborationWrite } from "./collaboration-store.js";
 import { remoteMilestones } from "./collaboration-remote-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
@@ -59,29 +59,66 @@ function milestoneIdForOperation(operationId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+/** note: The business result one remote milestone write derives from the observed document it froze against. */
+type MilestoneWriteResult = Readonly<{ changed: boolean; revision: number }>;
+
+/** note: The recorded result of one confirmed milestone write, or null when none was recorded. */
+function recordedMilestoneResult(value: unknown): MilestoneWriteResult | null {
+  if (value === null || typeof value !== "object") return null;
+  const body = value as Record<string, unknown>;
+  if (typeof body.changed !== "boolean" || !Number.isSafeInteger(body.revision) || (body.revision as number) < 0) {
+    return null;
+  }
+  return { changed: body.changed, revision: body.revision as number };
+}
+
 /**
- * note: The confirmed business result of a remote milestone write. The frozen document is the
- * recorded effect, so the row's revision comes from it; a removal's frozen effect is the absence
- * of the row, and the prior revision is not part of that effect. A remote write owns no local
- * collaboration revision.
+ * note: The business result of one milestone request, derived from the same observed document the
+ * request froze against: a no-op update keeps its revision and reports no change, a removal reports
+ * the revision it removed, an add reports the first revision. Recorded at preparation, because the
+ * confirmed document no longer carries the before-state.
+ */
+function milestoneWriteResult(
+  milestoneId: string,
+): (current: Record<string, unknown>, subject: Record<string, unknown>) => MilestoneWriteResult {
+  return (current, subject) => {
+    const before = observedMilestones(current).find((entry) => entry.milestoneId === milestoneId);
+    const after = observedMilestones(subject).find((entry) => entry.milestoneId === milestoneId);
+    if (after === undefined) {
+      return { changed: before !== undefined, revision: typeof before?.revision === "number" ? before.revision : 0 };
+    }
+    return {
+      changed: before === undefined || after.revision !== before.revision,
+      revision: typeof after.revision === "number" ? after.revision : 0,
+    };
+  };
+}
+
+/**
+ * note: The confirmed business result of a remote milestone write, read from the result recorded
+ * with the frozen request. A remote write owns no local collaboration revision.
  */
 function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, milestoneId: string): MilestoneReceipt {
-  const confirmed = intent.confirmed;
-  if (confirmed === null) {
+  if (intent.confirmed === null) {
     throw new MilestoneError(
       "milestone.operation-conflict",
       `Operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
     );
   }
-  const change = confirmed.event.change;
-  const rows = change.kind === "project-replace" ? (change.project.milestones as Array<Record<string, unknown>>) : [];
-  const row = rows.find((entry) => entry.milestoneId === milestoneId);
+  const result = recordedMilestoneResult(intent.result);
+  if (result === null) {
+    throw new MilestoneError(
+      "milestone.operation-conflict",
+      `Operation ${intent.operationId} is confirmed without its recorded business result, so its change and revision ` +
+        `cannot be reported. Inspect it with outbox-show; nothing was read or changed.`,
+    );
+  }
   return {
     projectId,
     milestoneId,
-    revision: typeof row?.revision === "number" ? row.revision : 0,
+    revision: result.revision,
     storeRevision: 0,
-    changed: true,
+    changed: result.changed,
   };
 }
 
@@ -96,13 +133,19 @@ async function queueMilestoneWrite(
   projectId: string,
   operationId: string,
   milestoneId: string,
+  origin: RemoteWriteOrigin,
   next: (current: Record<string, unknown>, issues: readonly RemoteIssue[]) => Record<string, unknown>,
-  replay: (event: RemoteEvent) => boolean,
 ): Promise<MilestoneReceipt> {
   // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
   // would close the cycle before the milestone contract initializes.
   const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
-  const intent = await prepareRemoteProjectWrite(context, { projectId, operationId, next, replay });
+  const intent = await prepareRemoteProjectWrite(context, {
+    projectId,
+    operationId,
+    origin,
+    next,
+    result: milestoneWriteResult(milestoneId),
+  });
   if (intent.confirmed !== null) return confirmedMilestoneReceipt(intent, projectId, milestoneId);
   throw pendingRemoteEffect(intent);
 }
@@ -190,6 +233,7 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
       input.projectId,
       mutation.operationId,
       milestoneId,
+      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal } },
       (current) => ({
         ...current,
         milestones: [
@@ -197,19 +241,6 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
           { milestoneId, name: input.name.trim(), target: input.target, status: "planned", ordinal: input.ordinal, revision: 1, createdAt: at, updatedAt: at },
         ],
       }),
-      (event) => {
-        const change = event.change;
-        if (change.kind !== "project-replace") return false;
-        const rows = change.project.milestones as Array<Record<string, unknown>>;
-        return rows.some(
-          (row) =>
-            row.name === input.name.trim() &&
-            (row.target ?? null) === input.target &&
-            row.ordinal === input.ordinal &&
-            row.status === "planned" &&
-            row.revision === 1,
-        );
-      },
     );
   }
   return write(context, db => mutate(db,input.projectId,"",input,mutation,true));
@@ -227,6 +258,7 @@ export async function updateMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
+      { verb: "milestone-update", request: { projectId, milestoneId, patch } },
       (current, issues) => {
         const rows = observedMilestones(current);
         const row = rows.find((entry) => entry.milestoneId === milestoneId);
@@ -252,20 +284,6 @@ export async function updateMilestone(context: StoreContext, projectId: string, 
           ),
         };
       },
-      (event) => {
-        const change = event.change;
-        if (change.kind !== "project-replace") return false;
-        const row = (change.project.milestones as Array<Record<string, unknown>>).find(
-          (entry) => entry.milestoneId === milestoneId,
-        );
-        if (row === undefined) return false;
-        return (
-          (patch.name === undefined || row.name === patch.name.trim()) &&
-          (patch.target === undefined || (row.target ?? null) === patch.target) &&
-          (patch.ordinal === undefined || row.ordinal === patch.ordinal) &&
-          (patch.status === undefined || row.status === patch.status)
-        );
-      },
     );
   }
   return write(context, db => mutate(db,projectId,milestoneId,patch,mutation,false));
@@ -279,6 +297,7 @@ export async function removeMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
+      { verb: "milestone-remove", request: { projectId, milestoneId } },
       (current, issues) => {
         const rows = observedMilestones(current);
         if (!rows.some((entry) => entry.milestoneId === milestoneId)) {
@@ -289,15 +308,6 @@ export async function removeMilestone(context: StoreContext, projectId: string, 
           fail("milestone.not-empty", `Milestone ${milestoneId} still holds ${held} issue(s); settled rows count too, so reassign or clear them before the removal. Nothing was enqueued.`);
         }
         return { ...current, milestones: rows.filter((entry) => entry.milestoneId !== milestoneId) };
-      },
-      (event) => {
-        const change = event.change;
-        return (
-          change.kind === "project-replace" &&
-          !(change.project.milestones as Array<Record<string, unknown>>).some(
-            (entry) => entry.milestoneId === milestoneId,
-          )
-        );
       },
     );
   }

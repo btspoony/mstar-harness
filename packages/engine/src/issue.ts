@@ -26,7 +26,6 @@ import {
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import type {
   ProviderIssueIdentity,
-  RemoteEvent,
   RemoteIntent,
   RemoteIssue,
   RemoteIssueWrite,
@@ -1103,29 +1102,12 @@ async function queueRemoteIssueWrite(context: StoreContext, write: RemoteIssueWr
   // note: Dynamic on purpose — collaboration-remote.ts imports this module's vocabularies, so a
   // static import would close a cycle before they initialize.
   const { prepareRemoteIssueWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
-  const intent = await prepareRemoteIssueWrite(context, write);
-  if (intent.confirmed !== null) return confirmedIssueReceipt(intent);
-  throw pendingRemoteEffect(intent);
-}
-
-/** note: One frozen array member's last entry, or null when the subject appends nothing there. */
-function lastFrozen(subject: Record<string, unknown>, member: string): Record<string, unknown> | null {
-  const entries = subject[member];
-  if (!Array.isArray(entries) || entries.length === 0) return null;
-  const last: unknown = entries[entries.length - 1];
-  return last !== null && typeof last === "object" ? (last as Record<string, unknown>) : null;
-}
-
-/** note: The frozen subject of an issue change, or null when the event replaces the project journal. */
-function frozenSubject(event: RemoteEvent): Record<string, unknown> | null {
-  const change = event.change;
-  return change.kind === "project-replace" ? null : change.mstar;
-}
-
-/** note: The frozen fields of an issue change's subject, or null for a project event. */
-function frozenFields(event: RemoteEvent): Record<string, unknown> | null {
-  const subject = frozenSubject(event);
-  return subject === null ? null : (subject.fields as Record<string, unknown>);
+  const outcome = await prepareRemoteIssueWrite(context, write);
+  // note: A write the observed authority already carries is the domain's own no-change outcome:
+  // nothing was frozen, and the established receipt stands.
+  if ("noChange" in outcome) return outcome.noChange as IssueReceipt;
+  if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome);
+  throw pendingRemoteEffect(outcome);
 }
 
 /** note: One frozen occurrence equals this observation, excluding the generated row id and recorded time. */
@@ -1148,95 +1130,6 @@ function frozenOccurrenceMatches(
     Array.isArray(frozenEvidence) &&
     frozenEvidence.length === evidence.length &&
     evidence.every((entry, index) => frozenEvidence[index] === entry)
-  );
-}
-
-/** note: A create's frozen genesis is this capture's own request; generated ids and times never decide it. */
-function genesisMatches(subject: Record<string, unknown>, input: CaptureInput): boolean {
-  const cols = occurrenceColumns(input);
-  const fields = subject.fields as Record<string, unknown>;
-  const occurrences = subject.occurrences as Array<Record<string, unknown>>;
-  const provenance = subject.provenance as Array<Record<string, unknown>>;
-  return (
-    fields.title === input.title &&
-    fields.kind === input.kind &&
-    fields.severity === input.severity &&
-    fields.impact === input.impact &&
-    fields.acceptance === input.acceptance &&
-    fields.owner === (input.owner ?? null) &&
-    fields.disposition === "open" &&
-    occurrences.length === 1 &&
-    frozenOccurrenceMatches(occurrences[0] ?? null, cols, input.evidence) &&
-    // note: A residual genesis appends its plan link after the capture record, so the capture
-    // identity is proved by its own first provenance row, not by the total count.
-    provenance.length >= 1 &&
-    provenance[0]?.kind === "capture" &&
-    provenance[0]?.target === cols.sourceIdentity
-  );
-}
-
-/** note: A frozen closure is this terminal request: disposition, actor, reason and its evidence. */
-export function closedSubjectMatches(
-  subject: Record<string, unknown>,
-  disposition: TerminalDisposition,
-  evidence: ClosureEvidence,
-  actor: string,
-): boolean {
-  const fields = subject.fields as Record<string, unknown>;
-  const transition = lastFrozen(subject, "transitions");
-  if (transition === null) return false;
-  const recorded = transition.evidence as Record<string, unknown>;
-  const references = recorded.references;
-  return (
-    fields.disposition === disposition &&
-    transition.fromDisposition === "open" &&
-    transition.toDisposition === disposition &&
-    transition.actor === actor &&
-    recorded.reason === evidence.reason &&
-    recorded.canonicalIssueId === (evidence.canonicalIssueId ?? null) &&
-    recorded.alignmentRef === (evidence.alignmentRef ?? null) &&
-    Array.isArray(references) &&
-    references.length === evidence.references.length &&
-    evidence.references.every((entry, index) => references[index] === entry)
-  );
-}
-
-/** note: A frozen reopen is this terminal-to-open request. */
-function reopenedSubjectMatches(subject: Record<string, unknown>, reason: string, actor: string): boolean {
-  const fields = subject.fields as Record<string, unknown>;
-  const transition = lastFrozen(subject, "transitions");
-  return (
-    fields.disposition === "open" &&
-    transition !== null &&
-    transition.toDisposition === "open" &&
-    transition.actor === actor &&
-    transition.reason === reason
-  );
-}
-
-/** note: A frozen triage carries exactly the values this patch sets. */
-function patchedSubjectMatches(subject: Record<string, unknown>, patch: Record<string, unknown>): boolean {
-  const fields = subject.fields as Record<string, unknown>;
-  return Object.entries(patch).every(([key, value]) => fields[key] === value);
-}
-
-/** note: A frozen link is this same relation or provenance append, under the same origin. */
-function linkedSubjectMatches(subject: Record<string, unknown>, link: IssueLink, origin: "scoped" | "unscoped"): boolean {
-  if ("relation" in link) {
-    const relation = lastFrozen(subject, "relations");
-    return (
-      ISSUE_REF_PATTERN.test(link.issueId) &&
-      relation !== null &&
-      relation.relation === link.relation &&
-      relation.target === link.issueId
-    );
-  }
-  const provenance = lastFrozen(subject, "provenance");
-  return (
-    provenance !== null &&
-    provenance.kind === link.kind &&
-    provenance.target === link.target &&
-    provenance.origin === origin
   );
 }
 
@@ -1266,18 +1159,6 @@ export function residualGenesisSubject(input: CaptureInput, planId: string, at: 
       },
     ],
   };
-}
-
-/** note: A frozen residual genesis is this capture plus this plan link. */
-export function residualGenesisMatches(
-  subject: Record<string, unknown>,
-  input: CaptureInput,
-  planId: string,
-): boolean {
-  if (!genesisMatches(subject, input)) return false;
-  return (subject.provenance as Array<Record<string, unknown>>).some(
-    (row) => row.kind === "plan" && row.target === planId && row.origin === "scoped",
-  );
 }
 
 /** note: The observed issue one stable reference or provider id names, if the scope observes it. */
@@ -1482,7 +1363,7 @@ export async function captureIssue(
       operationId: mutation.operationId,
       kind: "issue-create",
       next: () => genesisIssueSubject(input, nowRfc3339()),
-      replay: (event) => event.change.kind === "issue-create" && genesisMatches(event.change.mstar, input),
+      origin: { verb: "captureIssue", request: { input, actor: mutation.actor } },
     });
   }
   return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
@@ -1508,20 +1389,10 @@ export async function appendOccurrence(
         requireExpectedRevision(mutation, Number(fields.revision));
         // note: The occurrence rules are the domain's own: identity belongs to this issue, and a
         // reused key never silently lands another observation on it.
-        const native = observedIssue(observed, issueId);
-        const authority: readonly Record<string, unknown>[] = (native?.mstar?.occurrences ?? []) as readonly Record<
-          string,
-          unknown
-        >[];
-        const sameKey = authority.find((entry) => entry.occurrenceKey === cols.occurrenceKey);
-        if (sameKey !== undefined) {
-          if (!frozenOccurrenceMatches(sameKey as unknown as Record<string, unknown>, cols, input.evidence)) {
-            throw new IssueError(
-              "issue.occurrence-conflict",
-              "occurrenceKey was reused with a different observation; the original occurrence is retained.",
-            );
-          }
-        } else if (
+        const authority: readonly Record<string, unknown>[] = (
+          observedIssue(observed, issueId)?.mstar?.occurrences ?? []
+        ) as readonly Record<string, unknown>[];
+        if (
           authority.length > 0 &&
           (authority[0]!.sourceIdentity !== cols.sourceIdentity ||
             authority[0]!.rootCauseKey !== cols.rootCauseKey ||
@@ -1538,11 +1409,26 @@ export async function appendOccurrence(
           occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
         };
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return (
-          subject !== null && frozenOccurrenceMatches(lastFrozen(subject, "occurrences"), cols, input.evidence)
-        );
+      origin: { verb: "appendOccurrence", request: { issueId, input, actor: mutation.actor } },
+      unchanged: (current, observed) => {
+        // invariant: An occurrence key the observed authority already carries with THIS content is
+        // the established observation, exactly as the local domain answers it: no second history row.
+        const occurrences = (current?.occurrences ?? []) as Record<string, unknown>[];
+        const sameKey = occurrences.find((entry) => entry.occurrenceKey === cols.occurrenceKey);
+        if (sameKey === undefined) return null;
+        if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
+          throw new IssueError(
+            "issue.occurrence-conflict",
+            "occurrenceKey was reused with a different observation; the original occurrence is retained.",
+          );
+        }
+        return {
+          // note: The receipt names the provider identity, as every remote issue receipt does.
+          issueId: observedIssue(observed, issueId)?.identity.issueId ?? issueId,
+          revision: Number((current!.fields as Record<string, unknown>).revision),
+          storeRevision: 0,
+          created: false,
+        } satisfies IssueReceipt;
       },
     });
   }
@@ -2289,9 +2175,14 @@ export async function triageIssue(
         requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
         return { ...subject, fields: patchedFields(subject, normalized, at) };
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return subject !== null && patchedSubjectMatches(subject, normalized);
+      origin: {
+        verb: "triageIssue",
+        request: {
+          issueId,
+          patch,
+          actor: mutation.actor,
+          expectedRevision: mutation.expectedRevision,
+        },
       },
     });
   }
@@ -2489,9 +2380,15 @@ export async function closeIssue(
         }
         return closedRemoteSubject(subject, disposition, evidence, mutation.actor, at);
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return subject !== null && closedSubjectMatches(subject, disposition, evidence, mutation.actor);
+      origin: {
+        verb: "closeIssue",
+        request: {
+          issueId,
+          disposition,
+          evidence,
+          actor: mutation.actor,
+          expectedRevision: mutation.expectedRevision,
+        },
       },
     });
   }
@@ -2545,9 +2442,14 @@ export async function reopenIssue(
           ],
         };
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return subject !== null && reopenedSubjectMatches(subject, payload.reason, mutation.actor);
+      origin: {
+        verb: "reopenIssue",
+        request: {
+          issueId,
+          reason: payload.reason,
+          actor: mutation.actor,
+          expectedRevision: mutation.expectedRevision,
+        },
       },
     });
   }
@@ -2786,9 +2688,17 @@ export async function assignIssueMilestone(
         }
         return { ...subject, fields: patchedFields(subject, { milestoneId: input.milestoneId }, at) };
       },
-      replay: (event) => {
-        const fields = frozenFields(event);
-        return fields !== null && fields.milestoneId === input.milestoneId;
+      origin: {
+        verb: "assignIssueMilestone",
+        request: {
+          issueId,
+          projectId,
+          milestoneId: input.milestoneId,
+          reason,
+          actor: mutation.actor,
+          expectedRevision: mutation.expectedRevision,
+          expectedStoreRevision: mutation.expectedStoreRevision,
+        },
       },
     });
   }
@@ -2958,9 +2868,9 @@ export async function linkIssue(
         if ("relation" in link) assertObservedRelation(observed, issueId, link);
         return linkedSubject(subject, link, "unscoped", nowRfc3339());
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return subject !== null && linkedSubjectMatches(subject, link, "unscoped");
+      origin: {
+        verb: "linkIssue",
+        request: { issueId, link, origin: "unscoped", actor: mutation.actor, expectedRevision: mutation.expectedRevision },
       },
     });
   }
@@ -2987,9 +2897,9 @@ export async function linkIssueScoped(
         if ("relation" in link) assertObservedRelation(observed, issueId, link);
         return linkedSubject(subject, link, "scoped", nowRfc3339());
       },
-      replay: (event) => {
-        const subject = frozenSubject(event);
-        return subject !== null && linkedSubjectMatches(subject, link, "scoped");
+      origin: {
+        verb: "linkIssue",
+        request: { issueId, link, origin: "scoped", actor: mutation.actor, expectedRevision: mutation.expectedRevision },
       },
     });
   }

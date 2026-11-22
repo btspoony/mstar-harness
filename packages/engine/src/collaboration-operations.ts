@@ -908,6 +908,7 @@ function partialRefusal(input: {
   intent: CompositeIntent;
   phase: "prepared" | "collaboration-confirmed";
   confirmed: readonly string[];
+  frozen?: readonly string[];
   cause: unknown;
   receipt?: CollaborationEffectReceipt;
   recovery: string;
@@ -922,6 +923,7 @@ function partialRefusal(input: {
       kind: input.intent.kind,
       phase: input.phase,
       confirmed_components: [...input.confirmed],
+      ...(input.frozen === undefined ? {} : { frozen_components: [...input.frozen] }),
       ...(causeCode === null ? {} : { cause_code: causeCode }),
       cause: messageOf(input.cause),
       ...(input.receipt === undefined
@@ -935,6 +937,30 @@ function partialRefusal(input: {
   );
 }
 
+/**
+ * note: The refusal of a MULTI-ENTRY composite whose provider preparation stopped part-way. Each
+ * earlier entry is already durable, so the refusal names them: reporting "nothing was frozen" would
+ * strand them and invite a duplicate identity.
+ */
+export function remoteCompositePreparationPartial(
+  intent: CompositeIntent,
+  frozen: readonly RemoteIntent[],
+  cause: unknown,
+): ExecutionError {
+  const pending = frozen[frozen.length - 1];
+  return partialRefusal({
+    intent,
+    phase: "prepared",
+    confirmed: frozen.filter((entry) => entry.state === "confirmed").map((entry) => `provider:${entry.operationId}`),
+    frozen: frozen.map((entry) => entry.operationId),
+    cause,
+    recovery:
+      `The provider intents named in frozen_components are durable and are reused when this SAME verb is reissued with ` +
+      `the SAME --operation id${pending === undefined ? "" : `; inspect ${pending.operationId} with \`outbox-show\``}. ` +
+      `Nothing was applied.`,
+  });
+}
+
 export type CollaborationCompositeEffects<T> = Readonly<{
   /** note: The whole collaboration effect; runs inside one write transaction. */
   apply(handle: CollaborationStoreHandle): string;
@@ -942,12 +968,13 @@ export type CollaborationCompositeEffects<T> = Readonly<{
   finalize(tx: ExecutionTransaction, receipt: CollaborationEffectReceipt): T;
   /**
    * note: In `remote` mode the collaboration half is a provider event: this freezes (or replays)
-   * its durable outbox intent and returns its state. `null` means the kind has NO provider event
-   * remotely (its collaboration half is only the validated lane), so the frame finalizes the
+   * its durable outbox intents and returns their state. A multi-entry kind returns every entry's
+   * intent, so no durable component is lost from the receipt. `null` means the kind has NO provider
+   * event remotely (its collaboration half is only the validated lane), so the frame finalizes the
    * execution delta immediately instead of writing the local lane. Absent means the kind has no
    * admitted remote rewrite, and the frame refuses.
    */
-  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | null>;
+  remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[] | null>;
 }>;
 
 /**
@@ -1002,9 +1029,10 @@ async function runRemoteComposite<T>(
         `checkout. The reservation is retained; nothing was applied.`,
     });
   }
-  let remoteIntent: RemoteIntent | null;
+  let remoteIntents: readonly RemoteIntent[] | null;
   try {
-    remoteIntent = await effects.remote(context, intent);
+    const outcome = await effects.remote(context, intent);
+    remoteIntents = outcome === null ? null : Array.isArray(outcome) ? outcome : [outcome];
   } catch (error) {
     if (codeOf(error) === "collaboration.operation-partial") throw error;
     throw partialRefusal({
@@ -1017,7 +1045,7 @@ async function runRemoteComposite<T>(
         `once the named cause is corrected; nothing was applied.`,
     });
   }
-  if (remoteIntent === null) {
+  if (remoteIntents === null) {
     // invariant: A kind whose remote collaboration half is only the validated lane has no
     // provider effect to wait for; its execution delta is the whole effect and commits now.
     const receipt: CollaborationEffectReceipt = {
@@ -1030,30 +1058,43 @@ async function runRemoteComposite<T>(
     };
     return finalizeComposite(context, intent, receipt, effects.finalize);
   }
-  if (remoteIntent.state !== "confirmed") {
+  const pending = remoteIntents.find((entry) => entry.state !== "confirmed");
+  if (pending !== undefined) {
     throw partialRefusal({
       intent,
       phase: "prepared",
-      confirmed: [],
+      confirmed: remoteIntents
+        .filter((entry) => entry.state === "confirmed")
+        .map((entry) => `provider:${entry.operationId}`),
+      frozen: remoteIntents.map((entry) => entry.operationId),
       cause: new StoreError(
         "remote.effect-pending",
-        `the provider intent ${remoteIntent.operationId} is ${remoteIntent.state}, not confirmed`,
+        `the provider intent ${pending.operationId} is ${pending.state}, not confirmed`,
       ),
       recovery:
-        `Inspect it with \`outbox-show --operation ${remoteIntent.operationId}\`, send it with \`outbox-dispatch\`, record ` +
+        `Inspect it with \`outbox-show --operation ${pending.operationId}\`, send it with \`outbox-dispatch\`, record ` +
         `the result with \`outbox-receipt\`, then reissue this SAME verb with the SAME --operation id: only the execution ` +
         `delta is committed, and the confirmed effect is never re-applied.`,
     });
   }
   // invariant: A remote composite owns no local collaboration revision; the confirmed provider
-  // event IS its effect receipt, and only the separate execution acknowledgement is left.
+  // events ARE its effect receipt. Every entry is named with the record and issue it confirmed, so
+  // a multi-entry kind's effects stay inspectable after the fact.
   const receipt: CollaborationEffectReceipt = {
     key: intent.key,
     requestHash: intent.requestHash,
     collaborationRevision: 0,
     catalogRevision: 0,
-    committedAt: remoteIntent.updatedAt,
-    facts: JSON.stringify({ remote: { operationId: remoteIntent.operationId, requestHash: remoteIntent.requestHash } }),
+    committedAt: remoteIntents.reduce((latest, entry) => (entry.updatedAt > latest ? entry.updatedAt : latest), ""),
+    facts: JSON.stringify({
+      remote: remoteIntents.map((entry) => ({
+        operationId: entry.operationId,
+        requestHash: entry.requestHash,
+        issueId: entry.confirmed?.identity.issueId ?? null,
+        recordId: entry.confirmed?.recordId ?? null,
+        result: entry.result,
+      })),
+    }),
   };
   return finalizeComposite(context, intent, receipt, effects.finalize);
 }

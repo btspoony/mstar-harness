@@ -44,7 +44,7 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import type { RemoteEvent, RemoteIntent } from "./collaboration-remote.js";
+import type { RemoteIntent, RemoteWriteOrigin } from "./collaboration-remote.js";
 import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -861,8 +861,8 @@ async function queueCatalogWrite(
   context: StoreContext,
   operation: CatalogOperation,
   entity: Readonly<{ kind: CatalogReceipt["kind"]; id: string }>,
+  origin: RemoteWriteOrigin,
   next: (current: Record<string, unknown>) => Record<string, unknown>,
-  replay: (event: RemoteEvent) => boolean,
 ): Promise<CatalogReceipt> {
   const projectId = operation.projectId;
   if (typeof projectId !== "string" || projectId.trim() === "") {
@@ -877,8 +877,8 @@ async function queueCatalogWrite(
   const intent = await prepareRemoteProjectWrite(context, {
     projectId: projectId.trim(),
     operationId: operation.operationId,
+    origin,
     next,
-    replay,
   });
   if (intent.confirmed !== null) return confirmedCatalogReceipt(intent, entity.kind, entity.id);
   throw pendingRemoteEffect(intent);
@@ -925,6 +925,7 @@ export async function registerCatalogEntity(
       context,
       { ...op, projectId: operation.projectId },
       { kind, id },
+      { verb: "catalog-register", request: { projectId: operation.projectId, kind, id, title, description, documentKind, lifecycle } },
       (current) => {
         const entities = observedEntities(current);
         if (entities.some((entity) => entity.kind === kind && entity.id === id)) {
@@ -934,20 +935,6 @@ export async function registerCatalogEntity(
           ...current,
           catalogEntities: [...entities, { kind, id, title, description, documentKind, lifecycle, revision: 1 }],
         };
-      },
-      (event) => {
-        const change = event.change;
-        if (change.kind !== "project-replace") return false;
-        return (change.project.catalogEntities as Array<Record<string, unknown>>).some(
-          (entity) =>
-            entity.kind === kind &&
-            entity.id === id &&
-            entity.title === title &&
-            entity.description === description &&
-            entity.documentKind === documentKind &&
-            entity.lifecycle === lifecycle &&
-            entity.revision === 1,
-        );
       },
     );
   }
@@ -1067,6 +1054,7 @@ export async function updateCatalogEntity(
       context,
       { ...op, projectId: operation.projectId },
       target,
+      { verb: "catalog-update", request: { projectId: operation.projectId, key: target, patch: record, expectedRevision: expected } },
       (current) => {
       const entities = observedEntities(current);
       const row = entities.find((entity) => entity.kind === target.kind && entity.id === target.id);
@@ -1095,20 +1083,6 @@ export async function updateCatalogEntity(
             : entity,
         ),
       };
-      },
-      (event) => {
-        const change = event.change;
-        if (change.kind !== "project-replace") return false;
-        const row = (change.project.catalogEntities as Array<Record<string, unknown>>).find(
-          (entity) => entity.kind === target.kind && entity.id === target.id,
-        );
-        if (row === undefined) return false;
-        return (
-          (record.title === undefined || row.title === record.title) &&
-          (record.description === undefined || row.description === record.description) &&
-          (record.documentKind === undefined || row.documentKind === record.documentKind) &&
-          (record.lifecycle === undefined || row.lifecycle === record.lifecycle)
-        );
       },
     );
   }
@@ -1202,6 +1176,10 @@ export async function linkCatalogEntities(
       context,
       { ...op, projectId: operation.projectId },
       from,
+      {
+        verb: "catalog-link",
+        request: { projectId: operation.projectId, from, to, relation: link.relation, ordinal, expectedRevision: operation.expectedRevision },
+      },
       (current) => {
       const entities = observedEntities(current);
       for (const endpoint of [from, to]) {
@@ -1239,19 +1217,6 @@ export async function linkCatalogEntities(
           { fromKind: from.kind, fromId: from.id, relation: link.relation, toKind: to.kind, toId: to.id, ordinal },
         ],
       };
-      },
-      (event) => {
-        const change = event.change;
-        if (change.kind !== "project-replace") return false;
-        return (change.project.catalogLinks as Array<Record<string, unknown>>).some(
-          (row) =>
-            row.fromKind === from.kind &&
-            row.fromId === from.id &&
-            row.relation === link.relation &&
-            row.toKind === to.kind &&
-            row.toId === to.id &&
-            row.ordinal === ordinal,
-        );
       },
     );
   }
