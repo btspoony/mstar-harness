@@ -963,8 +963,13 @@ export async function registerShippedCatalogExecution(
   // why: The reviewed catalog revision belongs to the repository's ACTIVE
   // collaboration lane, not to this execution store: a NEW attempt pins the
   // revision it is reviewed against, and the published delta then joins it. A
-  // resumed operation keeps the expectation its first attempt admitted.
-  const authority = await readCollaborationAuthority(context);
+  // resumed operation keeps the expectation its first attempt admitted. A
+  // `remote` checkout's lane is its private cache — `readCollaborationAuthority`
+  // refuses the local lane outright.
+  const authority =
+    resolveCollaborationLocation(context).mode === "remote"
+      ? await readRemoteCacheAuthority(context)
+      : await readCollaborationAuthority(context);
   if (!replay.resuming && input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== authority.catalogRevision) {
     throw new CatalogError(
       "catalog.revision-conflict",
