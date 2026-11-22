@@ -3530,6 +3530,50 @@ describe("remote observation cache", () => {
     );
     await expect(readRemoteStatus(splitContext)).rejects.toMatchObject({ code: "collaboration.unreadable" });
   });
+
+  test("a complete snapshot without its own project catalog row still serves milestones", async () => {
+    const fixture = remoteFixture("milestone-without-project-row");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const snapshot = completeSnapshot();
+    await ingestRemoteObservation(context, {
+      ...observation(positiveCheck()),
+      selectorCommit: commit,
+      generation: 3,
+      snapshot: {
+        ...snapshot,
+        project: {
+          ...snapshot.project,
+          // invariant: Ingest never requires an admitted snapshot to re-declare its own project row.
+          catalogEntities: snapshot.project.catalogEntities.filter(
+            (row) => !(row.kind === "project" && row.id === SELECTED_PROJECT.localProjectId),
+          ),
+        },
+        issues: snapshot.issues.map((issue) =>
+          issue.mstar === null
+            ? issue
+            : { ...issue, mstar: { ...issue.mstar, fields: { ...issue.mstar.fields, milestoneId: "milestone-1" } } },
+        ),
+      },
+    });
+
+    const view = await openRemoteReadView(context);
+    const read = remoteMilestones(view, SELECTED_PROJECT.localProjectId);
+    expect(read.milestones.map((row) => [row.milestoneId, row.totalIssues])).toEqual([["milestone-1", 1]]);
+    expect(read.issues.map((row) => [row.id, row.milestoneId])).toEqual([[FORGED_ISSUE_REF, "milestone-1"]]);
+    expect(read.unassignedIssues).toBe(0);
+    // note: The milestone lookup keeps its own refusal for an id the snapshot does not carry.
+    expect(() => remoteMilestones(view, SELECTED_PROJECT.localProjectId, "missing-milestone")).toThrow(
+      /\[milestone\.not-found\]/,
+    );
+  });
+
+  test("a project outside the selected evidence refuses the milestone read as a scope mismatch", async () => {
+    const cache = await outboxCache("milestone-scope-mismatch");
+    const view = await openRemoteReadView(cache.context);
+    expect(() => remoteMilestones(view, SECOND_PROJECT.localProjectId)).toThrow(/\[remote\.scope-mismatch\]/);
+  });
 });
 
 // ---------------------------------------------------------------------------

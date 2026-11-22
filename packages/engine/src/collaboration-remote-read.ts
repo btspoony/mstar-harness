@@ -1107,8 +1107,6 @@ export function remoteProjectList(view: RemoteReadView): {
 /** note: One project's milestone grouping and MStar membership from admitted evidence. */
 export function remoteMilestones(view: RemoteReadView, projectId: string, milestoneId?: string): MilestoneRead {
   const evidence = requireRemoteProjects(view, [projectId])[0]!;
-  const project = remoteCatalogRows(view, [projectId]).find((row) => row.kind === "project" && row.id === projectId);
-  if (project === undefined) throw new MilestoneError("milestone.project-not-found", `Project ${projectId} does not exist.`);
   const source = evidence.snapshot?.project.milestones ?? [];
   if (milestoneId !== undefined && !source.some((row) => row.milestoneId === milestoneId)) {
     throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} does not exist.`);
