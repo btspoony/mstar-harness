@@ -35,6 +35,14 @@ function violationsOf(result: CommandEnvelope): { code: string; message: string 
   if (!("details" in result) || !Array.isArray(result.details?.violations)) throw new Error(`Expected semantic violations: type=${typeof result.details?.violations} ctor=${result.details?.violations?.constructor?.name} keys=${JSON.stringify(Object.keys(result.details?.violations ?? {}))}`);
   return result.details.violations as { code: string; message: string }[];
 }
+function lintMarkers(result: CommandEnvelope): string[] {
+  if (result.status !== "ok") return [];
+  const data: unknown = result.data;
+  if (typeof data !== "object" || data === null || !("results" in data) || !Array.isArray(data.results)) return [];
+  const first: unknown = data.results[0];
+  if (typeof first !== "object" || first === null || !("markers" in first) || !Array.isArray(first.markers)) return [];
+  return first.markers.filter((marker): marker is string => typeof marker === "string");
+}
 /** see skills/mstar-coding-behavior/references/comments.md § Ratchet — the
  * lint gate reads git through the effect seam, so a diff-base case runs the
  * real command. */
@@ -478,8 +486,11 @@ describe("validation command family", () => {
 
   test("a code lint falls back to the invocation directory when Git cannot start", async () => {
     const cwd = tempRoot();
-    const file = path.join(cwd, "scan.ts");
-    writeFileSync(file, "const a = 1;\n// see docs/absent-pointer.md\n");
+    mkdirSync(path.join(cwd, "docs", "adr"), { recursive: true });
+    writeFileSync(path.join(cwd, "docs", "adr", "README.md"), "# ADR index\n");
+    mkdirSync(path.join(cwd, "pkg"), { recursive: true });
+    const file = path.join(cwd, "pkg", "scan.ts");
+    writeFileSync(file, "const a = 1;\n// see docs/adr/README.md\n// see docs/absent-pointer.md\n");
     let calls = 0;
     const unavailable: CommandEffects["spawn"] = async () => {
       calls += 1;
@@ -494,6 +505,7 @@ describe("validation command family", () => {
     expect(result).toMatchObject({ status: "ok", exitCode: 0 });
     expect(calls).toBe(1);
     expect(lines).toEqual(["unclassified comments: 0", "unresolved comment pointers: 1"]);
+    expect(lintMarkers(result)).toEqual(["unresolved comment pointer @3: docs/absent-pointer.md"]);
   });
 
   test("unknown optional validator type is classified as usage", async () => {
