@@ -588,9 +588,10 @@ function remoteBindingRecorded(context: StoreContext): boolean {
 }
 
 /**
- * invariant: Selection for any origin-backed checkout: the origin's live selector lookup, its
- * fetched commit, a second lookup proving that commit is still the ref's, and the payload read
- * from that commit. `null` is a live-confirmed absence, never a failed check.
+ * invariant: Selection for any origin-backed checkout: the origin's live selector lookup (recorded
+ * before any fetch or decode can fail), its fetched commit, a second lookup proving that commit is
+ * still the ref's, and the payload read from that commit. `null` is a live-confirmed absence, never
+ * a failed check.
  */
 function resolvePublishedSelector(
   context: StoreContext,
@@ -612,14 +613,16 @@ function resolvePublishedSelector(
     }
     return null;
   }
+  // invariant: The lookup named this selector, so it is recorded before any fetch or decode can
+  // fail: a later deletion is never read as a checkout that never saw one.
+  recordObservedSelector(context, { repoKey, selectorCommit: commit });
   const payload = selectorPayload(mainRoot, commit);
   // invariant: The commit is read only if the ref still names it: a selector that moved mid-read selects nothing.
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  // invariant: Any selector the origin named is recorded before its payload can refuse, so its
-  // later deletion is never read as a checkout that never saw one.
+  // note: Refine the record with the payload's generation once it is readable.
   const generation = readableGeneration(payload);
-  recordObservedSelector(context, { repoKey, selectorCommit: commit, ...(generation === undefined ? {} : { generation }) });
+  if (generation !== undefined) recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
   const selector = parseSelector(payload, repoKey, mode);
   return {
     commit,

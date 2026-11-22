@@ -774,4 +774,47 @@ describe("remote selector resolution", () => {
       expect(resolveAt(remoteRepo(origin.bare, mode)).mode).toBe(mode);
     }
   });
+
+  test("a selector observed by live lookup stays evidence when its payload cannot be read", () => {
+    // invariant: The live lookup is recorded before any fetch or decode can fail, so a later
+    // deletion of that ref is never read as a checkout that never saw a selector.
+    const fetchOrigin = makeSelectorOrigin();
+    const fetchCommit = fetchOrigin.publish(selectorPayload({ mode: "local", projects: [], generation: 3 }));
+    const fetchRepo = remoteRepo(fetchOrigin.bare, "local");
+    // note: `fetch.parallel` is read only by `git fetch`, so the lookup still answers and the
+    // transfer itself is the failure under test.
+    git(fetchRepo, "config", "fetch.parallel", "bogus");
+    const failedFetch = refusal(() => resolveAt(fetchRepo));
+    expect(failedFetch.code).toBe("remote.selector-unavailable");
+    expect(failedFetch.message).toContain("fetch");
+    expect(
+      JSON.parse(
+        readFileSync(join(fetchRepo, ".mstar", "collaboration-selector-observation.json"), "utf8"),
+      ),
+    ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: fetchCommit });
+
+    const payloadOrigin = makeSelectorOrigin();
+    const payloadCommit = payloadOrigin.publish("{not json");
+    const payloadRepo = remoteRepo(payloadOrigin.bare, "mirror");
+    expect(refusal(() => resolveAt(payloadRepo)).code).toBe("remote.selector-unavailable");
+    expect(
+      JSON.parse(
+        readFileSync(join(payloadRepo, ".mstar", "collaboration-selector-observation.json"), "utf8"),
+      ),
+    ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: payloadCommit });
+
+    for (const [origin, repo, commit] of [
+      [fetchOrigin, fetchRepo, fetchCommit],
+      [payloadOrigin, payloadRepo, payloadCommit],
+    ] as const) {
+      git(origin.bare, "update-ref", "-d", SELECTOR_REF);
+      const gone = refusal(() => resolveAt(repo));
+      expect(gone.code).toBe("collaboration.stale-binding");
+      expect(gone.message).toContain(commit);
+    }
+
+    // invariant: A checkout that never observed a selector still keeps its legacy lane.
+    expect(resolveAt(remoteRepo(fetchOrigin.bare, "local")).mode).toBe("local");
+    expect(resolveAt(remoteRepo(payloadOrigin.bare, "mirror")).mode).toBe("mirror");
+  });
 });
