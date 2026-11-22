@@ -53,6 +53,9 @@ import {
   partialSnapshot,
   positiveCheck,
   REMOTE_IDS,
+  SECOND_IDS,
+  secondCheck,
+  secondSnapshot,
   submission,
 } from "./remote-scope.fixture.js";
 import {
@@ -1802,6 +1805,53 @@ describe("remote read boundary", () => {
     return { fixture, context, commit, check };
   }
 
+  /** note: Two selected projects: A carries the relation, B is its cross-project target. */
+  async function twoProjectScope(name: string) {
+    const fixture = createRemoteScope(ROOT, name);
+    const commit = fixture.publish({
+      projects: [
+        {
+          localProjectId: REMOTE_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: REMOTE_IDS.providerProjectId,
+          journalIssueId: REMOTE_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+        {
+          localProjectId: SECOND_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: SECOND_IDS.providerProjectId,
+          journalIssueId: SECOND_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+      ],
+    });
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
+    // note: A submitted check must not predate the binding's recorded verification.
+    const checkA = positiveCheck();
+    const checkB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
+    await ingestRemoteObservation(context, submission(commit, checkB, secondSnapshot(checkB), 0));
+    return { context, commit, checkA, checkB };
+  }
+
+  function expireBinding(context: StoreContext, projectId: string): void {
+    const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      db.prepare("update remote_bindings set verified_at = ? where project_key = ?").run(
+        new Date(Date.now() - 61_000).toISOString(),
+        projectId,
+      );
+    } finally {
+      db.close();
+    }
+  }
+
   function cacheState(dbPath: string) {
     const db = new DatabaseSync(dbPath);
     try {
@@ -2029,5 +2079,107 @@ describe("remote read boundary", () => {
 
     // invariant: No cache-only adoption exists: the local tables and every remote row are unchanged.
     expect(cacheState(dbPath)).toEqual(before);
+  });
+
+  test("a relation title resolves only across current scopes, never an expired project", async () => {
+    const { context } = await twoProjectScope("remote-read-relation-title");
+    const fresh = await showIssue(context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
+    expect(fresh).toMatchObject({
+      relations: [{ toIssue: SECOND_IDS.issueRef, title: "Second project subject" }],
+      collaboration: { completeness: "complete" },
+    });
+
+    expireBinding(context, SECOND_IDS.projectId);
+    const expired = await showIssue(context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
+    // invariant: A's current detail never discloses B's expired content, and A's own
+    // observation stays complete because only A contributes to this read.
+    expect(expired).toMatchObject({
+      relations: [{ toIssue: SECOND_IDS.issueRef, title: null }],
+      collaboration: {
+        completeness: "complete",
+        providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+      },
+    });
+  });
+
+  test("observation stamps cover exactly the projects a narrowed read contributes", async () => {
+    const { context, commit } = await twoProjectScope("remote-read-exact-scope");
+    const partialB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, partialB, secondSnapshot(partialB, "partial"), 1));
+
+    const binding = await readProjectBinding(context, REMOTE_IDS.projectId);
+    expect(binding.collaboration).toMatchObject({
+      completeness: "complete",
+      revision: 1,
+      providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+    });
+
+    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: REMOTE_IDS.projectId }));
+    expect(roadmap.collaboration).toMatchObject({
+      completeness: "complete",
+      providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+    });
+
+    const page = await withStoreRead(context, queryDashboard("issues", { issue: { projectId: REMOTE_IDS.projectId } }));
+    expect(page.data.total).toBe(1);
+    expect(page.collaboration).toMatchObject({
+      completeness: "complete",
+      revision: 1,
+      providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
+    });
+
+    // note: The unfiltered repository read still requires every selected project.
+    await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({
+      code: "collaboration.observation-incomplete",
+    });
+  });
+
+  test("a project-filtered workflow list refuses missing, partial or expired membership instead of zero", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-read-workflow-required");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    await initializeStore(context);
+    const filtered = () => withStoreRead(context, queryDashboard("workflows", { projectId: REMOTE_IDS.projectId }));
+
+    await expect(filtered()).rejects.toMatchObject({ code: "remote.unavailable" });
+
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+    const empty = await filtered();
+    expect(empty.data).toMatchObject({ total: 0 });
+    expect(empty.collaboration).toMatchObject({ completeness: "complete" });
+
+    await ingestRemoteObservation(context, submission(commit, check, partialSnapshot(check), 1));
+    await expect(filtered()).rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
+
+    const refreshed = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, refreshed, completeSnapshot(refreshed), 2));
+    expireBinding(context, REMOTE_IDS.projectId);
+    await expect(filtered()).rejects.toMatchObject({ code: "collaboration.observation-stale" });
+  });
+
+  test("an optional workflow view discloses expired access instead of a complete observation", async () => {
+    const { context } = await boundScope("remote-read-workflow-optional");
+    await initializeStore(context);
+    expireBinding(context, REMOTE_IDS.projectId);
+
+    const list = await withStoreRead(context, queryDashboard("workflows"));
+    expect(list.data).toMatchObject({ total: 0 });
+    expect(list.collaboration).toMatchObject({
+      completeness: "unavailable",
+      asOf: null,
+      authority: null,
+      code: "collaboration.observation-stale",
+    });
+
+    const detail = await withStoreRead(context, queryDashboard("workflow-detail", { id: "missing-workflow" }));
+    expect(detail.data).toBeNull();
+    expect(detail.collaboration).toMatchObject({
+      completeness: "unavailable",
+      asOf: null,
+      authority: null,
+      code: "collaboration.observation-stale",
+    });
   });
 });

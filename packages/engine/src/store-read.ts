@@ -48,6 +48,7 @@ import {
 } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import {
+  ISSUE_REF_PATTERN,
   openCollaborationStore,
   readCollaborationObservation,
   type CollaborationObservation,
@@ -154,7 +155,8 @@ export type StoreReadSources = {
 export type StoreReadQuery<T> = {
   view: string;
   needsProjection: boolean;
-  collaboration: { scope: CollaborationScope; required: boolean } | null;
+  /** note: `projectIds` is the exact project set a project-narrowed query contributes; omitted means the scope's own set. */
+  collaboration: { scope: CollaborationScope; required: boolean; projectIds?: readonly string[] } | null;
   execution: "not-requested" | "required" | "optional";
   run(sources: StoreReadSources): { data: T; collaborationGap?: string };
 };
@@ -676,7 +678,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
         collaborationHandle !== null && scope !== null
           ? readCollaborationObservation(collaborationHandle, scope)
           : remoteView !== null && scope !== null
-            ? remoteCollaborationObservation(remoteView, scope)
+            ? remoteCollaborationObservation(remoteView, scope, query.collaboration?.projectIds)
             : null;
       const execution: ExecutionObservation | null =
         executionHandle !== null
@@ -848,22 +850,41 @@ function issuePageKey(filter: IssueFilter): string {
  */
 function viewSources(view: DashboardView, filters: DashboardFilters): ViewSources {
   const projectId = text(filters.projectId);
+  // invariant: A project-narrowed query declares exactly the projects it contributes,
+  // so its observation covers those projects and not every selected one.
+  const narrowed = (id: string | null): readonly string[] | undefined => (id === null ? undefined : [id]);
   const page = () => paging(filters.limit, filters.offset);
   switch (view) {
-    case "issues":
-      return { collaboration: { scope: { kind: "query", key: issuePageKey(filters.issue ?? {}) }, required: true }, execution: "not-requested" };
-    case "issue-detail":
-      return { collaboration: { scope: { kind: "query", key: `issue:${requireId(filters, "issue-detail")}` }, required: true }, execution: "not-requested" };
+    case "issues": {
+      const issue = filters.issue ?? {};
+      return {
+        collaboration: { scope: { kind: "query", key: issuePageKey(issue) }, required: true, projectIds: narrowed(issue.projectId ?? null) },
+        execution: "not-requested",
+      };
+    }
+    case "issue-detail": {
+      const id = requireId(filters, "issue-detail");
+      return {
+        collaboration: {
+          scope: { kind: "query", key: `issue:${id}` },
+          required: true,
+          // note: A stable reference resolves across every selected project; a native id
+          // reads only the project it names.
+          projectIds: ISSUE_REF_PATTERN.test(id) ? undefined : narrowed(projectId),
+        },
+        execution: "not-requested",
+      };
+    }
     case "projects":
       return { collaboration: { scope: { kind: "query", key: "projects" }, required: true }, execution: "not-requested" };
     case "issue-flow":
-      return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true }, execution: "not-requested" };
+      return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
     case "roadmap":
       if (projectId === null) usage("the roadmap view requires filters.projectId");
       return { collaboration: { scope: { kind: "project", key: projectId }, required: true }, execution: "not-requested" };
     case "workflows": {
       const { limit, offset } = page();
-      return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null }, execution: "required" };
+      return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
     }
     case "workflow-detail":
       return { collaboration: { scope: { kind: "query", key: `workflow:${requireId(filters, "workflow-detail")}` }, required: false }, execution: "required" };
@@ -871,14 +892,14 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       const { limit, offset } = page();
       // invariant: Membership, attribution and the unpaged total are catalog facts: an
       // unavailable catalog cannot be answered as an empty list.
-      return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: true }, execution: "required" };
+      return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: true, projectIds: narrowed(projectId) }, execution: "required" };
     }
     case "iteration-detail":
       // note: The subject itself is a catalog row: without the catalog no id can be
       // called absent.
       return { collaboration: { scope: { kind: "query", key: `iteration:${requireId(filters, "iteration-detail")}` }, required: true }, execution: "required" };
     case "overview":
-      return { collaboration: { scope: { kind: "query", key: `overview:${projectId ?? "*"}` }, required: true }, execution: "required" };
+      return { collaboration: { scope: { kind: "query", key: `overview:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "required" };
   }
 }
 
@@ -911,7 +932,11 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
   return {
     view: "issue-flow",
     needsProjection: false,
-    collaboration: { scope: { kind: "query", key: `issue-flow:${scoped ?? "*"}` }, required: true },
+    collaboration: {
+      scope: { kind: "query", key: `issue-flow:${scoped ?? "*"}` },
+      required: true,
+      projectIds: scoped === null || scoped === undefined ? undefined : [scoped],
+    },
     execution: "not-requested",
     run: (sources) => ({
       data:
@@ -1626,10 +1651,11 @@ function catalogIdentitiesIn(
 function projectMembershipIn(
   sources: StoreReadSources,
   required: boolean,
+  projectIds?: readonly string[],
 ): ReadonlyMap<string, ReadonlySet<string>> {
   if (sources.remote === null) return projectMembership(sources.collaboration?.db ?? null);
   try {
-    return remoteCatalogLinks(sources.remote, sources.remote.projectIds).membership;
+    return remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds).membership;
   } catch (error) {
     if (required) throw error;
     return new Map();
@@ -1895,6 +1921,10 @@ function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO
 }
 function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters): WorkflowListDTO {
   const db = executionSource(sources);
+  const projectId = text(filters.projectId);
+  // invariant: A project filter makes membership a required source. Enforcing it here
+  // covers both zero-producing returns below; only an unfiltered list is optional.
+  const membership = projectMembershipIn(sources, projectId !== null, projectId === null ? undefined : [projectId]);
   const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false) !== null : sources.collaboration !== null;
   const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
@@ -1905,7 +1935,6 @@ function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters):
       ...(terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }),
     };
   }
-  const projectId = text(filters.projectId);
 
   const plansByWorkflow = new Map<string, ProjectedPlanRow[]>();
   for (const plan of generated.plans) {
@@ -1919,7 +1948,6 @@ function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters):
   // The list's rows stay ACTIVE-REGISTERED only (C3): the projection now also
   // carries terminal iteration workflows for the iteration views, and the
   // membership rule is stated here rather than inherited from the row set.
-  const membership = projectMembershipIn(sources, false);
   const scoped = generated.workflows.filter((workflow) => {
     if (!workflow.active_registration) return false;
     if (projectId === null) return true;

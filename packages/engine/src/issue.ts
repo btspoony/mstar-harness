@@ -1160,6 +1160,19 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
+/** note: A required remote read's complete proof; the observation codes map onto the store's own refusal. */
+function requiredObservation(observation: CollaborationObservation, detail: string): CompleteCollaborationObservation {
+  if (observation.completeness === "complete") return observation;
+  throw new StoreError(
+    observation.completeness === "partial"
+      ? "collaboration.observation-incomplete"
+      : observation.code === "collaboration.observation-stale"
+        ? "collaboration.observation-stale"
+        : "remote.unavailable",
+    `${detail} is ${observation.completeness}; a required read answers only a complete, current scope.`,
+  );
+}
+
 /** note: The canonical scope key of one issue page: the filters with the applied bounds. */
 function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
   return {
@@ -1230,11 +1243,13 @@ export async function listIssues(
       "./collaboration-remote-read.js"
     );
     const view = await openRemoteReadView(context);
-    requireRemoteProjects(view, filter.projectId === undefined ? view.projectIds : [filter.projectId]);
-    return {
-      ...remoteIssuePage(view, filter),
-      collaboration: remoteCollaborationObservation(view, issuePageScope(filter, limit, offset)) as CompleteCollaborationObservation,
-    };
+    const projects = filter.projectId === undefined ? view.projectIds : [filter.projectId];
+    requireRemoteProjects(view, projects);
+    const collaboration = requiredObservation(
+      remoteCollaborationObservation(view, issuePageScope(filter, limit, offset), projects),
+      "The remote observation for this issue page",
+    );
+    return { ...remoteIssuePage(view, filter), collaboration };
   }
   const { where, params } = bindFilter(filter);
   const handle = await openCollaborationStore(context, "read");
@@ -1324,10 +1339,11 @@ export async function getIssue(
           "with `mstar issue show --id <provider-issue-id> --project <local-project-id>`.",
       );
     }
-    return {
-      ...read.detail,
-      collaboration: remoteCollaborationObservation(view, { kind: "query", key: `issue:${id}` }) as CompleteCollaborationObservation,
-    };
+    const collaboration = requiredObservation(
+      remoteCollaborationObservation(view, { kind: "query", key: `issue:${id}` }, view.projectIds),
+      `The remote observation for issue ${id}`,
+    );
+    return { ...read.detail, collaboration };
   }
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -1563,7 +1579,9 @@ export async function showIssue(context: StoreContext, id: string, projectId?: s
   const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
   const view = await openRemoteReadView(context);
   const read = remoteIssueRead(view, target, projectId);
-  const collaboration = remoteCollaborationObservation(view, { kind: "query", key: `issue:${target}` });
+  // note: A stable reference reads every selected project; a native id reads the one it names.
+  const projects = ISSUE_REF_PATTERN.test(target) ? view.projectIds : projectId === undefined ? view.projectIds : [projectId];
+  const collaboration = remoteCollaborationObservation(view, { kind: "query", key: `issue:${target}` }, projects);
   return { ...read.detail, collaboration };
 }
 

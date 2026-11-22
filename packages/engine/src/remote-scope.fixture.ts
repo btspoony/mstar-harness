@@ -31,6 +31,15 @@ export const REMOTE_IDS = {
   secondIssueRef: "mstar:issue:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 } as const;
 
+/** note: The second selected project: the target of the fixture issue's cross-project relation. */
+export const SECOND_IDS = {
+  projectId: "fixture-project-two",
+  providerProjectId: "88888888-8888-4888-8888-888888888888",
+  journalIssueId: "99999999-9999-4999-8999-999999999999",
+  markedIssueId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  issueRef: REMOTE_IDS.secondIssueRef,
+} as const;
+
 /** note: The generated selectors the fixture published, for exact assertions. */
 export const FIXTURE_AT = "2026-11-20T00:00:00.000Z";
 
@@ -53,8 +62,8 @@ export type RemoteScopeFixture = {
   context(): StoreContext;
   /** Publish (or republish) the selector; returns the checked commit. */
   publish(overrides?: Record<string, unknown>): string;
-  /** The strict verification batch for the published generation. */
-  batch(commit: string, generation?: number): { version: 1; selectorCommit: string; generation: number; checks: ScopeCheck[] };
+  /** The strict verification batch for the published generation; `extra` covers further selected projects. */
+  batch(commit: string, generation?: number, extra?: ScopeCheck[]): { version: 1; selectorCommit: string; generation: number; checks: ScopeCheck[] };
 };
 
 /**
@@ -117,8 +126,8 @@ export function createRemoteScope(root: string, name: string): RemoteScopeFixtur
       git(publisher, "push", "-q", "--force", bare, `HEAD:${REMOTE_SELECTOR_REF}`);
       return git(publisher, "rev-parse", "HEAD");
     },
-    batch(commit, generation = 3) {
-      return { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] };
+    batch(commit, generation = 3, extra: ScopeCheck[] = []) {
+      return { version: 1, selectorCommit: commit, generation, checks: [positiveCheck(), ...extra] };
     },
   };
 }
@@ -289,6 +298,58 @@ export function partialSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnap
   return {
     ...completeSnapshot(check),
     coverage: { kind: "partial", stream: "issues", nextCursor: "cursor-2", code: "remote.observation.partial" },
+  };
+}
+
+export function secondScope(): ProviderProjectScope {
+  return {
+    provider: "linear",
+    workspaceId: REMOTE_IDS.workspaceId,
+    teamId: REMOTE_IDS.teamId,
+    projectId: SECOND_IDS.providerProjectId,
+  };
+}
+
+export function secondCheck(overrides: Partial<ScopeCheck> = {}): ScopeCheck {
+  return {
+    ...positiveCheck(),
+    projectId: SECOND_IDS.projectId,
+    scope: secondScope(),
+    journalIssueId: SECOND_IDS.journalIssueId,
+    ...overrides,
+  };
+}
+
+/** note: The second project's scope carrying the relation target the first project references. */
+export function secondSnapshot(check: ScopeCheck, coverage: "complete" | "partial" = "complete"): RemoteSnapshot {
+  const base = completeSnapshot(check);
+  const marked = base.issues[0];
+  if (marked === undefined || marked.mstar === null) throw new Error("fixture: the base snapshot carries no marked issue");
+  return {
+    ...base,
+    coverage: coverage === "complete" ? { kind: "complete" } : { kind: "partial", stream: "issues", nextCursor: "cursor-2", code: "remote.observation.partial" },
+    project: {
+      ...base.project,
+      milestones: [],
+      roadmap: null,
+      catalogEntities: [
+        { kind: "project", id: check.projectId, title: "Fixture project two", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+      ],
+      catalogLinks: [],
+    },
+    issues: [
+      {
+        ...marked,
+        identity: { ...marked.identity, issueId: SECOND_IDS.markedIssueId },
+        nativeTitle: "Second project native",
+        mstar: {
+          ...marked.mstar,
+          issueRef: SECOND_IDS.issueRef,
+          relations: [],
+          fields: { ...marked.mstar.fields, title: "Second project subject", milestoneId: null },
+        },
+      },
+    ],
   };
 }
 

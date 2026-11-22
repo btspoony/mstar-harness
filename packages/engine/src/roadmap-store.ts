@@ -132,6 +132,9 @@ export async function readRoadmapAuthority(
 ): Promise<RoadmapRead & { collaboration: CompleteCollaborationObservation }> {
   if (resolveCollaborationLocation(context).mode === "remote") {
     const view = await openRemoteReadView(context);
+    // note: The project scope is validated first, so an unknown project keeps its own refusal
+    // instead of surfacing as a generic incomplete observation.
+    const read = remoteRoadmapRead(view, projectId);
     const collaboration = remoteCollaborationObservation(view, { kind: "project", key: projectId });
     if (collaboration.completeness !== "complete") {
       throw new StoreError(
@@ -140,7 +143,7 @@ export async function readRoadmapAuthority(
         { projectId },
       );
     }
-    return { ...remoteRoadmapRead(view, projectId), collaboration };
+    return { ...read, collaboration };
   }
   const handle = await openCollaborationStore(context, "read");
   try {

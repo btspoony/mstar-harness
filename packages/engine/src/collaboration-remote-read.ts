@@ -167,7 +167,9 @@ export async function openRemoteReadView(context: StoreContext): Promise<RemoteR
         asOf: row.as_of,
         completeness,
         code: row.code,
-        freshness: current && completeness === "complete" ? "fresh" : completeness === "complete" ? "expired" : "incomplete",
+        // note: Freshness is the ACCESS check's currency, not the snapshot's coverage:
+        // an expired check means no read may serve this scope, complete or not.
+        freshness: current ? (completeness === "complete" ? "fresh" : "incomplete") : "expired",
         // note: A partial observation carries its verified rows; required reads refuse it before serving,
         // but the observation still discloses its real asOf instead of masquerading as absent.
         snapshot: completeness === "unavailable" ? null : snapshotOf(row.snapshot_json, selected.localProjectId),
@@ -314,12 +316,20 @@ export function requireRemoteProjects(
   });
 }
 
-/** The remote arm of one scoped observation, from the same evidence its rows came from. */
+/**
+ * The remote arm of one scoped observation, from the evidence of exactly the
+ * projects the read contributes. A caller that narrowed a query to one project
+ * passes that set; every stamp (provider scopes, `asOf`, revisions) covers only
+ * those projects, so an unrelated project's gap never taints this read and no
+ * complete stamp is claimed over an expired access check.
+ */
 export function remoteCollaborationObservation(
   view: RemoteReadView,
   scope: CollaborationScope,
+  projectIds?: readonly string[],
 ): CollaborationObservation {
-  const evidence = view.projectIds.map((projectId) => view.projects.get(projectId)).filter(
+  const ids = projectIds ?? remoteScopeProjectIds(view, scope);
+  const evidence = ids.map((projectId) => view.projects.get(projectId)).filter(
     (entry): entry is RemoteProjectEvidence => entry !== undefined,
   );
   const providerScopes: CollaborationProviderScope[] = evidence.map((entry) => ({
@@ -329,51 +339,50 @@ export function remoteCollaborationObservation(
     asOf: entry.asOf,
     revision: entry.revision,
   }));
-  const authority = { repoKey: view.repoKey, mode: "remote" as const, storeId: view.storeId, epoch: view.epoch };
-  const present = evidence.filter((entry) => entry.asOf !== null);
-  if (present.length === 0 || evidence.length !== view.projectIds.length) {
-    return {
-      scope,
-      source: "remote",
-      selectorCommit: view.selectorCommit,
-      generation: view.generation,
-      providerScopes,
-      completeness: "unavailable",
-      asOf: null,
-      authority: null,
-      code: evidence.length === 0 ? "remote.unavailable" : "collaboration.observation-incomplete",
-    };
+  const base = {
+    scope,
+    source: "remote" as const,
+    selectorCommit: view.selectorCommit,
+    generation: view.generation,
+    providerScopes,
+  };
+  const unavailable = (code: string): CollaborationObservation => ({
+    ...base,
+    completeness: "unavailable",
+    asOf: null,
+    authority: null,
+    code,
+  });
+  if (evidence.length !== ids.length) {
+    return unavailable(evidence.length === 0 ? "remote.unavailable" : "collaboration.observation-incomplete");
   }
+  const absent = evidence.find((entry) => entry.snapshot === null || entry.completeness === "unavailable" || entry.asOf === null);
+  if (absent !== undefined) return unavailable(absent.code ?? "remote.unavailable");
+  // note: An expired check cannot support any claim, complete or partial.
+  if (evidence.some((entry) => entry.freshness === "expired")) return unavailable("collaboration.observation-stale");
   // note: The aggregate instant is the OLDEST contributing observation, so a reader never
   // understates age by picking the freshest stream.
-  const asOf = present.map((entry) => entry.asOf as string).sort()[0] as string;
+  const asOf = evidence.map((entry) => entry.asOf as string).sort()[0] as string;
+  const revision = evidence.reduce((sum, entry) => sum + entry.revision, 0);
   const gap = evidence.find((entry) => entry.completeness !== "complete");
   if (gap !== undefined) {
     return {
-      scope,
-      source: "remote",
-      selectorCommit: view.selectorCommit,
-      generation: view.generation,
-      providerScopes,
+      ...base,
       completeness: "partial",
       asOf,
-      authority,
-      revision: view.revision,
-      catalogRevision: view.catalogRevision,
+      authority: { repoKey: view.repoKey, mode: "remote", storeId: view.storeId, epoch: view.epoch },
+      revision,
+      catalogRevision: revision,
       code: gap.code ?? "collaboration.observation-incomplete",
     };
   }
   return {
-    scope,
-    source: "remote",
-    selectorCommit: view.selectorCommit,
-    generation: view.generation,
-    providerScopes,
+    ...base,
     completeness: "complete",
     asOf,
-    authority,
-    revision: view.revision,
-    catalogRevision: view.catalogRevision,
+    authority: { repoKey: view.repoKey, mode: "remote", storeId: view.storeId, epoch: view.epoch },
+    revision,
+    catalogRevision: revision,
   };
 }
 
@@ -706,8 +715,11 @@ function mstarDetail(projectId: string, issue: RemoteIssue, view: RemoteReadView
 
 function titleOfRef(view: RemoteReadView, issueRef: string): string | null {
   for (const projectId of view.projectIds) {
-    const snapshot = view.projects.get(projectId)?.snapshot;
-    for (const issue of snapshot?.issues ?? []) {
+    const evidence = view.projects.get(projectId);
+    // invariant: A relation title is cross-project data. Only a current, complete scope
+    // may disclose it; an unresolved title stays null rather than reading an expired snapshot.
+    if (evidence === undefined || evidence.freshness !== "fresh" || evidence.snapshot === null) continue;
+    for (const issue of evidence.snapshot.issues) {
       if (issue.mstar?.issueRef === issueRef) {
         const title = issue.mstar.fields.title;
         return typeof title === "string" ? title : null;
