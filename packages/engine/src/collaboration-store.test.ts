@@ -2501,6 +2501,8 @@ describe("remote observation cache", () => {
       { id: "R9", title: "Imported finding", detail_doc: "see /Users/alice/private.txt" },
       { id: "R9", title: "Imported finding", superseded_by: "see C:\\operator\\notes.md" },
       { id: "R9", title: "Imported finding", closure_evidence: "api_key=sk-live-12345678" },
+      { id: "R9", title: "Imported finding", closure_evidence: "token=example-secret" },
+      { id: "R9", title: "Imported finding", detail_doc: "path)/Users/alice/private.txt" },
     ]) {
       await expect(
         submit(withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] })),
@@ -2558,6 +2560,32 @@ describe("remote observation cache", () => {
     expect(storedHistory().transitions[0]!.evidence).toMatchObject({
       closureEvidence: "See https://example.test/pull/42 for the fix and PR #42 / commit abc1234",
     });
+
+    // note: Control - the same shapes without a credential label or an absolute root stay
+    // portable: a URL path and a relative reference are accepted.
+    expect(
+      await ingestRemoteObservation(context, {
+        ...observation(check, {
+          expectRevision: 3,
+          snapshot: withSubject({
+            transitions: [
+              {
+                ...subject.transitions[0]!,
+                imported: true,
+                evidence: {
+                  id: "R11",
+                  title: "Imported finding",
+                  detail_doc: "plans/projects/_default/residuals/R11-finding.md",
+                  closure_evidence: "Tracked in https://example.test/runs/7 and notes/summary.md",
+                },
+              },
+            ],
+          }),
+        }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).toMatchObject({ revision: 4, completeness: "complete" });
   });
 
   /** note: Apply one reviewed legacy register import and return the source lane it wrote. */

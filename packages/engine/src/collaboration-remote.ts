@@ -228,18 +228,21 @@ const PORTABLE_FIELD_LIMIT = 512;
 
 /**
  * note: A path leaks the same machine detail embedded in a sentence as it does at
- * the start, so only a plain relative reference or a URL stays portable. The
+ * the start, so only a plain relative reference or a URL stays portable. A home,
+ * Windows or file URL root refuses wherever it appears, because a sentence that
+ * glues one behind another word still names the machine; the remaining
  * leading-slash rule needs a boundary so `https://host/path` is not a match.
  */
 const EMBEDDED_PATH =
-  /(?:^|[\s"'`(\[<{=,;])[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|\bfile:\/\/|(?:^|[\s"'`(\[<{=,;:])\/(?!\/)\S|(?:^|[\s"'`(\[<{=,;])~\//;
+  /\/Users\/|\/home\/|\b[A-Za-z]:[\\/]|\\\\|~\/|file:\/\/|(?:^|[\s"'`(\[<{=,;:])\/(?!\/)\S/i;
 
 /**
  * note: A reviewed conservative shape rule, not a credential scanner: the header,
- * label and common key shapes this boundary refuses wherever they appear.
+ * credential label and common key shapes this boundary refuses wherever they
+ * appear, in any spelling and with or without a separator.
  */
 const CREDENTIAL_SHAPE =
-  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\bauthorization\s*[:=]|\b(?:api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|password|passwd|passphrase)\s*[:=]|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
+  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:authorization|token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
 
 function portableValue(value: unknown, path: string): string | null {
   if (value === undefined || value === null) return null;
