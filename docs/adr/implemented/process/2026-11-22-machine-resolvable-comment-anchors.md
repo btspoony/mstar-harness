@@ -16,7 +16,7 @@ No file-based check can decide whether prose states a true fact. What a check ca
 A non-documentation comment survives only when it carries a machine-resolvable anchor, in one of four shapes:
 
 1. A bounded marker (`simplify:`, `shortcut:`, `temporary:`) with its bound.
-2. A contract pointer to a resolvable repository path (`docs/`, `skills/`, `packages/`, `scripts/`), an `ADR-<n>` record under `docs/adr/`, or a URL.
+2. A contract pointer to a resolvable repository path (`docs/`, `skills/`, `packages/`, `scripts/`; an ADR record is cited by its `docs/adr/...` path) or a URL.
 3. `@generated`.
 4. A `TODO`/`FIXME` with a tracking reference that opens the comment content.
 

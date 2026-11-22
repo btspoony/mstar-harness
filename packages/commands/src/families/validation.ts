@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AdrLintFailure } from "@mstar-harness/engine";
@@ -320,29 +321,22 @@ const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
  * unclassified corpus, which is a detector-collapse floor. */
 const UNRESOLVED_POINTER_MARKER_PREFIX = "unresolved comment pointer @";
 const POINTER_PATH_PREFIX_RE = /^(?:docs|skills|packages|scripts)\//;
-const POINTER_ADR_TARGET_RE = /^ADR[-\s]?(\d+)$/i;
 
-/** see skills/mstar-coding-behavior/references/comments.md § MUST — a contract
- * pointer counts only when its target resolves at HEAD: a path must exist
- * under the lint cwd, and `ADR-<n>` must match a record file name or an
- * `ADR-<n>` reference in its content (a bare number in prose proves nothing). */
+/** see skills/mstar-coding-behavior/references/comments.md § MUST — a path
+ * pointer counts only when its target exists at HEAD and is not a git-ignored
+ * build output; a git failure (not a repository) leaves the path accepted.
+ * Every other pointer form (a URL, `#<n>`, `issue <n>`, `contract §`) never
+ * reaches this check. */
 function pointerResolves(target: string, cwd: string): boolean {
-  const adr = POINTER_ADR_TARGET_RE.exec(target);
-  if (adr === null) return POINTER_PATH_PREFIX_RE.test(target) && existsSync(path.join(cwd, target));
-  const number = Number(adr[1]);
-  const nameNumber = new RegExp(`^(?:ADR[-\\s]?)?0*${number}\\b`, "i");
-  const contentReference = new RegExp(`ADR[-\\s]?0*${number}\\b`, "i");
-  const root = path.join(cwd, "docs", "adr");
-  const visit = (current: string): boolean => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const child = path.join(current, entry.name);
-      if (entry.isDirectory()) { if (visit(child)) return true; continue; }
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      if (nameNumber.test(entry.name) || contentReference.test(readFileSync(child, "utf8"))) return true;
-    }
+  if (!POINTER_PATH_PREFIX_RE.test(target)) return false;
+  const resolved = path.join(cwd, target);
+  if (!existsSync(resolved)) return false;
+  try {
+    execFileSync("git", ["check-ignore", "-q", "--", resolved], { cwd, stdio: "ignore" });
     return false;
-  };
-  return existsSync(root) && visit(root);
+  } catch {
+    return true;
+  }
 }
 /** why: the two arms are not the same question - `undefined` means no ratchet
  * (every comment is reported), an empty list means the diff does not touch this
@@ -393,7 +387,7 @@ function lintOne(file: string, cwd: string, type?: LintType, prVariant = false, 
             severity: "medium",
             code: "lint.comment.unclassified",
             message: `unclassified comment at line ${finding.line} - the shape matches none of comments.md \u00a7 MUST (marker, contract pointer, @generated, tracked TODO)`,
-            fix: 'give the comment a shape: "see docs/<path>" (or skills/packages/scripts), "see ADR-<n>", "see https://<url>", "simplify: <ceiling>, upgrade: <when>" / "@generated \u2026", or delete it',
+            fix: 'give the comment a shape: "see docs/<path>" (or skills/packages/scripts), "see https://<url>", "simplify: <ceiling>, upgrade: <when>" / "@generated \u2026", or delete it',
           });
         }
       }
@@ -404,7 +398,7 @@ function lintOne(file: string, cwd: string, type?: LintType, prVariant = false, 
         if (pointerResolves(pointer.target, cwd)) continue;
         const changed = touched === undefined
           ? false
-          : touched.some(([start, end]) => pointer.line <= end && pointer.line >= start);
+          : touched.some(([start, end]) => pointer.startLine <= end && pointer.endLine >= start);
         if (touched !== undefined && !changed) continue;
         markers.push(`${UNRESOLVED_POINTER_MARKER_PREFIX}${pointer.line}: ${pointer.target}`);
         if (changed) {
@@ -413,7 +407,7 @@ function lintOne(file: string, cwd: string, type?: LintType, prVariant = false, 
             severity: "medium",
             code: "lint.comment.pointer-unresolved",
             message: `unresolved comment pointer at line ${pointer.line} - "${pointer.target}" does not resolve at HEAD (comments.md \u00a7 MUST: a contract pointer must resolve)`,
-            fix: "point the comment at a target that exists (a docs/skills/packages/scripts path or an ADR record), or delete the pointer",
+            fix: "point the comment at a target that exists (a docs/skills/packages/scripts path), or delete the pointer",
           });
         }
       }
@@ -663,17 +657,20 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // the change adds or modifies a line of it, and a file the diff does
         // not mention keeps an empty range list so it reports none.
         const changed = input.diffBase === undefined ? undefined : await changedLineRanges(context, input.diffBase);
+        const repoRoot = changed?.root ?? (await gitTop(context)) ?? context.cwd;
         const results = targets.map((file) => {
           const touched = changed === undefined
             ? undefined
             : (changed.ranges.get(path.relative(changed.root, canonicalPath(file)).split(path.sep).join("/")) ?? []);
-          return { file, ...lintOne(file, context.cwd, forced as LintType | undefined, input.prVariant === true, touched) };
+          return { file, ...lintOne(file, repoRoot, forced as LintType | undefined, input.prVariant === true, touched) };
         });
         // why: the count is a summary written beside the envelope, so it is
         // stderr only; a run that linted no code file reports no count.
         if (targets.some((file) => (forced ?? lintType(file)) === "code")) {
           const unclassified = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNCLASSIFIED_MARKER_PREFIX)).length, 0);
           context.effects.writeStderr?.(`unclassified comments: ${unclassified}`);
+          const unresolved = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNRESOLVED_POINTER_MARKER_PREFIX)).length, 0);
+          if (unresolved > 0) context.effects.writeStderr?.(`unresolved comment pointers: ${unresolved}`);
         }
         return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
       }
@@ -813,6 +810,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
 async function awaitSpawn(context: InvocationContext, argv: readonly string[], cwd = context.cwd): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   const result = await context.effects.spawn({ argv, cwd, env: {}, signal: context.signal });
   return { ok: result.exitCode === 0, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+}
+/** see skills/mstar-coding-behavior/references/comments.md § MUST — a pointer
+ * resolves from the checkout root, not the invocation directory, so a run from
+ * a subdirectory still proves repo-relative targets; a cwd outside a git
+ * checkout keeps the invocation directory. */
+async function gitTop(context: InvocationContext): Promise<string | undefined> {
+  const top = await awaitSpawn(context, ["git", "rev-parse", "--show-toplevel"]);
+  return top.ok && top.stdout !== "" ? canonicalPath(top.stdout) : undefined;
 }
 /** why: the new side's count is 0 for a deletion-only hunk, which contributes
  * no changed line, so the count is read separately from the start. */

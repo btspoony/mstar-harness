@@ -26,9 +26,7 @@ export const PUSH_DIRECTION = "push" as const;
 
 /** Everything one item plan needs that is not local content. */
 export type PushContext = {
-  /** note: '"linear:<project_id>"', the ledger's binding key. */
   bindingId: string;
-  /** note: This checkout's repository identity and git author, stamped into the marker. */
   identity: { repo: string; author: string };
   mapping?: LinearFacetMapping;
   runId?: string;
@@ -51,11 +49,9 @@ export type PushCandidate = {
  */
 export type PushPlan = {
   localId: string;
-  /** note: 'create' when the ledger holds no identity for this item yet. */
   operation: "create" | "update";
   externalId: string | null;
   payload: ProviderWritePayload;
-  /** note: The marker the description ends with, reported so a caller can check it. */
   marker: string;
   requestHash: string;
 };
@@ -77,9 +73,7 @@ export type PushResult = {
   outcome: "confirmed" | "refused" | "ambiguous";
   externalId?: string | null;
   url?: string | null;
-  /** note: ISO-8601 instant the remote reports for the written issue. */
   remoteUpdatedAt?: string | null;
-  /** note: The tool's own cause text, for 'refused' and 'ambiguous'. */
   cause?: string | null;
 };
 
@@ -106,7 +100,6 @@ export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandid
     .all(projectId) as PushCandidate[];
 }
 
-/** note: The content of one local issue, for the ledger write that names it. */
 function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   return (
     (db
@@ -115,7 +108,6 @@ function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   );
 }
 
-/** note: '"<provider>:<project_id>"' → the store project id ('sync.invalid-input' otherwise). */
 function projectIdOf(bindingId: string): string {
   const prefix = "linear:";
   if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {

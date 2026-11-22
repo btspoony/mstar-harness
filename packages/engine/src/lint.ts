@@ -568,11 +568,11 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
 export type UnclassifiedComment = { line: number; endLine: number; text: string };
 
 /** see skills/mstar-coding-behavior/references/comments.md § MUST — the pointer
- * arms the linter can machine-resolve: a repo path it looks up, an ADR record,
- * or an external URL a reviewer can open. Shared with `findCommentPointers` so
- * an accepted shape is always a resolved claim. */
+ * arms the linter can machine-resolve: a repo path it looks up, or an external
+ * URL a reviewer can open. Shared with `findCommentPointers` so an accepted
+ * shape is always a resolved claim, and case-sensitive so a spelling the shape
+ * accepts is exactly one the finder resolves. */
 const POINTER_PATH_SOURCE = "(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
-const POINTER_ADR_SOURCE = "ADR[-\\s]?\\d+";
 const POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
 
 /** see skills/mstar-coding-behavior/references/comments.md § MUST: four shapes —
@@ -584,12 +584,11 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   /\btemporary\s*(?::|[\u2013\u2014-]\s)/i,
   // why: `see` must name its target - the English verb alone ("the way to see
   // a fold") cannot classify a comment as a pointer.
-  new RegExp(`\\bsee\\s+(?:${POINTER_URL_SOURCE}|${POINTER_ADR_SOURCE}|${POINTER_PATH_SOURCE})`, "i"),
+  new RegExp(`\\bsee\\s+${POINTER_URL_SOURCE}`, "i"),
   // why: the target alone is a pointer too (comments.md § MUST: "or that
   // target alone"), and a URL is the one with no in-repo path to anchor on.
   new RegExp(POINTER_URL_SOURCE, "i"),
-  new RegExp(`\\b${POINTER_ADR_SOURCE}`, "i"),
-  new RegExp(`\\b${POINTER_PATH_SOURCE}`, "i"),
+  new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`),
   /@generated\b/i,
 ];
 
@@ -777,41 +776,40 @@ export function findUnclassifiedComments(fileText: string, dialect: SourceDialec
 }
 
 /**
- * A pointer read from comment text: its 1-based line and the target token.
- * `target` is a repo-relative path under a resolvable root (`docs/`, `skills/`,
- * `packages/`, `scripts/`) or an `ADR-<n>` reference. Pointer forms the linter
- * cannot resolve (a URL, `#<n>`, `issue <n>`, `contract §`) are not returned —
- * the finder never invents a check for them.
+ * A pointer read from comment text: the pointer's own line (the diagnostic),
+ * the comment unit's first and last lines (the ratchet span), and the target
+ * token. `target` is a repo-relative path under a resolvable root (`docs/`,
+ * `skills/`, `packages/`, `scripts/`); every other pointer form (a URL,
+ * `#<n>`, `issue <n>`, `contract §`, an ADR number) is not machine-resolvable
+ * here and is not returned.
  */
-export type CommentPointer = { line: number; target: string };
+export type CommentPointer = { line: number; startLine: number; endLine: number; target: string };
 
-/** see skills/mstar-coding-behavior/references/comments.md § MUST — the finger
+/** see skills/mstar-coding-behavior/references/comments.md § MUST — the finder
  * patterns reuse the shape sources, so a shape the gate accepts is exactly one
  * this finder reports for resolution. */
-const POINTER_PATH_RE = new RegExp(`\\b${POINTER_PATH_SOURCE}`, "g");
-const POINTER_ADR_RE = new RegExp(`\\b${POINTER_ADR_SOURCE}`, "gi");
+const POINTER_PATH_RE = new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`, "g");
 const URL_SPAN_RE = new RegExp(POINTER_URL_SOURCE, "gi");
 
 /**
- * Find pointer targets in comment text (comments.md § MUST: a contract pointer,
+ * Find path pointers in comment text (comments.md § MUST: a contract pointer,
  * or its target alone). The shared literal mask means a path inside a string is
- * never read as a comment claim.
+ * never read as a comment claim, and an exported API doc block is exempt — the
+ * same carve-out `findUnclassifiedComments` applies.
  */
 export function findCommentPointers(fileText: string, dialect: SourceDialect = "c"): CommentPointer[] {
   if (fileText === "") return [];
+  const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
   const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const pointers: CommentPointer[] = [];
   for (const unit of commentUnits(fileText, scan, masked, offsets, dialect)) {
+    if (unit.doc && documentsExport(lines, unit.endLine)) continue;
     unit.body.split("\n").forEach((text, index) => {
       const line = unit.line + index;
-      const withoutUrls = text.replace(URL_SPAN_RE, " ");
-      for (const match of withoutUrls.matchAll(POINTER_PATH_RE)) {
-        pointers.push({ line, target: match[0] });
-      }
-      for (const match of withoutUrls.matchAll(POINTER_ADR_RE)) {
-        pointers.push({ line, target: match[0] });
+      for (const match of text.replace(URL_SPAN_RE, " ").matchAll(POINTER_PATH_RE)) {
+        pointers.push({ line, startLine: unit.line, endLine: unit.endLine, target: match[0] });
       }
     });
   }
