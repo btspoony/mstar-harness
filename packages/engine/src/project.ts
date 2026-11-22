@@ -410,20 +410,40 @@ export async function assertPlanFindingsCurrent(
   const current = await observePlanFindings(context, scope.key);
   const { repoKey, mode, storeId, epoch } = observed.authority;
   const authority = current.authority;
+  // invariant: A remote witness belongs to its EXACT selected source: per-generation revision
+  // counters restart, so a reviewed rebind can reuse a revision number under a different
+  // selector commit. The selector identity is part of the witness, not just the cache stamp.
+  const selectionDrift =
+    observed.source !== current.source ||
+    observed.selectorCommit !== current.selectorCommit ||
+    observed.generation !== current.generation;
   if (
     authority.repoKey !== repoKey ||
     authority.mode !== mode ||
     authority.storeId !== storeId ||
     authority.epoch !== epoch ||
-    current.revision !== observed.revision
+    current.revision !== observed.revision ||
+    selectionDrift
   ) {
     throw new FindingsEvidenceError(
       "collaboration.observation-stale",
       "The collaboration findings observation changed after the preflight gate; repeat the same gate against current scope so it is judged against a current complete observation.",
       {
         plan_id: scope.key,
-        observed: { asOf: observed.asOf, authority: observed.authority, revision: observed.revision },
-        current: { asOf: current.asOf, authority: current.authority, revision: current.revision },
+        observed: {
+          asOf: observed.asOf,
+          authority: observed.authority,
+          revision: observed.revision,
+          selectorCommit: observed.selectorCommit ?? null,
+          generation: observed.generation ?? null,
+        },
+        current: {
+          asOf: current.asOf,
+          authority: current.authority,
+          revision: current.revision,
+          selectorCommit: current.selectorCommit ?? null,
+          generation: current.generation ?? null,
+        },
       },
     );
   }
@@ -573,7 +593,7 @@ export async function readProjectBinding(
     const { openRemoteReadView, remoteCollaborationObservation, requireRemoteProjects } = await import(
       "./collaboration-remote-read.js"
     );
-    const view = await openRemoteReadView(context);
+    const view = await openRemoteReadView(context, [id]);
     const evidence = requireRemoteProjects(view, [id])[0]!;
     const collaboration = remoteCollaborationObservation(view, { kind: "project", key: id });
     if (collaboration.completeness !== "complete") {

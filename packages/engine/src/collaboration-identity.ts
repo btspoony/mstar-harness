@@ -700,11 +700,68 @@ function encodeSegment(segment: string): string {
 }
 
 /**
+ * invariant: The commit-boundary selector fence for one mutation. The caller already
+ * resolved a selection before it opened a writer; a Git ref can move while the
+ * writer waits for the database lock, so the checked commit (and the configured
+ * mode) are re-proved immediately before commit. A selector payload is immutable
+ * at its commit, so one live ref lookup is the whole recheck; a moved, vanished
+ * or newly published ref refuses instead of letting the mutation land under a
+ * selection this process no longer holds. This does not make Git and SQLite
+ * atomic: it only refuses the stale window it can observe.
+ */
+export function assertSelectionUnchanged(context: StoreContext, location: CollaborationLocation): void {
+  const mainRoot = mainWorktreeRoot(context.checkoutRoot ?? context.harnessDir);
+  if (mainRoot === null) unresolved("Git could not name the main checkout that owns this harness");
+  if (resolveMode(readConfig(mainRoot).mode) !== location.mode) {
+    selectorStale(
+      `The ${MSTARC_FILE} collaboration mode changed while this mutation was being prepared (resolved ${location.mode})`,
+    );
+  }
+  if (readOrigin(mainRoot) === null) {
+    // note: An origin-less scope has no selector to move: the resolved lane is the whole selection.
+    if (location.selection !== undefined) selectorStale("an origin-less scope cannot hold a checked selector");
+    return;
+  }
+  const live = lookupSelector(mainRoot);
+  if (location.selection !== undefined) {
+    if (live !== location.selection.commit) {
+      selectorStale(
+        `The origin's ${AUTHORITY_REF} no longer names the checked commit ${location.selection.commit} ` +
+          `(${live === null ? "the ref was deleted" : `it now names ${live}`})`,
+      );
+    }
+    return;
+  }
+  if (live === null) {
+    // invariant: A local/mirror admission proved an ABSENCE; a ref this checkout already
+    // recorded is evidence the origin published one, so its deletion is drift, not absence.
+    const seen = observedSelector(context);
+    if (seen !== null && seen.repoKey === location.repoKey) {
+      selectorStale(
+        `This checkout observed selector ${seen.selectorCommit}` +
+          `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+      );
+    }
+    if (remoteBindingRecorded(context)) {
+      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+    }
+    return;
+  }
+  // invariant: This admission proved a live-confirmed ABSENCE; a ref present now is a
+  // selector published during the mutation, never the absence the writer was admitted under.
+  selectorStale(
+    `The origin's ${AUTHORITY_REF} now names ${live}, but this mutation was admitted under a confirmed absence of it`,
+  );
+}
+
+/**
  * Canonical collaboration identity, explicit mode and user-level database path
  * for this control harness. Every origin-backed checkout proves its selection
  * from the origin's protected selector ref first: a local/mirror checkout keeps
  * its own lane only when that live lookup confirms no selector. A `remote` mode
- * additionally returns the checked selection. Throws `CollaborationIdentityError`
+ * requires the checked selection; a local/mirror mode that admits beside an
+ * ACTIVE local/mirror selector retains that exact commit for its write fence.
+ * Throws `CollaborationIdentityError`
  * on an unresolved identity or mode, an unchecked selector, or a selector that
  * disagrees with this checkout.
  */
@@ -728,12 +785,17 @@ export function resolveCollaborationLocation(
     if (mode === "remote") {
       if (published === null) selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
       selection = published;
-    } else if (published !== null && published.phase === "draining") {
-      // invariant: A draining selector stops old writers: a local/mirror lane must not write
-      // alongside a generation that is still being reconciled into its successor.
-      selectorStale(
-        `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
-      );
+    } else if (published !== null) {
+      if (published.phase === "draining") {
+        // invariant: A draining selector stops old writers: a local/mirror lane must not write
+        // alongside a generation that is still being reconciled into its successor.
+        selectorStale(
+          `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
+        );
+      }
+      // invariant: An ACTIVE selector is retained for local/mirror too, so the commit fence
+      // compares the exact admitted commit instead of accepting any later same-mode selector.
+      selection = published;
     }
   }
   const home = options.userHome ?? homedir();

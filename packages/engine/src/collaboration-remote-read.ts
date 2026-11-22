@@ -24,7 +24,7 @@ import {
   type CollaborationProviderScope,
   type CollaborationScope,
 } from "./collaboration-store.js";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, assertSelectionUnchanged, type CollaborationLocation } from "./collaboration-identity.js";
 import {
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
@@ -54,6 +54,15 @@ const PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const SEVERITY_RANK: Record<Severity, number> = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
 const TERMINAL = new Set<Disposition>(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
 
+/**
+ * note: The read's sample-to-snapshot gap seam: a regression binds a successor between the
+ * captured `{location,binding}` pair and the SQLite snapshot. Production runs without a callback.
+ */
+let remoteReadSampleGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteReadSampleGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteReadSampleGapForTest = callback;
+}
+
 // ---------------------------------------------------------------------------
 // note: Admitted project evidence for one read
 // ---------------------------------------------------------------------------
@@ -68,6 +77,8 @@ export type RemoteProjectEvidence = Readonly<{
   completeness: "complete" | "partial" | "unavailable";
   code: string | null;
   freshness: "fresh" | "expired" | "incomplete";
+  /** note: The provider traversal started inside the freshness window (a second clock from the access check). */
+  asOfFresh: boolean;
   snapshot: RemoteSnapshot | null;
 }>;
 
@@ -79,6 +90,7 @@ export type RemoteReadView = Readonly<{
   selectorCommit: string;
   generation: number;
   phase: "active" | "draining";
+  /** note: The declared contributing projects this view loaded; never another selected project. */
   projectIds: readonly string[];
   projects: ReadonlyMap<string, RemoteProjectEvidence>;
   /** note: Aggregate snapshot counters: both move whenever any project's observation is replaced. */
@@ -102,16 +114,27 @@ type StoredEvidenceRow = {
 };
 
 /**
- * `remote read`: load this generation's admitted evidence for every selected
- * project into memory. The cache is opened read-only and closed before the
- * caller's view work; the rows loaded are ONE deferred snapshot of the lane.
+ * `remote read`: load this generation's admitted evidence for the DECLARED
+ * contributing projects into memory. A narrowed query passes its project set, so
+ * an unrelated project's missing, partial, expired or unparseable snapshot never
+ * refuses or contributes to it; an unfiltered read declares every selected
+ * project. The cache is opened read-only and closed before the caller's view
+ * work; the rows loaded are ONE deferred snapshot of the lane.
  *
  * A missing/unbound checkout keeps the store's own refusal
  * (`collaboration.stale-binding`); the returned view is only built from the
  * exact generation the checkout is bound to.
+ *
+ * A caller that has already resolved this checkout's location passes it in, so
+ * one request resolves the published selector ONCE and the cache lane is opened
+ * for that same checked location and binding.
  */
-export async function openRemoteReadView(context: StoreContext): Promise<RemoteReadView> {
-  const location = resolveCollaborationLocation(context);
+export async function openRemoteReadView(
+  context: StoreContext,
+  projectIds?: readonly string[],
+  resolvedLocation?: CollaborationLocation,
+): Promise<RemoteReadView> {
+  const location = resolvedLocation ?? resolveCollaborationLocation(context);
   if (location.mode !== "remote" || location.selection === undefined) {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -126,23 +149,55 @@ export async function openRemoteReadView(context: StoreContext): Promise<RemoteR
         'Run the reviewed remote bind ("mstar store collaboration remote bind --input <file|->"); nothing was read.',
     );
   }
-  const handle = await openRemoteCache(context, "read");
   const selection = location.selection;
+  const requested = projectIds ?? selection.projects.map((project) => project.localProjectId);
+  for (const projectId of requested) {
+    if (!selection.projects.some((project) => project.localProjectId === projectId)) {
+      throw new StoreError(
+        "remote.scope-mismatch",
+        `Project ${projectId} is not one of the selected remote projects, so this cache has no evidence for it. Nothing was read.`,
+      );
+    }
+  }
+  // note: The sample the caller took is re-observed at the boundary: a regression binds a
+  // successor in this window, so a matching pair alone is not proof the lane stood still.
+  await remoteReadSampleGapForTest?.();
+  // note: ONE sample: the lane is admitted for the location and binding this view reads and
+  // stamps itself with, so a concurrent rebind never labels rows with another generation.
+  const handle = await openRemoteCache(context, "read", { location, binding });
   try {
     handle.db.exec("begin");
+    // invariant: The row snapshot must belong to the SAME selector generation the pair named.
+    // A successor committed before this transaction began leaves the predecessor's rows in
+    // place, so a bound-generation-stable read could otherwise satisfy the successor's gate.
+    const latest = handle.db
+      .prepare("select max(generation) as generation from remote_bindings")
+      .get() as { generation?: unknown } | undefined;
+    if (latest?.generation !== binding.generation) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This read sampled selector commit ${selection.commit} generation ${String(binding.generation)}, but the cache ` +
+          `lane has since committed generation ${String(latest?.generation ?? "none")}; the sampled generation is ` +
+          `inspection-only. Re-run the read against the current scope; nothing was returned from the predecessor.`,
+      );
+    }
     const rows = handle.db
       .prepare(
         "select b.project_key, b.workspace_id, b.team_id, b.provider_project_id, b.journal_issue_id, b.verified_at, " +
           "b.verification_json, o.revision, o.as_of, o.completeness, o.code, o.snapshot_json " +
           "from remote_bindings b left join remote_observations o on o.generation = b.generation and o.project_key = b.project_key " +
-          "where b.generation = ?",
+          `where b.generation = ? and b.project_key in (${requested.map(() => "?").join(", ")})`,
       )
-      .all(binding.generation) as StoredEvidenceRow[];
+      .all(binding.generation, ...requested) as StoredEvidenceRow[];
     handle.db.exec("commit");
+    // invariant: The admitted selector commit is re-proved on the live ref at the read
+    // boundary: a moved ref refuses instead of answering a superseded generation's rows.
+    assertSelectionUnchanged(context, location);
     const byProject = new Map(rows.map((row) => [row.project_key, row]));
     const now = Date.now();
     const projects = new Map<string, RemoteProjectEvidence>();
     for (const selected of selection.projects) {
+      if (!requested.includes(selected.localProjectId)) continue;
       const row = byProject.get(selected.localProjectId);
       if (row === undefined) {
         projects.set(selected.localProjectId, unavailableEvidence(selected.localProjectId, selected));
@@ -154,6 +209,7 @@ export async function openRemoteReadView(context: StoreContext): Promise<RemoteR
           : "unavailable";
       const verified = outcomeLabel(row.verification_json) === "verified";
       const current = verified && Math.abs(now - Date.parse(row.verified_at)) <= REMOTE_SCOPE_TTL_MS;
+      const asOfAt = row.as_of === null ? Number.NaN : Date.parse(row.as_of);
       projects.set(selected.localProjectId, {
         projectId: selected.localProjectId,
         scope: {
@@ -170,6 +226,7 @@ export async function openRemoteReadView(context: StoreContext): Promise<RemoteR
         // note: Freshness is the ACCESS check's currency, not the snapshot's coverage:
         // an expired check means no read may serve this scope, complete or not.
         freshness: current ? (completeness === "complete" ? "fresh" : "incomplete") : "expired",
+        asOfFresh: Number.isFinite(asOfAt) && Math.abs(now - asOfAt) <= REMOTE_SCOPE_TTL_MS,
         // note: A partial observation carries its verified rows; required reads refuse it before serving,
         // but the observation still discloses its real asOf instead of masquerading as absent.
         snapshot: completeness === "unavailable" ? null : snapshotOf(row.snapshot_json, selected.localProjectId),
@@ -183,7 +240,7 @@ export async function openRemoteReadView(context: StoreContext): Promise<RemoteR
       selectorCommit: selection.commit,
       generation: selection.generation,
       phase: selection.phase,
-      projectIds: selection.projects.map((project) => project.localProjectId),
+      projectIds: requested,
       projects,
       revision: evidence.reduce((sum, entry) => sum + entry.revision, 0),
       catalogRevision: evidence.reduce((sum, entry) => sum + entry.revision, 0),
@@ -208,6 +265,7 @@ function unavailableEvidence(projectId: string, selected: { workspaceId: string;
     completeness: "unavailable",
     code: "remote.unavailable",
     freshness: "incomplete",
+    asOfFresh: false,
     snapshot: null,
   };
 }
@@ -312,6 +370,17 @@ export function requireRemoteProjects(
         { projectId },
       );
     }
+    // invariant: The traversal clock is separate from the access check: a check made now over a
+    // traversal started outside the window still cannot satisfy a count, rollup or gate.
+    if (!evidence.asOfFresh) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The observation for project ${projectId} started its provider traversal at ` +
+          `${evidence.asOf ?? "an unrecorded time"}, outside the ${String(REMOTE_SCOPE_TTL_MS / 1000)}-second freshness ` +
+          `window, so it cannot serve a required read even though its access check is current. Re-observe the scope.`,
+        { projectId },
+      );
+    }
     return evidence;
   });
 }
@@ -360,6 +429,9 @@ export function remoteCollaborationObservation(
   if (absent !== undefined) return unavailable(absent.code ?? "remote.unavailable");
   // note: An expired check cannot support any claim, complete or partial.
   if (evidence.some((entry) => entry.freshness === "expired")) return unavailable("collaboration.observation-stale");
+  // note: A traversal started outside the window is stale even under a current check: an optional
+  // view discloses that instead of a complete stamp, and no gate or count can decide on it.
+  if (evidence.some((entry) => !entry.asOfFresh)) return unavailable("collaboration.observation-stale");
   // note: The aggregate instant is the OLDEST contributing observation, so a reader never
   // understates age by picking the freshest stream.
   const asOf = evidence.map((entry) => entry.asOf as string).sort()[0] as string;
@@ -491,7 +563,9 @@ function queryMatches(issue: RemoteIssue, query: string): boolean {
 /**
  * The issue page over admitted snapshots. `items`/`total`/`projectCount` are MStar
  * findings only; `providerIssues` makes an unmarked native issue visible without
- * giving it a disposition, severity or count.
+ * giving it a disposition, severity or count. Both lists answer the SAME stable
+ * `limit`/`offset` page: the provider list is ordered by provider update, project
+ * and provider id, so output size is bounded by the requested page.
  */
 export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): IssuePage {
   const { limit, offset } = pageBounds(filter);
@@ -537,12 +611,28 @@ export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): Issu
   }));
   const providerIssues: ProviderOnlyIssue[] =
     disposition === "open"
-      ? evidence.flatMap((entry) =>
-          (entry.snapshot?.issues ?? [])
-            .filter((issue) => issue.mstar === null)
-            .filter((issue) => filter.query === undefined || filter.query === "" || queryMatches(issue, filter.query))
-            .map((issue) => providerOnly(entry.projectId, issue)),
-        )
+      ? evidence
+          .flatMap((entry) =>
+            (entry.snapshot?.issues ?? [])
+              .filter((issue) => issue.mstar === null)
+              .filter((issue) => filter.query === undefined || filter.query === "" || queryMatches(issue, filter.query))
+              .map((issue) => ({ projectId: entry.projectId, issue })),
+          )
+          // note: The page contract needs a TOTAL order: newest provider update first, then
+          // project and the immutable provider id, so `offset` names the same rows on a re-read.
+          // The input accepts whole-second and fractional UTC spellings for one instant, so
+          // the key is the parsed instant, never the text.
+          .sort((left, right) => {
+            const leftAt = Date.parse(left.issue.providerUpdatedAt);
+            const rightAt = Date.parse(right.issue.providerUpdatedAt);
+            if (leftAt !== rightAt) return rightAt - leftAt;
+            if (left.projectId !== right.projectId) return left.projectId < right.projectId ? -1 : 1;
+            const leftId = left.issue.identity.issueId;
+            const rightId = right.issue.identity.issueId;
+            return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+          })
+          .slice(offset, offset + limit)
+          .map(({ projectId, issue }) => providerOnly(projectId, issue))
       : [];
   return {
     items,
@@ -732,7 +822,7 @@ function titleOfRef(view: RemoteReadView, issueRef: string, projectIds: readonly
     // invariant: A relation title is cross-project data. Only a project this read DECLARES
     // and that is current and complete may disclose it; an unresolved title stays null
     // rather than reading an undeclared or expired snapshot.
-    if (evidence === undefined || evidence.freshness !== "fresh" || evidence.snapshot === null) continue;
+    if (evidence === undefined || evidence.freshness !== "fresh" || !evidence.asOfFresh || evidence.snapshot === null) continue;
     for (const issue of evidence.snapshot.issues) {
       if (issue.mstar?.issueRef === issueRef) {
         const title = issue.mstar.fields.title;

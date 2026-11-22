@@ -104,6 +104,7 @@ export type {
 export {
   adoptCollaborationBinding,
   assertIssueRef,
+  COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
   ISSUE_REF_PATTERN,
   mintIssueRef,
@@ -114,6 +115,7 @@ export {
   readCollaborationBinding,
   readRemoteCacheAuthority,
   upgradeCollaborationStore,
+  upgradeExistingCollaborationStore,
   withCollaborationWrite,
   withRemoteCacheWrite,
   writeCollaborationBinding,

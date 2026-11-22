@@ -261,48 +261,48 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-function lockCreateRefusal(path: string, error: unknown): StoreError {
+function lockCreateRefusal(label: string, path: string, error: unknown): StoreError {
   return new StoreError(
     "collaboration.cutover-conflict",
-    `The collaboration cutover lock at ${path} could not be created ` +
+    `The ${label} lock at ${path} could not be created ` +
       `(${error instanceof Error ? error.message : String(error)}). Fix the control harness directory and retry. ` +
       `Nothing was inspected, claimed, fenced or published.`,
   );
 }
 
-function cutoverLockRefusal(path: string, owner: CutoverLockOwner | null): StoreError {
+function cutoverLockRefusal(label: string, path: string, owner: CutoverLockOwner | null): StoreError {
   const header = "Nothing was inspected, claimed, fenced or published.";
   if (owner === null) {
     return new StoreError(
       "collaboration.cutover-conflict",
-      `The collaboration cutover lock at ${path} is unreadable or malformed. Confirm that no cutover process is running ` +
+      `The ${label} lock at ${path} is unreadable or malformed. Confirm that no ${label} process is running ` +
         `on any host that shares this harness, remove that file, and retry. ${header}`,
     );
   }
   if (owner.host === hostname()) {
     return new StoreError(
       "collaboration.cutover-conflict",
-      `Another collaboration cutover is running on this host (pid ${String(owner.pid)}, started at ${owner.startedAt}) ` +
+      `Another ${label} is running on this host (pid ${String(owner.pid)}, started at ${owner.startedAt}) ` +
         `and holds ${path}. Wait for it to finish; a stuck run must be stopped before retrying. ${header}`,
     );
   }
   return new StoreError(
     "collaboration.cutover-conflict",
-    `The collaboration cutover lock at ${path} is held on host ${owner.host} (pid ${String(owner.pid)}, started at ` +
-      `${owner.startedAt}), which cannot be probed from here. Confirm that the cutover is not running on that host, ` +
+    `The ${label} lock at ${path} is held on host ${owner.host} (pid ${String(owner.pid)}, started at ` +
+      `${owner.startedAt}), which cannot be probed from here. Confirm that the ${label} is not running on that host, ` +
       `remove the lock file only then, and retry. ${header}`,
   );
 }
 
-function cutoverRecoveryRefusal(recoveryPath: string, holder: CutoverLockOwner | null): StoreError {
+function cutoverRecoveryRefusal(label: string, recoveryPath: string, holder: CutoverLockOwner | null): StoreError {
   const who =
     holder === null
       ? "an unreadable recovery slot"
       : `pid ${String(holder.pid)} on ${holder.host}, started at ${holder.startedAt}`;
   return new StoreError(
     "collaboration.cutover-conflict",
-    `Another process is recovering the stale collaboration cutover lock (recovery slot ${recoveryPath}, ${who}). ` +
-      `Wait for it and retry; if that process is gone, confirm no cutover is running and remove the recovery slot ` +
+    `Another process is recovering the stale ${label} lock (recovery slot ${recoveryPath}, ${who}). ` +
+      `Wait for it and retry; if that process is gone, confirm no ${label} is running and remove the recovery slot ` +
       `file, then retry. Nothing was inspected, claimed, fenced or published.`,
   );
 }
@@ -331,6 +331,7 @@ function releaseCutoverLockFile(path: string, token: string): void {
  * recovery is already in progress (the caller refuses with its named recovery).
  */
 function recoverStaleCutoverLock(
+  label: string,
   path: string,
   recoveryPath: string,
   staleOwner: CutoverLockOwner,
@@ -346,7 +347,7 @@ function recoverStaleCutoverLock(
     writeFileSync(recoveryPath, `${JSON.stringify(recoveryOwner)}\n`, { flag: "wx", mode: 0o600 });
   } catch (error) {
     if ((error as { code?: string }).code === "EEXIST") return false;
-    throw lockCreateRefusal(recoveryPath, error);
+    throw lockCreateRefusal(label, recoveryPath, error);
   }
   try {
     const current = readCutoverLock(path);
@@ -371,20 +372,20 @@ function recoverySlotToken(attemptToken: string): string {
  * note: Acquire the local cutover lock: exclusive create plus an atomic stale-lock
  * recovery. See `recoverStaleCutoverLock` for the recovery protocol.
  */
-function acquireCutoverLock(path: string, recoveryPath: string, owner: CutoverLockOwner): void {
+function acquireCutoverLock(label: string, path: string, recoveryPath: string, owner: CutoverLockOwner): void {
   for (let attempt = 1; ; attempt++) {
     try {
       writeFileSync(path, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600 });
       return;
     } catch (error) {
-      if ((error as { code?: string }).code !== "EEXIST") throw lockCreateRefusal(path, error);
+      if ((error as { code?: string }).code !== "EEXIST") throw lockCreateRefusal(label, path, error);
     }
     const held = readCutoverLock(path);
-    if (held === null) throw cutoverLockRefusal(path, null);
+    if (held === null) throw cutoverLockRefusal(label, path, null);
     const stale = held.host === owner.host && !processIsAlive(held.pid);
-    if (!stale || attempt >= STALE_LOCK_ATTEMPTS) throw cutoverLockRefusal(path, held);
-    if (!recoverStaleCutoverLock(path, recoveryPath, held, owner.token)) {
-      throw cutoverRecoveryRefusal(recoveryPath, readCutoverLock(recoveryPath));
+    if (!stale || attempt >= STALE_LOCK_ATTEMPTS) throw cutoverLockRefusal(label, path, held);
+    if (!recoverStaleCutoverLock(label, path, recoveryPath, held, owner.token)) {
+      throw cutoverRecoveryRefusal(label, recoveryPath, readCutoverLock(recoveryPath));
     }
   }
 }
@@ -404,14 +405,28 @@ function acquireCutoverLock(path: string, recoveryPath: string, owner: CutoverLo
  * attempt's token, in `finally`, so a throwing step never leaves the lock held.
  */
 export async function withCollaborationCutoverLock<T>(context: StoreContext, work: () => Promise<T>): Promise<T> {
-  const path = cutoverLockPath(context);
+  return withCollaborationLockFile(cutoverLockPath(context), "collaboration cutover", work);
+}
+
+/**
+ * The same exclusive-file primitive over an EXPLICIT path. Two checkouts of one
+ * repository resolve one canonical store path but different harness roots, so a
+ * critical section over shared store bytes (retirement, publication) keys its
+ * lock by that store/binding path instead of `{HARNESS_DIR}`. The stale-lock
+ * recovery protocol is the cutover lock's; only the label and location differ.
+ */
+export async function withCollaborationLockFile<T>(
+  path: string,
+  label: string,
+  work: () => Promise<T>,
+): Promise<T> {
   const owner: CutoverLockOwner = {
     pid: process.pid,
     host: hostname(),
     startedAt: new Date().toISOString(),
     token: randomUUID(),
   };
-  acquireCutoverLock(path, cutoverRecoveryPath(path), owner);
+  acquireCutoverLock(label, path, cutoverRecoveryPath(path), owner);
   try {
     return await work();
   } finally {

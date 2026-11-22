@@ -34,17 +34,22 @@ import {
   type CollaborationMode,
 } from "./collaboration-identity.js";
 import {
+  adoptCollaborationBinding,
   assertControlCheckoutScope,
   assertIssueRef,
   COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  localPredecessorRetiredPath,
   openCollaborationStore,
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  setLocalPredecessorPublicationGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
   writeCollaborationBinding,
+  writeRemoteCacheStage,
+  writeRemoteCollaborationBinding,
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
@@ -52,6 +57,8 @@ import {
   bindRemoteAuthority,
   ingestRemoteObservation,
   readRemoteStatus,
+  setRemoteBindTransitionGapForTest,
+  setRemoteBindingPublicationGapForTest,
   type RemoteSnapshot,
   type ScopeCheck,
 } from "./collaboration-remote.js";
@@ -1381,6 +1388,17 @@ function issueRefs(dbPath: string): Array<{ id: string; issue_ref: string }> {
   }
 }
 
+/** note: The lane's retained issue rows, for a refusal that must leave history untouched. */
+function issueCount(dbPath: string): number {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare("select count(*) as n from issues").get() as { n?: unknown } | undefined;
+    return typeof row?.n === "number" ? row.n : 0;
+  } finally {
+    db.close();
+  }
+}
+
 function ledgerVersions(dbPath: string): number[] {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1462,6 +1480,7 @@ describe("collaboration v2 remote cache schema", () => {
     const wrongChecksumRepo = makeRepo("https://github.com/v2-upgrade/wrong-checksum.git");
     const wrongChecksum = locationAt(wrongChecksumRepo);
     writeV1Lane(wrongChecksum, (db) => db.prepare("update schema_version set checksum = ? where version = 1").run("f".repeat(64)));
+    activate(wrongChecksum.dbPath);
     await expect(upgradeCollaborationStore(contextAt(wrongChecksumRepo), "ops-engineer")).rejects.toMatchObject({
       code: "store.corrupt",
     });
@@ -1471,6 +1490,7 @@ describe("collaboration v2 remote cache schema", () => {
     const partialRepo = makeRepo("https://github.com/v2-upgrade/partial.git");
     const partial = locationAt(partialRepo);
     writeV1Lane(partial, (db) => db.exec("create table remote_bindings(generation integer)"));
+    activate(partial.dbPath);
     await expect(upgradeCollaborationStore(contextAt(partialRepo), "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
@@ -1481,6 +1501,7 @@ describe("collaboration v2 remote cache schema", () => {
     const halfRepo = makeRepo("https://github.com/v2-upgrade/half.git");
     const half = locationAt(halfRepo);
     writeV1Lane(half, (db) => db.exec("alter table issues add column issue_ref text"));
+    activate(half.dbPath);
     await expect(upgradeCollaborationStore(contextAt(halfRepo), "ops-engineer")).rejects.toMatchObject({
       code: "store.corrupt",
       message: expect.stringContaining("partially applied v2"),
@@ -1490,6 +1511,7 @@ describe("collaboration v2 remote cache schema", () => {
     // invariant: The upgrade records the operator it attests.
     const anonymous = makeRepo("https://github.com/v2-upgrade/anonymous.git");
     writeV1Lane(locationAt(anonymous));
+    activate(locationAt(anonymous).dbPath);
     await expect(upgradeCollaborationStore(contextAt(anonymous), "  ")).rejects.toMatchObject({
       code: "store.attestation-invalid",
     });
@@ -1514,6 +1536,104 @@ describe("collaboration v2 remote cache schema", () => {
       code: "collaboration.unreadable",
     });
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+  });
+
+  test("a stale or unbound checkout never migrates a v1 lane it does not own", async () => {
+    // note: A same-repository v1 lane replaced by another generation while this checkout still
+    // records the superseded store: repository and mode alone must not admit the mutation.
+    const staleRepo = makeRepo("https://github.com/v2-upgrade/stale-generation.git");
+    const staleContext = contextAt(staleRepo);
+    const stale = locationAt(staleRepo);
+    writeV1Lane(stale, seedV1History);
+    activate(stale.dbPath);
+    writeCollaborationBinding(staleContext, {
+      repoKey: stale.repoKey,
+      mode: "local",
+      storeId: "superseded-store",
+      epoch: 3,
+    });
+
+    await expect(upgradeCollaborationStore(staleContext, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    // invariant: No DDL, no backfill and no receipt landed on the lane this checkout does not own.
+    expect(ledgerVersions(stale.dbPath)).toEqual([1]);
+    expect(hasColumn(stale.dbPath, "issues", "issue_ref")).toBe(false);
+    expect(issueCount(stale.dbPath)).toBe(2);
+
+    // note: An unbound checkout (a replacement clone) reads the lane but never upgrades it.
+    const unboundRepo = makeRepo("https://github.com/v2-upgrade/unbound-generation.git");
+    const unbound = locationAt(unboundRepo);
+    writeV1Lane(unbound, seedV1History);
+    await expect(upgradeCollaborationStore(contextAt(unboundRepo), "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    expect(ledgerVersions(unbound.dbPath)).toEqual([1]);
+    expect(hasColumn(unbound.dbPath, "issues", "issue_ref")).toBe(false);
+    expect(issueCount(unbound.dbPath)).toBe(2);
+
+    // invariant: The refusal was ownership, not bytes: the owning checkout still migrates the lane.
+    activate(stale.dbPath);
+    expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
+      fromVersion: 1,
+      toVersion: 2,
+      storeId: "v1-store",
+      issuesBackfilled: 2,
+    });
+    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2]);
+  });
+
+  test("an unbound checkout adopts an intact v1 lane, then upgrades it", async () => {
+    const repo = makeRepo("https://github.com/v2-upgrade/adopt-v1.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV1Lane(location, (db) => {
+      seedV1History(db);
+      // note: The durable creation receipt of the activation that published this generation,
+      // the same evidence a real `store init` records.
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+          "values ('standalone', ?, ?, ?, ?)",
+      ).run(
+        "creation:v1-store:1",
+        "fixture",
+        JSON.stringify({
+          version: 1,
+          producer: "store-init",
+          storeId: "v1-store",
+          epoch: 1,
+          repoKey: location.repoKey,
+          mode: location.mode,
+          createdAt: "2026-11-21T00:00:00.000Z",
+        }),
+        "2026-11-21T00:00:00.000Z",
+      );
+    });
+
+    // invariant: Without a binding, the v1 lane is inspection-only: the ordinary open refuses
+    // and the upgrade's ownership gate refuses, so adoption is the supported recovery.
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.upgrade-required",
+    });
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+
+    const adopted = await adoptCollaborationBinding(context);
+    expect(adopted).toMatchObject({ adopted: true, authority: { storeId: "v1-store", schemaVersion: 1 } });
+    expect(readCollaborationBinding(context)).toMatchObject({
+      version: 2,
+      state: "active",
+      storeId: "v1-store",
+      epoch: 1,
+    });
+    // invariant: Adoption proved the v1 bytes without migrating them.
+    expect(ledgerVersions(location.dbPath)).toEqual([1]);
+
+    const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 2, storeId: "v1-store", issuesBackfilled: 2 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(issueCount(location.dbPath)).toBe(2);
   });
 });
 
@@ -3230,5 +3350,616 @@ describe("remote observation cache", () => {
       ),
     );
     await expect(readRemoteStatus(splitContext)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: The reviewed local/mirror -> remote transition and the commit-time fence
+// ---------------------------------------------------------------------------
+
+/** note: A same-repository checkout that starts in local mode and owns a bare origin. */
+function transitionFixture(name: string): {
+  repo: string;
+  repoKey: string;
+  origin: string;
+  bare: string;
+  publish(payload: Record<string, unknown>): string;
+} {
+  const slug = `${name}-${sequence++}`;
+  const origin = `https://github.com/transition-fixture/${slug}.git`;
+  const repoKey = `github.com/transition-fixture/${slug}`;
+  const bare = join(ROOT, `transition-origin-${slug}.git`);
+  git(ROOT, "init", "-q", "--bare", bare);
+  const repo = join(ROOT, `transition-repo-${slug}`);
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-q");
+  git(repo, "config", "user.name", "Transition Store Test");
+  git(repo, "config", "user.email", "transition@example.test");
+  git(repo, "config", "remote.origin.url", origin);
+  git(repo, "config", `url.${bare}.insteadOf`, origin);
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
+  const publisher = join(ROOT, `transition-publisher-${slug}`);
+  mkdirSync(publisher, { recursive: true });
+  git(publisher, "init", "-q");
+  git(publisher, "config", "user.name", "Transition Publisher");
+  git(publisher, "config", "user.email", "publisher@example.test");
+  return {
+    repo,
+    repoKey,
+    origin,
+    bare,
+    publish(payload) {
+      writeFileSync(join(publisher, "authority.json"), `${JSON.stringify(payload, null, 2)}\n`);
+      git(publisher, "add", "authority.json");
+      git(publisher, "commit", "-q", "-m", "publish selector");
+      git(publisher, "push", "-q", "--force", bare, `HEAD:${SELECTOR_REF}`);
+      return git(publisher, "rev-parse", "HEAD");
+    },
+  };
+}
+
+/** note: A published local lane carrying one issue, with the checkout's v2 binding recorded. */
+async function publishedLocalLane(repo: string): Promise<{ context: StoreContext; location: CollaborationLocation }> {
+  const context = contextAt(repo);
+  const location = locationAt(repo);
+  await initializeCollaborationStore(location);
+  activate(location.dbPath);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+        "identity_key, issue_ref) values ('I-000001', 'fixture-project', 'Local history', 'bug', 'high', 'open', 'i', 'a', " +
+        "'2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', 'key-one', 'mstar:issue:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')",
+    ).run();
+  } finally {
+    db.close();
+  }
+  return { context, location };
+}
+
+/** note: A second checkout of the SAME repository: its own harness, the shared canonical origin. */
+function secondCheckout(origin: string, bare: string, mode: CollaborationMode): string {
+  const dir = join(ROOT, `second-checkout-${sequence++}`);
+  mkdirSync(dir, { recursive: true });
+  git(dir, "init", "-q");
+  git(dir, "config", "user.name", "Second Checkout");
+  git(dir, "config", "user.email", "second@example.test");
+  git(dir, "config", "remote.origin.url", origin);
+  git(dir, "config", `url.${bare}.insteadOf`, origin);
+  writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=${mode}\n`);
+  return dir;
+}
+
+function selectorPayload(repoKey: string, overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    version: 1,
+    repoKey,
+    generation: 1,
+    mode: "local",
+    phase: "active",
+    projects: [],
+    previous: null,
+    cutover: null,
+    ...overrides,
+  };
+}
+
+const FENCED = {
+  operator: "ops-engineer",
+  reviewedAt: "2026-11-22T00:00:00Z",
+  sourceFenced: true,
+  pendingOperationIds: [],
+  verifiedTargetDigest: "f".repeat(64),
+};
+
+describe("reviewed authority transition", () => {
+  test("a reviewed local predecessor is retired into the remote cache with its history preserved", async () => {
+    const fixture = transitionFixture("predecessor");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    expect(predecessor).toMatchObject({ mode: "local", authority_state: "active" });
+
+    // note: The predecessor generation the successor names, published while this checkout is local.
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+
+    // invariant: An ACTIVE selector whose cutover is not source-fenced refuses before any byte moves.
+    const unfenced = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: { ...FENCED, sourceFenced: false },
+      }),
+    );
+    await expect(
+      bindRemoteAuthority(context, { version: 1, selectorCommit: unfenced, generation: 2, checks: [positiveCheck()] }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(existsSync(location.dbPath)).toBe(true);
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "local", store_id: predecessor.store_id });
+
+    // note: The reviewed, fenced successor names that local generation and retires the lane.
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 3,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: successor,
+      generation: 3,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({
+      generation: 3,
+      binding: { version: 3, mode: "remote", generation: 3, selectorCommit: successor },
+      retiredPredecessor: { mode: "local", storeId: predecessor.store_id, epoch: predecessor.authority_epoch },
+    });
+    if (bound.retiredPredecessor === null) throw new Error("fixture: the transition reported no retired predecessor");
+
+    // invariant: The canonical path is now the verified cache; the predecessor's rows survive as
+    // inaccessible history beside it, under their own local mode.
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote", authority_state: "active" });
+    const preserved = new DatabaseSync(bound.retiredPredecessor.path);
+    try {
+      expect(preserved.prepare("select id, title from issues").all()).toEqual([{ id: "I-000001", title: "Local history" }]);
+      expect((preserved.prepare("select mode from collaboration_meta where id = 1").get() as { mode: string }).mode).toBe("local");
+    } finally {
+      preserved.close();
+    }
+
+    // invariant: The retired generation is never served and a stale local write cannot land.
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.mode-unavailable",
+    });
+  });
+
+  test("a local write refuses when the origin publishes a draining selector inside its transaction", async () => {
+    const fixture = transitionFixture("draining-writer");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+
+    await expect(
+      withCollaborationWrite(context, (handle) => {
+        handle.db.prepare(receiptInsert("draining-gap")).run();
+        // note: The origin starts the reviewed transition while this writer holds the lock.
+        fixture.publish(selectorPayload(fixture.repoKey, { generation: 1, phase: "draining" }));
+        return "written";
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+
+    // invariant: The effect rolled back: no receipt landed under the superseded selection.
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(
+        (db.prepare("select count(*) as n from collaboration_operations where operation_id = 'draining-gap'").get() as { n: number })
+          .n,
+      ).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a remote cache staging transaction refuses when the selector moves before commit", async () => {
+    const fixture = remoteFixture("selector-fence");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 1, checks: [positiveCheck()] });
+
+    await expect(
+      writeRemoteCacheStage(
+        location,
+        ({ db }) => {
+          db.prepare(receiptInsert("selector-gap")).run();
+          fixture.publish(
+            fixture.payload({
+              generation: 2,
+              previous: { selectorCommit: first, generation: 1, mode: "remote" },
+              cutover: FENCED,
+            }),
+          );
+          return "staged";
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+
+    // invariant: The staged cache mutation rolled back with the moved selection.
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(
+        (db.prepare("select count(*) as n from collaboration_operations where operation_id = 'selector-gap'").get() as { n: number })
+          .n,
+      ).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("an unbound same-repository checkout retires the shared local predecessor", async () => {
+    const fixture = transitionFixture("unbound-predecessor");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    // note: A fresh clone in the same home resolves the same canonical lane but holds no
+    // binding for it; the reviewed selector is the only lineage evidence it needs.
+    rmSync(join(fixture.repo, ".mstar", "collaboration-binding.json"), { force: true });
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: successor,
+      generation: 2,
+      checks: [positiveCheck()],
+    });
+    expect(bound.retiredPredecessor).toMatchObject({ mode: "local", storeId: predecessor.store_id });
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote" });
+  });
+
+  test("a selector that moves before the retirement decision never retires the predecessor", async () => {
+    const fixture = transitionFixture("retirement-drift");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+
+    // note: A competing publication lands AFTER the bind's reviewed proof and BEFORE its
+    // retirement decision, so the successor the bind checked is no longer the live selection.
+    setRemoteBindTransitionGapForTest(() => {
+      fixture.publish(
+        selectorPayload(fixture.repoKey, {
+          generation: 3,
+          mode: "remote",
+          projects: [SELECTED_PROJECT],
+          previous: { selectorCommit: successor, generation: 2, mode: "remote" },
+          cutover: FENCED,
+        }),
+      );
+    });
+    try {
+      await expect(
+        bindRemoteAuthority(context, {
+          version: 1,
+          selectorCommit: successor,
+          generation: 2,
+          checks: [positiveCheck()],
+        }),
+      ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    } finally {
+      setRemoteBindTransitionGapForTest(undefined);
+    }
+
+    // invariant: Drift is observed before the rename, so nothing moved: the canonical path is
+    // still the local predecessor, no retired image exists and no v3 binding was published.
+    expect(metaRecord(location.dbPath)).toMatchObject({
+      mode: "local",
+      store_id: predecessor.store_id,
+      authority_epoch: predecessor.authority_epoch,
+    });
+    expect(issueCount(location.dbPath)).toBe(1);
+    expect(
+      existsSync(localPredecessorRetiredPath(location, { storeId: predecessor.store_id, epoch: predecessor.authority_epoch })),
+    ).toBe(false);
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 2, mode: "local" });
+  });
+
+  test("a late bind publication never replaces a recorded newer generation", async () => {
+    const fixture = remoteFixture("publication-fence");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: first,
+      generation: 1,
+      checks: [positiveCheck()],
+    });
+    // invariant: The published stamp is the lane the transaction actually wrote.
+    const lane = metaRecord(location.dbPath);
+    expect(bound.binding).toMatchObject({ version: 3, storeId: lane.store_id, epoch: lane.authority_epoch });
+
+    const second = fixture.publish(
+      fixture.payload({
+        generation: 2,
+        previous: { selectorCommit: first, generation: 1, mode: "remote" },
+        cutover: FENCED,
+      }),
+    );
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: second, generation: 2, checks: [positiveCheck()] });
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 2, selectorCommit: second });
+
+    // note: A slower bind that staged the predecessor publishes nothing over the successor.
+    expect(() =>
+      writeRemoteCollaborationBinding(context, {
+        repoKey: location.repoKey,
+        selectorCommit: first,
+        generation: 1,
+        storeId: bound.binding.storeId,
+        epoch: bound.binding.epoch,
+      }),
+    ).toThrow(expect.objectContaining({ code: "collaboration.stale-binding" }));
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 2, selectorCommit: second });
+  });
+
+  test("a missing cache never adopts a different selector at the recorded generation", async () => {
+    const fixture = remoteFixture("equal-generation");
+    const first = fixture.publish(fixture.payload({ generation: 1 }));
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 1, checks: [positiveCheck()] });
+    // note: The private cache is disposable bytes; its loss never licenses reusing the number.
+    rmSync(location.dbPath, { force: true });
+    // note: The same generation republished with a different payload (the marker only makes the
+    // commit distinct); the origin's ref now names a commit this checkout never recorded.
+    const other = fixture.publish(fixture.payload({ generation: 1, publishedNote: "same generation, different payload" }));
+    expect(other).not.toBe(first);
+
+    await expect(
+      bindRemoteAuthority(context, { version: 1, selectorCommit: other, generation: 1, checks: [positiveCheck()] }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // invariant: The refused bind created no lane and left the recorded generation alone.
+    expect(existsSync(location.dbPath)).toBe(false);
+    expect(readCollaborationBinding(context)).toMatchObject({ generation: 1, selectorCommit: first });
+  });
+
+  test("a local write refuses a different active selector of the same mode", async () => {
+    const fixture = transitionFixture("same-mode-drift");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    // note: The initial local selector is ACTIVE; the local admission retains its exact commit.
+    const first = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    expect(resolveCollaborationLocation(context).selection?.commit).toBe(first);
+
+    await expect(
+      withCollaborationWrite(context, (handle) => {
+        handle.db.prepare(receiptInsert("same-mode-gap")).run();
+        // note: A valid successor of the SAME mode and phase lands while this writer holds the lock.
+        fixture.publish(
+          selectorPayload(fixture.repoKey, {
+            generation: 2,
+            previous: { selectorCommit: first, generation: 1, mode: "local" },
+            cutover: FENCED,
+          }),
+        );
+        return "written";
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(receipts(location.dbPath)).not.toContain("same-mode-gap");
+
+    // invariant: An ACTIVE selector first published after an admission that proved absence is
+    // the same drift, not a fresh absence the writer may continue under.
+    const absence = transitionFixture("same-mode-absence");
+    const fresh = await publishedLocalLane(absence.repo);
+    await expect(
+      withCollaborationWrite(fresh.context, (handle) => {
+        handle.db.prepare(receiptInsert("absence-gap")).run();
+        absence.publish(selectorPayload(absence.repoKey, { generation: 1 }));
+        return "written";
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(receipts(fresh.location.dbPath)).not.toContain("absence-gap");
+  });
+
+  test("two checkouts sharing one lane serialize predecessor retirement", async () => {
+    const fixture = transitionFixture("shared-retirement");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+    // note: A second checkout of the same repository resolves the SAME canonical store path
+    // but keeps its own harness root, so a harness-scoped lock would not exclude it.
+    const otherContext = contextAt(secondCheckout(fixture.origin, fixture.bare, "remote"));
+    let competing: unknown;
+    setLocalPredecessorPublicationGapForTest(async () => {
+      try {
+        await bindRemoteAuthority(otherContext, {
+          version: 1,
+          selectorCommit: successor,
+          generation: 2,
+          checks: [positiveCheck()],
+        });
+      } catch (error) {
+        competing = error;
+      }
+    });
+    try {
+      const bound = await bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: successor,
+        generation: 2,
+        checks: [positiveCheck()],
+      });
+      expect(bound.retiredPredecessor).toMatchObject({ mode: "local", storeId: predecessor.store_id });
+    } finally {
+      setLocalPredecessorPublicationGapForTest(undefined);
+    }
+
+    // invariant: The second checkout was excluded by the SHARED lane lock, and the one archive
+    // that exists carries the predecessor's history, not the competing cache.
+    expect(competing).toMatchObject({ code: "collaboration.cutover-conflict" });
+    const retired = localPredecessorRetiredPath(location, {
+      storeId: predecessor.store_id,
+      epoch: predecessor.authority_epoch,
+    });
+    expect(metaRecord(retired)).toMatchObject({ mode: "local", store_id: predecessor.store_id });
+    expect(issueCount(retired)).toBe(1);
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote" });
+  });
+
+  test("a suspended retirement never replaces a preserved predecessor image", async () => {
+    const fixture = transitionFixture("archive-no-replace");
+    const { context, location } = await publishedLocalLane(fixture.repo);
+    const predecessor = metaRecord(location.dbPath);
+    const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
+    writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    const successor = fixture.publish(
+      selectorPayload(fixture.repoKey, {
+        generation: 2,
+        mode: "remote",
+        projects: [SELECTED_PROJECT],
+        previous: { selectorCommit: local, generation: 1, mode: "local" },
+        cutover: FENCED,
+      }),
+    );
+    const retired = localPredecessorRetiredPath(location, {
+      storeId: predecessor.store_id,
+      epoch: predecessor.authority_epoch,
+    });
+    // note: A competing checkout completes its retirement AFTER this one's last inode check;
+    // only the create-if-absent publication decides which image survives.
+    setLocalPredecessorPublicationGapForTest(() => {
+      writeFileSync(retired, "competing archive\n", { mode: 0o600 });
+    });
+    try {
+      await expect(
+        bindRemoteAuthority(context, {
+          version: 1,
+          selectorCommit: successor,
+          generation: 2,
+          checks: [positiveCheck()],
+        }),
+      ).rejects.toMatchObject({
+        code: "collaboration.stale-binding",
+        message: expect.stringContaining("never replaced"),
+      });
+    } finally {
+      setLocalPredecessorPublicationGapForTest(undefined);
+    }
+
+    // invariant: Neither the archive nor the canonical predecessor was overwritten.
+    expect(readFileSync(retired, "utf8")).toBe("competing archive\n");
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "local", store_id: predecessor.store_id });
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 2, mode: "local" });
+  });
+
+  test("a competing v3 publisher never replaces an in-progress publication", async () => {
+    const fixture = remoteFixture("publication-lock");
+    const first = fixture.publish(fixture.payload({ generation: 3 }));
+    const context = contextAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 3, checks: [positiveCheck()] });
+    const second = fixture.publish(
+      fixture.payload({
+        generation: 4,
+        previous: { selectorCommit: first, generation: 3, mode: "remote" },
+        cutover: FENCED,
+      }),
+    );
+    let competing: unknown;
+    setRemoteBindingPublicationGapForTest(async () => {
+      try {
+        await bindRemoteAuthority(context, {
+          version: 1,
+          selectorCommit: second,
+          generation: 4,
+          checks: [positiveCheck()],
+        });
+      } catch (error) {
+        competing = error;
+      }
+    });
+    try {
+      const bound = await bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: second,
+        generation: 4,
+        checks: [positiveCheck()],
+      });
+      expect(bound).toMatchObject({ generation: 4, selectorCommit: second });
+    } finally {
+      setRemoteBindingPublicationGapForTest(undefined);
+    }
+
+    // invariant: The second publisher was excluded, so the first publication stands.
+    expect(competing).toMatchObject({ code: "collaboration.cutover-conflict" });
+    expect(readCollaborationBinding(context)).toMatchObject({
+      version: 3,
+      generation: 4,
+      selectorCommit: second,
+    });
+  });
+
+  test("a bind whose selector advanced after its cache commit recovers through that generation", async () => {
+    const fixture = remoteFixture("publication-recovery");
+    const first = fixture.publish(fixture.payload({ generation: 3 }));
+    const context = contextAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 3, checks: [positiveCheck()] });
+    const second = fixture.publish(
+      fixture.payload({
+        generation: 4,
+        previous: { selectorCommit: first, generation: 3, mode: "remote" },
+        cutover: FENCED,
+      }),
+    );
+    let third = "";
+    setRemoteBindingPublicationGapForTest(() => {
+      third = fixture.publish(
+        fixture.payload({
+          generation: 5,
+          previous: { selectorCommit: second, generation: 4, mode: "remote" },
+          cutover: FENCED,
+        }),
+      );
+    });
+    try {
+      await expect(
+        bindRemoteAuthority(context, { version: 1, selectorCommit: second, generation: 4, checks: [positiveCheck()] }),
+      ).rejects.toMatchObject({
+        code: "collaboration.stale-binding",
+        message: expect.stringContaining("already committed"),
+      });
+    } finally {
+      setRemoteBindingPublicationGapForTest(undefined);
+    }
+
+    // invariant: Generation 4's cache rows committed and no checkout binding was published;
+    // the checkout still records generation 3 while the committed 4 is the reviewed predecessor.
+    expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 3, selectorCommit: first });
+
+    const recovered = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: third,
+      generation: 5,
+      checks: [positiveCheck()],
+    });
+    expect(recovered).toMatchObject({ generation: 5, selectorCommit: third, replayed: false });
+    expect(readCollaborationBinding(context)).toMatchObject({
+      version: 3,
+      generation: 5,
+      selectorCommit: third,
+    });
   });
 });

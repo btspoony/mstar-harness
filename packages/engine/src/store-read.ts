@@ -72,7 +72,7 @@ import {
   type RemoteCatalogRow,
   type RemoteReadView,
 } from "./collaboration-remote-read.js";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
@@ -639,22 +639,45 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
   let collaborationHandle: CollaborationStoreHandle | null = null;
   let remoteView: RemoteReadView | null = null;
   let executionHandle: StoreHandle | null = null;
+  /** note: The checked remote selection when it resolved, so an unavailable arm still names its source. */
+  let remoteSelection: { selectorCommit: string; generation: number } | null = null;
   // invariant: Both opens sit INSIDE the cleanup scope: a required execution open that
   // throws must not strand the collaboration handle it already acquired.
   try {
     let collaborationCode: string | null = null;
     let executionCode: string | null = null;
     if (scope !== null) {
+      // invariant: Resolving the selection IS admitting the source. A selector outage is an
+      // unavailable source, not a view failure: an optional collaboration dependency never
+      // blocks the execution data the view owns, and no local fallback is opened instead.
+      let remote: boolean | null = null;
+      /** note: The location this request already resolved, so the nested cache open never re-resolves. */
+      let remoteLocation: CollaborationLocation | undefined;
+      try {
+        const location = resolveCollaborationLocation(context);
+        remote = location.mode === "remote";
+        if (remote) remoteLocation = location;
+        if (remote === true && location.selection !== undefined) {
+          remoteSelection = {
+            selectorCommit: location.selection.commit,
+            generation: location.selection.generation,
+          };
+        }
+      } catch (error) {
+        if (query.collaboration?.required !== false) throw error;
+        collaborationCode = errorCode(error);
+      }
       // invariant: A remote selection opens ONLY the cache evidence lane; a local-authority
-      // handle is never opened, so no local row can stand in for the provider.
-      if (resolveCollaborationLocation(context).mode === "remote") {
+      // handle is never opened, so no local row can stand in for the provider. An unresolved
+      // selection opens neither.
+      if (remote === true) {
         try {
-          remoteView = await openRemoteReadView(context);
+          remoteView = await openRemoteReadView(context, query.collaboration?.projectIds, remoteLocation);
         } catch (error) {
           if (query.collaboration?.required !== false) throw error;
           collaborationCode = errorCode(error);
         }
-      } else {
+      } else if (remote === false) {
         try {
           collaborationHandle = await openCollaborationStore(context, "read");
         } catch (error) {
@@ -707,7 +730,14 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
           withGap ??
           (scope === null
             ? null
-            : { scope, completeness: "unavailable", asOf: null, authority: null, code: collaborationCode ?? "collaboration.not-initialized" }),
+            : {
+                scope,
+                ...(remoteSelection === null ? {} : { source: "remote" as const, ...remoteSelection }),
+                completeness: "unavailable",
+                asOf: null,
+                authority: null,
+                code: collaborationCode ?? "collaboration.not-initialized",
+              }),
         execution,
       };
     } catch (error) {
@@ -881,7 +911,7 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
     case "roadmap":
       if (projectId === null) usage("the roadmap view requires filters.projectId");
-      return { collaboration: { scope: { kind: "project", key: projectId }, required: true }, execution: "not-requested" };
+      return { collaboration: { scope: { kind: "project", key: projectId }, required: true, projectIds: [projectId] }, execution: "not-requested" };
     case "workflows": {
       const { limit, offset } = page();
       return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
@@ -1013,7 +1043,9 @@ export function queryOpenIssueRollup(projectId?: string): StoreReadQuery<OpenIss
   return {
     view: "open-issue-rollup",
     needsProjection: false,
-    collaboration: { scope, required: true },
+    // invariant: A project rollup declares exactly that project, so an unrelated project's
+    // evidence never refuses or contributes to it.
+    collaboration: { scope, required: true, ...(scoped === undefined ? {} : { projectIds: [scoped] }) },
     execution: "not-requested",
     run: (sources) => ({
       data:
@@ -1929,17 +1961,31 @@ function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO
   }
   return { unregistered, adopted };
 }
-function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters): WorkflowListDTO {
+/**
+ * The execution workflow list.
+ *
+ * `catalogProjectIds` narrows ONLY the catalog join (membership, identities and
+ * the known-catalog flag) to the projects a containing response declares, while
+ * the row filter keeps its own `filters.projectId`. The `overview` uses it so an
+ * A-scoped response never carries B's catalog titles while still answering the
+ * global workflow summary it owns.
+ */
+function readWorkflowList(
+  sources: StoreReadSources,
+  filters: DashboardFilters,
+  catalogProjectIds?: readonly string[],
+): WorkflowListDTO {
   const db = executionSource(sources);
   const projectId = text(filters.projectId);
   // invariant: A project filter declares exactly that project for this read: membership,
   // catalog identities and the known-catalog flag all come from it, so an unrelated
   // project's gap never suppresses this project's rows or taints their stamp.
   const scopeIds = projectId === null ? undefined : [projectId];
+  const catalogScope = catalogProjectIds ?? scopeIds;
   // invariant: A project filter makes membership a required source. Enforcing it here
   // covers both zero-producing returns below; only an unfiltered list is optional.
-  const membership = projectMembershipIn(sources, projectId !== null, scopeIds);
-  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false, scopeIds) !== null : sources.collaboration !== null;
+  const membership = projectMembershipIn(sources, projectId !== null, catalogScope);
+  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false, catalogScope) !== null : sources.collaboration !== null;
   const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
@@ -1973,7 +2019,7 @@ function readWorkflowList(sources: StoreReadSources, filters: DashboardFilters):
   const identities = catalogIdentitiesIn(sources, [
     ...page.map(workflowCatalogKey),
     ...page.flatMap((workflow) => (plansByWorkflow.get(workflow.id) ?? []).map((plan) => ({ kind: "plan" as const, id: plan.plan_id }))),
-  ], false, scopeIds);
+  ], false, catalogScope);
   return {
     items: page.map((workflow) =>
       toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities, catalogKnown),
@@ -2322,7 +2368,12 @@ function readOverview(sources: StoreReadSources, filters: DashboardFilters): Ove
 
   return {
     projectId,
-    workflows: projected(() => activeWorkflows(readWorkflowList(sources, { limit: 50 }))),
+    // invariant: The workflow member joins catalog identity, so it declares the SAME project
+    // scope as the rest of this overview: an A-only response never carries B's catalog titles
+    // or is suppressed by B's evidence, while the rows keep their global summary.
+    workflows: projected(() =>
+      activeWorkflows(readWorkflowList(sources, { limit: 50 }, projectId === null ? undefined : [projectId])),
+    ),
     residuals:
       remote === null
         ? member(() => readResidualCounts(collaborationDb as StoreDb))

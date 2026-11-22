@@ -131,7 +131,7 @@ export async function readRoadmapAuthority(
   projectId: string,
 ): Promise<RoadmapRead & { collaboration: CompleteCollaborationObservation }> {
   if (resolveCollaborationLocation(context).mode === "remote") {
-    const view = await openRemoteReadView(context);
+    const view = await openRemoteReadView(context, [projectId]);
     // note: The project scope is validated first, so an unknown project keeps its own refusal
     // instead of surfacing as a generic incomplete observation.
     const read = remoteRoadmapRead(view, projectId);
