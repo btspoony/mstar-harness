@@ -70,6 +70,7 @@ import {
   remoteEventHead,
   setRemoteBindTransitionGapForTest,
   setRemoteBindingPublicationGapForTest,
+  setRemoteIntentSampleGapForTest,
   type ForkObservation,
   type RemoteEvent,
   type RemoteIntentState,
@@ -4181,13 +4182,14 @@ function outboxRows(dbPath: string): Array<{
   state: string;
   attempt_id: string | null;
   execution_key_json: string | null;
+  abandon_reason: string | null;
 }> {
   const db = new DatabaseSync(dbPath);
   try {
     return (
       db
         .prepare(
-          "select operation_id, request_hash, request_json, state, attempt_id, execution_key_json " +
+          "select operation_id, request_hash, request_json, state, attempt_id, execution_key_json, abandon_reason " +
             "from remote_outbox order by operation_id",
         )
         .all() as Array<Record<string, unknown>>
@@ -4198,6 +4200,7 @@ function outboxRows(dbPath: string): Array<{
       state: String(row.state),
       attempt_id: typeof row.attempt_id === "string" ? row.attempt_id : null,
       execution_key_json: typeof row.execution_key_json === "string" ? row.execution_key_json : null,
+      abandon_reason: typeof row.abandon_reason === "string" ? row.abandon_reason : null,
     }));
   } finally {
     db.close();
@@ -6881,15 +6884,42 @@ describe("remote outbox qc fixes", () => {
       }),
     );
     const successorId = "00000000-0000-4000-8000-000000000813";
-    await prepareRemoteResolution(cache.context, repairId, {
+    const successor = await prepareRemoteResolution(cache.context, repairId, {
       operationId: successorId,
       operator: "operator-one",
       reason: "merge the second fork",
       event: journalEvent(cache.fixture, successorId, second.heads),
     });
-    expect(
-      (await dispatchRemoteIntent(cache.context, successorId, forkObservationFor(cache, repairId, second.heads))).kind,
-    ).toBe("permit");
+    // note: An ordinary intent frozen on the second fork's base waits for the whole chain.
+    const ordinaryId = "00000000-0000-4000-8000-000000000814";
+    await prepareRemoteIntent(
+      cache.context,
+      journalIntent(cache.fixture, cache.commit, ordinaryId, {
+        event: journalEvent(cache.fixture, ordinaryId, second.heads),
+        expectedHeads: second.heads,
+      }),
+    );
+    // invariant: Before the terminal repair confirms, the original conflict still closes the queue.
+    await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+      details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
+    });
+    const successorAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, successorId, forkObservationFor(cache, repairId, second.heads)),
+    );
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, successorId, successorAttempt, successor.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffff8b3",
+        event: journalEvent(cache.fixture, successorId, second.heads),
+      }),
+    );
+    // invariant: A confirmed terminal repair settles the LIVE `resolved_by` chain, so the ancestor
+    // conflict no longer blocks an ordinary send frozen on the merged base.
+    await observeHead(cache, second.heads);
+    expect((await dispatchRemoteIntent(cache.context, ordinaryId)).kind).toBe("permit");
   }, 30_000);
 
   test("an outbox resolution must merge the same subject and keep both branches", async () => {
@@ -6986,7 +7016,27 @@ describe("remote outbox qc fixes", () => {
 
     const second = "00000000-0000-4000-8000-000000000842";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, second));
-    rewriteVerification(cache.dbPath, { verifiedAt: new Date().toISOString(), outcome: { kind: "denied" } });
+    // note: A PUBLIC denial: the ingest clears the binding's writer in place, as a real revocation does.
+    await expect(
+      ingestRemoteObservation(cache.context, {
+        ...observation(positiveCheck({ checkedAt: new Date().toISOString(), outcome: { kind: "denied" } }), {
+          selectorCommit: cache.commit,
+          generation: 3,
+          expectRevision: observationRevision(cache.dbPath),
+          snapshot: null,
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "remote.denied" });
+    expect(bindingEvidence(cache.dbPath).writer_id).toBeNull();
+    // invariant: A denial withholds the payload, never the row: inspection answers metadata instead
+    // of refusing, so an operator can still see the state and recover it.
+    expect(await readRemoteIntent(cache.context, second)).toMatchObject({
+      disclosure: "metadata",
+      state: "enqueued",
+      event: null,
+      target: null,
+      result: null,
+    });
     // invariant: A recorded denial never withholds the abandonment, but the retained business
     // payload never comes back through the command's response either.
     expect(await abandonRemoteIntent(cache.context, { operationId: second, reason: "withdrawn after denial" })).toMatchObject({
@@ -6996,6 +7046,14 @@ describe("remote outbox qc fixes", () => {
       event: null,
       result: null,
     });
+    // invariant: The repeat refusal redacts the retained reason exactly as the response does.
+    const repeat = await refusalOf(() => abandonRemoteIntent(cache.context, { operationId: second, reason: "withdrawn again" }));
+    expect(repeat.code).toBe("remote.dispatch-refused");
+    expect(repeat.message).toContain("already abandoned");
+    expect(repeat.message).not.toContain("withdrawn after denial");
+    expect(outboxRows(cache.dbPath).find((row) => row.operation_id === second)?.abandon_reason).toBe(
+      "withdrawn after denial",
+    );
   }, 30_000);
 
   test("a successor generation keeps predecessor outbox intents inspection-only", async () => {
@@ -7060,7 +7118,49 @@ describe("remote outbox qc fixes", () => {
     expect(outboxStateOf(cache.dbPath, operationId)).toBe("enqueued");
   }, 30_000);
 
-  test("a recorded outbox conflict refuses counts until the scope is refreshed", async () => {
+  test("an inspection samples one binding and a successor bound mid-read withholds the payload", async () => {
+    const cache = await outboxCache("outbox-show-successor-gap");
+    const operationId = "00000000-0000-4000-8000-000000000891";
+    await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
+    const committed = cache.commit;
+    // note: The successor becomes live AND bound BETWEEN the inspection's single sample and the
+    // cache open, so the open admits a lane the checkout no longer records.
+    let sampled = false;
+    setRemoteIntentSampleGapForTest(async () => {
+      if (sampled) return;
+      sampled = true;
+      const successor = cache.fixture.publish(
+        cache.fixture.payload({
+          generation: 4,
+          previous: { selectorCommit: committed, generation: 3, mode: "remote" },
+          cutover: {
+            operator: "operator-one",
+            reviewedAt: "2026-11-21T00:00:00.000Z",
+            sourceFenced: true,
+            pendingOperationIds: [],
+            verifiedTargetDigest: "a".repeat(64),
+          },
+        }),
+      );
+      await bindRemoteAuthority(cache.context, { version: 1, selectorCommit: successor, generation: 4, checks: [positiveCheck()] });
+    });
+    try {
+      // invariant: Disclosure follows the ONE pair the open admitted. A successor bound between that
+      // sample and the open leaves the predecessor row inspectable, never its frozen payload.
+      expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
+        generation: 3,
+        disclosure: "metadata",
+        event: null,
+        target: null,
+        receipts: [],
+      });
+    } finally {
+      setRemoteIntentSampleGapForTest(undefined);
+    }
+    expect(sampled).toBe(true);
+  }, 30_000);
+
+  test("an unresolved outbox fork keeps counts closed across a complete refresh", async () => {
     const cache = await outboxCache("outbox-conflict-counts");
     const conflictedId = "00000000-0000-4000-8000-000000000861";
     const fork = await conflictedJournal(cache, conflictedId);
@@ -7069,6 +7169,32 @@ describe("remote outbox qc fixes", () => {
     await expect(
       (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
     ).rejects.toMatchObject({ code: "remote.unavailable" });
+    // invariant: Q1: a refresh of the SAME competing heads proves the rows, never that the fork
+    // settled; counts stay closed until the live resolution chain confirms a terminal repair.
+    await observeHead(cache, fork.heads);
+    await expect(
+      (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
+    ).rejects.toMatchObject({ code: "remote.unavailable", message: expect.stringContaining("remote.effect-conflict") });
+    // note: Only a confirmed terminal repair on the merged observation reopens them.
+    const resolutionId = "00000000-0000-4000-8000-000000000862";
+    const resolution = await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, resolutionId, fork.heads),
+    });
+    const attemptId = attemptOf(
+      await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads)),
+    );
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, resolutionId, attemptId, resolution.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffff8c1",
+        event: journalEvent(cache.fixture, resolutionId, fork.heads),
+      }),
+    );
     await observeHead(cache, fork.heads);
     expect(remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId).milestones).toHaveLength(1);
   }, 30_000);

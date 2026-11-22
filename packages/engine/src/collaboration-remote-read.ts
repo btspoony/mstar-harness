@@ -26,6 +26,7 @@ import {
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation, assertSelectionUnchanged, type CollaborationLocation } from "./collaboration-identity.js";
 import {
+  conflictSettled,
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
   type RemoteIssue,
@@ -125,6 +126,10 @@ type StoredEvidenceRow = {
  * (`collaboration.stale-binding`); the returned view is only built from the
  * exact generation the checkout is bound to.
  *
+ * A project with an unresolved outbox fork is served as `unavailable`
+ * (`remote.effect-conflict`), so no count, rollup or gate decides on a base a
+ * recorded conflict still disputes.
+ *
  * A caller that has already resolved this checkout's location passes it in, so
  * one request resolves the published selector ONCE and the cache lane is opened
  * for that same checked location and binding.
@@ -189,18 +194,50 @@ export async function openRemoteReadView(
           `where b.generation = ? and b.project_key in (${requested.map(() => "?").join(", ")})`,
       )
       .all(binding.generation, ...requested) as StoredEvidenceRow[];
+    // invariant: Q1: a recorded fork closes required reads until its LIVE `resolved_by` chain
+    // reaches a confirmed terminal repair; a nominally complete traversal of the same competing
+    // heads proves the rows, never that the fork settled.
+    const outbox = handle.db
+      .prepare(
+        "select operation_id, project_key, state, resolved_by from remote_outbox " +
+          `where generation = ? and project_key in (${requested.map(() => "?").join(", ")})`,
+      )
+      .all(binding.generation, ...requested) as Array<{
+      operation_id?: unknown;
+      project_key?: unknown;
+      state?: unknown;
+      resolved_by?: unknown;
+    }>;
     handle.db.exec("commit");
     // invariant: The admitted selector commit is re-proved on the live ref at the read
     // boundary: a moved ref refuses instead of answering a superseded generation's rows.
     assertSelectionUnchanged(context, location);
     const byProject = new Map(rows.map((row) => [row.project_key, row]));
+    const links = new Map<string, { projectId: string; state: string; resolvedBy: string | null }>();
+    for (const entry of outbox) {
+      if (typeof entry.operation_id !== "string" || typeof entry.project_key !== "string" || typeof entry.state !== "string") {
+        continue;
+      }
+      links.set(entry.operation_id, {
+        projectId: entry.project_key,
+        state: entry.state,
+        resolvedBy: typeof entry.resolved_by === "string" ? entry.resolved_by : null,
+      });
+    }
+    const unresolvedForks = new Set<string>();
+    for (const [operationId, link] of links) {
+      if (link.state === "conflict" && !conflictSettled(links, operationId)) unresolvedForks.add(link.projectId);
+    }
     const now = Date.now();
     const projects = new Map<string, RemoteProjectEvidence>();
     for (const selected of selection.projects) {
       if (!requested.includes(selected.localProjectId)) continue;
       const row = byProject.get(selected.localProjectId);
-      if (row === undefined) {
-        projects.set(selected.localProjectId, unavailableEvidence(selected.localProjectId, selected));
+      if (row === undefined || unresolvedForks.has(selected.localProjectId)) {
+        projects.set(
+          selected.localProjectId,
+          unavailableEvidence(selected.localProjectId, selected, row === undefined ? undefined : "remote.effect-conflict"),
+        );
         continue;
       }
       const completeness =
@@ -250,7 +287,11 @@ export async function openRemoteReadView(
   }
 }
 
-function unavailableEvidence(projectId: string, selected: { workspaceId: string; teamId: string; projectId: string; journalIssueId: string }): RemoteProjectEvidence {
+function unavailableEvidence(
+  projectId: string,
+  selected: { workspaceId: string; teamId: string; projectId: string; journalIssueId: string },
+  code = "remote.unavailable",
+): RemoteProjectEvidence {
   return {
     projectId,
     scope: {
@@ -263,7 +304,7 @@ function unavailableEvidence(projectId: string, selected: { workspaceId: string;
     revision: 0,
     asOf: null,
     completeness: "unavailable",
-    code: "remote.unavailable",
+    code,
     freshness: "incomplete",
     asOfFresh: false,
     snapshot: null,

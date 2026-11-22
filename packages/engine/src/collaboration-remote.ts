@@ -72,6 +72,15 @@ export function setRemoteBindingPublicationGapForTest(
   remoteBindingPublicationGapForTest = callback;
 }
 
+/**
+ * note: The inspection-sample gap seam: a regression binds a successor between the v3 sample an
+ * inspection discloses under and the cache open that admits it. Production runs without a callback.
+ */
+let remoteIntentSampleGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteIntentSampleGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteIntentSampleGapForTest = callback;
+}
+
 /** note: The bound provider record an MStar issue is anchored to. */
 export type ProviderIssueIdentity = Readonly<{
   provider: "linear";
@@ -3084,11 +3093,16 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
   }
 }
 
-/** note: The cache's materialized binding must equal the frozen one before any lifecycle act. */
+/**
+ * note: The cache's materialized binding must equal the frozen one before any lifecycle act.
+ * The writer id is NOT part of that identity: a denial, revocation or expiry clears it in place,
+ * so including it would refuse a row that must stay inspectable as metadata. Sending still
+ * re-proves the verified writer against the scope in `assertDispatchScope`.
+ */
 function assertFrozenBinding(db: StoreDb, binding: RemoteIntentBinding, operationId: string): void {
   const stored = db
     .prepare(
-      "select selector_commit, provider, workspace_id, team_id, provider_project_id, journal_issue_id, writer_id " +
+      "select selector_commit, provider, workspace_id, team_id, provider_project_id, journal_issue_id " +
         "from remote_bindings where generation = ? and project_key = ?",
     )
     .get(binding.generation, binding.projectKey) as Record<string, unknown> | undefined;
@@ -3099,8 +3113,7 @@ function assertFrozenBinding(db: StoreDb, binding: RemoteIntentBinding, operatio
     stored.workspace_id !== binding.workspaceId ||
     stored.team_id !== binding.teamId ||
     stored.provider_project_id !== binding.projectId ||
-    stored.journal_issue_id !== binding.journalIssueId ||
-    (typeof stored.writer_id === "string" ? stored.writer_id : null) !== binding.writerId
+    stored.journal_issue_id !== binding.journalIssueId
   ) {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -3117,8 +3130,20 @@ function assertFrozenBinding(db: StoreDb, binding: RemoteIntentBinding, operatio
  * admitted to. A successor bind leaves the predecessor's rows in place, so their own still-fresh
  * access check is not what authorizes them: the admitted selector does. Predecessor rows stay
  * inspection-only (metadata), and no recovery verb rewrites them.
+ *
+ * The `{location,binding}` pair is sampled ONCE here and is the only pair a request acts under:
+ * the cache open, the admitted-lane fence and disclosure all read this sample, never a second
+ * read of the v3 file that could authorize a predecessor's payload under a successor's handle.
  */
-function admittedLane(context: StoreContext): { generation: number; selectorCommit: string } {
+type SampledLane = Readonly<{
+  location: CollaborationLocation;
+  binding: CollaborationBinding;
+  generation: number;
+  selectorCommit: string;
+}>;
+
+function admittedLane(context: StoreContext): SampledLane {
+  const location = resolveCollaborationLocation(context);
   const binding = readCollaborationBinding(context);
   if (binding === null || binding.version !== 3 || binding.state !== "active") {
     throw new StoreError(
@@ -3127,7 +3152,19 @@ function admittedLane(context: StoreContext): { generation: number; selectorComm
         "remote bind first; nothing was read or changed.",
     );
   }
-  return { generation: binding.generation, selectorCommit: binding.selectorCommit };
+  return { location, binding, generation: binding.generation, selectorCommit: binding.selectorCommit };
+}
+
+/** note: Whether the checkout still records the sampled binding: a rebind makes that sample inspection-only. */
+function laneStillRecorded(context: StoreContext, lane: SampledLane): boolean {
+  const current = readCollaborationBinding(context);
+  return (
+    current !== null &&
+    current.version === 3 &&
+    current.state === "active" &&
+    current.generation === lane.generation &&
+    current.selectorCommit === lane.selectorCommit
+  );
 }
 
 function assertAdmittedLane(
@@ -3668,24 +3705,34 @@ function readPermission(db: StoreDb, generation: number, projectKey: string): "f
 /**
  * note: `outbox-show`: one intent under the binding it was frozen under, including a draining
  * generation's pinned previous binding, never a send permit. Frozen content is disclosed only
- * while the project's current read permission holds.
+ * while the project's current read permission holds AND the admitted pair still authorizes this
+ * row: the sample read once here is the pair the cache open admits.
  */
 export async function readRemoteIntent(context: StoreContext, operationId: string): Promise<RemoteIntentRead> {
   const target = linearId(operationId, "operationId");
   const lane = admittedLane(context);
-  const handle = await openRemoteCache(context, "read", undefined, { previousDuringDraining: true });
+  // note: The sample is the request's whole admission: the open below validates exactly this
+  // pair, and disclosure compares against it instead of a second read of the v3 binding.
+  await remoteIntentSampleGapForTest?.();
+  const handle = await openRemoteCache(context, "read", { location: lane.location, binding: lane.binding }, {
+    previousDuringDraining: true,
+  });
   try {
     const row = intentRow(handle.db, target);
     const stored = storedRequest(row);
     assertFrozenBinding(handle.db, stored.request.binding, target);
-    // invariant: A predecessor generation's row keeps its durable state visible but is never
-    // disclosed as the admitted lane's frozen request, however current its own check still is.
-    const current = row.generation === lane.generation && stored.request.binding.selectorCommit === lane.selectorCommit;
+    // invariant: Disclosure follows the pair this open admitted. A checkout that rebound while the
+    // lane opened authorized nothing here, however current the row's own check still is: the row
+    // stays inspectable, its frozen content does not.
+    const admitted =
+      row.generation === lane.generation &&
+      stored.request.binding.selectorCommit === lane.selectorCommit &&
+      laneStillRecorded(context, lane);
     return intentRead(
       handle.db,
       row,
       stored,
-      current ? readPermission(handle.db, row.generation, row.projectKey) : "metadata",
+      admitted ? readPermission(handle.db, row.generation, row.projectKey) : "metadata",
     );
   } finally {
     handle.close();
@@ -4055,6 +4102,47 @@ function repairedForks(db: StoreDb, operationId: string): Set<string> {
   return forks;
 }
 
+/** note: One outbox row's state and its `resolved_by` link, as a resolution-chain walk needs them. */
+type ResolutionLink = Readonly<{ state: string; resolvedBy: string | null }>;
+
+/**
+ * note: Whether a recorded conflict is SETTLED: its live `resolved_by` chain reaches a confirmed
+ * terminal repair. A repair may itself conflict and be repaired, so only the whole chain proves
+ * the fork settled; an abandoned, enqueued, unconfirmed or missing link (or a cycle) settles nothing.
+ */
+export function conflictSettled(
+  chain: ReadonlyMap<string, ResolutionLink>,
+  operationId: string,
+): boolean {
+  const visited = new Set<string>();
+  let cursor: string | null = operationId;
+  while (cursor !== null && !visited.has(cursor)) {
+    visited.add(cursor);
+    const link = chain.get(cursor);
+    if (link === undefined) return false;
+    if (link.state === "confirmed") return true;
+    if (link.state !== "conflict") return false;
+    cursor = link.resolvedBy;
+  }
+  return false;
+}
+
+/** note: One binding lane's outbox rows, keyed by operation id, for resolution-chain walks. */
+function outboxChain(db: StoreDb, generation: number, projectKey: string): Map<string, ResolutionLink> {
+  const rows = db
+    .prepare("select operation_id, state, resolved_by from remote_outbox where generation = ? and project_key = ?")
+    .all(generation, projectKey) as Array<{ operation_id?: unknown; state?: unknown; resolved_by?: unknown }>;
+  const chain = new Map<string, ResolutionLink>();
+  for (const entry of rows) {
+    if (typeof entry.operation_id !== "string" || typeof entry.state !== "string") continue;
+    chain.set(entry.operation_id, {
+      state: entry.state,
+      resolvedBy: typeof entry.resolved_by === "string" ? entry.resolved_by : null,
+    });
+  }
+  return chain;
+}
+
 /**
  * `dispatchRemoteIntent` / `outbox-dispatch`: issue the ONE send permit for the oldest enqueued
  * intent of its binding, atomically marking it `unconfirmed` before returning it. The frozen
@@ -4127,29 +4215,22 @@ export async function dispatchRemoteIntent(
     // invariant: An in-flight attempt or an unresolved conflict serializes sends. The forks a
     // reviewed intent repairs are exempt - its own resolved fork and every ancestor fork of that
     // repair (a repair can itself conflict) - so a reviewed successor of a conflicted repair
-    // proceeds. Every other conflict still blocks until its own repair is confirmed, and an
-    // abandoned repair keeps the fork closed until a replacement resolution takes it over.
+    // proceeds. Every other conflict still blocks until its LIVE chain reaches a confirmed
+    // terminal repair, and an abandoned repair keeps the fork closed until a replacement
+    // resolution takes it over.
+    const chain = outboxChain(db, row.generation, row.projectKey);
     const blocking = db
       .prepare(
-        "select operation_id, state, resolved_by from remote_outbox where generation = ? and project_key = ? " +
+        "select operation_id, state from remote_outbox where generation = ? and project_key = ? " +
           "and operation_id <> ? and state in ('unconfirmed','conflict') order by created_at, operation_id",
       )
-      .all(row.generation, row.projectKey, target) as Array<{
-      operation_id?: unknown;
-      state?: unknown;
-      resolved_by?: unknown;
-    }>;
+      .all(row.generation, row.projectKey, target) as Array<{ operation_id?: unknown; state?: unknown }>;
     const repaired = repairedForks(db, target);
     const unresolved = blocking.find((entry) => {
       if (entry.state === "unconfirmed") return true;
       if (typeof entry.operation_id !== "string") return true;
       if (repaired.has(entry.operation_id)) return false;
-      const by = typeof entry.resolved_by === "string" ? entry.resolved_by : null;
-      return (
-        by === null ||
-        db.prepare("select 1 as found from remote_outbox where operation_id = ? and state = 'confirmed'").get(by) ===
-          undefined
-      );
+      return !conflictSettled(chain, entry.operation_id);
     });
     if (unresolved !== undefined) {
       const aheadId = typeof unresolved.operation_id === "string" ? unresolved.operation_id : "?";
@@ -4447,11 +4528,16 @@ export async function abandonRemoteIntent(
     const row = intentRow(db, operationId);
     const stored = storedRequest(row);
     assertAdmittedLane(admittedLane(context), row, stored.request.binding, operationId, "an abandonment");
+    // note: The retained reason and the row's state share one disclosure decision: a denial or an
+    // expired check withholds the free text from every response, refusals included.
+    const disclosure = readPermission(db, row.generation, row.projectKey);
     if (row.state === "abandoned") {
+      const retained = disclosure === "full" ? ` (${String(row.abandonReason)})` : "";
       throw new StoreError(
         "remote.dispatch-refused",
-        `Operation ${operationId} is already abandoned (${String(row.abandonReason)}); an abandonment replays through ` +
-          `outbox-show and is never rewritten.`,
+        `Operation ${operationId} is already abandoned${retained}; an abandonment replays through outbox-show and is never ` +
+          `rewritten.` +
+          (disclosure === "full" ? "" : " Its retained reason stays withheld while this scope's read permission does not hold."),
         { operationId, state: row.state },
       );
     }
@@ -4490,7 +4576,7 @@ export async function abandonRemoteIntent(
     );
     // invariant: The response is an inspection of the abandoned row, so a denied or expired
     // access check withholds the retained business payload instead of echoing it back.
-    return intentRead(db, intentRow(db, operationId), stored, readPermission(db, row.generation, row.projectKey));
+    return intentRead(db, intentRow(db, operationId), stored, disclosure);
   });
 }
 
