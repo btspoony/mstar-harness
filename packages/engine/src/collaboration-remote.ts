@@ -2915,6 +2915,8 @@ export type RemoteDispatchPermit = Readonly<{
   operationId: string;
   requestHash: string;
   frozenRequest: RemoteIntentRequest;
+  /** note: The cached observation the base was proven against, bound to the permit. */
+  observation: Readonly<{ revision: number; asOf: string | null }>;
 }>;
 
 export type RemoteDispatchResult =
@@ -3494,6 +3496,9 @@ async function recordReceiptEvidence(
         generation: envelope.generation,
         observedAt: envelope.observedAt,
         operationId: envelope.operationId,
+        // note: A conflict is bound to the cache revision it was recorded against, so a later
+        // resolution must be proven by an observation ingested after this evidence.
+        observationRevision: observationRevisionOf(db, row.generation, row.projectKey),
         outcome,
         projectId: envelope.projectId,
         requestHash: envelope.requestHash,
@@ -3597,7 +3602,7 @@ function scopeRow(db: StoreDb, generation: number, projectKey: string): Record<s
   return (db
     .prepare(
       "select b.selector_commit, b.provider, b.workspace_id, b.team_id, b.provider_project_id, b.journal_issue_id, " +
-        "b.writer_id, b.verified_at, b.verification_json, o.completeness, o.snapshot_json " +
+        "b.writer_id, b.verified_at, b.verification_json, o.revision, o.as_of, o.completeness, o.snapshot_json " +
         "from remote_bindings b left join remote_observations o " +
         "on o.generation = b.generation and o.project_key = b.project_key " +
         "where b.generation = ? and b.project_key = ?",
@@ -3638,6 +3643,38 @@ function recordedFork(db: StoreDb, conflicted: string): Extract<RemoteReceiptOut
   return recorded.outcome;
 }
 
+/** note: The cached observation revision of one project; a project with no observation holds revision 0. */
+function observationRevisionOf(db: StoreDb, generation: number, projectKey: string): number {
+  const row = db
+    .prepare("select revision from remote_observations where generation = ? and project_key = ?")
+    .get(generation, projectKey) as { revision?: unknown } | undefined;
+  return typeof row?.revision === "number" && Number.isSafeInteger(row.revision) ? row.revision : 0;
+}
+
+/**
+ * note: The observation revision the intent's recorded fork evidence was judged against. A later
+ * observation increments the cache's revision, so anything at or below this number predates the
+ * conflict and can never prove that the fork still stands.
+ */
+function conflictObservationRevision(db: StoreDb, conflicted: string): number {
+  const rows = db
+    .prepare(
+      "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' " +
+        "order by recorded_at, receipt_hash",
+    )
+    .all(conflicted) as Array<{ evidence_json?: unknown }>;
+  const last = rows.at(-1);
+  if (last === undefined || typeof last.evidence_json !== "string") return 0;
+  try {
+    const body = JSON.parse(last.evidence_json) as Record<string, unknown>;
+    return typeof body.observationRevision === "number" && Number.isSafeInteger(body.observationRevision)
+      ? body.observationRevision
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * invariant: A dispatch only issues its one permit against the CURRENT persisted head the frozen
  * event names. A create must still be unobserved; an adoption must still address an unmarked
@@ -3671,10 +3708,11 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
   }
   if (row.resolves !== null) {
     // invariant: A reviewed resolution's base is the fork evidence that conflict recorded, and that
-    // evidence must be FRESHLY observed: the records it names are proved against a current
-    // observation, so an obsolete or rewritten fork never receives a permit. Completeness is not
-    // required - a forked chain does not yield a complete observation - but an absent one proves
-    // nothing.
+    // evidence must be FRESHLY observed: the records it names are proved against an observation
+    // recorded AFTER the conflict, so an obsolete or rewritten fork never receives a permit.
+    // Completeness is not required - a forked chain does not yield a complete observation - but an
+    // absent one proves nothing, and a matching cached set recorded at or before the conflict is
+    // exactly the stale snapshot that must not send.
     let fork: readonly string[];
     try {
       fork = recordedFork(db, row.resolves).observedHeads;
@@ -3688,6 +3726,14 @@ function assertDispatchBase(db: StoreDb, row: OutboxIntentRow, stored: StoredReq
       return refuse(
         `The fork ${row.resolves} recorded is not observed in the current state of ${row.projectKey}; a resolution is ` +
           `never sent against an unobserved base.`,
+      );
+    }
+    const observedRevision = typeof scope?.revision === "number" ? scope.revision : 0;
+    if (observedRevision <= conflictObservationRevision(db, row.resolves)) {
+      return refuse(
+        `The fork ${row.resolves} recorded is proven only by an observation at or before the conflict ` +
+          `(revision ${String(observedRevision)}); a resolution needs a full fork observation recorded after it, ` +
+          `however well an older cached snapshot matches.`,
       );
     }
     if (canonicalJson(observedHeads(snapshot, event, target)) !== canonicalJson(fork)) {
@@ -3810,18 +3856,19 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         { operationId: target, state: row.state },
       );
     }
-    // invariant: An in-flight attempt or an unresolved conflict serializes sends. A conflict a
-    // reviewed resolution has taken over stops blocking once that resolution exists: the
-    // resolution's own row carries its state, so an abandoned resolution restores the block.
+    // invariant: An in-flight attempt or an unresolved conflict serializes sends. A conflict is
+    // exempt only for the dispatch of its OWN reviewed resolution; every other send stays blocked
+    // until that resolution is confirmed, so an enqueued, unconfirmed or conflicted repair never
+    // opens the queue, and an abandoned repair keeps it closed.
     const unresolved = db
       .prepare(
         "select o.operation_id, o.state from remote_outbox o where o.generation = ? and o.project_key = ? " +
           "and o.operation_id <> ? and o.state in ('unconfirmed','conflict') " +
-          "and (o.resolved_by is null or exists (select 1 from remote_outbox r " +
-          "where r.operation_id = o.resolved_by and r.state = 'abandoned')) " +
+          "and not (o.state = 'conflict' and (o.resolved_by is ? or exists (select 1 from remote_outbox r " +
+          "where r.operation_id = o.resolved_by and r.state = 'confirmed'))) " +
           "order by o.created_at, o.operation_id limit 1",
       )
-      .get(row.generation, row.projectKey, target) as { operation_id?: unknown; state?: unknown } | undefined;
+      .get(row.generation, row.projectKey, target, target) as { operation_id?: unknown; state?: unknown } | undefined;
     if (unresolved !== undefined) {
       const aheadId = typeof unresolved.operation_id === "string" ? unresolved.operation_id : "?";
       const aheadState = typeof unresolved.state === "string" ? unresolved.state : "?";
@@ -3886,6 +3933,10 @@ export async function dispatchRemoteIntent(context: StoreContext, operationId: s
         operationId: target,
         requestHash: row.requestHash,
         frozenRequest: stored.request,
+        observation: {
+          revision: typeof scope.revision === "number" ? scope.revision : 0,
+          asOf: typeof scope.as_of === "string" ? scope.as_of : null,
+        },
       },
     } satisfies RemoteDispatchResult;
   });

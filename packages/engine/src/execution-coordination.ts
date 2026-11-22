@@ -1493,7 +1493,7 @@ export async function residualAddExecutionPlan(
       // why: §3.1 ONE collaboration revision advance for the whole effect transaction:
       // every composed issue helper joins it instead of advancing the counter.
       const composed: ComposedTransactionRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
-      const captured: Array<{ issueId: string; occurrenceId?: number; revision: number; created: boolean }> = [];
+      const captured: Array<{ issueId: string; occurrenceId?: number | string; revision: number; created: boolean }> = [];
       for (const [entryIndex, input] of derived.entries()) {
         const occurrenceKey = input.occurrenceKey;
         let childOperation: "capture" | "plan-link" = "capture";

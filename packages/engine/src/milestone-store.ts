@@ -233,7 +233,7 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
       input.projectId,
       mutation.operationId,
       milestoneId,
-      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal } },
+      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current) => ({
         ...current,
         milestones: [
@@ -258,7 +258,7 @@ export async function updateMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
-      { verb: "milestone-update", request: { projectId, milestoneId, patch } },
+      { verb: "milestone-update", request: { projectId, milestoneId, patch, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current, issues) => {
         const rows = observedMilestones(current);
         const row = rows.find((entry) => entry.milestoneId === milestoneId);
@@ -297,7 +297,7 @@ export async function removeMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
-      { verb: "milestone-remove", request: { projectId, milestoneId } },
+      { verb: "milestone-remove", request: { projectId, milestoneId, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current, issues) => {
         const rows = observedMilestones(current);
         if (!rows.some((entry) => entry.milestoneId === milestoneId)) {

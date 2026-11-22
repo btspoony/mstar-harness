@@ -267,7 +267,11 @@ export const ISSUE_ACTION_NAMES: readonly IssueAction[] = Object.keys(ISSUE_ACTI
 
 export type IssueReceipt = {
   issueId: string;
-  occurrenceId?: number;
+  /**
+   * The established occurrence: the local row id, or the frozen occurrence's provider-neutral
+   * event id in `remote` mode (where no local row exists).
+   */
+  occurrenceId?: number | string;
   revision: number;
   storeRevision: number;
   created: boolean;
@@ -1409,11 +1413,18 @@ export async function appendOccurrence(
           occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
         };
       },
-      origin: { verb: "appendOccurrence", request: { issueId, input, actor: mutation.actor } },
+      origin: {
+        verb: "appendOccurrence",
+        request: { issueId, input, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+      },
       unchanged: (current, observed) => {
         // invariant: An occurrence key the observed authority already carries with THIS content is
         // the established observation, exactly as the local domain answers it: no second history row.
-        const occurrences = (current?.occurrences ?? []) as Record<string, unknown>[];
+        // The concurrency guard applies before that answer, so a stale caller never receives a
+        // success it did not review.
+        const subject = current!;
+        requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
+        const occurrences = (subject.occurrences ?? []) as Record<string, unknown>[];
         const sameKey = occurrences.find((entry) => entry.occurrenceKey === cols.occurrenceKey);
         if (sameKey === undefined) return null;
         if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
@@ -1423,9 +1434,11 @@ export async function appendOccurrence(
           );
         }
         return {
-          // note: The receipt names the provider identity, as every remote issue receipt does.
+          // note: The receipt names the provider identity and the established occurrence, as every
+          // remote issue receipt does.
           issueId: observedIssue(observed, issueId)?.identity.issueId ?? issueId,
-          revision: Number((current!.fields as Record<string, unknown>).revision),
+          ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
+          revision: Number((subject.fields as Record<string, unknown>).revision),
           storeRevision: 0,
           created: false,
         } satisfies IssueReceipt;
