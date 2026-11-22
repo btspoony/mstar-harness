@@ -23,6 +23,7 @@
  * per lint:ascii-literals — bun misdecodes raw UTF-8 in the CLI bundle).
  */
 import { lstatSync, readdirSync, type Dirent, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { resolveReviewRunDir } from "./path.js";
@@ -2522,4 +2523,140 @@ export function resolvePrReviewTier(input: ResolvePrReviewTierInput): PrReviewTi
  // step 5: small band
   if (input.tinyMechanical === true) return "quick";
   return "default";
+}
+
+// ---------------------------------------------------------------------------
+// why: the §5.3a merge gate is parsed and decided here, so the parser, the
+// decision and the digest stay in one section.
+// ---------------------------------------------------------------------------
+
+/** One review thread as GitHub's `reviewThreads` connection reports it. */
+export interface ReviewThreadFacts {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path?: string;
+  line?: number;
+  author?: string;
+  body?: string;
+}
+
+/** The record a double confirmation leaves behind: the head it was given for,
+ * how many confirmations it carries, the exact unresolved thread ids the user
+ * confirmed, and the `digest` of what the user was shown — an edited opening
+ * comment or a new thread changes the digest and voids the record. */
+export interface ThreadGateConfirmation {
+  head: string;
+  confirmations: number;
+  threads: readonly string[];
+  digest?: string;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : null;
+
+/**
+ * The fingerprint of the unresolved set the user confirmed: thread id plus the
+ * opening comment. An edit to either changes it, so a stale confirmation
+ * cannot be replayed against a rewritten thread.
+ */
+export function threadGateDigest(threads: readonly ReviewThreadFacts[]): string {
+  const payload = threads
+    .map((thread) => [thread.id, thread.body ?? ""] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
+}
+
+/**
+ * Read one GraphQL page of `repository.pullRequest.reviewThreads` into thread
+ * facts. A node without a string `id` is skipped — a gate must never invent an
+ * identity it cannot name back to the user. `readable` is false when the page
+ * carries no `nodes` array — a missing connection and a truncated connection
+ * are both unreadable, so neither can read as "nothing to review".
+ */
+export function parseReviewThreads(payload: unknown): {
+  threads: ReviewThreadFacts[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+  readable: boolean;
+  headRefOid: string | null;
+} {
+  const repository = asRecord(asRecord(asRecord(payload)?.data)?.repository);
+  const pullRequest = asRecord(repository?.pullRequest);
+  const connection = asRecord(pullRequest?.reviewThreads);
+  const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+  const threads = nodes.flatMap((node): ReviewThreadFacts[] => {
+    const row = asRecord(node);
+    if (row === null || typeof row.id !== "string") return [];
+    const comments = asRecord(row.comments);
+    const first = Array.isArray(comments?.nodes) ? asRecord(comments.nodes[0]) : null;
+    const author = asRecord(first?.author);
+    return [{
+      id: row.id,
+      isResolved: row.isResolved === true,
+      isOutdated: row.isOutdated === true,
+      ...(typeof row.path === "string" ? { path: row.path } : {}),
+      ...(typeof row.line === "number" ? { line: row.line } : {}),
+      ...(typeof author?.login === "string" ? { author: author.login } : {}),
+      ...(typeof first?.body === "string" ? { body: first.body } : {}),
+    }];
+  });
+  const pageInfo = asRecord(connection?.pageInfo);
+  return {
+    threads,
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
+    readable: Array.isArray(connection?.nodes),
+    headRefOid: typeof pullRequest?.headRefOid === "string" ? pullRequest.headRefOid : null,
+  };
+}
+
+export type ThreadGateDecision =
+  | { ok: true; head: string; unresolved: ReviewThreadFacts[] }
+  | {
+      ok: false;
+      code: "pr.merge-gate.unresolved" | "pr.merge-gate.confirmation-invalid";
+      head: string;
+      unresolved: ReviewThreadFacts[];
+      problems: string[];
+    };
+
+/**
+ * §5.3a: with no confirmation, ANY unresolved thread refuses the merge. With a
+ * confirmation it must bind the current head, record two confirmations, and
+ * name exactly the unresolved thread ids — a blanket "merge it" leaves no
+ * record and therefore no authority.
+ */
+export function decideThreadGate(input: {
+  head: string;
+  threads: readonly ReviewThreadFacts[];
+  confirmation?: ThreadGateConfirmation;
+}): ThreadGateDecision {
+  const unresolved = input.threads.filter((thread) => !thread.isResolved);
+  if (input.confirmation === undefined) {
+    return unresolved.length === 0
+      ? { ok: true, head: input.head, unresolved }
+      : { ok: false, code: "pr.merge-gate.unresolved", head: input.head, unresolved, problems: [] };
+  }
+  const problems: string[] = [];
+  if (input.confirmation.head !== input.head) {
+    problems.push(`confirmation head ${input.confirmation.head} is not the current head ${input.head}`);
+  }
+  if (input.confirmation.confirmations < 2) {
+    problems.push(`confirmation records ${input.confirmation.confirmations} confirmation(s); 2 are required`);
+  }
+  const named = new Set(input.confirmation.threads);
+  const open = new Set(unresolved.map((thread) => thread.id));
+  for (const id of open) if (!named.has(id)) problems.push(`thread ${id} is unresolved but not named in the confirmation`);
+  for (const id of named) if (!open.has(id)) problems.push(`thread ${id} is named in the confirmation but is resolved or absent`);
+  // why: an unchanged id can hide an edited opening comment, so the record must
+  // carry the fingerprint of what the user was actually shown.
+  if (unresolved.length > 0 && input.confirmation.digest !== threadGateDigest(unresolved)) {
+    problems.push(`confirmation digest does not match the unresolved threads on ${input.head}; re-enumerate and confirm again`);
+  }
+  return problems.length === 0
+    ? { ok: true, head: input.head, unresolved }
+    : { ok: false, code: "pr.merge-gate.confirmation-invalid", head: input.head, unresolved, problems };
 }

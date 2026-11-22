@@ -97,7 +97,13 @@
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/roadmap.ts:1d4c9081b58e",
-    "justification": "The roadmap family's refusal forwards engine-supplied recovery text (`facts.recovery` from `engineErrorFacts(error)`) with per-command conditional literal fallbacks; strict static proof cannot evaluate the `facts.recovery ?? (conditional)` expression \u2014 see I-000872.",
+    "justification": "The roadmap family's refusal forwards engine-supplied recovery text (`facts.recovery` from `engineErrorFacts(error)`) with per-command conditional literal fallbacks; strict static proof cannot evaluate the `facts.recovery ?? (conditional)` expression — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/pr.ts:4678d5fb22d1",
+    "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter after family-refusal.ts type-checks it; strict static proof cannot evaluate the `recovery ?? literal` expression, the same class as pr-review.ts — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   }

@@ -8,7 +8,7 @@ const PACKAGE_NAMES: Record<string, true> = {
   "@mstar-harness/omp": true,
 };
 const SKILL_SMOKE = ["mstar-host", "mstar-harness-core", "pm"];
-const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"];
+const COMMAND_SMOKE = ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit", "codebase-comment-cleanup"];
 
 /** Parse `omp plugin list --json` output into flat npm + marketplace records. */
 export function parseOmpPluginList(raw: string): Array<Record<string, unknown>> {

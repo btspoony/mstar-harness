@@ -8,6 +8,10 @@ A comment is an input to the next change: whoever edits the line reads it before
 2. **License** — a label (`simplify:`, `temporary`, `TODO`) is read as permission to repeat the pattern, so a bounded shortcut becomes the house style.
 3. **Substitute** — the comment says what the code already says, or explains a known-bad pattern instead of the code being corrected. Two descriptions of one behavior diverge, and the code is the one that runs.
 
+## Triage
+
+A comment corpus is cleaned by classifying it, not by banning it: a **Tautology** (Substitute) and a **Stale** comment (Drift) are deleted; an **Excuse** (License) is a confirmed defect, so it is captured per `mstar-project-governance` § Issue capture whether or not the fix lands in this change — once the capture succeeds, the code is corrected here when the correction fits, otherwise the fix stays with the captured issue, and the excusing comment is deleted once the correction has landed here or the captured issue exists, while a failed capture keeps it; a **Decision Record** moves its rationale into `{ADR_DIR}` and leaves one contract pointer. Whatever survives must carry a shape from § MUST. A full pass, its batch and ratchet rules, and its measurement → **`references/comment-cleanup.md`**.
+
 ## MUST
 
 A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`) together with its bound — a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), or for `simplify:`/`shortcut:` an `upgrade:` clause — a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference and only when it opens the comment content (`// TODO:`, `* TODO(`, `# TODO:`) — a marker named mid-sentence is prose, and `see` without a target is prose, not a pointer. A bare label is not a shape: it licenses the pattern without bounding it, so the lint rejects it. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
@@ -58,7 +62,7 @@ A change that edits a line verifies the adjacent comment in the same edit: delet
 
 Labels: `simplify: <ceiling>` and its spelling `shortcut:`, and `temporary` written `temporary:`, `temporary —` or `temporary -` — never the bare adjective, and a bare quoted token (`` `simplify:` ``, `"simplify:"`) names the label without being a marker. A `simplify:` or `shortcut:` marker is bounded by an `upgrade: <when>` clause or a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), stated on the label line or anywhere in the same comment block; `temporary:` is bounded only by that reference — an upgrade clause says when the shortcut goes, not who removes a workaround. The tracking entry is the task's plan or issue.
 
-The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.
+The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — the defect is captured per `mstar-project-governance` § Issue capture, then delete it with the code it excused, or add the bound.
 
 The gate reads the code files under `packages/` and `scripts/`, selected by extension (`mstar lint <file>`); a marker elsewhere is unenforced, so check it in review.
 

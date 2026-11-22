@@ -80,7 +80,7 @@ function writeOmpPluginTree(
 ): void {
   writeJson(root, "plugin.json", { name: "@mstar-harness/omp" });
   for (const skill of ["mstar-host", "mstar-harness-core", "pm"]) writeText(root, `skills/${skill}/SKILL.md`, "synthetic skill");
-  for (const command of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"]) writeText(root, `commands/${command}.md`, "synthetic command");
+  for (const command of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit", "codebase-comment-cleanup"]) writeText(root, `commands/${command}.md`, "synthetic command");
   writeText(root, "skills/mstar-host/references/omp.md", "synthetic host reference");
   if (options.identityExtension !== false) writeText(root, "extensions/mcp-identity.js", "synthetic identity extension");
   writeJson(root, "package.json", { omp: { extensions: options.registerIdentityExtension === false ? [] : ["./extensions/mcp-identity.js"] } });

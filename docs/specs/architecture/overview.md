@@ -16,7 +16,7 @@ The monorepo root carries the shared TypeScript packages, the host plugins built
 - Host plugins — `packages/dsh/` (`@mstar-harness/dsh`), `packages/omp/` (`@mstar-harness/omp`), `packages/opencode/` (`@mstar-harness/opencode`), `packages/opencode-v2/` (`@mstar-harness/opencode-v2`), `packages/ui/` (`@mstar-harness/ui`), `packages/judgment/` (`@mstar-harness/judgment`).
 - `skills/` — runtime skills (`mstar-*` topics plus `grill-me`, `pm`), with role behavior in `skills/mstar-roles/references/`.
 - `agents/` and `codex/agents/` — per-host agent shells (`.md` role shells; Codex `.toml` definitions).
-- `commands/` — the seven user-facing slash commands (`iteration-start`, `iteration-drive`, `iteration-loop`, `codebase-audit`, `amazing-e2e-check`, `amazing-pr-review`, `amazing-test-audit`), indexed by `docs/commands.md`.
+- `commands/` — the eight user-facing slash commands (`iteration-start`, `iteration-drive`, `iteration-loop`, `codebase-audit`, `codebase-comment-cleanup`, `amazing-e2e-check`, `amazing-pr-review`, `amazing-test-audit`), indexed by `docs/commands.md`.
 - `docs/` — human documentation: `commands.md`, `runtime-reference.md`, `judgment.md`, and the tracked corpora `docs/adr/`, `docs/knowledge/`, `docs/specs/`.
 
 ### Layers and data flow

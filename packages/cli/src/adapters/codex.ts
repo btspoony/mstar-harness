@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -73,13 +75,14 @@ const CODEX_PROJECT_COMMAND_NAMES = [
   "iteration-drive",
   "iteration-loop",
   "codebase-audit",
+  "codebase-comment-cleanup",
   "amazing-test-audit",
   "amazing-pr-review",
   "amazing-e2e-check",
 ] as const;
 
 const GLOBAL_ITERATION_SKILLS_WARNING =
-  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / amazing-test-audit / amazing-pr-review / amazing-e2e-check) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
+  "Codex project-scoped commands (iteration-start / iteration-drive / iteration-loop / codebase-audit / codebase-comment-cleanup / amazing-test-audit / amazing-pr-review / amazing-e2e-check) are installed as project-local skills under .agents/skills/ only. Global install skips them to avoid polluting other code agents. Re-run with --scope project to enable.";
 
 /** Run codex with args; dry-run never spawns a subprocess. env is spread so
  * the binary resolves from PATH (same contract as the dsh adapter). */
@@ -148,15 +151,55 @@ function projectIterationSkillLinkPath(skillName: string) {
   return path.join(resolveProjectRoot(), ".agents", "skills", skillName, "SKILL.md");
 }
 
+/** why: a spaced checkout path must stay one copy-paste argument. */
+function quotePath(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function commandTrackedInHead(skillName: string) {
+  try {
+    execFileSync("git", ["-C", HARNESS_REPO_PATH, "cat-file", "-e", `HEAD:commands/${skillName}.md`], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse before linking anything: a checkout that predates a command, or one
+ * whose working tree lost a tracked command file, would otherwise get a dangling
+ * project link and a success report. Each state gets its own recovery. An absent
+ * checkout is the pre-clone dry run, where init stages the clone itself.
+ * why: a dangling link reports success while the iteration skill never resolves. */
+function assertIterationCommandSources(dryRun: boolean) {
+  if (!fs.existsSync(HARNESS_REPO_PATH)) return [];
+  const missing = CODEX_PROJECT_COMMAND_NAMES.filter((name) => !fs.existsSync(iterationCommandSourcePath(name)));
+  if (!missing.length) return [];
+  const repo = quotePath(HARNESS_REPO_PATH);
+  const absent = missing.filter((name) => !commandTrackedInHead(name)).map((name) => quotePath(iterationCommandSourcePath(name)));
+  const deleted = missing.filter(commandTrackedInHead).map((name) => `commands/${name}.md`);
+  const recovery = [
+    absent.length ? `The checkout at ${repo} does not have ${absent.join(", ")} in HEAD; refresh it with \`git -C ${repo} pull --ff-only\`.` : "",
+    deleted.length ? `The checkout at ${repo} has ${deleted.map(quotePath).join(", ")} in HEAD but not in the working tree; run \`git -C ${repo} restore -- ${deleted.map(quotePath).join(" ")}\`.` : "",
+  ].filter(Boolean).join(" ");
+  const refusal =
+    `Missing Codex project command sources: ${missing.map((name) => quotePath(iterationCommandSourcePath(name))).join(", ")}. ` +
+    `${recovery} Then retry: init --target codex --scope project.`;
+  // why: a dry run links nothing, so previewing this refusal must not fail it.
+  if (!dryRun) throw new Error(refusal);
+  return [`Would refuse: ${refusal}`];
+}
+
 function ensureIterationSkillLinks(dryRun: boolean) {
-  const notes: string[] = [];
+  const notes: string[] = assertIterationCommandSources(dryRun);
+  // why: only a dry run gets here with notes; following a dangling installed link would throw instead of previewing the refusal.
+  if (notes.length) return notes;
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);
     notes.push(ensureSymlink(source, linkPath, dryRun));
   }
   notes.push(
-    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, amazing-test-audit, amazing-pr-review, amazing-e2e-check) \u2014 symlinked to harness commands/*.md.",
+    "Installed Codex project-scoped command skills under .agents/skills/ (iteration-start, iteration-drive, iteration-loop, codebase-audit, codebase-comment-cleanup, amazing-test-audit, amazing-pr-review, amazing-e2e-check) \u2014 symlinked to harness commands/*.md.",
   );
   return notes;
 }

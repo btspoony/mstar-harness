@@ -83,6 +83,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   skill: "Lint a skill directory.",
   roles: "Validate the role mapping and load-order corpus.",
   qc: "Validate a saved QC seat report.",
+  pr: "Review-thread half of the merge gate: enumerate its threads and refuse while any stays unresolved, or verify a recorded waiver.",
   "pr-review": "PR review: size, seat prompt, tally, report path, worktree and post.",
   harness: "Scaffold harness directories and the default project.",
   doctor: "Validate the host setup for one supported target.",

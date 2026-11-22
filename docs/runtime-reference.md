@@ -5,7 +5,7 @@ Morning Star is an Agent Plugin for harness engineering workflows: a TypeScript 
 Read it when you are running Morning Star in your own repository or wiring it into a host. It does not replace:
 
 - **Installation and host setup** — commands, config files, path layouts, manual fallbacks → [`INSTALL.md`](../INSTALL.md).
-- **Slash commands** — the seven user entry points and the store CLI walkthrough → [`docs/commands.md`](commands.md).
+- **Slash commands** — the eight user entry points and the store CLI walkthrough → [`docs/commands.md`](commands.md).
 - **Behaviour rules** — each concern's own skill file. This page maps them and points at them instead of restating them.
 
 ## Components
@@ -16,7 +16,7 @@ Read it when you are running Morning Star in your own repository or wiring it in
 | Harness CLI | `@mstar-harness/cli` — the `mstar-harness` binary, with `mstar` as a short alias. It provides the installer bootstrap (`init`, `doctor`), the command surface, the stdio MCP server, and the offline report draft. |
 | Command registry | `@mstar-harness/commands` — one canonical definition per non-installer command. `--help`, refusal text, exit codes, and the MCP tools all derive from these definitions, so the help text and validation use the same definitions. It is **internal, never published**: the CLI and dsh artifacts bundle it, so a consumer installs neither package. |
 | Skills | `skills/` — the `mstar-*` family plus the `pm` entry and the bundled `grill-me` skill. These are the semantic source of truth for lifecycle, gates, roles, dispatch, review, and knowledge; the engine checks a subset of what they state. |
-| Entry commands | `commands/*.md` — the slash entries (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/amazing-pr-review`, `/amazing-test-audit`, `/amazing-e2e-check`). Each boots `project-manager` in your current session; argument forms and routing → [`docs/commands.md`](commands.md). |
+| Entry commands | `commands/*.md` — the slash entries (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-test-audit`, `/amazing-e2e-check`). Each boots `project-manager` in your current session; argument forms and routing → [`docs/commands.md`](commands.md). |
 | Role shells | `agents/*.md` — the role identities hosts surface as named subagents (for example `fullstack-dev`, `qc-specialist`). |
 | Host plugins | `@mstar-harness/dsh`, `@mstar-harness/omp`, `@mstar-harness/opencode`, plus Cursor, Codex, Kimi, and ZCode packaging. They add skill discovery, session context, and — where the host exposes a refusal channel — engine-backed write gates. |
 | Portable package | The repository root `plugin.json` plus `skills/` form an [Agent Plugins v1.0.0](https://agent-plugins.org) package. Validate it with `mstar-harness plugin validate --root <path>`. |
