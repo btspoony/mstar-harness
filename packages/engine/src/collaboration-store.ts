@@ -1764,14 +1764,16 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 /**
  * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
  * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
- * singleton naming this repository and mode, and (by being below the outbox schema) no outbox
- * work. Anything unreadable, foreign or newer is never deleted. The replaced lane's identity is
- * returned so the fresh lane keeps it.
+ * singleton naming this repository and mode (and, when this checkout records one, exactly the
+ * store identity that record names), and (by being below the outbox schema) no outbox work.
+ * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
+ * reads: the canonical name is released after the successor is staged, never before.
  */
 async function replaceDerivedLaneBelow(
   location: CollaborationLocation,
   below: number,
   timeout: number,
+  expected: RetainedLaneIdentity | undefined,
 ): Promise<RetainedLaneIdentity | undefined> {
   const dbPath = location.dbPath;
   const db = await connectAt(dbPath, "read", timeout);
@@ -1785,10 +1787,39 @@ async function replaceDerivedLaneBelow(
   if (recorded.meta.repoKey !== location.repoKey || recorded.meta.mode !== location.mode) {
     throw staleBinding(dbPath, recorded.meta, `this checkout's ${location.repoKey} (${location.mode})`);
   }
-  // note: The derived cache is retired with its journals: a stale sidecar would otherwise be
-  // picked up by the replacement's name.
-  for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+  // invariant: The bytes about to be replaced must be the generation this checkout's own binding
+  // names; another identity is a replacement it never recorded, so it is refused before any move.
+  if (
+    expected !== undefined &&
+    (recorded.meta.storeId !== expected.storeId || recorded.meta.epoch !== expected.epoch)
+  ) {
+    throw staleBinding(
+      dbPath,
+      recorded.meta,
+      `this checkout's recorded cache store ${expected.storeId} epoch ${String(expected.epoch)}`,
+    );
+  }
   return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
+}
+
+/**
+ * note: The derived-cache replacement's post-staging seam: a regression fails the publication after
+ * the staged successor exists and before the canonical name is released.
+ */
+let remoteCacheReplacementGapForTest: (() => void) | undefined;
+export function setRemoteCacheReplacementGapForTest(callback: (() => void) | undefined): void {
+  remoteCacheReplacementGapForTest = callback;
+}
+
+/**
+ * note: The replacement's release window seam: a regression publishes a competing current cache
+ * between this attempt's release of the canonical name and its own create-only link.
+ */
+let remoteCacheReplacementPublishGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementPublishGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementPublishGapForTest = callback;
 }
 
 /**
@@ -1857,15 +1888,22 @@ export async function initializeCollaborationStore(location: CollaborationLocati
  *
  * A cache below the outbox schema is DERIVED observation state with no outbox work to preserve,
  * so the reviewed bind replaces it in place instead of failing its own documented recovery. The
- * replaced lane's store identity is kept: the checkout binding that named it stays valid, so the
- * bind publishes over the same generation.
+ * successor is staged and verified first; only then are the previous bytes preserved beside the
+ * lane and the canonical name released, so a failed or raced publication never destroys them.
+ * The replaced lane's store identity is kept: the checkout binding that named it stays valid, so
+ * the bind publishes over the same generation.
  */
-export async function initializeRemoteCacheStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
+export async function initializeRemoteCacheStore(
+  location: CollaborationLocation,
+  expected?: RetainedLaneIdentity,
+): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
   // note: `remote` has existed only since v2, so every pre-current remote cache is below the outbox
-  // schema and holds no outbox work: any of them is replaced, never migrated in place.
+  // schema and holds no outbox work: any of them is replaced, never migrated in place. The floor is
+  // the outbox schema itself, never a later migration, so a cache that HAS an outbox is never replaced.
   return createOrContinueStore(location, {
-    replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
+    replaceBelowVersion: COLLABORATION_OUTBOX_SCHEMA.version,
+    expectedIdentity: expected,
   });
 }
 
@@ -1874,7 +1912,7 @@ type RetainedLaneIdentity = Readonly<{ storeId: string; epoch: number }>;
 
 async function createOrContinueStore(
   location: CollaborationLocation,
-  options: { replaceBelowVersion?: number } = {},
+  options: { replaceBelowVersion?: number; expectedIdentity?: RetainedLaneIdentity } = {},
 ): Promise<CollaborationAuthority> {
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
@@ -1882,7 +1920,12 @@ async function createOrContinueStore(
   let retained: RetainedLaneIdentity | undefined;
   if (existsSync(dbPath)) {
     if (options.replaceBelowVersion === undefined || location.mode !== "remote") return continueExisting(location, timeout);
-    retained = await replaceDerivedLaneBelow(location, options.replaceBelowVersion, timeout);
+    retained = await replaceDerivedLaneBelow(
+      location,
+      options.replaceBelowVersion,
+      timeout,
+      options.expectedIdentity,
+    );
     if (retained === undefined) return continueExisting(location, timeout);
   }
 
@@ -1966,14 +2009,60 @@ async function createOrContinueStore(
     throw asRefusal(dbPath, error);
   }
 
+  // invariant: The derived cache's successor is already staged and verified. Its previous bytes
+  // are preserved beside the lane BEFORE the canonical name is released, so a publication that
+  // fails or loses a race leaves them intact and never overwrites the winner's cache.
+  let preservedPath: string | undefined;
+  if (retained !== undefined) {
+    try {
+      remoteCacheReplacementGapForTest?.();
+    } catch (error) {
+      discardStaging(stagingDir, stagingPath);
+      throw asRefusal(dbPath, error);
+    }
+    preservedPath = join(dir, `.replaced-${process.pid}-${randomUUID()}.db`);
+    try {
+      // note: Create-only, so a preserved image of other bytes is never overwritten.
+      linkSync(dbPath, preservedPath);
+    } catch (error) {
+      discardStaging(stagingDir, stagingPath);
+      throw unreadable(
+        dbPath,
+        `its derived cache could not be preserved before replacement (${publicationCause(error)})`,
+      );
+    }
+    try {
+      unlinkSync(dbPath);
+    } catch (error) {
+      // note: The canonical name still holds the previous bytes; the preserved duplicate is dropped.
+      rmSync(preservedPath, { force: true });
+      discardStaging(stagingDir, stagingPath);
+      throw barrierRefusal(dbPath, error);
+    }
+    // note: A stale sidecar would otherwise be picked up by the replacement's name.
+    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    // note: The release window a competing publisher can land in; only the create-only links below
+    // decide whose cache keeps the canonical name.
+    await remoteCacheReplacementPublishGapForTest?.();
+  }
   try {
     linkSync(stagingPath, dbPath);
   } catch (error) {
     discardStaging(stagingDir, stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      // note: A competing initializer published this scope first: continue that record
-      // only after it is verified and its directory entry is confirmed.
+      // invariant: A competing initializer published this scope between release and link: its cache
+      // is never deleted, and the preserved image of what this attempt replaced stays beside it.
       return continueExisting(location, timeout);
+    }
+    if (preservedPath !== undefined) {
+      // invariant: Restore the previous bytes with a create-only link, so a name that won the race
+      // in the meantime is never overwritten. A failed restore keeps the preserved image.
+      try {
+        linkSync(preservedPath, dbPath);
+        rmSync(preservedPath, { force: true });
+      } catch {
+        // note: The preserved image remains for the operator; the canonical name is another's.
+      }
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
@@ -1983,6 +2072,7 @@ async function createOrContinueStore(
   } finally {
     discardStaging(stagingDir, stagingPath);
   }
+  if (preservedPath !== undefined) rmSync(preservedPath, { force: true });
   return authority;
 }
 

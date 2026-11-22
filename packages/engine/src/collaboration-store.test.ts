@@ -39,6 +39,7 @@ import {
   assertIssueRef,
   COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  initializeRemoteCacheStore,
   localPredecessorRetiredPath,
   openCollaborationStore,
   probeCollaborationAuthority,
@@ -46,6 +47,8 @@ import {
   readCollaborationBinding,
   readRemoteCacheAuthority,
   setLocalPredecessorPublicationGapForTest,
+  setRemoteCacheReplacementGapForTest,
+  setRemoteCacheReplacementPublishGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
   writeCollaborationBinding,
@@ -7784,5 +7787,107 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(tableNames(location.dbPath)).toContain("remote_outbox");
     expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(3);
+  }, 30_000);
+
+  test("a replacement that fails after staging keeps the previous cache readable", async () => {
+    const fixture = remoteFixture("remote-prev3-failed-replacement");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV2RemoteLane(location);
+    writeRemoteCollaborationBinding(context, {
+      repoKey: fixture.repoKey,
+      selectorCommit: commit,
+      generation: 3,
+      storeId: "v1-store",
+      epoch: 1,
+    });
+    // note: The staged successor exists when this fails, so the canonical name must not have moved.
+    setRemoteCacheReplacementGapForTest(() => {
+      throw new Error("injected publication failure");
+    });
+    try {
+      const refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] }),
+      );
+      expect(refused.code).toBe("collaboration.unreadable");
+    } finally {
+      setRemoteCacheReplacementGapForTest(undefined);
+    }
+    // invariant: The previous cache and its ledger are exactly as the failed bind found them.
+    expect(existsSync(location.dbPath)).toBe(true);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(metaRecord(location.dbPath)).toMatchObject({
+      mode: "remote",
+      store_id: "v1-store",
+      authority_epoch: 1,
+    });
+    // invariant: The documented recovery still completes on the same bytes afterwards.
+    const bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    expect(bound).toMatchObject({
+      generation: 3,
+      binding: { version: 3, mode: "remote", storeId: "v1-store", epoch: 1 },
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+  }, 30_000);
+
+  test("a replacement refuses a cache its checkout did not record", async () => {
+    const fixture = remoteFixture("remote-prev3-unrecorded-cache");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV2RemoteLane(location);
+    // note: Same store, another epoch: these bytes belong to a generation this checkout never
+    // recorded, so they are refused before the canonical name is released.
+    writeRemoteCollaborationBinding(context, {
+      repoKey: fixture.repoKey,
+      selectorCommit: commit,
+      generation: 3,
+      storeId: "v1-store",
+      epoch: 2,
+    });
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("collaboration.stale-binding");
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2]);
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: "v1-store", authority_epoch: 1 });
+  }, 30_000);
+
+  test("a competing publication during replacement keeps its v3 cache", async () => {
+    const fixture = remoteFixture("remote-prev3-competing-publication");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV2RemoteLane(location);
+    writeRemoteCollaborationBinding(context, {
+      repoKey: fixture.repoKey,
+      selectorCommit: commit,
+      generation: 3,
+      storeId: "v1-store",
+      epoch: 1,
+    });
+    // note: A competing bind publishes a current cache inside this attempt's release window.
+    let competing: { storeId: string; epoch: number } | undefined;
+    setRemoteCacheReplacementPublishGapForTest(async () => {
+      if (competing !== undefined) return;
+      competing = await initializeRemoteCacheStore(location);
+    });
+    try {
+      const refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] }),
+      );
+      expect(refused.code).toBe("collaboration.stale-binding");
+    } finally {
+      setRemoteCacheReplacementPublishGapForTest(undefined);
+    }
+    // invariant: The winner's current cache is never deleted; the canonical name still holds it.
+    expect(competing).toBeDefined();
+    expect(metaRecord(location.dbPath)).toMatchObject({
+      store_id: competing!.storeId,
+      authority_epoch: competing!.epoch,
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(tableNames(location.dbPath)).toContain("remote_outbox");
   }, 30_000);
 });

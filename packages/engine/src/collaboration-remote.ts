@@ -1627,7 +1627,12 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
       );
     }
   }
-  const staged = await initializeRemoteCacheStore(location);
+  // invariant: A pre-v3 cache is replaced only after the bytes about to go are proven to be the
+  // generation this checkout recorded, so the release never discards another record's cache.
+  const staged = await initializeRemoteCacheStore(
+    location,
+    recorded !== null && recorded.version === 3 ? { storeId: recorded.storeId, epoch: recorded.epoch } : undefined,
+  );
   if (cachePresent && recorded !== null && recorded.version === 3) assertRemoteCacheIdentity(staged, recorded);
   const outcome = await writeRemoteCacheStage(location, ({ db, authority }) => {
     // invariant: The transaction's own lane identity is the stamp that gets published: a lane
