@@ -8,6 +8,17 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.8.3] - 2026-11-22
+
+### Added
+
+- **`/codebase-comment-cleanup` entry.** New slash command that triages every code comment into delete / ADR / issue / keep-with-shape, batched through a development seat with independent QC and PM Acceptance, and closes on a measured `unclassified-comment net change`.
+- **Comment triage reference.** `mstar-coding-behavior/references/comment-cleanup.md` maps tautology, excuse, stale and decision record onto the existing Drift / License / Substitute failure modes; a confirmed Excuse is captured per `mstar-project-governance` § Issue capture before its comment goes, and an ADR home is required only for a decision that must outlive the change.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.3**.
+
 ## [4.8.2] - 2026-11-21
 
 ### Changed
