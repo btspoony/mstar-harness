@@ -110,8 +110,8 @@ function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, mile
     throw new MilestoneError(
       "milestone.operation-conflict",
       `Operation ${intent.operationId} is confirmed without its recorded business result, so its change and revision ` +
-        `cannot be reported. Inspect it with mstar store collaboration remote outbox-show --harness <abs>; ` +
-        `nothing was read or changed.`,
+        `cannot be reported. Inspect it with mstar store collaboration remote outbox-show --harness <abs> ` +
+        `--operation ${intent.operationId}; nothing was read or changed.`,
     );
   }
   return {
