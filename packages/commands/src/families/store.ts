@@ -152,9 +152,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
                         ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id>, and store init is never the binding route; a bound checkout is never retargeted by editing its mode."
         : code === "remote.selector-unavailable" || code === "remote.unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale"
           ? "Restore Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs>; the Host Agent refreshes the scope and resubmits mstar store collaboration remote observe --input <file|->. A required read is never answered from local rows."
-          : code === "remote.outbox-unavailable"
-            ? "This checkout's collaboration lane holds no durable outbox, so nothing was enqueued and nothing was sent. Advance the lane with mstar store upgrade --operator <name> --harness <abs>, then rerun the same verb with the same operation id; the observed native issue is still readable with mstar issue show --id <provider-issue-id> --project <local-project-id>."
-            : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked" || code === "remote.unsafe-fidelity"
+          : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked" || code === "remote.unsafe-fidelity"
               ? "Correct the document or the host's verified tenant/team/project scope, permissions and field fidelity, then resubmit mstar store collaboration remote bind|observe --input <file|-> for the checked selector commit and generation."
               : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.

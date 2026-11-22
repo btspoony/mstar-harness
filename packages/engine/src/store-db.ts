@@ -111,9 +111,6 @@ export type StoreErrorCode =
   | "remote.revoked"
   | "remote.unsafe-fidelity"
   | "remote.unavailable"
-  // note: A v2 remote cache has no durable outbox yet, so an adoption intent cannot be
-  // recorded and no cache-only adoption is ever performed.
-  | "remote.outbox-unavailable"
   // note: One operation id is bound to one frozen request; a different request or binding
   // under the same id never replays and never overwrites the stored intent.
   | "remote.operation-conflict"

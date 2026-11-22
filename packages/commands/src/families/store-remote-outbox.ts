@@ -127,9 +127,6 @@ function recoveryFor(code: string, verb: OutboxVerb): string {
   if (code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked") {
     return "Correct the verified scope, permission or selection this refusal names: re-prove this checkout's scope with mstar store collaboration remote status --harness <abs>, then rerun the same verb with the same operation id; a refused request records nothing.";
   }
-  if (code === "remote.outbox-unavailable") {
-    return "This checkout's collaboration lane holds no durable outbox, so nothing was enqueued and nothing was sent. Advance the lane with mstar store upgrade --operator <name> --harness <abs>, then rerun the same verb with the same operation id.";
-  }
   if (code === "collaboration.stale-binding") {
     return "Re-prove the checked selection and this checkout's binding with mstar store collaboration remote status --harness <abs>, then complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->; a draining generation is recovered, never resent.";
   }

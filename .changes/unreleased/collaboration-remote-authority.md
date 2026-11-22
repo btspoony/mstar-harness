@@ -27,8 +27,9 @@ packages: root
   checkout's recorded selector lineage.
 - **Remote writes are durable intents, not provider calls.** In a `remote` checkout every business write freezes an
   intent in the version-3 outbox (`remote adopt-issue` enqueues an `issue-adopt` intent) and refuses
-  `remote.effect-pending` until a recorded receipt confirms it; a lane still below version 3 refuses
-  `remote.outbox-unavailable` and is advanced by `store upgrade`. The CLI performs no provider call —
+  `remote.effect-pending` until a recorded receipt confirms it; a remote lane still below version 3 refuses
+  `collaboration.upgrade-required` at admission, and recovery is the reviewed `remote bind`
+  (`store upgrade` returns no collaboration receipt for `mode=remote`). The CLI performs no provider call —
   `outbox-dispatch` issues the host's single send permit — so no credential or transport ships in the checkout.
 
 <!-- CN -->
@@ -51,5 +52,6 @@ packages: root
   缺失也不能替代检出记录的 selector 血缘。
 - **远程写入是持久 intent，而不是 provider 调用。** 在 `remote` 检出中，每个业务写入都会在版本 3 的 outbox 中冻结一个
   intent（`remote adopt-issue` 入队 `issue-adopt` intent），并持续以 `remote.effect-pending` 拒绝，直到记录的 receipt
-  确认该效果；仍低于版本 3 的 lane 以 `remote.outbox-unavailable` 拒绝，并通过 `store upgrade` 推进。CLI 不执行任何
+  确认该效果；远端 lane 仍低于版本 3 时在准入处以 `collaboration.upgrade-required` 拒绝，恢复路径为经审查的
+  `remote bind`（`mode=remote` 时 `store upgrade` 不返回 collaboration receipt）。CLI 不执行任何
   provider 调用——`outbox-dispatch` 只签发宿主的唯一发送许可——因此检出中不携带凭据或传输实现。
