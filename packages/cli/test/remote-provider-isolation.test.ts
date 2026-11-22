@@ -15,7 +15,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { RunResult } from "./harness";
 import {
@@ -63,19 +63,38 @@ function forbiddenImport(specifier: string): boolean {
   return NETWORK_MODULES[specifier] === true || PROVIDER_MODULES.some((pattern) => pattern.test(specifier));
 }
 
-/** note: A declared workspace export: the source the walk enters, or why it must not. */
-type ExportSource = string | "data" | "unresolved";
+/** note: A declared workspace export: the sources the walk enters, or why it must not. */
+type ExportSource = readonly string[] | "data" | "unresolved";
 
 type WorkspacePackage = Readonly<{ sources: ReadonlyMap<string, ExportSource> }>;
 
-/** note: A module-graph target: JavaScript, or TypeScript/declaration source. */
+/** note: A module-graph target: JavaScript, or TypeScript source. */
 const CODE_TARGET = /\.(?:[cm]?[jt]sx?)$/;
 
-/** note: Every string a conditional export can select, in declaration order. */
-function exportTargets(value: unknown): string[] {
-  if (typeof value === "string") return [value];
+/** note: A `types` target is a declaration, never the module the package executes. */
+const DECLARATION_TARGET = /\.d\.[cm]?[jt]s$/;
+
+/**
+ * note: A bundle name a package's build script renames: `dist/<bundle>` is built from
+ * `src/<source>`, so substituting `dist` for `src` cannot find it. A stale entry leaves the
+ * target unresolved, which fails the walk instead of skipping the module.
+ */
+const BUILD_ENTRIES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  engine: { "dist/engine": "src/index" },
+};
+
+/**
+ * note: Every module a conditional export can run, across `import`/`require`/`default` and nested
+ * conditions. A `types` target is skipped: it names a declaration, not the executed module.
+ */
+function runtimeTargets(value: unknown): string[] {
+  if (typeof value === "string") {
+    return CODE_TARGET.test(value) && !DECLARATION_TARGET.test(value) ? [value] : [];
+  }
   if (value === null || typeof value !== "object") return [];
-  return Object.values(value).flatMap(exportTargets);
+  return Object.entries(value)
+    .filter(([condition]) => condition !== "types")
+    .flatMap(([, target]) => runtimeTargets(target));
 }
 
 /**
@@ -85,7 +104,8 @@ function exportTargets(value: unknown): string[] {
 function sourceFor(root: string, target: string): string | null {
   const base = target.replace(/^\.\//, "").replace(/(?:\.d)?\.[cm]?[jt]sx?$/, "");
   const parts = base.split("/");
-  const probes = [base];
+  const renamed = BUILD_ENTRIES[basename(root)]?.[base];
+  const probes = renamed === undefined ? [base] : [base, renamed];
   parts.forEach((part, index) => {
     if (part === "dist") probes.push([...parts.slice(0, index), "src", ...parts.slice(index + 1)].join("/"));
     // note: A declaration root above the package (`dist/<pkg>/src/…`) still ends in the source path.
@@ -101,21 +121,24 @@ function sourceFor(root: string, target: string): string | null {
 }
 
 /**
- * note: What one declared export resolves to. A conditional export selects any of its targets; a
- * code export with no source behind any of them is unresolved, never silently treated as data.
+ * note: What one declared export resolves to. Every runtime target must resolve to a source, so a
+ * declaration can never stand in for the module the package actually executes.
  */
 function exportSource(root: string, target: unknown): ExportSource {
-  const targets = exportTargets(target);
-  if (targets.length === 0) return "unresolved";
-  const code = targets.filter((value) => CODE_TARGET.test(value));
+  const targets = runtimeTargets(target);
+  // note: An export of only non-executable paths (a stylesheet, a document) has no module to walk.
+  if (targets.length === 0) return "data";
   // note: A glob selects several modules and cannot map to one source.
-  if (code.some((value) => value.includes("*"))) return "unresolved";
-  if (code.length === 0) return "data";
-  for (const value of code) {
+  if (targets.some((value) => value.includes("*"))) return "unresolved";
+  const sources: string[] = [];
+  for (const value of targets) {
     const source = sourceFor(root, value);
-    if (source !== null) return source;
+    // invariant: An unresolved runtime target fails closed; it never falls back to a declaration
+    // source the package does not run.
+    if (source === null) return "unresolved";
+    if (!sources.includes(source)) sources.push(source);
   }
-  return "unresolved";
+  return sources;
 }
 
 /** note: Each workspace package's name and every declared export mapped to its source. */
@@ -147,13 +170,13 @@ function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): M
   return packages;
 }
 
-/** note: Resolve one production specifier to its source: relative, or a workspace package export. */
+/** note: Resolve one production specifier to its sources: relative, or a workspace package export. */
 function resolveProductionFile(
   specifier: string,
   fromFile: string,
   workspace: ReadonlyMap<string, WorkspacePackage>,
-): string | null {
-  if (specifier.startsWith(".")) return resolve(fromFile, "..", specifier.replace(/\.js$/, ".ts"));
+): readonly string[] {
+  if (specifier.startsWith(".")) return [resolve(fromFile, "..", specifier.replace(/\.js$/, ".ts"))];
   for (const [name, pkg] of workspace) {
     if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
     const subpath = specifier === name ? "" : specifier.slice(name.length + 1);
@@ -161,9 +184,9 @@ function resolveProductionFile(
     // invariant: An unresolved workspace import fails the walk; it is never silently skipped.
     if (source === undefined) throw new Error(`${fromFile} imports ${specifier}, which ${name} does not export`);
     if (source === "unresolved") throw new Error(`${fromFile} imports ${specifier}, whose source cannot be resolved`);
-    return source === "data" ? null : source;
+    return source === "data" ? [] : source;
   }
-  return null;
+  return [];
 }
 
 /** note: Every reachable production file (absolute), following workspace packages across their boundary. */
@@ -179,8 +202,7 @@ function walkRemoteImports(
     const source = readFileSync(file, "utf8");
     files.set(file, source);
     for (const specifier of importSpecifiers(source)) {
-      const next = resolveProductionFile(specifier, file, workspace);
-      if (next !== null) pending.push(next);
+      pending.push(...resolveProductionFile(specifier, file, workspace));
     }
   }
   return files;
@@ -346,7 +368,7 @@ describe("provider isolation: the shipped remote path", () => {
     // invariant: A declared non-root export resolves to its source instead of being dropped.
     expect(
       resolveProductionFile("@mstar-harness/engine/src/audit", join(REPO_ROOT, "packages/cli/src/index.ts"), workspacePackages()),
-    ).toBe(join(REPO_ROOT, "packages/engine/src/audit.ts"));
+    ).toEqual([join(REPO_ROOT, "packages/engine/src/audit.ts")]);
 
     // note: Negative control - a provider SDK reached only through a non-root exported subpath is
     // still found, so the walk cannot silently drop a workspace export it fails to map.
@@ -356,6 +378,8 @@ describe("provider isolation: the shipped remote path", () => {
       const pkg = join(root, "packages/synthetic");
       const aliased = join(pkg, "src/internal.ts");
       const conditional = join(pkg, "src/conditional.ts");
+      const declaration = join(pkg, "src/decoy.ts");
+      const splitRequire = join(pkg, "src/split-require.ts");
       mkdirSync(join(pkg, "src"), { recursive: true });
       writeFileSync(
         join(pkg, "package.json"),
@@ -367,6 +391,13 @@ describe("provider isolation: the shipped remote path", () => {
             "./audit": { types: "./dist/internal.d.ts", default: "./dist/internal.js" },
             // invariant: A conditional code export without `default` is a module, not data.
             "./conditional": { import: "./dist/conditional.js" },
+            // invariant: `types` and the runtime default name different sources; the walk enters
+            // the runtime module, never the decoy declaration.
+            "./aliased": { types: "./dist/decoy.d.ts", default: "./dist/internal.js" },
+            // invariant: Every runtime condition is walked, not just the first one declared.
+            "./split": { import: "./dist/split-import.js", require: "./dist/split-require.js" },
+            // invariant: A resolvable declaration never masks an unresolved runtime target.
+            "./declared-only": { types: "./dist/index.d.ts", default: "./dist/missing.js" },
             // invariant: A conditional code export with no source fails closed, not as data.
             "./broken": { import: "./dist/broken.js" },
           },
@@ -377,6 +408,9 @@ describe("provider isolation: the shipped remote path", () => {
       writeFileSync(join(pkg, "src/audit.ts"), 'export const audit = "decoy";\n');
       writeFileSync(aliased, 'import { LinearClient } from "@linear/sdk";\n');
       writeFileSync(conditional, 'import { LinearClient } from "@linear/sdk";\n');
+      writeFileSync(declaration, 'export const decoy = "clean";\n');
+      writeFileSync(join(pkg, "src/split-import.ts"), 'export const splitImport = "clean";\n');
+      writeFileSync(splitRequire, 'import { LinearClient } from "@linear/sdk";\n');
       const walked = walkRemoteImports([entry], workspacePackages(join(root, "packages")));
       const forbidden = [...walked.entries()].flatMap(([file, source]) =>
         importSpecifiers(source)
@@ -388,6 +422,22 @@ describe("provider isolation: the shipped remote path", () => {
 
       writeFileSync(entry, 'import { conditional } from "@mstar-harness/synthetic/conditional";\n');
       expect([...walkRemoteImports([entry], workspacePackages(join(root, "packages"))).keys()]).toContain(conditional);
+
+      // invariant: A `types` declaration never substitutes for the runtime module; the differing
+      // runtime target is walked and the decoy declaration is not scanned.
+      writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/aliased";\n');
+      const differing = walkRemoteImports([entry], workspacePackages(join(root, "packages")));
+      expect([...differing.keys()]).toContain(aliased);
+      expect([...differing.keys()]).not.toContain(declaration);
+      expect(importSpecifiers(differing.get(aliased) ?? "")).toContain("@linear/sdk");
+
+      // invariant: Both runtime branches are walked, so neither `import` nor `require` hides one.
+      writeFileSync(entry, 'import { split } from "@mstar-harness/synthetic/split";\n');
+      expect([...walkRemoteImports([entry], workspacePackages(join(root, "packages"))).keys()]).toContain(splitRequire);
+
+      // invariant: A resolvable declaration does not mask an unresolved runtime target.
+      writeFileSync(entry, 'import { declared } from "@mstar-harness/synthetic/declared-only";\n');
+      expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/declared-only/);
 
       // invariant: An import outside the manifest's exports fails the walk instead of vanishing.
       writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/private";\n');
