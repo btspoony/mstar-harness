@@ -90,7 +90,8 @@ const allowedGit = process.env.MSTAR_NO_PROVIDER_GIT ?? "";
 
 /**
  * note: Resolve the executable from the options the child actually spawns with, so a caller
- * cannot pin this process's PATH and then run a foreign binary from its own environment.
+ * cannot pin this process's PATH and then run a foreign binary from its own environment. An
+ * empty PATH entry means the child's cwd, exactly as the platform's lookup treats it.
  */
 function executablePath(command, options) {
   const value = String(command);
@@ -98,10 +99,7 @@ function executablePath(command, options) {
   const searchPath = String((options.env ?? process.env).PATH ?? "");
   const candidates = value.includes(path.sep)
     ? [path.resolve(cwd, value)]
-    : searchPath
-        .split(path.delimiter)
-        .filter(Boolean)
-        .map((dir) => path.resolve(cwd, dir, value));
+    : searchPath.split(path.delimiter).map((dir) => path.resolve(cwd, dir, value));
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);

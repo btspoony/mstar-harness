@@ -15,7 +15,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { RunResult } from "./harness";
 import {
@@ -68,21 +68,54 @@ type ExportSource = string | "data" | "unresolved";
 
 type WorkspacePackage = Readonly<{ sources: ReadonlyMap<string, ExportSource> }>;
 
+/** note: A module-graph target: JavaScript, or TypeScript/declaration source. */
+const CODE_TARGET = /\.(?:[cm]?[jt]sx?)$/;
+
+/** note: Every string a conditional export can select, in declaration order. */
+function exportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (value === null || typeof value !== "object") return [];
+  return Object.values(value).flatMap(exportTargets);
+}
+
 /**
- * note: The TypeScript behind one declared export. Packages build from `src/`, so the export
- * subpath names its source; an unmatched code export stays `unresolved` and fails the walk.
+ * note: The source file behind one build target. Packages compile `src/` into `dist/`, so the
+ * target path — not the export key — names the source; an unmatched probe stays unresolved.
  */
-function exportSource(root: string, subpath: string, target: unknown): ExportSource {
-  if (subpath === "") {
-    const entry = join(root, "src/index.ts");
-    return existsSync(entry) ? entry : "unresolved";
+function sourceFor(root: string, target: string): string | null {
+  const base = target.replace(/^\.\//, "").replace(/(?:\.d)?\.[cm]?[jt]sx?$/, "");
+  const parts = base.split("/");
+  const probes = [base];
+  parts.forEach((part, index) => {
+    if (part === "dist") probes.push([...parts.slice(0, index), "src", ...parts.slice(index + 1)].join("/"));
+    // note: A declaration root above the package (`dist/<pkg>/src/…`) still ends in the source path.
+    if (part === "src") probes.push(parts.slice(index).join("/"));
+  });
+  for (const probe of probes) {
+    for (const candidate of [`${probe}.ts`, `${probe}.tsx`, `${probe}/index.ts`, `${probe}/index.tsx`]) {
+      const file = join(root, candidate);
+      if (existsSync(file)) return file;
+    }
   }
-  // note: A non-JavaScript target is data (package.json, CSS, wildcard assets), not a module graph.
-  if (typeof target !== "string" || target.includes("*") || !target.endsWith(".js")) return "data";
-  const candidates = [`${subpath}.ts`, `${subpath}/index.ts`, `src/${subpath}.ts`, `src/${subpath}/index.ts`].map((path) =>
-    join(root, path),
-  );
-  return candidates.find(existsSync) ?? "unresolved";
+  return null;
+}
+
+/**
+ * note: What one declared export resolves to. A conditional export selects any of its targets; a
+ * code export with no source behind any of them is unresolved, never silently treated as data.
+ */
+function exportSource(root: string, target: unknown): ExportSource {
+  const targets = exportTargets(target);
+  if (targets.length === 0) return "unresolved";
+  const code = targets.filter((value) => CODE_TARGET.test(value));
+  // note: A glob selects several modules and cannot map to one source.
+  if (code.some((value) => value.includes("*"))) return "unresolved";
+  if (code.length === 0) return "data";
+  for (const value of code) {
+    const source = sourceFor(root, value);
+    if (source !== null) return source;
+  }
+  return "unresolved";
 }
 
 /** note: Each workspace package's name and every declared export mapped to its source. */
@@ -92,7 +125,7 @@ function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): M
     const root = join(packagesDir, entry.name);
     const manifestPath = join(root, "package.json");
     if (!entry.isDirectory() || !existsSync(manifestPath)) continue;
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown; exports?: unknown };
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown; main?: unknown; exports?: unknown };
     if (typeof manifest.name !== "string") continue;
     const declared =
       typeof manifest.exports === "string"
@@ -102,11 +135,13 @@ function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): M
           : {};
     const sources = new Map<string, ExportSource>();
     for (const [key, value] of Object.entries(declared)) {
-      const target = typeof value === "string" ? value : (value as { default?: unknown } | null)?.default;
-      const subpath = key.replace(/^\.\/?/, "");
-      sources.set(subpath, exportSource(root, subpath, target));
+      sources.set(key.replace(/^\.\/?/, ""), exportSource(root, value));
     }
-    if (!sources.has("")) sources.set("", exportSource(root, "", undefined));
+    // note: Only a package without an `exports` map falls back to `main`; otherwise a bare import
+    // of an undeclared root must fail the walk, as it would fail at runtime.
+    if (Object.keys(declared).length === 0 && !sources.has("")) {
+      sources.set("", exportSource(root, manifest.main ?? "./src/index.ts"));
+    }
     packages.set(manifest.name, { sources });
   }
   return packages;
@@ -319,7 +354,8 @@ describe("provider isolation: the shipped remote path", () => {
     try {
       const entry = join(root, "entry.ts");
       const pkg = join(root, "packages/synthetic");
-      const module = join(pkg, "src/audit.ts");
+      const aliased = join(pkg, "src/internal.ts");
+      const conditional = join(pkg, "src/conditional.ts");
       mkdirSync(join(pkg, "src"), { recursive: true });
       writeFileSync(
         join(pkg, "package.json"),
@@ -327,24 +363,39 @@ describe("provider isolation: the shipped remote path", () => {
           name: "@mstar-harness/synthetic",
           exports: {
             ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
-            "./src/audit": { types: "./dist/audit.d.ts", default: "./dist/audit.js" },
+            // invariant: The key names the API; the declared target names the source it walks.
+            "./audit": { types: "./dist/internal.d.ts", default: "./dist/internal.js" },
+            // invariant: A conditional code export without `default` is a module, not data.
+            "./conditional": { import: "./dist/conditional.js" },
+            // invariant: A conditional code export with no source fails closed, not as data.
+            "./broken": { import: "./dist/broken.js" },
           },
         }),
       );
-      writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/audit";\n');
-      writeFileSync(join(pkg, "src/index.ts"), 'export { audit } from "./audit.js";\n');
-      writeFileSync(module, 'import { LinearClient } from "@linear/sdk";\n');
+      writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/audit";\n');
+      writeFileSync(join(pkg, "src/index.ts"), 'export { audit } from "./internal.js";\n');
+      writeFileSync(join(pkg, "src/audit.ts"), 'export const audit = "decoy";\n');
+      writeFileSync(aliased, 'import { LinearClient } from "@linear/sdk";\n');
+      writeFileSync(conditional, 'import { LinearClient } from "@linear/sdk";\n');
       const walked = walkRemoteImports([entry], workspacePackages(join(root, "packages")));
       const forbidden = [...walked.entries()].flatMap(([file, source]) =>
         importSpecifiers(source)
           .filter(forbiddenImport)
           .map((specifier) => `${file} imports ${specifier}`),
       );
-      expect(forbidden).toEqual([`${module} imports @linear/sdk`]);
+      expect(forbidden).toEqual([`${aliased} imports @linear/sdk`]);
+      expect([...walked.keys()]).not.toContain(join(pkg, "src/audit.ts"));
+
+      writeFileSync(entry, 'import { conditional } from "@mstar-harness/synthetic/conditional";\n');
+      expect([...walkRemoteImports([entry], workspacePackages(join(root, "packages"))).keys()]).toContain(conditional);
 
       // invariant: An import outside the manifest's exports fails the walk instead of vanishing.
       writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/private";\n');
       expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/src\/private/);
+
+      // invariant: A declared export whose source cannot be established fails the walk.
+      writeFileSync(entry, 'import { broken } from "@mstar-harness/synthetic/broken";\n');
+      expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/broken/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -387,7 +438,7 @@ describe("provider isolation: the shipped remote path", () => {
       // note: A same-named executable earlier on PATH is foreign even though its basename is `git`.
       const foreign = join(root, "git");
       const marker = join(root, "foreign-git-ran");
-      writeFileSync(foreign, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`);
+      writeFileSync(foreign, `#!/bin/sh\n: > ${JSON.stringify(marker)}\n`);
       chmodSync(foreign, 0o755);
       expect(
         attempt('require("node:child_process").execFileSync("git", ["--version"])', {
@@ -401,6 +452,15 @@ describe("provider isolation: the shipped remote path", () => {
       expect(
         attempt(
           `require("node:child_process").execFileSync("git", ["--version"], { env: { PATH: ${JSON.stringify(root)} } })`,
+        ),
+      ).not.toBe(0);
+      expect(existsSync(marker)).toBe(false);
+
+      // note: An empty PATH entry means the child's cwd, where the foreign `git` lives; skipping
+      // it would approve the pinned Git from the later entry and then run the foreign one.
+      expect(
+        attempt(
+          `require("node:child_process").execFileSync("git", ["--version"], { cwd: ${JSON.stringify(root)}, env: { PATH: ${JSON.stringify(`:${dirname(git)}`)} } })`,
         ),
       ).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
@@ -428,7 +488,7 @@ describe("provider isolation: the shipped remote path", () => {
       expect(kinds).toContain("network:tls");
       expect(kinds).toContain("network:websocket");
       expect(kinds.filter((kind) => kind === "fs:credential-read")).toHaveLength(3);
-      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(4);
+      expect(kinds.filter((kind) => kind === "spawn")).toHaveLength(5);
       expect(kinds.filter((kind) => kind === "spawn:shell")).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
