@@ -223,8 +223,23 @@ function unsafeFidelity(path: string, detail: string): never {
   throw new StoreError("remote.unsafe-fidelity", `${path}: ${detail}. Nothing was written.`);
 }
 
-/** note: A portable field is one bounded line that cannot name a filesystem location. */
+/** note: A portable field is one bounded line that cannot name a filesystem location or carry a credential. */
 const PORTABLE_FIELD_LIMIT = 512;
+
+/**
+ * note: A path leaks the same machine detail embedded in a sentence as it does at
+ * the start, so only a plain relative reference or a URL stays portable. The
+ * leading-slash rule needs a boundary so `https://host/path` is not a match.
+ */
+const EMBEDDED_PATH =
+  /(?:^|[\s"'`(\[<{=,;])[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|\bfile:\/\/|(?:^|[\s"'`(\[<{=,;:])\/(?!\/)\S|(?:^|[\s"'`(\[<{=,;])~\//;
+
+/**
+ * note: A reviewed conservative shape rule, not a credential scanner: the header,
+ * label and common key shapes this boundary refuses wherever they appear.
+ */
+const CREDENTIAL_SHAPE =
+  /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\bauthorization\s*[:=]|\b(?:api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|password|passwd|passphrase)\s*[:=]|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
 
 function portableValue(value: unknown, path: string): string | null {
   if (value === undefined || value === null) return null;
@@ -235,8 +250,13 @@ function portableValue(value: unknown, path: string): string | null {
     unsafeFidelity(path, `is longer than ${String(PORTABLE_FIELD_LIMIT)} characters`);
   }
   if (/[\u0000-\u001f\u007f]/.test(value)) unsafeFidelity(path, "carries a control character");
-  if (/^(?:[A-Za-z]:[\\/]|[\\/~])/.test(value) || value.split(/[\\/]/).includes("..")) {
-    unsafeFidelity(path, "names a filesystem location, which the snapshot cannot represent");
+  if (
+    /^(?:[A-Za-z]:[\\/]|[\\/~])/.test(value) ||
+    value.split(/[\\/]/).includes("..") ||
+    EMBEDDED_PATH.test(value) ||
+    CREDENTIAL_SHAPE.test(value)
+  ) {
+    unsafeFidelity(path, "carries a filesystem location or credential material, which the snapshot cannot represent");
   }
   return value;
 }
@@ -595,9 +615,10 @@ function transitionEvidence(value: unknown, path: string): Record<string, unknow
  * business field set under camelCase names matching the snapshot vocabulary:
  * identity, classification, closure and supersession pointers, the
  * detail-document reference, and the source and plan anchors. A field outside
- * that list, or a value that is not portable text (a structured payload, an
- * absolute or home-anchored path, a control character, an over-long string),
- * refuses the observation as `remote.unsafe-fidelity` instead of being dropped.
+ * that list, or a value that is not portable text (a structured payload, a
+ * credential, an embedded absolute, home-anchored or Windows path, a control
+ * character, an over-long string), refuses the observation as
+ * `remote.unsafe-fidelity` instead of being dropped.
  * The lossless row stays in the local store, which the snapshot does not replace.
  */
 const IMPORTED_RECORD_FIELDS = [
@@ -694,8 +715,9 @@ const PROVENANCE_KEYS = [
  * invariant: Provenance never carries the raw legacy register JSON. A migration
  * row's full lossless text may be handed over as `legacyJson`; it is parsed and
  * projected through the same reviewed portable record as imported transition
- * evidence, so a credential-bearing structure, an absolute or home-anchored
- * path, or an unknown field refuses the observation as `remote.unsafe-fidelity`.
+ * evidence, so a credential-bearing structure or string, an embedded absolute,
+ * home-anchored or Windows path, or an unknown field refuses the observation as
+ * `remote.unsafe-fidelity`.
  * Only the portable projection is persisted, as `legacyRecord`, and a stored
  * snapshot's `legacyRecord` is accepted again so an export round-trips.
  */

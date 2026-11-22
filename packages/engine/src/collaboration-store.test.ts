@@ -2497,6 +2497,10 @@ describe("remote observation cache", () => {
       { id: "R9", title: "Imported finding", detail_doc: "/home/operator/notes.md" },
       { id: "R9", title: "Imported finding", superseded_by: "C:\\operator\\notes.md" },
       { id: "R9", title: "Imported finding", closure_evidence: { token: "leak" } },
+      { id: "R9", title: "Imported finding", closure_evidence: "Bearer secret" },
+      { id: "R9", title: "Imported finding", detail_doc: "see /Users/alice/private.txt" },
+      { id: "R9", title: "Imported finding", superseded_by: "see C:\\operator\\notes.md" },
+      { id: "R9", title: "Imported finding", closure_evidence: "api_key=sk-live-12345678" },
     ]) {
       await expect(
         submit(withSubject({ transitions: [{ ...subject.transitions[0]!, imported: true, evidence }] })),
@@ -2524,6 +2528,35 @@ describe("remote observation cache", () => {
           evidence: expect.objectContaining({ closureEvidence: "PR #42 / commit abc1234" }),
         }),
       ],
+    });
+
+    // note: Control - ordinary business prose carrying a URL and a relative reference stays
+    // portable, so the credential/path rule refuses shapes, not business text.
+    expect(
+      await ingestRemoteObservation(context, {
+        ...observation(check, {
+          expectRevision: 2,
+          snapshot: withSubject({
+            transitions: [
+              {
+                ...subject.transitions[0]!,
+                imported: true,
+                evidence: {
+                  id: "R10",
+                  title: "Imported finding",
+                  detail_doc: "plans/projects/_default/residuals/R10-finding.md",
+                  closure_evidence: "See https://example.test/pull/42 for the fix and PR #42 / commit abc1234",
+                },
+              },
+            ],
+          }),
+        }),
+        selectorCommit: commit,
+        generation: 3,
+      }),
+    ).toMatchObject({ revision: 3, completeness: "complete" });
+    expect(storedHistory().transitions[0]!.evidence).toMatchObject({
+      closureEvidence: "See https://example.test/pull/42 for the fix and PR #42 / commit abc1234",
     });
   });
 
@@ -2690,6 +2723,7 @@ describe("remote observation cache", () => {
     const source = await migratedSource("imported-provenance", [
       migratedRow("R1"),
       migratedRow("R3", { detail_doc: "/Users/operator/notes.md", superseded_by: { token: "leak" } }),
+      migratedRow("R4", { closure_evidence: "Bearer secret" }),
     ]);
     type ProvenanceRow = {
       kind: string;
@@ -2716,7 +2750,10 @@ describe("remote observation cache", () => {
     })();
     const portable = rows.find((row) => row.legacy_entry_id === "R1");
     const unsafe = rows.find((row) => row.legacy_entry_id === "R3");
-    if (portable === undefined || unsafe === undefined) throw new Error("the migrated lane recorded no provenance");
+    const credential = rows.find((row) => row.legacy_entry_id === "R4");
+    if (portable === undefined || unsafe === undefined || credential === undefined) {
+      throw new Error("the migrated lane recorded no provenance");
+    }
     expect(portable.kind).toBe("migration");
 
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
@@ -2806,6 +2843,9 @@ describe("remote observation cache", () => {
     const refusal: unknown = await submitProvenance(unsafe, 1).catch((error: unknown) => error);
     expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(refusal)).toContain("legacyJson.detail_doc");
+    const credentialRefusal: unknown = await submitProvenance(credential, 1).catch((error: unknown) => error);
+    expect(credentialRefusal).toMatchObject({ code: "remote.unsafe-fidelity" });
+    expect(String(credentialRefusal)).toContain("legacyJson.closure_evidence");
     expect((await readRemoteStatus(context)).projects[0]!.revision).toBe(1);
   });
 
