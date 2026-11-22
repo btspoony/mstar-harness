@@ -2391,7 +2391,7 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
     verb: "issue-adopt",
     request: { projectId, issueId, adoption },
   });
-  if (replay !== null) return replay;
+  if (replay !== null) return replayedOnly(replay, operationId);
   // note: The cache is admitted for the same selector and binding the adoption document was
   // validated against, so a rebind in between never mixes two generations.
   const scope = await readWriteScope(context, projectId);
@@ -5751,7 +5751,7 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     write.executionKey ?? null,
     origin,
   );
-  if (replay !== null) return replay;
+  if (replay !== null) return replayedOnly(replay, operationId);
   const scope = await readWriteScope(context, projectId);
   const parents = scope.snapshot.project.head ?? [];
   const current = {

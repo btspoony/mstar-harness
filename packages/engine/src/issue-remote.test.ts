@@ -98,6 +98,14 @@ function frozenChange(row: Record<string, unknown>): { kind: string; issueRef: s
   return (JSON.parse(String(row.request_json)) as { event: { change: { kind: string; issueRef: string; mstar: Record<string, unknown> } } }).event.change;
 }
 
+/**
+ * note: An established answer records ONE settled no-change claim under its operation id — that is
+ * what keeps the id from carrying a different effect later — and nothing that could be dispatched.
+ */
+function expectNoChangeClaim(context: StoreContext): void {
+  expect(outboxRows(context).map((row) => row.state)).toEqual(["abandoned"]);
+}
+
 /** note: One refusal as its envelope: the test's own failure when nothing refused. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string; details?: unknown }> {
   try {
@@ -483,7 +491,7 @@ test("a recurring remote capture returns the established occurrence without a se
     storeRevision: 0,
     created: false,
   });
-  expect(outboxRows(fixture.context)).toHaveLength(0);
+  expectNoChangeClaim(fixture.context);
 });
 
 test("the same identity appends one occurrence through one issue-replace", async () => {
@@ -590,7 +598,7 @@ test("a snapshot that moves under the dedupe read never freezes a second subject
     actor: "project-manager",
   });
   expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
-  expect(outboxRows(fixture.context)).toHaveLength(0);
+  expectNoChangeClaim(fixture.context);
 });
 
 test("an occurrence that arrives before the freeze answers the established receipt instead of appending twice", async () => {
@@ -613,7 +621,7 @@ test("an occurrence that arrives before the freeze answers the established recei
   });
   expect(sampled).toBe(true);
   expect(receipt).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, created: false });
-  expect(outboxRows(fixture.context)).toHaveLength(0);
+  expectNoChangeClaim(fixture.context);
 });
 
 test("an operation id with a frozen entry answers through the replay gate, not an observed no-op", async () => {
@@ -669,7 +677,7 @@ test("a key another subject carries answers the established receipt, never a sec
     occurrenceId: "11111111-1111-4111-8111-199999999999",
     created: false,
   });
-  expect(outboxRows(fixture.context)).toHaveLength(0);
+  expectNoChangeClaim(fixture.context);
 });
 
 test("a scope that moves after the last sample refuses the freeze and keeps retrying the same id", async () => {
@@ -706,7 +714,8 @@ test("a scope that moves after the last sample refuses the freeze and keeps retr
     actor: "project-manager",
   });
   expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
-  expect(outboxRows(fixture.context)).toHaveLength(0);
+  // invariant: The recorded claim makes the id unusable for a different effect afterwards.
+  expectNoChangeClaim(fixture.context);
 });
 
 test("a durable operation under the same id refuses an established no-op answer", async () => {
@@ -770,6 +779,38 @@ test("a durable operation under the same id refuses an established no-op answer"
   const rows = outboxRows(fixture.context);
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ operation_id: operationId, state: "enqueued" });
+});
+
+test("an established occurrence success is recorded and replays its own answer under the same id", async () => {
+  const fixture = await remoteFixture("capture-established-replay");
+  const operationId = "30000000-0000-4000-8000-00000000000d";
+  const established = await captureIssue(fixture.context, captureInput(), { operationId, actor: "project-manager" });
+  expect(established).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, created: false, storeRevision: 0 });
+  expectNoChangeClaim(fixture.context);
+
+  // invariant: The recorded claim answers the identical request with the SAME business result, from
+  // the durable row instead of a re-derived observation answer, and never appends a second row.
+  const replayed = await captureIssue(fixture.context, captureInput(), { operationId, actor: "project-manager" });
+  expect(replayed).toEqual(established);
+  const rows = outboxRows(fixture.context);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ operation_id: operationId, state: "abandoned" });
+});
+
+test("a different payload under an established operation id refuses instead of reusing it", async () => {
+  const fixture = await remoteFixture("capture-established-reuse");
+  const operationId = "30000000-0000-4000-8000-00000000000e";
+  const established = await captureIssue(fixture.context, captureInput(), { operationId, actor: "project-manager" });
+  expect(established).toMatchObject({ created: false });
+
+  // invariant: The successful no-op OWNS the operation id: another request under it is a
+  // collision, never a fresh write, because a reused id must never carry a different effect.
+  const refused = await refusalOf(() =>
+    captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), { operationId, actor: "project-manager" }),
+  );
+  expect(refused.code).toBe("remote.operation-conflict");
+  expect(refused.message).toContain("frozen under the business request");
+  expectNoChangeClaim(fixture.context);
 });
 
 // ---------------------------------------------------------------------------
