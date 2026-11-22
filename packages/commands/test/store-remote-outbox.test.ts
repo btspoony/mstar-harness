@@ -513,6 +513,16 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(resend).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
 
+    // note: The fixture adopts an issue, so its reviewed repair is an issue-replace that keeps the
+    // adopted portable reference and the history both branches carry.
+    const adopted = frozen.change;
+    if (adopted.kind === "project-replace") throw new Error("the fixture adoption freezes an issue event");
+    const reviewedRepair = (operationId: string) => ({
+      ...frozen,
+      operationId,
+      parents: [head],
+      change: { kind: "issue-replace" as const, issueRef: adopted.issueRef, mstar: adopted.mstar },
+    });
     const resolved = dataOf(await invoke("store.collaboration.remote.outbox-resolve", {
       harness: fixture.harness,
       operation: OPERATIONS.adopt,
@@ -521,7 +531,7 @@ describe("remote outbox commands", () => {
         operationId: OPERATIONS.resolution,
         operator: "ops",
         reason: "the reviewed replacement cites both branches",
-        event: { ...frozen, operationId: OPERATIONS.resolution, parents: [head], change: { ...frozen.change, issueRef: frozen.change.kind === "project-replace" ? undefined : frozen.change.issueRef } },
+        event: reviewedRepair(OPERATIONS.resolution),
       }),
     }, fixture.repo));
     expect(resolved).toMatchObject({ operationId: OPERATIONS.resolution, state: "enqueued" });
@@ -534,7 +544,7 @@ describe("remote outbox commands", () => {
         operationId: "16161616-1616-4616-8616-161616161616",
         operator: "ops",
         reason: "duplicate review",
-        event: { ...frozen, operationId: "16161616-1616-4616-8616-161616161616", parents: [head], change: frozen.change },
+        event: reviewedRepair("16161616-1616-4616-8616-161616161616"),
       }),
     }, fixture.repo);
     expect(twice).toMatchObject({ status: "refused", exitCode: 1 });
@@ -581,7 +591,7 @@ describe("remote outbox commands", () => {
 
     const cases: Array<[string, Record<string, unknown>]> = [
       ["issue.add", { harness: fixture.harness, operationId: OPERATIONS.capture, actor: "project-manager", payload: capturePayload }],
-      ["milestone.add", { harness: fixture.harness, project: IDS.projectId, name: "Outbox milestone", ordinal: 1, expectStore: 0, operation: OPERATIONS.milestone }],
+      ["milestone.add", { harness: fixture.harness, project: IDS.projectId, name: "Outbox milestone", ordinal: 1, expectStore: 1, operation: OPERATIONS.milestone }],
       ["roadmap.replace", {
         harness: fixture.harness,
         project: IDS.projectId,

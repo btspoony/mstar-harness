@@ -133,9 +133,13 @@ async function queueMilestoneWrite(
   projectId: string,
   operationId: string,
   milestoneId: string,
+  expectedStoreRevision: number,
   origin: RemoteWriteOrigin,
   next: (current: Record<string, unknown>, issues: readonly RemoteIssue[]) => Record<string, unknown>,
 ): Promise<MilestoneReceipt> {
+  if (!Number.isSafeInteger(expectedStoreRevision) || expectedStoreRevision < 0) {
+    fail("milestone.invalid-input", "A non-negative expected store revision is required.");
+  }
   // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
   // would close the cycle before the milestone contract initializes.
   const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
@@ -145,6 +149,19 @@ async function queueMilestoneWrite(
     origin,
     next,
     result: milestoneWriteResult(milestoneId),
+    // invariant: `expectedStoreRevision` is the caller's observed base in remote mode too. The
+    // guard runs inside the freeze transaction, so a competing write or a newer observation that
+    // landed after the caller read the project refuses instead of silently superseding it.
+    guard: ({ observationRevision }) => {
+      if (observationRevision === expectedStoreRevision) return;
+      fail(
+        "milestone.revision-conflict",
+        `Project ${projectId}'s observed base is revision ${String(observationRevision)}, not the ` +
+          `${String(expectedStoreRevision)} this write was planned against; another write or observation moved it. ` +
+          `Re-read the project revision with \`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, ` +
+          `then retry with a fresh --operation. Nothing was enqueued.`,
+      );
+    },
   });
   if (intent.confirmed !== null) return confirmedMilestoneReceipt(intent, projectId, milestoneId);
   throw pendingRemoteEffect(intent);
@@ -233,6 +250,7 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
       input.projectId,
       mutation.operationId,
       milestoneId,
+      mutation.expectedStoreRevision,
       { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current) => ({
         ...current,
@@ -258,6 +276,7 @@ export async function updateMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
+      mutation.expectedStoreRevision,
       { verb: "milestone-update", request: { projectId, milestoneId, patch, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current, issues) => {
         const rows = observedMilestones(current);
@@ -297,6 +316,7 @@ export async function removeMilestone(context: StoreContext, projectId: string, 
       projectId,
       mutation.operationId,
       milestoneId,
+      mutation.expectedStoreRevision,
       { verb: "milestone-remove", request: { projectId, milestoneId, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current, issues) => {
         const rows = observedMilestones(current);
