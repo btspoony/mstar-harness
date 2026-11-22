@@ -234,7 +234,7 @@ describe("validateRoadmap — frontmatter schema ()", () => {
     }
   });
 
-  test("created_at is required and must be YYYY-MM-DD", () => {
+  test("created_at must be YYYY-MM-DD when present and absence validates", () => {
     const root = tmpRoot("mstar-roadmap-");
     try {
       const noCreated = writeRoadmap(
@@ -242,7 +242,9 @@ describe("validateRoadmap — frontmatter schema ()", () => {
         "no-created.md",
         "---\nproject_id: p\ntitle: t\nstatus: active\n---\n",
       );
-      expectViolations(validateRoadmap(noCreated), "project.roadmap.missing-created-at");
+      // note: An absent `created_at` is the undated export's own importable form, so the
+      // importer accepts it; only a present value must be a real calendar date.
+      expect(validateRoadmap(noCreated).ok).toBe(true);
 
       const badCreated = writeRoadmap(
         root,

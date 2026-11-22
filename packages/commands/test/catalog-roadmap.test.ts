@@ -677,7 +677,20 @@ describe("catalog and roadmap command families", () => {
     }
     const blank = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness: undated.harness }, invocation(undated.cwd));
     expect(blank.status).toBe("ok");
-    expect(String(blank.data)).not.toContain("created_at");
+    const blankMarkdown = String(blank.data);
+    expect(blankMarkdown).not.toContain("created_at");
+    // invariant: The omitted `created_at` is an importable form, not a dead end: the exported
+    // document round-trips through the same validation `roadmap.replace` runs, so export and
+    // import agree for a roadmap with no usable date.
+    const blankFile = join(undated.cwd, "created-at-blank.md");
+    writeFileSync(blankFile, blankMarkdown);
+    const blankReplaced = await roadmap["roadmap.replace"]!.execute(
+      { project: "proj", file: blankFile, expectProject: 1, expectRoadmap: "absent", operation: "created-at-blank", harness: undated.harness },
+      invocation(undated.cwd),
+    );
+    expect(blankReplaced.status).toBe("ok");
+    const blankReexported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness: undated.harness }, invocation(undated.cwd));
+    expect(String(blankReexported.data)).not.toContain("created_at");
   });
 
   test("roadmap JSON export returns the v2 envelope", async () => {

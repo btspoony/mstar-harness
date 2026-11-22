@@ -8,7 +8,8 @@ export type RoadmapFrontmatter = {
   project_id: string;
   title: string;
   status: "active" | "paused" | "completed";
-  created_at: string;
+  /** Absent when the roadmap records no usable date: the export's own importable form. */
+  created_at?: string;
   milestones?: string[] | null;
   residuals_ref?: string | null;
   [key: string]: unknown;
@@ -107,9 +108,9 @@ export function validateRoadmapContent(content: string, sourceLabel: string): Ro
   } else if (typeof doc.status !== "string" || !(ROADMAP_STATUSES as readonly string[]).includes(doc.status)) {
     violations.push(violation("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} \u2014 got ${JSON.stringify(doc.status)}`));
   }
-  if (doc.created_at === undefined) {
-    violations.push(violation("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
-  } else if (typeof doc.created_at !== "string" || !DATE_RE.test(doc.created_at)) {
+  // note: An absent `created_at` is the export's own form for a roadmap with no usable date,
+  // so absence validates; a present value must still be a real `YYYY-MM-DD` date.
+  if (doc.created_at !== undefined && (typeof doc.created_at !== "string" || !DATE_RE.test(doc.created_at))) {
     violations.push(violation("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
   }
   if (doc.milestones !== undefined && doc.milestones !== null) {
