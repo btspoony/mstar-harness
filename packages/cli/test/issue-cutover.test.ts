@@ -597,3 +597,239 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     expect(found).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The remote observation lane: CLI admission, native detail and the refusal
+// that keeps this v2 cache from performing a cache-only adoption.
+// ---------------------------------------------------------------------------
+
+describe("remote collaboration CLI", () => {
+  const remoteIds = {
+    projectId: "fixture-project",
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    teamId: "22222222-2222-4222-8222-222222222222",
+    providerProjectId: "33333333-3333-4333-8333-333333333333",
+    journalIssueId: "44444444-4444-4444-8444-444444444444",
+    writerId: "55555555-5555-4555-8555-555555555555",
+    providerIssueId: "77777777-7777-4777-8777-777777777777",
+  } as const;
+
+  function remoteRepo(root: string): { repo: string; harness: string; home: string; publish: () => string } {
+    const origin = `https://github.com/remote-cli/fixture.git`;
+    const bare = join(root, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    for (const [key, value] of [["user.name", "Remote CLI"], ["user.email", "remote-cli@example.test"], ["remote.origin.url", origin], [`url.${bare}.insteadOf`, origin]] as const) {
+      execFileSync("git", ["config", key, value], { cwd: repo });
+    }
+    writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+    mkdirSync(join(repo, ".mstar"), { recursive: true });
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    return {
+      repo,
+      harness: join(repo, ".mstar"),
+      home,
+      publish() {
+        const publisher = join(root, "publisher");
+        mkdirSync(publisher, { recursive: true });
+        execFileSync("git", ["init", "-q"], { cwd: publisher });
+        execFileSync("git", ["config", "user.name", "Selector"], { cwd: publisher });
+        execFileSync("git", ["config", "user.email", "selector@example.test"], { cwd: publisher });
+        const payload = {
+          version: 1,
+          repoKey: "github.com/remote-cli/fixture",
+          generation: 3,
+          mode: "remote",
+          phase: "active",
+          projects: [
+            {
+              localProjectId: remoteIds.projectId,
+              provider: "linear",
+              workspaceId: remoteIds.workspaceId,
+              teamId: remoteIds.teamId,
+              projectId: remoteIds.providerProjectId,
+              journalIssueId: remoteIds.journalIssueId,
+              writerId: remoteIds.writerId,
+            },
+          ],
+          previous: null,
+          cutover: null,
+        };
+        writeFileSync(join(publisher, "authority.json"), `${JSON.stringify(payload)}\n`);
+        execFileSync("git", ["add", "authority.json"], { cwd: publisher });
+        execFileSync("git", ["commit", "-q", "-m", "selector"], { cwd: publisher });
+        execFileSync("git", ["push", "-q", "--force", bare, "HEAD:refs/heads/mstar-collaboration-authority"], { cwd: publisher });
+        return execFileSync("git", ["rev-parse", "HEAD"], { cwd: publisher, encoding: "utf8" }).trim();
+      },
+    };
+  }
+
+  test("status|bind|observe admit evidence, native detail is visible, and adopt-issue refuses without mutation", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-remote-cli-")));
+    roots.push(root);
+    const fixture = remoteRepo(root);
+    const commit = fixture.publish();
+    const env = { HOME: fixture.home };
+    const at = new Date(Date.now() - 1_000).toISOString();
+    const scope = {
+      provider: "linear",
+      workspaceId: remoteIds.workspaceId,
+      teamId: remoteIds.teamId,
+      projectId: remoteIds.providerProjectId,
+    };
+    const check = {
+      projectId: remoteIds.projectId,
+      scope,
+      journalIssueId: remoteIds.journalIssueId,
+      checkedAt: at,
+      outcome: {
+        kind: "verified",
+        readerId: "reader-one",
+        writerId: remoteIds.writerId,
+        capabilities: { fullRead: true, appendOnly: true, exactLookup: true, fieldFidelity: true, privateAudience: true },
+      },
+    };
+    const snapshot = {
+      asOf: new Date(Date.now() - 5_000).toISOString(),
+      coverage: { kind: "complete" },
+      project: {
+        projectId: remoteIds.projectId,
+        head: ["1".repeat(64)],
+        binding: scope,
+        milestones: [],
+        roadmap: null,
+        catalogEntities: [
+          { kind: "project", id: remoteIds.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+        ],
+        catalogLinks: [],
+      },
+      issues: [
+        {
+          identity: { ...scope, issueId: remoteIds.providerIssueId },
+          nativeTitle: "Unmarked native issue",
+          nativeStatus: "Done",
+          providerUpdatedAt: at,
+          mstar: null,
+        },
+      ],
+    };
+
+    // note: Before any bind the status discloses an unbound checkout and creates nothing.
+    const before = runCli(["store", "collaboration", "remote", "status", "--harness", fixture.harness], fixture.repo, env);
+    expect(before.exitCode).toBe(0);
+    expect(jsonOf(before).binding).toMatchObject({ state: "unbound" });
+    expect(jsonOf(before).available).toBe(false);
+
+    const bindInput = join(root, "bind.json");
+    writeFileSync(bindInput, JSON.stringify({ version: 1, selectorCommit: commit, generation: 3, checks: [check] }));
+    const bound = runCli(
+      ["store", "collaboration", "remote", "bind", "--harness", fixture.harness, "--input", bindInput],
+      fixture.repo,
+      env,
+    );
+    expect(bound.exitCode).toBe(0);
+    expect(jsonOf(bound).binding).toMatchObject({ version: 3, state: "active", generation: 3, selectorCommit: commit });
+
+    const observeInput = join(root, "observe.json");
+    writeFileSync(
+      observeInput,
+      JSON.stringify({ version: 1, selectorCommit: commit, generation: 3, check, expectRevision: 0, snapshot }),
+    );
+    const ingested = runCli(
+      ["store", "collaboration", "remote", "observe", "--harness", fixture.harness, "--input", observeInput],
+      fixture.repo,
+      env,
+    );
+    expect(ingested.exitCode).toBe(0);
+    expect(jsonOf(ingested)).toMatchObject({ projectId: remoteIds.projectId, revision: 1, completeness: "complete" });
+
+    const status = runCli(["store", "collaboration", "remote", "status", "--harness", fixture.harness], fixture.repo, env);
+    expect(status.exitCode).toBe(0);
+    expect(jsonOf(status)).toMatchObject({
+      available: true,
+      binding: { state: "bound", generation: 3 },
+      projects: [expect.objectContaining({ projectId: remoteIds.projectId, completeness: "complete", freshness: "fresh" })],
+    });
+
+    const listed = runCli(["issue", "list", "--harness", fixture.harness], fixture.repo, env);
+    expect(listed.exitCode).toBe(0);
+    const page = jsonOf(listed);
+    expect(page.total).toBe(0);
+    expect(page.providerIssues).toHaveLength(1);
+
+    const shown = runCli(
+      ["issue", "show", "--id", remoteIds.providerIssueId, "--project", remoteIds.projectId, "--harness", fixture.harness],
+      fixture.repo,
+      env,
+    );
+    expect(shown.exitCode).toBe(0);
+    expect(jsonOf(shown)).toMatchObject({ kind: "provider-only", issueRef: null, nativeStatus: "Done" });
+    const guessed = runCli(["issue", "show", "--id", remoteIds.providerIssueId, "--harness", fixture.harness], fixture.repo, env);
+    expect(guessed.exitCode).toBe(1);
+    expect(jsonOf(guessed).code).toBe("issue.scope-refused");
+
+    // invariant: The unmarked native issue is never closed by its native status.
+    const closed = runCli(
+      [
+        "issue", "close",
+        "--id", remoteIds.providerIssueId,
+        "--operation-id", "88888888-8888-4888-8888-888888888888",
+        "--actor", "project-manager",
+        "--expect", "1",
+        "--payload", JSON.stringify({ reason: "native done", references: ["native-status"], alignmentRef: "fixture" }),
+        "--harness", fixture.harness,
+      ],
+      fixture.repo,
+      env,
+    );
+    expect(jsonOf(closed)).toMatchObject({ code: "collaboration.mode-unavailable" });
+
+    const adoption = {
+      version: 1,
+      kind: "new",
+      capture: {
+        kind: "bug",
+        severity: "high",
+        impact: "i",
+        acceptance: "a",
+        sourceIdentity: "review:cli-adoption",
+        rootCauseKey: "remote.adoption",
+        acceptanceKey: "remote.adoption.stored",
+        occurrenceKey: "cli-adoption-occurrence",
+        sourceKind: "review",
+        location: "fixture",
+        observedBehavior: "The cache refused the adoption.",
+        evidence: ["fixture"],
+        discoveredAt: at,
+      },
+    };
+    const adoptInput = join(root, "adopt.json");
+    writeFileSync(adoptInput, JSON.stringify(adoption));
+    const refused = runCli(
+      [
+        "store", "collaboration", "remote", "adopt-issue",
+        "--project", remoteIds.projectId,
+        "--issue", remoteIds.providerIssueId,
+        "--operation", "99999999-9999-4999-8999-999999999999",
+        "--input", adoptInput,
+        "--harness", fixture.harness,
+      ],
+      fixture.repo,
+      env,
+    );
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused).code).toBe("remote.outbox-unavailable");
+
+    // invariant: No cache-only adoption is performed: the observation revision and the
+    // visible issue set are exactly what the admission recorded.
+    const after = runCli(["store", "collaboration", "remote", "status", "--harness", fixture.harness], fixture.repo, env);
+    expect(jsonOf(after).projects).toEqual([expect.objectContaining({ projectId: remoteIds.projectId, revision: 1, completeness: "complete" })]);
+    const relisted = runCli(["issue", "list", "--harness", fixture.harness], fixture.repo, env);
+    const afterPage = jsonOf(relisted);
+    expect(afterPage.total).toBe(0);
+    expect(afterPage.providerIssues).toHaveLength(1);
+  }, 60_000);
+});

@@ -29,19 +29,32 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
-import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
+import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption } from "./collaboration-remote.js";
+import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
+import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
 import { executionInputHash } from "./coordination.js";
 import { captureProjectionSources, refreshProjections } from "./projection.js";
-import { importRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
+import { importRoadmapAuthority, readRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "./execution-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import {
+  completeSnapshot,
+  createRemoteScope,
+  FIXTURE_AT,
+  negativeCheck,
+  partialSnapshot,
+  positiveCheck,
+  REMOTE_IDS,
+  submission,
+} from "./remote-scope.fixture.js";
 import {
   queryDashboard,
   queryIssueFlow,
@@ -198,8 +211,8 @@ type SeedIssue = {
 
 function seedIssue(db: StoreDb, seed: SeedIssue): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, closed_at, created_at, updated_at, revision, identity_key, milestone_id) " +
-      "values (?, ?, ?, ?, ?, ?, 'impact', ?, ?, ?, ?, ?, 1, ?, ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, closed_at, created_at, updated_at, revision, identity_key, milestone_id, issue_ref) " +
+      "values (?, ?, ?, ?, ?, ?, 'impact', ?, ?, ?, ?, ?, 1, ?, ?, ?)",
   ).run(
     seed.id,
     seed.projectId ?? "proj-a",
@@ -214,6 +227,7 @@ function seedIssue(db: StoreDb, seed: SeedIssue): void {
     RECORDED_AT,
     `identity-${seed.id}`,
     seed.milestoneId ?? null,
+    mintIssueRef(),
   );
   if (seed.importedOccurrence === true) {
     db.prepare(
@@ -930,6 +944,7 @@ describe("issue views", () => {
     const { collaboration: detailEvidence, ...directDetail } = direct;
     expect(envelope.data).toEqual(directDetail);
     expect(detailEvidence.completeness).toBe("complete");
+    if (!("occurrences" in envelope.data)) throw new Error("a local issue detail must carry its occurrence history");
     expect(envelope.data.occurrences).toHaveLength(1);
     await expect(withStoreRead(context, queryDashboard("issue-detail", { id: "I-999999" }))).rejects.toMatchObject({
       code: "issue.not-found",
@@ -1769,5 +1784,250 @@ describe("collaboration projection sources", () => {
     const envelope = await withStoreRead(context, queryDashboard("workflows"));
     expect(envelope.collaboration).toMatchObject({ completeness: "unavailable" });
     expect(envelope.data.items.map((item) => item.id)).toEqual(["wf-read"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote read boundary: admitted evidence only, never a local-row zero
+// ---------------------------------------------------------------------------
+
+describe("remote read boundary", () => {
+  async function boundScope(name: string) {
+    const fixture = createRemoteScope(ROOT, name);
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+    return { fixture, context, commit, check };
+  }
+
+  function cacheState(dbPath: string) {
+    const db = new DatabaseSync(dbPath);
+    try {
+      const count = (table: string): number => (db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n;
+      return {
+        issues: count("issues"),
+        catalog: count("catalog_entities"),
+        bindings: count("remote_bindings"),
+        observations: count("remote_observations"),
+        identities: count("remote_issue_identities"),
+      };
+    } finally {
+      db.close();
+    }
+  }
+
+  test("complete evidence serves findings and keeps an unmarked native issue visible, never counted", async () => {
+    const { context, commit } = await boundScope("remote-read-complete");
+    const page = await withStoreRead(context, queryDashboard("issues"));
+    expect(page.data.total).toBe(1);
+    expect(page.data.items).toEqual([
+      expect.objectContaining({
+        id: REMOTE_IDS.issueRef,
+        issueRef: REMOTE_IDS.issueRef,
+        severity: "high",
+        disposition: "open",
+        nativeStatus: "Todo",
+      }),
+    ]);
+    expect(page.data.providerIssues).toEqual([
+      expect.objectContaining({
+        kind: "provider-only",
+        issueRef: null,
+        title: "Unmarked native issue",
+        nativeStatus: "Done",
+        projectId: REMOTE_IDS.projectId,
+      }),
+    ]);
+    expect(page.collaboration).toMatchObject({
+      source: "remote",
+      completeness: "complete",
+      selectorCommit: commit,
+      generation: 3,
+      providerScopes: [
+        expect.objectContaining({ projectId: REMOTE_IDS.projectId, completeness: "complete", asOf: expect.any(String) }),
+      ],
+    });
+
+    // invariant: The stable IssueRef resolves; the unmarked issue is visible ONLY by exact provider id + project.
+    const detail = await withStoreRead(context, queryDashboard("issue-detail", { id: REMOTE_IDS.issueRef }));
+    expect(detail.data).toMatchObject({
+      id: REMOTE_IDS.issueRef,
+      issueRef: REMOTE_IDS.issueRef,
+      nativeStatus: "Todo",
+      providerIdentity: expect.objectContaining({ issueId: REMOTE_IDS.markedIssueId }),
+    });
+    const native = await withStoreRead(
+      context,
+      queryDashboard("issue-detail", { id: REMOTE_IDS.providerOnlyIssueId, projectId: REMOTE_IDS.projectId }),
+    );
+    expect(native.data).toMatchObject({ kind: "provider-only", issueRef: null, nativeStatus: "Done", projectId: REMOTE_IDS.projectId });
+    await expect(
+      withStoreRead(context, queryDashboard("issue-detail", { id: REMOTE_IDS.providerOnlyIssueId })),
+    ).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    const listed = await listIssues(context, {});
+    expect(listed.total).toBe(1);
+    expect(listed.providerIssues).toHaveLength(1);
+    expect(await showIssue(context, REMOTE_IDS.issueRef)).toMatchObject({ id: REMOTE_IDS.issueRef });
+    expect(await showIssue(context, REMOTE_IDS.providerOnlyIssueId, REMOTE_IDS.projectId)).toMatchObject({
+      kind: "provider-only",
+      nativeStatus: "Done",
+    });
+    // invariant: A native `Done` never closes anything: remote writes are not this cache's.
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: randomUUID(), actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
+  });
+
+  test("a partial, negative or stale scope refuses required views instead of answering zero", async () => {
+    const { context, commit, check } = await boundScope("remote-read-partial");
+    await ingestRemoteObservation(context, submission(commit, check, partialSnapshot(check), 1));
+    await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({
+      code: "collaboration.observation-incomplete",
+    });
+    await expect(withStoreRead(context, queryOpenIssueRollup())).rejects.toMatchObject({
+      code: "collaboration.observation-incomplete",
+    });
+    await expect(withStoreRead(context, queryMilestones(REMOTE_IDS.projectId))).rejects.toMatchObject({
+      code: "collaboration.observation-incomplete",
+    });
+
+    // note: A negative check persists its invalidation and returns the named refusal.
+    const denied = negativeCheck({ checkedAt: new Date().toISOString() });
+    await expect(ingestRemoteObservation(context, submission(commit, denied, null, 2))).rejects.toMatchObject({
+      code: "remote.denied",
+    });
+    await expect(withStoreRead(context, queryDashboard("issue-flow"))).rejects.toMatchObject({ code: "remote.unavailable" });
+  });
+
+  test("findings count MStar subjects only, and plan completion re-samples the same remote scope", async () => {
+    const { context, commit, check } = await boundScope("remote-read-findings");
+    const observation = await observePlanFindings(context, "20261122-remote-authority");
+    expect(observation.source).toBe("remote");
+    expect(observation.open).toEqual([{ id: REMOTE_IDS.issueRef, severity: "high" }]);
+    const gate = await findingsCleanupGate(context, "20261122-remote-authority", { mode: "zero-residual" });
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((violation) => violation.message).join(" ")).toContain(REMOTE_IDS.issueRef);
+    expect(gate.violations.map((violation) => violation.message).join(" ")).not.toContain(REMOTE_IDS.providerOnlyIssueId);
+
+    await expect(assertPlanFindingsCurrent(context, observation)).resolves.toBeUndefined();
+
+    // note: A partial refresh refuses the findings read, never "no findings".
+    await ingestRemoteObservation(context, submission(commit, check, partialSnapshot(check), 1));
+    await expect(observePlanFindings(context, "20261122-remote-authority")).rejects.toMatchObject({
+      code: "collaboration.observation-incomplete",
+    });
+
+    // note: A complete replacement moves the aggregate revision, so the pre-commit
+    // re-sample of a completion record refuses as stale.
+    const refreshed = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, refreshed, completeSnapshot(refreshed), 2));
+    await expect(assertPlanFindingsCurrent(context, observation)).rejects.toMatchObject({
+      code: "collaboration.observation-stale",
+    });
+  });
+
+  test("project, milestone, roadmap and flow reads use admitted snapshot evidence", async () => {
+    const { context } = await boundScope("remote-read-views");
+    const projects = await withStoreRead(context, queryDashboard("projects"));
+    expect(projects.data).toEqual({
+      items: [
+        {
+          project: { id: REMOTE_IDS.projectId, title: "Fixture project", description: null, lifecycle: "active" },
+          openIssues: 1,
+        },
+      ],
+      total: 1,
+    });
+
+    const milestones = await withStoreRead(context, queryMilestones(REMOTE_IDS.projectId));
+    expect(milestones.data.milestones).toEqual([
+      expect.objectContaining({ milestoneId: "milestone-1", totalIssues: 1, openIssues: 1, resolvedIssues: 0 }),
+    ]);
+    expect(milestones.data.issues).toEqual([expect.objectContaining({ id: REMOTE_IDS.issueRef, milestoneId: "milestone-1" })]);
+
+    const binding = await readProjectBinding(context, REMOTE_IDS.projectId);
+    expect(binding).toMatchObject({
+      kind: "bound",
+      binding: {
+        provider: "linear",
+        workspace: REMOTE_IDS.workspaceId,
+        team: REMOTE_IDS.teamId,
+        remoteProject: REMOTE_IDS.providerProjectId,
+      },
+    });
+
+    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: REMOTE_IDS.projectId }));
+    expect(roadmap.data).toMatchObject({
+      projectId: REMOTE_IDS.projectId,
+      catalog: { id: REMOTE_IDS.projectId, source: "remote", relativePath: null },
+      authority: { state: "present", revision: 2 },
+    });
+    const authority = await readRoadmapAuthority(context, REMOTE_IDS.projectId);
+    expect(authority.roadmap).toMatchObject({ projectId: REMOTE_IDS.projectId, revision: 2 });
+
+    const flow = await withStoreRead(context, queryDashboard("issue-flow"));
+    expect(flow.data.currentOpen).toBe(1);
+    expect(flow.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+  });
+
+  test("adoption validates the exact unmarked issue and refuses outbox-unavailable without mutation", async () => {
+    const { context } = await boundScope("remote-read-adopt");
+    const dbPath = resolveCollaborationLocation(context).dbPath;
+    const before = cacheState(dbPath);
+    const capture = {
+      kind: "bug",
+      severity: "high",
+      impact: "i",
+      acceptance: "a",
+      sourceIdentity: "review:adoption",
+      rootCauseKey: "remote.adoption",
+      acceptanceKey: "remote.adoption.stored",
+      occurrenceKey: "adoption-occurrence",
+      sourceKind: "review",
+      location: "packages/engine/src/collaboration-remote.ts",
+      observedBehavior: "The cache refused an adoption intent.",
+      evidence: ["fixture"],
+      discoveredAt: FIXTURE_AT,
+    };
+    const adoption = { version: 1, kind: "new", capture };
+
+    await expect(
+      prepareRemoteAdoption(context, {
+        projectId: REMOTE_IDS.projectId,
+        issueId: REMOTE_IDS.providerOnlyIssueId,
+        operationId: randomUUID(),
+        adoption,
+      }),
+    ).rejects.toMatchObject({ code: "remote.outbox-unavailable" });
+
+    // invariant: An already marked issue refuses; a title is never accepted from the caller.
+    await expect(
+      prepareRemoteAdoption(context, {
+        projectId: REMOTE_IDS.projectId,
+        issueId: REMOTE_IDS.markedIssueId,
+        operationId: randomUUID(),
+        adoption,
+      }),
+    ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
+    await expect(
+      prepareRemoteAdoption(context, {
+        projectId: REMOTE_IDS.projectId,
+        issueId: REMOTE_IDS.providerOnlyIssueId,
+        operationId: randomUUID(),
+        adoption: { ...adoption, capture: { ...capture, title: "forged title" } },
+      }),
+    ).rejects.toMatchObject({ code: "remote.input-invalid" });
+
+    // invariant: No cache-only adoption exists: the local tables and every remote row are unchanged.
+    expect(cacheState(dbPath)).toEqual(before);
   });
 });

@@ -11,6 +11,14 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import {
+  completeSnapshot,
+  createRemoteScope,
+  positiveCheck,
+  REMOTE_IDS,
+  submission,
+} from "./remote-scope.fixture.js";
 import { readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -28,6 +36,7 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  showIssue,
   reopenIssue,
   computeIdentityKey,
   linkIssue,
@@ -1593,5 +1602,49 @@ describe("issue action vocabulary", () => {
       const disposition = ISSUE_ACTIONS[verb].disposition;
       return disposition === null ? [] : [[verb, disposition]];
     })).toEqual([["close", "resolved"], ["waive", "waived"], ["duplicate", "duplicate"], ["supersede", "superseded"]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remote selection: portable reference, native detail and a refused write path
+// ---------------------------------------------------------------------------
+
+describe("remote issue reads", () => {
+  test("a remote checkout reads admitted findings and keeps an unmarked issue visible", async () => {
+    const fixture = createRemoteScope(ROOT, "issue-remote");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const page = await listIssues(context, {});
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ id: REMOTE_IDS.issueRef, issueRef: REMOTE_IDS.issueRef, nativeStatus: "Todo" });
+    expect(page.providerIssues).toEqual([
+      expect.objectContaining({ kind: "provider-only", issueRef: null, nativeStatus: "Done" }),
+    ]);
+    expect(page.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    const shown = await showIssue(context, REMOTE_IDS.issueRef);
+    expect(shown).toMatchObject({ issueRef: REMOTE_IDS.issueRef, projectId: REMOTE_IDS.projectId });
+    const native = await showIssue(context, REMOTE_IDS.providerOnlyIssueId, REMOTE_IDS.projectId);
+    expect(native).toMatchObject({ kind: "provider-only", issueRef: null, nativeStatus: "Done" });
+
+    // invariant: The unmarked issue has no MStar detail; a display id and a guessed project never resolve.
+    await expect(getIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(showIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(showIssue(context, "I-000001", REMOTE_IDS.projectId)).rejects.toMatchObject({ code: "issue.scope-refused" });
+
+    // invariant: A native `Done` is not an MStar transition, and remote writes are not this cache's.
+    await expect(
+      closeIssue(
+        context,
+        REMOTE_IDS.issueRef,
+        "resolved",
+        { reason: "native done", references: ["native-status"], alignmentRef: "fixture" },
+        { operationId: crypto.randomUUID(), actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.mode-unavailable" });
   });
 });

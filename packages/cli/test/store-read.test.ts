@@ -436,3 +436,13 @@ describe("dashboard views over a real store", () => {
     expect(executionAsOf).toBeGreaterThanOrEqual(collaborationAsOf);
   });
 });
+// ---------------------------------------------------------------------------
+// Remote native issue detail: the transport carries the project it addresses
+// ---------------------------------------------------------------------------
+
+test("dashboard issue-detail accepts the project a remote native record needs", () => {
+  const filters = dashboardFilters("issue-detail", { project: "fixture-project" }, "11111111-1111-4111-8111-111111111111");
+  expect(filters).toEqual({ id: "11111111-1111-4111-8111-111111111111", projectId: "fixture-project" });
+  // invariant: A local display id keeps its existing filter shape (no project required).
+  expect(dashboardFilters("issue-detail", {}, "I-000001")).toEqual({ id: "I-000001" });
+});

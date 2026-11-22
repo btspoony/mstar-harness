@@ -46,7 +46,8 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
-import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   openCollaborationStore,
   readCollaborationObservation,
@@ -233,7 +234,7 @@ export function validateProjectRegister(doc: unknown): GateResult {
  * (beside the handle that builds them) and re-exported here for the existing
  * domain imports.
  */
-export type { CollaborationObservation, CollaborationScope } from "./collaboration-store.js";
+export type { CollaborationObservation, CollaborationProviderScope, CollaborationScope } from "./collaboration-store.js";
 
 /** A complete plan-scoped findings observation: the open local issues it read. */
 export type FindingsObservation = Extract<CollaborationObservation, { completeness: "complete" }> &
@@ -253,6 +254,25 @@ export type FindingsObservation = Extract<CollaborationObservation, { completene
 export async function observePlanFindings(context: StoreContext, planId: string): Promise<FindingsObservation> {
   if (typeof planId !== "string" || planId.trim() === "") {
     throw new Error("observePlanFindings requires a non-empty plan id");
+  }
+  // invariant: A remote selection reads its MStar findings from admitted snapshots. An
+  // unmarked native issue is not a finding, and a partial/missing/stale observation
+  // refuses instead of reading as "no findings".
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    // note: Dynamic on purpose — `path.ts` imports this module, so a static import of the
+    // remote read boundary would close a module cycle before the issue
+    // vocabulary initializes.
+    const { openRemoteReadView, remotePlanFindings } = await import("./collaboration-remote-read.js");
+    const view = await openRemoteReadView(context);
+    const { observation, open } = remotePlanFindings(view, planId);
+    if (observation.completeness !== "complete") {
+      throw new StoreError(
+        "collaboration.observation-incomplete",
+        `The remote findings scope for plan ${planId} is ${observation.completeness}; a findings decision needs one complete observation of every selected project.`,
+        { planId },
+      );
+    }
+    return { ...observation, open };
   }
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -545,6 +565,37 @@ export async function readProjectBinding(
 ): Promise<ProjectBindingRead & { collaboration: CompleteCollaborationObservation }> {
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
+  }
+  const id = projectId.trim();
+  // invariant: In remote mode the provider tuple is the selected binding, read from the
+  // admitted snapshot; the local `project_bindings` table is never consulted.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const { openRemoteReadView, remoteCollaborationObservation, requireRemoteProjects } = await import(
+      "./collaboration-remote-read.js"
+    );
+    const view = await openRemoteReadView(context);
+    const evidence = requireRemoteProjects(view, [id])[0]!;
+    const collaboration = remoteCollaborationObservation(view, { kind: "project", key: id });
+    if (collaboration.completeness !== "complete") {
+      throw new StoreError(
+        "collaboration.observation-incomplete",
+        `The remote binding for project ${id} is not a complete, current observation.`,
+        { projectId: id },
+      );
+    }
+    return {
+      kind: "bound",
+      binding: {
+        projectId: id,
+        provider: "linear",
+        workspace: evidence.scope.workspaceId,
+        team: evidence.scope.teamId,
+        remoteProject: evidence.scope.projectId,
+        revision: Math.max(1, evidence.revision),
+        updatedAt: evidence.asOf ?? "",
+      },
+      collaboration,
+    };
   }
   const handle = await openCollaborationStore(context, "read");
   try {

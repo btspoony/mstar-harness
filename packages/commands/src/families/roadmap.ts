@@ -141,7 +141,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number | null): stri
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
     `title: ${JSON.stringify(roadmap.content?.frontmatter?.title ?? roadmap.catalog.title)}`,
     `status: ${JSON.stringify(roadmap.content?.frontmatter?.status ?? "active")}`,
-    `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? roadmap.catalog.registeredAt.slice(0, 10))}`,
+    `created_at: ${JSON.stringify(roadmap.content?.frontmatter?.created_at ?? (roadmap.catalog.registeredAt ?? roadmap.catalog.updatedAt ?? "").slice(0, 10))}`,
     "---",
     "",
     "# Roadmap",

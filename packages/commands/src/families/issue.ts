@@ -6,6 +6,7 @@ import {
   captureIssue,
   closeIssue,
   getIssue,
+  showIssue,
   ISSUE_ACTION_NAMES,
   ISSUE_ACTIONS,
   ISSUE_DISPOSITIONS,
@@ -196,7 +197,7 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       if (id === "issue.export" && input.id !== undefined && input.id.trim() !== "") return ok(id, await getIssue(context, input.id.trim()));
       return ok(id, page);
     }
-    if (id === "issue.show") return ok(id, await getIssue(context, requiredId(input)));
+    if (id === "issue.show") return ok(id, await showIssue(context, requiredId(input), input.project));
     const runMutation = async (action: (write: MutationContext) => Promise<unknown>): Promise<CommandEnvelope<unknown>> => {
       const write = mutation(input);
       const receipt = await action(write);

@@ -136,6 +136,7 @@ export type {
   RemoteProjectStatus,
   RemoteRoadmap,
   RemoteSnapshot,
+  RemoteAdoptionRequest,
   RemoteStatus,
   ScopeCapabilities,
   ScopeCheck,
@@ -146,8 +147,19 @@ export type {
 export {
   bindRemoteAuthority,
   ingestRemoteObservation,
+  prepareRemoteAdoption,
   readRemoteStatus,
 } from "./collaboration-remote.js";
+// note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
+// refuses a failed/partial/stale required scope rather than reading local rows.
+export type {
+  RemoteCatalogLinks,
+  RemoteCatalogRow,
+  RemoteIssueRead,
+  RemoteProjectEvidence,
+  RemoteReadView,
+} from "./collaboration-remote-read.js";
+export { openRemoteReadView } from "./collaboration-remote-read.js";
 // note: The one-way authority cutover: reviewed manifest, verified staged copy,
 // activation claim, durable source fence, guarded publication and replay.
 export type {
@@ -380,6 +392,7 @@ export {
 export type {
   BindingErrorCode,
   CollaborationObservation,
+  CollaborationProviderScope,
   CollaborationScope,
   FindingsObservation,
   ProjectBinding,
@@ -820,6 +833,7 @@ export {
   closeIssue,
   computeIdentityKey,
   getIssue,
+  showIssue,
   linkIssue,
   listIssues,
   moveIssue,

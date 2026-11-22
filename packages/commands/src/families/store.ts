@@ -22,6 +22,10 @@ import {
   restoreCollaborationBackup,
   retireStoreSources,
   upgradeStoreMinimal,
+  bindRemoteAuthority,
+  ingestRemoteObservation,
+  prepareRemoteAdoption,
+  readRemoteStatus,
   type ActivationAttestation,
   type CutoverManifest,
   type MigrationManifest,
@@ -62,10 +66,15 @@ const inputSchema = z.object({
   ackSkipWorkflow: z.array(z.string()).optional(),
   ackSkipCompass: z.array(z.string()).optional(),
   delivery: z.array(deliveryDeclarationSchema).optional(),
+  input: z.string().optional(),
+  project: z.string().optional(),
+  issue: z.string().optional(),
+  operation: z.string().optional(),
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
 const collaborationVerbs = ["plan", "apply", "activate", "restore", "adopt"] as const;
+const remoteVerbs = ["status", "bind", "observe", "adopt-issue"] as const;
 
 /** note: The one flag table both store families publish. */
 const optionFlags: Record<keyof StoreInput, string> = {
@@ -77,6 +86,10 @@ const optionFlags: Record<keyof StoreInput, string> = {
   ackSkipWorkflow: "--ack-skip-workflow <id...>",
   ackSkipCompass: "--ack-skip-compass <iteration-id...>",
   delivery: "--delivery <json...>",
+  input: "--input <file|->",
+  project: "--project <local-project-id>",
+  issue: "--issue <provider-issue-id>",
+  operation: "--operation <uuid>",
 };
 
 function ok(id: string, data: unknown): CommandEnvelope {
@@ -126,7 +139,13 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
                       ? "This checkout has no collaboration authority yet: run mstar store init for a fresh scope, mstar store upgrade --operator <name> for file-era execution state, or mstar store collaboration restore --backup <abs-manifest> for a verified pair."
                       : code === "collaboration.unreadable" || code === "collaboration.stale-binding"
                         ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id>, and store init is never the binding route; a bound checkout is never retargeted by editing its mode."
-                        : code === "store.upgrade-attestation-missing"
+        : code === "remote.selector-unavailable" || code === "remote.unavailable" || code === "collaboration.observation-incomplete" || code === "collaboration.observation-stale"
+          ? "Restore Git access to the canonical origin and the protected selector ref, then inspect mstar store collaboration remote status --harness <abs>; the Host Agent refreshes the scope and resubmits mstar store collaboration remote observe --input <file|->. A required read is never answered from local rows."
+          : code === "remote.outbox-unavailable"
+            ? "This checkout's v2 cache has no durable outbox, so an adoption intent cannot be recorded and nothing was written; no cache-only adoption exists. Confirm the observed native issue with mstar issue show --id <provider-issue-id> --project <local-project-id>; the durable adoption intent arrives with the remote outbox plan."
+            : code === "remote.input-invalid" || code === "remote.scope-mismatch" || code === "remote.denied" || code === "remote.revoked" || code === "remote.unsafe-fidelity"
+              ? "Correct the document or the host's verified tenant/team/project scope, permissions and field fidelity, then resubmit mstar store collaboration remote bind|observe --input <file|-> for the checked selector commit and generation."
+              : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
           : code === "store.runtime-unsupported"
@@ -528,6 +547,120 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
   };
 }
 
+/**
+ * Read a JSON argument for a remote verb: a file path, or `-` for stdin. An
+ * unreadable path or a body that is not JSON is a USAGE refusal (exit 2) naming
+ * the flag; no store work has happened yet.
+ */
+async function readRemoteJson(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
+  if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
+  let raw: string;
+  if (value === "-") {
+    raw = await invocation.effects.readInput();
+  } else {
+    try {
+      raw = readFileSync(value, "utf8");
+    } catch (error) {
+      throw new SddScriptError(`${flag} ${value} cannot be read: ${error instanceof Error ? error.message : String(error)}`, 2);
+    }
+  }
+  if (raw.trim() === "") throw new SddScriptError(`${flag} received no content; pass a JSON document`, 2);
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new SddScriptError(`${flag} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
+  }
+}
+
+/**
+ * The remote observation lane: `status|bind|observe|adopt-issue` under
+ * `store collaboration remote`. `--harness` names this checkout's harness
+ * explicitly, exactly like the collaboration cutover family; no provider call,
+ * credential or transport exists here.
+ */
+async function executeRemote(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const verb = id.slice("store.collaboration.remote.".length) as (typeof remoteVerbs)[number];
+  try {
+    const target = absoluteFile(required(input.harness, "--harness"), "--harness");
+    const context: StoreContext = { harnessDir: path.resolve(target) };
+    if (verb === "status") {
+      return ok(id, await readRemoteStatus(context, input.project));
+    }
+    if (verb === "bind") {
+      const batch = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await bindRemoteAuthority(context, batch));
+    }
+    if (verb === "observe") {
+      const submission = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await ingestRemoteObservation(context, submission));
+    }
+    if (verb === "adopt-issue") {
+      const adoption = await readRemoteJson(invocation, input.input, "--input");
+      return ok(id, await prepareRemoteAdoption(context, {
+        projectId: required(input.project, "--project"),
+        issueId: required(input.issue, "--issue"),
+        operationId: required(input.operation, "--operation"),
+        adoption,
+      }));
+    }
+    throw new SddScriptError(`unknown store collaboration remote verb ${verb}`, 2);
+  } catch (error) {
+    return refused(id, error);
+  }
+}
+
+function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition<StoreInput, unknown> {
+  const id = `store.collaboration.remote.${verb}`;
+  const optionsByVerb: Record<(typeof remoteVerbs)[number], (keyof StoreInput)[]> = {
+    status: ["harness", "project"],
+    bind: ["harness", "input"],
+    observe: ["harness", "input"],
+    "adopt-issue": ["harness", "project", "issue", "operation", "input"],
+  };
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
+  const optionHelp: Partial<Record<keyof StoreInput, string>> = {
+    harness: "absolute path to this checkout's harness (the operation target, never discovered from the working directory)",
+    project: "the local project id this cache binds; native issue detail and adoption require it, and it is never guessed",
+    issue: "the exact immutable Linear provider issue id (a UUID, never a display id such as ENG-42)",
+    operation: "caller-owned UUID for this adoption intent; unique across the repository",
+    input: "path to the strict JSON document, or - for stdin",
+  };
+  const descriptions: Record<(typeof remoteVerbs)[number], string> = {
+    status:
+      "Report the checked selector/phase, this checkout's remote binding, and each bound project's latest revision, completeness, asOf, provider scope and access verdict. Reads and creates nothing; no provider content is printed.",
+    bind:
+      "Verify one ScopeCheck per selected project and create or advance this checkout's private remote cache lane. Every check must prove the exact selected tenant/team/project and all five capabilities; the lane records the reviewed selector commit/generation.",
+    observe:
+      "Accept one verification/observation submission and replace one project's cache evidence atomically. A negative check records the invalidation and returns its named refusal; a partial snapshot is stored as partial. It never creates or adopts an issue.",
+    "adopt-issue":
+      "Validate a strict adoption document against the exact observed, UNMARKED native issue. This v2 cache has no durable outbox, so the verb refuses remote.outbox-unavailable and writes nothing: no cache-only adoption exists. A title, a native status or an already marked issue never adopts.",
+  };
+  const effects: Record<(typeof remoteVerbs)[number], readonly CommandEffect[]> = {
+    status: ["read"],
+    bind: ["read", "write"],
+    observe: ["read", "write"],
+    "adopt-issue": ["read"],
+  };
+  const options = optionKeys.map((key) => ({
+    key,
+    flags: optionFlags[key],
+    required: key === "harness" || (verb === "adopt-issue" && (key === "project" || key === "issue" || key === "operation" || key === "input")),
+    ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
+  }));
+  return {
+    id,
+    cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
+    input: inputSchema.pick(shape),
+    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
+    rootInputs: [],
+    output: commandEnvelopeSchema,
+    effects: effects[verb],
+    description: descriptions[verb],
+    execute: (input, invocation) => executeRemote(id, input, invocation),
+  };
+}
+
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
@@ -586,5 +719,6 @@ export function getStoreCommandDefinitions(): readonly CommandDefinition[] {
   return [
     ...verbs.map((verb) => cliDefinition(`store.${verb}`)),
     ...collaborationVerbs.map((verb) => collaborationDefinition(verb)),
+    ...remoteVerbs.map((verb) => remoteDefinition(verb)),
   ];
 }

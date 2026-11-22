@@ -7,7 +7,13 @@ import {
   withCollaborationWrite,
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
-import type { StoreContext, StoreDb } from "./store-db.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import {
+  openRemoteReadView,
+  remoteCollaborationObservation,
+  remoteRoadmapRead,
+} from "./collaboration-remote-read.js";
+import { type StoreContext, type StoreDb, StoreError } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
 export type RoadmapExpected = number | "absent";
@@ -124,6 +130,18 @@ export async function readRoadmapAuthority(
   context: StoreContext,
   projectId: string,
 ): Promise<RoadmapRead & { collaboration: CompleteCollaborationObservation }> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const view = await openRemoteReadView(context);
+    const collaboration = remoteCollaborationObservation(view, { kind: "project", key: projectId });
+    if (collaboration.completeness !== "complete") {
+      throw new StoreError(
+        "collaboration.observation-incomplete",
+        `The remote roadmap scope for project ${projectId} is not a complete, current observation.`,
+        { projectId },
+      );
+    }
+    return { ...remoteRoadmapRead(view, projectId), collaboration };
+  }
   const handle = await openCollaborationStore(context, "read");
   try {
     handle.db.exec("begin");
@@ -142,6 +160,10 @@ export async function readRoadmapAuthority(
 }
 
 export async function listRoadmapAuthority(context: StoreContext): Promise<RoadmapRead[]> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const view = await openRemoteReadView(context);
+    return view.projectIds.map((projectId) => remoteRoadmapRead(view, projectId));
+  }
   const handle = await openCollaborationStore(context, "read");
   try {
     handle.db.exec("begin");
