@@ -293,8 +293,10 @@ export class RemoteCollaborationFixture {
   private readonly publisher: string;
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
-  /** note: The provider records this host actually holds; only `send` appends, only `lookup` reads. */
+  /** note: The provider records a lookup can observe; `send` appends and `withheld` holds the rest. */
   private readonly effects: ProviderEffect[] = [];
+  /** note: Records the provider holds while a stale read cannot observe them yet; they are never lost. */
+  private readonly withheld: ProviderEffect[] = [];
   /** note: Records the provider already held before this run; a traversal renders their complete history. */
   private readonly seeded: Array<Readonly<{ issueId: string; record: ProviderIssueRecord }>> = [];
   /** note: The portable project document a traversal renders; the default carries empty history. */
@@ -530,31 +532,34 @@ export class RemoteCollaborationFixture {
   }
 
   /**
-   * note: The provider's own history for one attempt: exactly one record, a duplicate it applied
-   * twice, or none yet. It is provider state, never a host send, so `providerCalls` does not grow
-   * and a lookup reports `not-found`, `ambiguous` or `confirmed` from the cardinality alone.
+   * note: What a lookup can observe of one attempt, while the record its single send produced
+   * stays in provider state: a stale view that has not exposed it yet, exactly that record, or
+   * that record plus the duplicate the provider applied under a second immutable id. Recovery
+   * must name the record the send produced, never one reinserted to make confirmation pass.
    */
-  setAttemptHistory(permit: OutboxPermit, records: number): void {
+  setAttemptObservable(permit: OutboxPermit, observable: "stale" | "sole" | "duplicated"): void {
+    const owned = (effect: ProviderEffect): boolean =>
+      effect.operationId === permit.operationId && effect.attemptId === permit.attemptId;
+    // note: Restore every withheld record first, then rebuild only the view the caller asks for.
+    for (let index = this.withheld.length - 1; index >= 0; index -= 1) {
+      const effect = this.withheld[index]!;
+      if (!owned(effect)) continue;
+      this.withheld.splice(index, 1);
+      this.effects.push(effect);
+    }
+    const [record] = this.effects.filter(owned);
+    if (record === undefined) {
+      throw new Error(`fixture: the provider holds no record for attempt ${permit.attemptId}`);
+    }
+    // note: Everything past the first record is a duplicate application; fold it back to one.
     for (let index = this.effects.length - 1; index >= 0; index -= 1) {
       const effect = this.effects[index]!;
-      if (effect.operationId === permit.operationId && effect.attemptId === permit.attemptId) {
-        this.effects.splice(index, 1);
-      }
+      if (owned(effect) && effect.recordId !== record.recordId) this.effects.splice(index, 1);
     }
-    for (let index = 0; index < records; index += 1) {
-      this.effects.push({
-        operationId: permit.operationId,
-        attemptId: permit.attemptId,
-        recordId: randomUUID(),
-        identity: {
-          provider: "linear",
-          workspaceId: permit.binding.workspaceId,
-          teamId: permit.binding.teamId,
-          projectId: permit.binding.projectId,
-          issueId: permit.frozenRequest.target ?? randomUUID(),
-        },
-        event: permit.frozenRequest.event as RemoteEvent,
-      });
+    if (observable === "duplicated") this.effects.push({ ...record, recordId: randomUUID() });
+    if (observable === "stale") {
+      this.effects.splice(this.effects.indexOf(record), 1);
+      this.withheld.push(record);
     }
   }
 
