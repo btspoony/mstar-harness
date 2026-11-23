@@ -53,6 +53,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 Terminal wri
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch、control root + integration worktree checklist） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.5：entry checklist、specs/ADR promotion、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`mstar-roles/references/project-manager/pr-delivery.md`**（`## Publish the PR`、`## Push cadence`、`## Review paths and surfaces`、`## Merge-ready loop`、`## Merge-ready checklist`、`## Merge authorization`、`## Unresolved conversation gate`） |
+| **stack**（迭代按层开 PR、追踪与整链收尾） | **`references/pr-stack.md`**（层级切分与 `iteration-stack/<iteration-id>/sNN` 命名、tracker、landing/propagation、compass `PR stack` 记录与整链证明） |
 | **Phase 6 / post-merge close**（PR merged 后关闭 lifecycle） | **`mstar-roles/references/project-manager/workflow-close.md`**（Entry（proved merge）→ Terminal write → Unregister → Projection reconciliation → Cleanup handoff：`mstar worktree cleanup`，dry-run 默认，`--apply` 才变更） |
 | **PR helper discovery**（仅 command 层按需） | **`references/pr-helper-discovery.md`**（babysit / greploop 发现） |
 

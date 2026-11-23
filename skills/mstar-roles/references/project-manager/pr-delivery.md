@@ -4,11 +4,15 @@
 
 | Caller | Route inputs |
 |---|---|
-| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.integration` (the PR head), `branch.target` (the base) and `integration_worktree_path` — mirrored in the compass frontmatter; the compass `pr_merge_policy` selects the review path. |
+| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.target` and `integration_worktree_path` — mirrored in the compass frontmatter; each PR's head is its own layer ref and its base is the live predecessor layer, per `mstar-iteration/references/pr-stack.md`; the compass `pr_merge_policy` selects the review path and the compass `PR stack` table records the chain. |
 | Standalone development | Its registered delivery branch and target. |
 | Report-only | None: a report-only workflow has no PR and does not enter this file. |
 
 **Authorization source (one statement for both callers).** An iteration takes `pr_merge_policy` from its compass — exactly one of `reviewed-auto`, `reviewed-bot` or `owner-gated`, confirmed with the user at direction lock and never defaulted; a missing value → STOP and return to the iteration's direction-lock step. A standalone development PR takes the project's merge requirements plus the owner's approval naming the PR and head; absent → STOP and ask, and no compass is invented. **Route entry.** Iteration: its iteration-close exit checklist is all `[x]` and the close commit is pushed to `spec_integration_branch`; after its PR exists, the loop starts on that PR. Standalone: the compound disposition is recorded and the delivery branch head is finalized.
+
+## Stacked PRs (iteration only)
+
+An iteration is delivered as a chain of stacked PRs, never as one aggregate PR: each PR's head is a layer ref and its base is its live predecessor layer, or `branch.target` after a merged prefix — `mstar-iteration/references/pr-stack.md` owns slicing, order, tracking, prefix approval, per-layer reconciliation and whole-chain proof, while everything else on this page applies per PR (publish, push cadence, review paths and surfaces, merge-ready, authorization, head reconciliation, the conversation gate), and where it names `spec_integration_branch` as an iteration PR's head, read that layer's ref. The single-PR predicates below stay whole for a standalone development PR and for a chain's last layer.
 
 ## Publish the PR
 
