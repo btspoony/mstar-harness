@@ -65,7 +65,8 @@ import {
   bindingInputOf,
   canonicalRegistrationIdentity,
   normalizeIterationPlanPaths,
-  readPendingRegistration,
+  pendingRegistrationOf,
+  readSplitPendingRegistration,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
   workflowEntryOf,
@@ -355,12 +356,12 @@ export async function commitExecutionRegistration(
     );
   }
   // invariant: A legacy operation still in flight must be settled explicitly before this
-  // registration can commit; it never adopts legacy journal state. The journal is
-  // resolved from whichever file OWNS it, outside any transaction: after the
-  // reviewed cutover the collaboration lane holds `catalog_operations`, so the
-  // execution connection below cannot read it.
-  const pending = await readPendingRegistration(context, request.workflow.workflowId);
-  if (pending !== null) refusePendingRegistration(request.workflow.workflowId, pending);
+  // registration can commit; it never adopts legacy journal state. A SPLIT owner (the
+  // lane, after the reviewed cutover) is READ here — it is not under this
+  // transaction's lock, so it cannot be read inside it — while the refusal itself is
+  // decided inside the transaction, after the root-token CAS. A combined source
+  // answers `undefined` and reads its journal in that original in-transaction position.
+  const splitPending = await readSplitPendingRegistration(context, request.workflow.workflowId);
 
   // invariant: The witness preflight: a registration publishes the reviewed delta into the
   // repository's collaboration lane, so that lane must be the ACTIVE one this
@@ -415,6 +416,13 @@ export async function commitExecutionRegistration(
       key: [],
       revision: tx.execution.revision,
     });
+
+    // invariant: The pending journal is decided HERE, after the root-token CAS, so a stale
+    // token keeps reporting its conflict instead of the journal verdict — the ordering a
+    // combined source has always had. A split owner's row was READ before the
+    // transaction (it is not under this lock); a combined source's row is read here.
+    const pending = splitPending === undefined ? pendingRegistrationOf(tx.db, plan.workflowId) : splitPending;
+    if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
 
     // Create-only admission: a workflow identity another lifecycle already
     // holds is a deterministic conflict, so it is refused BEFORE the catalog

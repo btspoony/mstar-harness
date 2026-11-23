@@ -34,6 +34,20 @@ import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 const HOME = mkdtempSync(join(tmpdir(), "catalog-registration-home-"));
 let homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 
+/** The refusal of a call that must refuse, as its code and message. */
+async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
+  try {
+    await run();
+  } catch (error) {
+    const candidate = error as { code?: unknown; message?: unknown };
+    if (typeof candidate?.code === "string" && typeof candidate.message === "string") {
+      return { code: candidate.code, message: candidate.message };
+    }
+    throw error;
+  }
+  throw new Error("expected a refusal");
+}
+
 describe("ACTIVE catalog execution registration and legacy recovery", () => {
   let root: string | undefined;
   afterEach(() => {
@@ -157,6 +171,13 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       code: "catalog.registration-pending",
       message: expect.stringContaining("mstar catalog reconcile --abort"),
     });
+    // invariant: The refusal states only the pending phase: this entry holds no registry
+    // row for the workflow, so it may not claim root visibility. (The gates that DO read
+    // a registry row — dispatch, handle-taking — still name it; see catalog-consumers.)
+    const unregistered = await refusalOf(() => registerShippedCatalogExecution(execution, { actor: "project-manager", workflow }));
+    expect(unregistered.code).toBe("catalog.registration-pending");
+    expect(unregistered.message).not.toContain("root-visible");
+    expect(unregistered.message).toContain("legacy-pending");
     const beforeAbort = await readCatalogRevisions(context);
     const abandoned = await abortCatalogExecution(context, "legacy-pending", "discard unwritten legacy request");
     expect(abandoned).toEqual({ operationId: "legacy-pending", workflowId, phase: "aborted", sourceBytesRetained: true });

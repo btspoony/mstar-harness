@@ -742,9 +742,44 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
       planCall(fixture, OWN_PLAN, "prepare-pending", planTokens[OWN_PLAN]!, { kind: "prepare" }),
     );
     expect(refusal.code).toBe("catalog.registration-pending");
+    // note: The registry row exists here, so the refusal names root visibility.
+    expect(refusal.message).toContain("root-visible");
     expect(footprint(context)).toEqual({ ...before, operations: before.operations as number });
     expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
     expect(rows(context, "select * from catalog_operations where operation_id = 'op-pending'")).toEqual(pendingBefore);
+  });
+
+  test("a pending journal refuses an identical prepare under a new operation id, while a committed retry still replays", async () => {
+    const fixture = await seededWorkflow("prepare-pending-satisfied");
+    const { context } = fixture;
+    const config = prepareCheckout(fixture, OWN_PLAN);
+    const first = await preparePlan(fixture, OWN_PLAN, "prepare-committed", config);
+    expect(first.replayed).toBe(false);
+    // invariant: The committed receipt replays even while the journal is pending: the
+    // replay is answered before the gate is consulted.
+    const committedFootprint = footprint(context);
+    withRaw(context, (db) => {
+      db.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+          "values ('op-pending-satisfied', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+    });
+    const replay = await preparePlan(fixture, OWN_PLAN, "prepare-committed", config);
+    expect(replay.replayed).toBe(true);
+    expect(replay.data.coordination?.prepared).toEqual(first.data.coordination?.prepared);
+    expect(footprint(context)).toEqual(committedFootprint);
+
+    // invariant: The SAME configuration under a NEW operation id is not "already
+    // satisfied" while a journal row is pending: it refuses and records nothing.
+    const before = footprint(context);
+    const storedBefore = storedCoordinationText(context, OWN_PLAN);
+    const receiptsBefore = storedOperationReceipts(context);
+    const refusal = await refusalOf(() => preparePlan(fixture, OWN_PLAN, "prepare-satisfied-pending", config));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    expect(refusal.message).toContain("op-pending-satisfied");
+    expect(footprint(context)).toEqual(before);
+    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
+    expect(storedOperationReceipts(context)).toBe(receiptsBefore);
   });
 });
 
