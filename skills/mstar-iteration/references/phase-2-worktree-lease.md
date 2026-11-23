@@ -17,7 +17,7 @@ and workflow-wide serial integration safety remain required.
 Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree safety gate
 starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start`'s integration-branch step, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
-**Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`mstar-roles/references/project-manager/pr-delivery.md`**「Fix boundary」。
+**Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。已发布 layer 的 merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后由该 PR 的单一 pusher merge 回它的 layer ref，coordinator 再串行写入 integration 并向上层传播 → **`mstar-iteration/references/pr-stack.md`**「Propagation」，修复边界 → **`mstar-roles/references/project-manager/pr-delivery.md`**「Fix boundary」。
 
 This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, PM Acceptance, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
 
@@ -43,7 +43,7 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 
 | 宿主会话 | 工具 | 最小集合 |
 |----------|------|---------|
-| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**PM Acceptance**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至「Merge-ready checklist」第 1–5 项全 `[x]`，即 merge-ready） |
+| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**PM Acceptance**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；首个 layer PR 发布时追加 **`delivery-chain`**，整链证明记录后追加 **`workflow-close`**（勾除条件 → `mstar-iteration/references/command-shared-invariants.md` § Session todos） |
 
 SSOT = ACTIVE store.db 执行行 + `{PLAN_DIR}/` authored plans；todos 只追踪本轮下一步。
 
@@ -162,6 +162,8 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 | `ownership-changed` | Assigned writable paths, source branches or checkout ownership change |
 | `capacity-changed` | Native leaf capacity changes as tasks start or settle |
 
+PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，把确认的 finding 作为普通 fix 派发给所属 implementer（每 PR head 一个 pusher），并在下一次 integration 更新时按既有 reason 安排传播检查点——不新增第六个 reason，也不把 tracker 报告当成已接受的工作 → `mstar-iteration/references/pr-stack.md`「Tracking」「Propagation」。
+
 **决策步骤**（每次 checkpoint 按序执行）：
 
 1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。
@@ -179,6 +181,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 - Host idle status is not evidence that all tasks/jobs settled; native wait/completion delivery remains host-owned, never a polling loop.
 - Never duplicate owned/running/completed work or change an active assigned base. Checkout names, idle age and terminal labels confer no authority.
 - integration merge 入 `spec_integration_branch` 仍**串行**；跨 plan 并行仍受本节首段跨 plan 安全闸约束。
+- PR tracker 只观察、triage 并报告：本 checkpoint 不让它获得 dispatch、merge 或 waiver 权限，修复仍由所属 implementer 在隔离 fix checkout 中完成。
 - `execution_policy` 取值（如 `serial`）是 accepted-but-opaque：**禁止**描述为引擎强制的线性调度器；实际策略从当前用户 / plan 推导，并保留显式 serial 约束。
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
@@ -200,13 +203,15 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on the authoritative workflow's `branch.integration`, record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/PM Acceptance/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
    - The integration merge commit uses the already-configured identity; identity refusal is Blocked, never fabricate or use per-commit identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
    - On merge conflict, retain InReview and resolve or explicitly abort Git in that same checkout; do not invent Done. After a completed merge, retry complete with the same actual SHAs, never repeat the merge because a response was lost. Exact operation replay does not re-run Git or rewrite timestamps. Missing scope facts use ordinary prepare; actual Git conflicts must be resolved, not suppressed by state edits.
+   - **Completion witness:** the merge completion proves is a real two-parent merge whose second parent is the QC-reviewed source SHA reported as `integration.result_sha`; when earlier batches were already integrated, plan the final batch so this merge still exists, and never record an already-integrated no-op as the merge.
 6. **Per-plan compound:** after `Done`, run the compound disposition (Q1–Q8; `created` / `updated` / reasoned `skipped`) in the integration worktree and record the outcome in the plan's authored `## Review Gate Summary` — the engine completion payload is already written and is not amended. Commit the tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md` changes to `branch.integration` **only when the capture changed tracked files**; a reasoned `skipped` with no tracked change is satisfied by the recorded outcome and creates no empty commit. Never defer the disposition to iteration-close, and never start the next row before this step finishes.
-7. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
-8. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
+7. **Publish the layer**（`mstar-iteration/references/pr-stack.md`「Layer」「Sizing」「Opening」「Tracking」）：命名本 commit 所在的 integration range，在其 HEAD 上建 `iteration-stack/<iteration-id>/sNN`，用 `mstar pr-review size --base <predecessor> --head <layer>` 量测（`adviseSplit` → 停，先拆分再发布），push layer ref 后对它开 PR——首个 open layer 的 base 是 `branch.target`，其余是 live predecessor；写 compass `PR stack` 行，本 plan 首个 layer 发布时启动其 PR tracker。量测或发布未完成 → 停在该 layer，不推进它的下一层；其它 plan 的独立 ready 工作照常派发（推迟发布，不推迟实现）。`branch.integration` 从不作 PR head。
+8. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
+9. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
 
 全部 plan `Done` → **Phase transition gate**（见 `mstar-iteration` SKILL.md **Phase transition gates** 表）：
 
-1. **STOP** per-plan loop — 禁止 merge 后继续下一 plan、禁止开 PR、禁止会话结束语。
+1. **STOP** per-plan loop — 禁止 merge 后继续下一 plan、禁止会话结束语；loop 在 iteration-close 之前结束，execute 期间发布 layer PR 是预期行为，开 PR 不等于交付。
 2. 打印 **`## Phase 3: iteration-close`**。
 3. 按 **`references/phase-3-iteration-close.md`** §3.0 起独立执行至 §3.5。final plan 的 Assignment / closure 仅作输入，**不能**替代 Phase 3 gate。
 
@@ -218,7 +223,7 @@ After successful real integration and row Done, recover the owned merged feature
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose]
 ```
 
-- 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
+- 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 workflow close → `mstar-roles/references/project-manager/workflow-close.md`）。
 - 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
 - Cleanup never releases exclusion or advances state; direct complete owns that transaction. Ownership remains in row source metadata and retained track Assignments, not presence/absence of historical lease fields. Standalone plans use `branch.target` as evidence base and require terminal close before physical cleanup.
 - **禁止**为让 cleanup 通过而推进/终结父迭代或改执行状态；受保护行保持 `refuse` 是正确行为，不是失败。

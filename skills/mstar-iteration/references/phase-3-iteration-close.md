@@ -2,7 +2,7 @@
 
 > Loaded by `mstar-iteration` SKILL.md when entering Phase 3. **Read `mstar-harness-core` first.** Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入本 Phase。
 
-PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree（路径取 ACTIVE workflow 执行行的 `integration_worktree_path`）中运行**，产出物 commit 到 integration 分支，随迭代 PR 合入 workflow `branch.target`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
+PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree（路径取 ACTIVE workflow 执行行的 `integration_worktree_path`）中运行**，产出物 commit 到 integration 分支，随 close-delta layer PR 合入 workflow `branch.target`。入口：Phase 2 全部 plan `Done` 后按 **Phase transition gates** 进入。
 
 **Close Done 定义**：§3.1→§3.5 完成；compass frontmatter `status: completed` + `end_date`；新增 specs/ADR 完成 store catalog 登记。per-plan knowledge compound 已在各 plan `Done` 后完成，不替代 iteration-close。
 
@@ -68,7 +68,7 @@ At close, review the local ignored per-edit attribution record for this iteratio
 
 **Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
 
-PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；然后进入 **Phase 4**（见 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」）：
+PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；随后把该 close commit 作为整链的最后一层发布（有 tracked 变更时；无 diff 则封存预期清单，不开空 PR），再做整链证明 → `mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」，最后 workflow close → `mstar-roles/references/project-manager/workflow-close.md`：
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 specs/ADR promotion 完成；package specs 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 specs/ADR 均完成 store catalog 登记（或记明无提升原因）；各 plan compound disposition 已记录
@@ -76,9 +76,9 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 - [ ] §3.3 已读取项目 milestone list/status；匹配 milestone 已按观察到的 store revision 显式更新并记录证据，`delivered` 满足治理规则的交付前提且未隐式关闭 issue；无匹配项已记 `N/A`
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Corpus Promotion Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
-- [ ] PR base = 当前权威 workflow `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`
+- [ ] 整链的 target 是记录在案的 `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`
 
-**Commit 前提（HARD — branch-anchored，防递交到主 checkout 驻留分支）**：§3.5 的 close commit **在 integration worktree（`integration_worktree_path`）中执行，**绝不**在主 checkout（control root）或任一 feature worktree 上执行**——`git commit` 落在**当前检出分支**，`<spec_integration_branch>` 只出现在 push 参数里。当执行 commit 的检出不在 integration 分支时，未经下述核对直接执行本配方，specs/ADR promotion 会把 tracked 的 `{SPECS_DIR}/`、`{ADR_DIR}/` 递交到主 checkout 驻留分支（如 `main`），integration 分支的 PR 永远带不上这些 shared 产物。因此 **任何 `git add` 之前**必须先验分支；mismatch → **STOP**（不得 commit、不得 push、不得「先提交后挪」），改在正确检出上重做（见下）。
+**Commit 前提（HARD — branch-anchored，防递交到主 checkout 驻留分支）**：§3.5 的 close commit **在 integration worktree（`integration_worktree_path`）中执行，**绝不**在主 checkout（control root）或任一 feature worktree 上执行**——`git commit` 落在**当前检出分支**，push 的是该 commit 上的 layer ref。当执行 commit 的检出不在 integration 分支时，未经下述核对直接执行本配方，specs/ADR promotion 会把 tracked 的 `{SPECS_DIR}/`、`{ADR_DIR}/` 递交到主 checkout 驻留分支（如 `main`），integration 分支的 close 内容永远进不了该链的 PR。因此 **任何 `git add` 之前**必须先验分支；mismatch → **STOP**（不得 commit、不得 push、不得「先提交后挪」），改在正确检出上重做（见下）。
 
 1. 解析 `<spec_integration_branch>`：ACTIVE workflow 执行行 `branch.integration` → 缺失时 compass frontmatter；仍缺 → STOP 按受守卫入口补齐，不默认 `main`。
 2. **先验后提交**（在执行 commit 的检出处）：`git branch --show-current` === `<spec_integration_branch>`。§3.2–§3.4 产生的 tracked close 产物本就应处于未提交状态等待本 commit，**不要求**此处工作树干净。engine 可用 → 在 add/commit **前**运行 `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch <current> --integration <spec_integration_branch> --target <target_branch>` 并确认 exit 无 `EXIT_BRANCH_MISMATCH` / `EXIT_PR_BASE_MISMATCH`（Phase-3 窗口预期的其它 exit-1 除外，见 Phase transition gates 注）。
@@ -91,10 +91,11 @@ Close commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不�
 git branch --show-current   # must print <spec_integration_branch> — mismatch → STOP, see above
 git add {ITERATION_DIR}/<id>/ {ITERATION_DIR}/README.md {SPECS_DIR}/ {ADR_DIR}/
 git add STRATEGY.md   # only if updated in §3.3 (tracked root file); skip line otherwise
-git commit -m "chore(iteration): close <iteration-id> — specs/ADR promotion"
-git push origin <spec_integration_branch>
+git commit -m "chore(iteration): close <iteration-id> — specs/ADR promotion"   # no tracked change → seal the expected list, open no empty PR
 ```
 
 Staging 说明：`{SPECS_DIR}` 与 `{ADR_DIR}` 为解析后的实际语料目录（候选链见 `mstar-conventions`）；本轮更新过才加入。per-plan knowledge compound 的 tracked 写入已在各 plan `Done` 后提交到 integration 分支，本 commit 不重复提交。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
 
-PR 目标使用当前权威 workflow `branch.target`；缺失时停止并按受守卫入口处理，不默认 `main`。
+commit 存在时按其值建 `iteration-stack/<iteration-id>/sNN` 并发布：先按 `mstar-iteration/references/pr-stack.md`「Sizing」量测，`adviseSplit` → 停；再由它的单一 pusher push 该 layer ref，并以 live predecessor 为 base 开 close-delta layer PR（`branch.integration` 不作 PR head）。无 tracked 变更时不建 ref、不开 PR，封存预期清单供整链证明使用。
+
+close-delta layer 的 base 是它的 live predecessor，只有首个 open layer 才是当前权威 workflow `branch.target`；target 缺失时停止并按受守卫入口处理，不默认 `main`。
