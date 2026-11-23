@@ -68,7 +68,7 @@ import {
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
 import { readExecutionAuthority } from "./execution-read.js";
-import { commitExecutionRegistration, registerShippedCatalogExecution } from "./execution-registration.js";
+import { commitExecutionRegistration, registerShippedCatalogExecution, setRegistrationJournalGapForTest } from "./execution-registration.js";
 import {
   bindExecutionSession,
   readExecutionState,
@@ -1448,6 +1448,50 @@ describe("execution-registration", () => {
       ),
     );
     expect(stale.code).toBe("execution.stale-token");
+  });
+
+  test("execution-registration-refuses-a-split-owner-journal-committed-after-the-owner-read", async () => {
+    const fixture = await activeFixture("pending-split-gap");
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const before = await footprint(fixture.context);
+    let seamRan = false;
+    // invariant: The split lane stays open across the registration transaction, so the verdict
+    // is read at its position: a row that appears after the owner verdict and before that lock
+    // refuses. A pre-read-only verdict missed exactly this row.
+    setRegistrationJournalGapForTest(() => {
+      seamRan = true;
+      const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+      try {
+        lane.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, 'hash', 'execution-written', ?, '{}', '{}', null, ?, ?)",
+        ).run("op-split-gap", JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      } finally {
+        lane.close();
+      }
+    });
+    try {
+      const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-split-gap-registration"));
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-split-gap");
+      // note: The planted row IS the only lane change; remove it so the footprint proves the
+      // refusal wrote nothing else.
+      const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+      try {
+        lane.prepare("delete from catalog_operations where operation_id = 'op-split-gap'").run();
+      } finally {
+        lane.close();
+      }
+      expect(await footprint(fixture.context)).toEqual(before);
+      expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+    } finally {
+      setRegistrationJournalGapForTest(undefined);
+    }
   });
 
 });

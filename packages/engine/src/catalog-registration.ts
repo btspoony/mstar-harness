@@ -834,27 +834,55 @@ export async function readPendingRegistration(
 }
 
 /**
- * The same verdict, but ONLY when a SPLIT owner holds the journal: `undefined`
- * means the execution store owns it, so the caller must read it inside its own
- * execution transaction (the combined source's original position and ordering).
- * A split journal is not under that transaction's lock, so it is resolved before.
+ * A SPLIT owner's journal connection, held open across ONE execution
+ * transaction so the verdict is re-read under that transaction's lock; `null`
+ * means the execution store owns the journal (a combined source), whose row the
+ * transaction reads itself.
+ *
+ * shortcut: the lane is another database, so the window cannot be closed
+ * completely without a cross-store lock this design refuses; a row committed to
+ * the lane after its in-transaction read and before the execution commit is
+ * still missed. Upgrade: if such a row is ever observed, serialize the two
+ * stores instead of widening this read.
  */
-export async function readSplitPendingRegistration(
-  context: StoreContext,
-  workflowId: string,
-): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null | undefined> {
+export type SplitJournal = {
+  read(workflowId: string): { operationId: string; phase: "prepared" | "execution-written" } | null;
+  close(): void;
+};
+
+/** note: The owner verdict is taken once; a split lane then stays open for the caller. */
+export async function openSplitJournal(context: StoreContext): Promise<SplitJournal | null> {
   const execution = await openStore(context, "read");
+  let owner: JournalOwner;
   try {
-    const owner = journalOwnerOf(context, execution.db);
-    if (owner === "combined") return undefined;
-    const lane = await openJournalLane(context, owner);
-    try {
-      return pendingRegistrationOf(lane.db, workflowId);
-    } finally {
-      lane.close();
-    }
+    owner = journalOwnerOf(context, execution.db);
   } finally {
     execution.close();
+  }
+  if (owner === "combined") return null;
+  const lane = await openJournalLane(context, owner);
+  return { read: (workflowId) => pendingRegistrationOf(lane.db, workflowId), close: () => lane.close() };
+}
+
+/**
+ * The pending verdict a transaction may act on: a combined source's row is the
+ * transaction's own connection, a split source's row comes from its held lane.
+ * Both are read at the caller's in-transaction position, never before it.
+ */
+export function pendingRegistrationInTransaction(
+  journal: SplitJournal | null,
+  db: StoreDb,
+  workflowId: string,
+): { operationId: string; phase: "prepared" | "execution-written" } | null {
+  return journal === null ? pendingRegistrationOf(db, workflowId) : journal.read(workflowId);
+}
+
+/** note: Release a held split lane whether the transaction it fed committed or refused. */
+export async function withSplitJournal<T>(journal: SplitJournal | null, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    journal?.close();
   }
 }
 
