@@ -48,7 +48,7 @@
  *   claims vs. real checks); this suite only reports that the seat exists.
  * - PM required reading → `mstar-roles/references/project-manager.md`
  *   (preset-exempt, never gated by `Skill presets:`).
- * - Phase transitions → `evaluatePhaseGate` (engine) and the PHASE6 behavior
+ * - Phase transitions → `evaluatePhaseGate` (engine) and the close-state probe
  *   suites (`packages/engine/src/execution-workflow.test.ts`,
  *   `packages/commands/test/coordination-checks.test.ts`,
  *   `packages/cli/test/execution-session.test.ts`); this suite asserts none
@@ -581,7 +581,7 @@ describe("mstar-iteration phase route map ", () => {
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
- // Phase 3 / 4-5 detail keeps its hard gates.
+ // Iteration-close detail keeps its hard gates.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.1 Close entry checklist（HARD GATE）")).toBe(true);
     expect(phase3.includes("## 3.5 Close exit checklist + commit")).toBe(true);
@@ -627,7 +627,7 @@ describe("mstar-iteration phase route map ", () => {
 // 3. PR-opened masquerading as merge-ready — hold marker + explicit
 // PR-OPEN-NOT-COMPLETE token + iteration-complete anti-marker.
 // 4. Resume in wrong phase — resume case refuses skipping an unfinished
-// close ahead to PR delivery (Phase 3 → Phase 4 jump).
+// close ahead to PR delivery (iteration-close → delivery chain jump).
 // 5. Overridden pause — pause honored; auto-continue anti-marker.
 // Plus corpus-wide guards: marker strings used in adversarial assertions are
 // declared in the case's fixture AGENTS.md protocol, and NO assertion value is

@@ -10,7 +10,7 @@
 
 ## PM invariants（重叠行）
 
-Phase 2–5 全程有效（drive + loop 共有的行）：
+Execute 到 close 全程有效（drive + loop 共有的行）：
 
 | 禁止（PM 线程） | 必须 |
 |-----------------|------|
@@ -65,6 +65,6 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 execute �
 - **`Blocked`**：真冲突、secrets、不可逆范围缺口、某层多轮仍无法 merge-ready
 - 用户本轮显式打断
 
-**Turn closure during Phase 2–5 continuous execution**: retain the existing in-flight-action discipline (invoke issued or next dispatch Assignment named); do not end with a routine user-confirmation question.
+**Turn closure during continuous execution from execute through close**: retain the existing in-flight-action discipline (invoke issued or next dispatch Assignment named); do not end with a routine user-confirmation question.
 
 **Phase 1 distinction**: interactive prototype feedback and explicit current-revision design confirmation (§1.2.5) are required before formal authoring, not forbidden routine execution check-ins. Explicit autonomous opt-in instead retains a reasoned prototype/disposition without routine human approval. Neither route waives host Plan-mode permissions or implementation authorization.
