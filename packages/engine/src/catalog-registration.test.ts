@@ -34,7 +34,7 @@ import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 const HOME = mkdtempSync(join(tmpdir(), "catalog-registration-home-"));
 let homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 
-/** The refusal of a call that must refuse, as its code and message. */
+/** note: The refusal of a call that must refuse, as its code and message. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
   try {
     await run();
@@ -369,7 +369,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     await expect(purgeCatalogRegistration(context, {
       workflowId, operationId, expectedCatalogRevision: 99, actor: "project-manager",
     })).rejects.toMatchObject({ code: "catalog.revision-conflict", message: expect.stringContaining("current revision is 5") });
-    // ...nor approve the settlement: the lane revision is what the CAS compares.
+    // invariant: ...nor approve the settlement: the lane revision is what the CAS compares.
     const receipt = await purgeCatalogRegistration(context, {
       workflowId, operationId, expectedCatalogRevision: 5, actor: "project-manager",
     });
@@ -432,6 +432,76 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       writer.close();
     }
     expect(await readPendingRegistration(context, "wf-remote-journal")).toEqual({ operationId: "remote-pending", phase: "prepared" });
+  });
+
+  test("a remote checkout settles pending registrations on the cache lane that owns the journal", async () => {
+    root = mkdtempSync(join(tmpdir(), "catalog-registration-remote-write-"));
+    const scope = createRemoteScope(root, "remote-journal-write");
+    const context = scope.context();
+    const commit = scope.publish();
+    await bindRemoteAuthority(context, scope.batch(commit));
+    await initializeStore(context).then((handle) => handle.close());
+    // why: The fenced shape a remote checkout lands in — the cache owns the journal, and the
+    // execution store no longer carries the table at all.
+    const fenced = new DatabaseSync(join(scope.harness, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+
+    const lanePath = resolveCollaborationLocation(context).dbPath;
+    const workflowId = "wf-remote-write";
+    const snapshotPath = join(scope.harness, "workflows", workflowId, "snapshot.json");
+    mkdirSync(join(scope.harness, "workflows", workflowId), { recursive: true });
+    const snapshot = `{"identity":"${workflowId}"}\n`;
+    writeFileSync(snapshotPath, snapshot);
+    const digest = createHash("sha256").update(snapshot).digest("hex");
+    const lane = new DatabaseSync(lanePath);
+    try {
+      const insert = lane.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, ?, 'prepared', ?, '{}', ?, null, ?, ?)",
+      );
+      insert.run(
+        "remote-pending-write",
+        "remote-hash",
+        JSON.stringify({ workflow: { workflowId: "wf-remote-write" }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 0 }),
+        "{}",
+        "2026-11-23",
+        "2026-11-23",
+      );
+      insert.run(
+        "remote-pending-purge",
+        "remote-hash",
+        JSON.stringify({ workflow: { workflowId, harnessDir: scope.harness, snapshotPath }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 0 }),
+        JSON.stringify({ failure: { workflow_id: workflowId, snapshot_path: snapshotPath, snapshot_content_sha256: digest, reviewed_identity: "remote-identity" } }),
+        "2026-11-23",
+        "2026-11-23",
+      );
+      lane.prepare("update collaboration_meta set revision = 2, catalog_revision = 4 where id = 1").run();
+    } finally {
+      lane.close();
+    }
+
+    // invariant: A pending row on the cache is visible to discovery, not only to the point read.
+    const pending = await listPendingCatalogRegistrations(context);
+    expect(pending).toContainEqual(expect.objectContaining({ operationId: "remote-pending-write", workflowId: "wf-remote-write", phase: "prepared" }));
+    expect(pending).toContainEqual(expect.objectContaining({ operationId: "remote-pending-purge", workflowId, phase: "prepared" }));
+
+    // invariant: Abort settles it on the cache and advances that lane's counter.
+    expect(await abortCatalogExecution(context, "remote-pending-write")).toEqual({
+      operationId: "remote-pending-write", workflowId: "wf-remote-write", phase: "aborted", sourceBytesRetained: true,
+    });
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 3, catalogRevision: 4 });
+
+    // invariant: Both purge halves compare generations on the cache lane, so they agree.
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId, operationId: "remote-pending-purge", expectedCatalogRevision: 4, actor: "project-manager",
+    });
+    expect(receipt).toMatchObject({ workflowId, sourceBytesRetained: true, actor: "project-manager" });
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 4, catalogRevision: 4 });
+    expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
   });
 
   test("reconcile refuses registered active work but abort retains unregistered leases and permits disposition retry", async () => {

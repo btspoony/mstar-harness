@@ -22,7 +22,7 @@ import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js"
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, readStoreAuthority, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
-import { openCollaborationStore, openRemoteCache, withCollaborationWrite } from "./collaboration-store.js";
+import { openCollaborationStore, openRemoteCache, withCollaborationWrite, withRemoteCacheWrite } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
@@ -749,22 +749,32 @@ function executionOwnsJournal(db: StoreDb): boolean {
 }
 
 /**
- * The SPLIT owner's read-only journal connection, or `null` when the execution
- * store itself owns the journal (a combined source). A remote checkout's owner is
- * its private cache; the local lane refuses a remote selection outright, so it
- * must not be the read's target.
+ * invariant: The journal's ONE owner. A combined source still holds
+ * `catalog_operations` (execution); a split source names the lane this checkout
+ * resolves — its private remote cache, or the local/mirror domain lane. Read and
+ * write paths take this same verdict, so a row is never written on a file its
+ * readers do not read.
  */
-async function openSplitJournal(context: StoreContext, execution: StoreDb): Promise<{ db: StoreDb; close(): void } | null> {
-  if (executionOwnsJournal(execution)) return null;
-  return resolveCollaborationLocation(context).mode === "remote"
+type JournalOwner = "combined" | "domain" | "remote-cache";
+
+function journalOwnerOf(context: StoreContext, execution: StoreDb): JournalOwner {
+  if (executionOwnsJournal(execution)) return "combined";
+  return resolveCollaborationLocation(context).mode === "remote" ? "remote-cache" : "domain";
+}
+
+/** note: The split owner's read connection; a remote selection never opens the domain lane. */
+async function openJournalLane(
+  context: StoreContext,
+  owner: "domain" | "remote-cache",
+): Promise<{ db: StoreDb; close(): void }> {
+  return owner === "remote-cache"
     ? await openRemoteCache(context, "read")
     : await openCollaborationStore(context, "read");
 }
 
 /**
- * One journal read on the file that owns the journal, under READ-ONLY admission:
- * a verdict is never a mutation, so it takes no write lock. `executionDb` stays
- * open (read-only) for the facts execution still owns.
+ * why: A verdict is never a mutation, so the journal read takes no write lock.
+ * `executionDb` stays open (read-only) for the facts execution still owns.
  */
 async function withJournalRead<T>(
   context: StoreContext,
@@ -772,8 +782,9 @@ async function withJournalRead<T>(
 ): Promise<T> {
   const execution = await openStore(context, "read");
   try {
-    const lane = await openSplitJournal(context, execution.db);
-    if (lane === null) return fn(execution.db, execution.db);
+    const owner = journalOwnerOf(context, execution.db);
+    if (owner === "combined") return fn(execution.db, execution.db);
+    const lane = await openJournalLane(context, owner);
     try {
       return fn(lane.db, execution.db);
     } finally {
@@ -809,8 +820,9 @@ export async function readSplitPendingRegistration(
 ): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null | undefined> {
   const execution = await openStore(context, "read");
   try {
-    const lane = await openSplitJournal(context, execution.db);
-    if (lane === null) return undefined;
+    const owner = journalOwnerOf(context, execution.db);
+    if (owner === "combined") return undefined;
+    const lane = await openJournalLane(context, owner);
     try {
       return pendingRegistrationOf(lane.db, workflowId);
     } finally {
@@ -822,11 +834,13 @@ export async function readSplitPendingRegistration(
 }
 
 /**
- * One journal write, on the file that owns the journal. A combined source's
- * execution store still carries `catalog_operations`, so it keeps transacting
- * there exactly as before; after the reviewed cutover the lane owns the
- * journal, and the execution handle only supplies the facts execution still
- * owns (authority state and registry membership).
+ * invariant: One journal write lands on the file `journalOwnerOf` names, the
+ * same verdict every reader takes. A combined source transacts on its execution
+ * store exactly as before; a split source writes the lane that owns the journal
+ * (the remote checkout's cache included), while the execution handle only
+ * supplies the facts execution still owns (authority state, registry
+ * membership). The callback stays synchronous: every lane refuses a thenable
+ * before commit.
  */
 async function withJournalWrite<T>(
   context: StoreContext,
@@ -835,16 +849,21 @@ async function withJournalWrite<T>(
   const execution = await openStore(context, "read");
   try {
     assertStoreActive(execution.db);
-    if (executionOwnsJournal(execution.db)) {
-      // Avoid the execution-store → coordination → catalog-registration cycle.
+    const owner = journalOwnerOf(context, execution.db);
+    if (owner === "combined") {
+      // why: execution-store imports this module, so a static import would close the
+      // execution-store → coordination → catalog-registration cycle; nothing but the
+      // combined lane's transaction needs it.
       const { withExecutionTransaction } = await import("./execution-store.js");
       return await withExecutionTransaction(context, (tx) =>
         fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.db),
       );
     }
-    return await withCollaborationWrite(context, (handle) =>
-      fn(handle.db, { storeId: handle.authority.storeId, epoch: handle.authority.epoch }, execution.db),
-    );
+    const apply = (handle: { db: StoreDb; authority: { storeId: string; epoch: number } }) =>
+      fn(handle.db, { storeId: handle.authority.storeId, epoch: handle.authority.epoch }, execution.db);
+    return owner === "remote-cache"
+      ? await withRemoteCacheWrite(context, apply)
+      : await withCollaborationWrite(context, apply);
   } finally {
     execution.close();
   }
@@ -879,10 +898,10 @@ function assertStoreActive(db: StoreDb): void {
 }
 
 /**
- * The shared store revisions, read from the meta singleton the JOURNAL OWNER
- * uses: a combined source keeps them in `store_meta` (execution), while the
- * reviewed cutover moves them into the lane's `collaboration_meta` together
- * with the journal - the same table `catalog.ts` reads after the cutover.
+ * why: The shared revisions live on the JOURNAL OWNER's meta singleton — a
+ * combined source keeps them in `store_meta` (execution), while the reviewed
+ * cutover moves them into the lane's `collaboration_meta` together with the
+ * journal (the same table `catalog.ts` reads after the cutover).
  */
 function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevision: number } {
   const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
@@ -895,7 +914,7 @@ function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevis
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision };
 }
 
-/** Advance the shared store revision on the journal owner's own meta singleton. */
+/** note: Advance the shared store revision on the journal owner's own meta singleton. */
 function bumpSharedRevision(db: StoreDb): void {
   const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
   db.prepare(`update ${metaTable} set revision = revision + 1 where id = 1`).run();
@@ -929,8 +948,8 @@ export function pendingRegistrationOf(
 }
 
 /**
- * Record one aborted journal row and advance the journal owner's shared
- * revision, on the one connection that owns both.
+ * invariant: The aborted row and the owner's shared revision advance on the one
+ * connection that owns both, so abort never leaves the counter behind the row.
  */
 function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?").run(

@@ -4,7 +4,7 @@
  * is a name only — the skill owns the semantics, never the envelope.
  */
 
-/** Family defaults: one owning skill for the whole `<prefix>.*` group, where the prefix is one or more dot segments. */
+/** note: Family defaults: one owning skill for the whole `<prefix>.*` group, where the prefix is one or more dot segments. */
 const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   persist: "mstar-artifacts",
   workflow: "mstar-artifacts",
