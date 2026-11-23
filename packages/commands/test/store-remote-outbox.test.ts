@@ -772,7 +772,7 @@ describe("remote outbox commands", () => {
     });
     // invariant: A representative accepted document parses against the published contract...
     expect(documentOf(RECEIPT).safeParse(accepted).success).toBe(true);
-    // ...and one with an extra nested event member does not, exactly as the engine refuses it.
+    // note: one document with an extra nested event member does not parse, exactly as the engine refuses it.
     const nested = {
       ...accepted,
       outcome: { ...accepted.outcome, event: { ...frozen, change: { ...frozen.change, unsupportedMember: [] } } },
