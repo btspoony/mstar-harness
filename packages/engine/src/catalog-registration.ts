@@ -736,9 +736,29 @@ function nowRfc3339(): string {
  * `catalog_operations` into the collaboration lane and drops it from the
  * execution store, so the journal's owner is decided by which file HOLDS the
  * table - never by a schema version, which a fenced store keeps advancing.
+ *
+ * shortcut: this probe is a plain read, not serialized against a concurrent
+ * fence; a reader holding the execution handle while a fence commits would see
+ * the pre-fence owner and read a journal the lane now owns. The reviewed cutover
+ * requires every other handle stopped before it fences the source, so no fence
+ * can commit under a live reader. Upgrade: if a fence ever runs beside live
+ * readers, prove the owner under the same lock as the fence.
  */
 function executionOwnsJournal(db: StoreDb): boolean {
   return tableNamesOn(db).has("catalog_operations");
+}
+
+/**
+ * The SPLIT owner's read-only journal connection, or `null` when the execution
+ * store itself owns the journal (a combined source). A remote checkout's owner is
+ * its private cache; the local lane refuses a remote selection outright, so it
+ * must not be the read's target.
+ */
+async function openSplitJournal(context: StoreContext, execution: StoreDb): Promise<{ db: StoreDb; close(): void } | null> {
+  if (executionOwnsJournal(execution)) return null;
+  return resolveCollaborationLocation(context).mode === "remote"
+    ? await openRemoteCache(context, "read")
+    : await openCollaborationStore(context, "read");
 }
 
 /**
@@ -752,16 +772,12 @@ async function withJournalRead<T>(
 ): Promise<T> {
   const execution = await openStore(context, "read");
   try {
-    if (executionOwnsJournal(execution.db)) return fn(execution.db, execution.db);
-    // note: A remote checkout's journal owner is its private cache; the local lane
-    // refuses a remote selection outright, so it must not be the read's target.
-    const handle = resolveCollaborationLocation(context).mode === "remote"
-      ? await openRemoteCache(context, "read")
-      : await openCollaborationStore(context, "read");
+    const lane = await openSplitJournal(context, execution.db);
+    if (lane === null) return fn(execution.db, execution.db);
     try {
-      return fn(handle.db, execution.db);
+      return fn(lane.db, execution.db);
     } finally {
-      handle.close();
+      lane.close();
     }
   } finally {
     execution.close();
@@ -779,6 +795,30 @@ export async function readPendingRegistration(
   workflowId: string,
 ): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null> {
   return await withJournalRead(context, (db) => pendingRegistrationOf(db, workflowId));
+}
+
+/**
+ * The same verdict, but ONLY when a SPLIT owner holds the journal: `undefined`
+ * means the execution store owns it, so the caller must read it inside its own
+ * execution transaction (the combined source's original position and ordering).
+ * A split journal is not under that transaction's lock, so it is resolved before.
+ */
+export async function readSplitPendingRegistration(
+  context: StoreContext,
+  workflowId: string,
+): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null | undefined> {
+  const execution = await openStore(context, "read");
+  try {
+    const lane = await openSplitJournal(context, execution.db);
+    if (lane === null) return undefined;
+    try {
+      return pendingRegistrationOf(lane.db, workflowId);
+    } finally {
+      lane.close();
+    }
+  } finally {
+    execution.close();
+  }
 }
 
 /**
@@ -1058,16 +1098,20 @@ export async function readCatalogRevisions(context: StoreContext): Promise<Catal
 
 /**
  * The ONE refusal a pending registration produces, verbatim for the dispatch
- * gate, the handle-taking gate and the active DB registration route.
+ * gate, the handle-taking gate and the active DB registration route. It states
+ * only what is known — the pending phase — because the registration entry
+ * reaches it without a registry row; the caller names root visibility when its
+ * own read proved one.
  */
 export function refusePendingRegistration(
   workflowId: string,
   pending: { operationId: string; phase: "prepared" | "execution-written" },
+  rootVisible = false,
 ): never {
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
-    `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
-      `(operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. ` +
+    `workflow ${JSON.stringify(workflowId)}'s catalog registration is ${pending.phase}, not committed ` +
+      `(operation ${JSON.stringify(pending.operationId)})${rootVisible ? " while the workflow is root-visible" : ""}; registration must refuse until the legacy journal is settled. ` +
       `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
   );
 }
@@ -1093,7 +1137,8 @@ export function assertCatalogExecutionCommittedOn(
   if (readStoreAuthority(db).authorityState !== "active") return;
   if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
   if (pending === null) return;
-  refusePendingRegistration(id, pending);
+  // note: This caller READ the registry row above, so the refusal may say so.
+  refusePendingRegistration(id, pending, true);
 }
 
 /**

@@ -875,6 +875,12 @@ function alreadyPrepared(
   catalogFacts: CatalogFacts,
   pending: { operationId: string; phase: "prepared" | "execution-written" } | null,
 ): ExecutionRead<ExecutionPlanView> | undefined {
+  // invariant: The pending-registration gate covers THIS branch too: a prepared or
+  // execution-written journal row refuses an unchanged no-op exactly as it refuses a
+  // changed configuration, since both prepare a workflow whose registration never
+  // committed — and this branch writes its own receipt. The frame runs the committed
+  // -receipt replay before consulting it, so an identical retry still replays.
+  assertCatalogExecutionCommittedOn(tx.db, read.workflowId, pending);
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
   // invariant: The already-satisfied shortcut still owns a pin decision: an unchanged

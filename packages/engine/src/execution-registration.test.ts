@@ -79,7 +79,7 @@ import {
   type ExecutionToken,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type RegisterIterationWorkflowOptions, type RegisterPlanWorkflowOptions } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
@@ -371,6 +371,11 @@ function catalogRevisionOf(context: StoreContext): number {
  * the journal's in-flight count.
  */
 async function footprint(context: StoreContext): Promise<Record<string, unknown>> {
+  // note: A post-fence source no longer carries the journal table, so its pending count
+  // is answered by the lane's own copy below instead of an unnameable subquery.
+  const executionHandle = await openStore(context, "read");
+  const journalOnExecution = tableNamesOn(executionHandle.db).has("catalog_operations");
+  executionHandle.close();
   const execution =
     (await one<Record<string, unknown>>(
       context,
@@ -381,8 +386,10 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
         "(select count(*) from execution_plans) as plans, " +
         "(select count(*) from execution_inputs) as inputs, " +
         "(select count(*) from execution_operations) as operations, " +
-        "(select count(*) from catalog_execution_bindings) as bindings, " +
-        "(select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending",
+        "(select count(*) from catalog_execution_bindings) as bindings" +
+        (journalOnExecution
+          ? ", (select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending"
+          : ""),
     )) ?? {};
   // why: The catalog and the collaboration revision live in the repository's own
   // lane; the execution store keeps only the binding and the legacy journal.
@@ -396,8 +403,11 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
           "select revision as collaboration_revision, catalog_revision, " +
             "(select count(*) from catalog_entities) as entities, " +
             "(select count(*) from catalog_links) as links, " +
-            "(select count(*) from collaboration_operations where key_space = 'composite') as effects " +
-            "from collaboration_meta where id = 1",
+            "(select count(*) from collaboration_operations where key_space = 'composite') as effects, " +
+            (journalOnExecution
+              ? "0 as lane_pending"
+              : "(select count(*) from catalog_operations where phase in ('prepared','execution-written')) as lane_pending") +
+            " from collaboration_meta where id = 1",
         )
         .get() as Record<string, unknown>),
     };
@@ -1367,10 +1377,77 @@ describe("execution-registration", () => {
     expect(refusal.message).toContain("op-legacy-pending");
     expect(refusal.message).toContain("mstar catalog reconcile --abort");
     expect(refusal.message).toContain("mstar catalog purge-registration");
+    // note: The refusal is reached by the registration entry itself, which holds no
+    // root visibility; the journal verdict is all this caller knows. (The dispatch and
+    // handle-taking gates, which DO read the registry row, still name it.)
+    expect(refusal.message).not.toContain("root-visible");
 
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
     expect((await listCatalog(fixture.context, {})).total).toBe(0);
+  });
+
+  test("execution-registration-keeps-the-stale-root-token-conflict-ahead-of-the-combined-journal", async () => {
+    const fixture = await activeFixture("pending-combined-stale-root");
+    await registerPlanWorkflow(fixture, "op-first");
+    // note: A combined source keeps its journal in the execution store, so this row is
+    // in the SAME transaction as the root-token CAS — the original ordering.
+    await plantPendingLegacyOperation(fixture.context, "op-combined-pending", WORKFLOW_ID_ALT);
+    const accepted = await footprint(fixture.context);
+
+    const refusal = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: { ...fixture.caller, workflowId: WORKFLOW_ID_ALT } },
+        {
+          ...planRequest({ context: fixture.context, operationId: "op-combined-stale", workflowId: WORKFLOW_ID_ALT }),
+          expected: fixture.rootToken,
+        },
+      ),
+    );
+    // invariant: The stale token is reported, not the pending journal.
+    expect(refusal.code).toBe("execution.stale-token");
+    expect(await footprint(fixture.context)).toEqual(accepted);
+  });
+
+  test("execution-registration-refuses-a-split-owner-journal-inside-the-transaction", async () => {
+    const fixture = await activeFixture("pending-split");
+    // why: The post-fence shape: the collaboration lane owns the journal, so the
+    // execution store no longer carries the table and the verdict is a split read.
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+    try {
+      lane.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, 'hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run("op-split-pending", JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+    } finally {
+      lane.close();
+    }
+    const before = await footprint(fixture.context);
+
+    const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-split-registration"));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    expect(refusal.message).toContain("op-split-pending");
+    expect(await footprint(fixture.context)).toEqual(before);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+
+    // invariant: The refusal is DECIDED inside the transaction, after the root-token CAS:
+    // a stale token is still reported as the token conflict, never as the journal verdict.
+    await registerPlanWorkflow(fixture, "op-split-first", PLAN_ID, WORKFLOW_ID_ALT);
+    const stale = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: { ...fixture.caller, workflowId: WORKFLOW_ID } },
+        {
+          ...planRequest({ context: fixture.context, operationId: "op-split-stale", planId: SIDE_PLAN_ID }),
+          expected: fixture.rootToken,
+        },
+      ),
+    );
+    expect(stale.code).toBe("execution.stale-token");
   });
 
 });
