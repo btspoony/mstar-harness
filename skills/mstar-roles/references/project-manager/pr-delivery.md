@@ -26,8 +26,8 @@
 - **Iteration.** Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
 - **Checkout / worktree（HARD，iteration）**：Phase 5 是 PR 级 **hotfix** loop。产品修复在从 `spec_integration_branch` 出的独立 **fix feature worktree** 上编辑、commit；review 后在 **integration worktree**（路径取 ACTIVE workflow 执行行 `integration_worktree_path`）串行 merge 回 integration，再按 「Push cadence」 push。禁止在 integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
   Hotfix commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
-- Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges back in the **integration worktree**.
-- **Standalone development.** Edit and commit in a dedicated worktree checked out on the registered delivery branch, never the primary checkout (fix sites table → `mstar-pr-loop/SKILL.md`); the hotfix identity rule above still applies.
+- **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges back in the **integration worktree**.
+- **Standalone development.** The fix is committed on the registered delivery branch in its dedicated worktree and pushed under 「Push cadence」, never the primary checkout (fix sites table → `mstar-pr-loop/SKILL.md`); the hotfix identity rule above still applies.
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → 下一节（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
 
@@ -105,7 +105,7 @@ gh api --paginate "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
 **Loop 理念**（mstar SSOT）：PR 开完后进入 **验证—修复—再验证** 循环，直至 PR 可合并。与 Phase 2 per-plan loop 类似，但对象是 **PR 级** merge 门禁（CI、review、冲突），不是 plan 实现。（repeat until the Merge-ready checklist items 1–5 are all `[x]`）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
-2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 「Push cadence」 push gate 满足时**再 push（意图冲突 → **Blocked**）
+2. **Merge conflicts** — blocking 则**本地**解决：iteration 在 integration 分支；standalone development 在 registered delivery branch 的专属 worktree。**仅当 「Push cadence」 push gate 满足时**再 push（意图冲突 → **Blocked**）
 3. **Review dispatch** — **Iteration（按 compass `pr_merge_policy`）**：`reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 「Push cadence」 的 push cadence 推进；**不要**在每个 merge-ready 迭代里另起第二个 review loop。「Merge-ready loop」 在该轮内**暂停第 4 步的 review 修复分派与第 6 步的 push**——这两项由该 loop 一并执行（「Push cadence」 仍逐次适用，单一 pusher，避免同一 head 两个推手）。**第 5 步的 required-CI 修复保留**：可由 「Merge-ready loop」 本地开工，但其 push 同样走该 loop 的批（「Push cadence」），不得另起第二推手。「Merge-ready loop」 仍负责 mergeable 与 required-CI 观测。「Merge authorization」 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`reviewed-bot`：**不**起任何本地 review loop——挂载的 bot 按其自身触发模式（push 触发或手动触发）产出 review，「Merge-ready loop」 只监控该 review 是否已落到当前 head 并达到其自身门（「Review paths and surfaces」），其 findings 走第 4 步普通第三方 triage，push 仍守 「Push cadence」。`owner-gated`：**完全**不起 PR 级 review loop，**人类 owner** 的 review 就是 gate，Phase 5 停在 merge-ready 等其书面批准。**Standalone development**：不按 compass 选择——按项目挂载的 review surface 推进，每个 bot 按其自身门在 current head settled（「Review paths and surfaces」）；只有用户明确要求时才运行本地 `mstar-pr-loop`，不得自行启动。
 4. **Reviews** — `reviewed-auto`：fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）。`reviewed-bot`：读 bot 在当前 head 上的证据并按 「Review paths and surfaces」 Bot evidence 取全量 findings——整体 review comment（全部 finding 块，含被折叠的 omitted 声明）、anchored line comments（行内副本，即可 resolve 的 thread）、`mstar-inspector review` check（结论与 summary）；**不要**只 fetch threads 就当作该 head 的全部 findings。triage 与本地修复同本地路径，bot 已自行 resolve 的线程不重复处理。
 5. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
