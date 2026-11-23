@@ -511,5 +511,3 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
     });
   });
 }
-/** The payload shape the `plan complete` MCP tool publishes (one contract, both transports). */
-export const PLAN_COMPLETION_EVIDENCE_SCHEMA = completionEvidenceSchema;
