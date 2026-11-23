@@ -4,7 +4,7 @@ module: omp host adapter / engine coordination / CLI plan bind
 date: 2026-09-18
 problem_type: architecture_pattern
 category: architecture-patterns
-last_updated: 2026-11-09
+last_updated: 2026-11-23
 severity: medium
 source: plan <plan-id> (fix for the OMP Phase-1 handoff refusal)
 status: active
