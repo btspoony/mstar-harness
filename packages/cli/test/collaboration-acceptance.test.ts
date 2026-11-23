@@ -10,7 +10,8 @@
  * Two scenarios had no owner and live in this file: the delete-and-reclone of a
  * local checkout against a retained user-level store (criterion 1), and the
  * cross-authority move refusal boundary (criterion 7 — boundary only, never the
- * staged move the ADR asks for).
+ * staged move the ADR asks for). Criterion 1 also delegates its five identity and
+ * cutover owner scenarios, so a renamed or deleted one fails this criterion.
  *
  * Requires the locally built CLI (`bun run cli:build`) because the remote owner
  * suites spawn it, exactly like every other remote CLI suite.
@@ -32,7 +33,7 @@ import {
   readCollaborationAuthority,
   type StoreContext,
 } from "@mstar-harness/engine";
-import { RemoteCollaborationFixture } from "./support/remote-collaboration-fixture";
+import { FIXTURE_ISSUE_ID, REMOTE_PROJECT, RemoteCollaborationFixture } from "./support/remote-collaboration-fixture";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 
@@ -65,12 +66,14 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/cli/test/remote-host-roundtrip.test.ts", title: "a competing provider effect is surfaced as a conflict, never overwritten" },
   ],
   "5. All read models and gates": [
+    { file: "packages/engine/src/store-read.test.ts", title: "project, milestone, roadmap and flow reads use admitted snapshot evidence" },
     { file: "packages/engine/src/store-read.test.ts", title: "a current access check over an old traversal never serves a count, rollup or findings gate" },
     { file: "packages/cli/test/store-read.test.ts", title: "each source observation is stamped at its own snapshot, not at request time" },
     { file: "packages/cli/test/dashboard-server.test.ts", title: "a missing collaboration authority is a 503, never a 404 or an empty list" },
     { file: "packages/omp/test/store-cutover.test.ts", title: "a missing or staged store fails closed: the register write refuses by authority, never by shape" },
   ],
   "6. Migration and rebinding": [
+    { file: "packages/engine/src/collaboration-cutover.test.ts", title: "stage copies exact keys, history, foreign keys and revisions without activating" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a crash after the claim keeps it resumable and the source unfenced" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a fence that committed before publication is resumed by the same activation" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "extraction leaves execution rows, tokens and the source epoch unchanged" },
@@ -118,6 +121,12 @@ function runOwnerCase(owner: OwnerCase): { executed: string[]; failures: string[
   const stderr = child.stderr.toString();
   // note: A child killed on this run's own deadline proves nothing about the case.
   if (child.exitCode === null) throw new Error(`${owner.file} :: "${owner.title}" did not finish within 240s\n${stderr}`);
+  // invariant: The child's own verdict is part of the evidence — a non-zero exit is a failure
+  // even when the JUnit file reports the named testcase as passing (a suite-level error, or a
+  // second failure outside this run's filter, exits non-zero).
+  if (child.exitCode !== 0) {
+    throw new Error(`${owner.file} :: "${owner.title}" exited ${String(child.exitCode)}\n${stderr}`);
+  }
   let xml = "";
   try {
     xml = readFileSync(reportPath, "utf8");
@@ -165,6 +174,9 @@ function expectOwners(criterion: string): void {
 
 describe("collaboration authority — ADR acceptance", () => {
   test("criterion 1 — a local checkout deleted and recloned reads its seeded records with the retained user store and no execution state", async () => {
+    // note: The identity/cutover owners first, so a renamed or deleted one fails this criterion by name.
+    expectOwners("1. Local persistence and isolation");
+
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-acceptance-reclone-")));
     scratchRoots.push(root);
     const home = join(root, "home");
@@ -172,9 +184,23 @@ describe("collaboration authority — ADR acceptance", () => {
     // invariant: The user-level store lives under a fixture HOME; the real home is never read.
     const restore = spyOn(nodeOs, "homedir").mockImplementation(() => home);
     try {
-      const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0" };
       const git = (cwd: string, ...args: string[]): string =>
-        execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+        execFileSync("git", args, {
+          cwd,
+          // invariant: A minimal environment — no GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* from the
+          // invoking shell may select the repository or the config this fixture exercises.
+          env: {
+            PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+            HOME: home,
+            TMPDIR: process.env.TMPDIR ?? tmpdir(),
+            TZ: "UTC",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: devNull,
+            GIT_TERMINAL_PROMPT: "0",
+          },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
       const origin = "https://github.com/acme/acceptance-reclone.git";
       const bare = join(root, "origin.git");
       git(root, "init", "-q", "--bare", bare);
@@ -259,42 +285,68 @@ describe("collaboration authority — ADR acceptance", () => {
     expectOwners("6. Migration and rebinding");
   }, 240_000);
 
-  test("criterion 7 — boundary only: a remote project move refuses collaboration.mode-unavailable and leaves the source authority unchanged", () => {
+  test("criterion 7 — boundary only: a remote project move refuses collaboration.mode-unavailable and leaves the observed issue and source generation unchanged", () => {
     // note: The ADR asks for a staged cross-authority move with interruption recovery. This
     // asserts only the refusal boundary at the shipped CLI: no staged move, no relation
     // resolution, no IssueRef preservation across authorities. Criterion 7 stays unproven.
     const fixture = new RemoteCollaborationFixture("acceptance-move-boundary");
+    const moveOperation = "11111111-1111-4111-8111-1111111111aa";
     try {
       fixture.publish(1);
       const sandbox = fixture.sandbox("boundary");
       expect(sandbox.bind(fixture.verify()).exitCode).toBe(0);
       expect(sandbox.init().exitCode).toBe(0);
-      const pendingBefore = sandbox.runJson([
-        "store", "collaboration", "remote", "outbox-pending",
-        "--harness", sandbox.harness, "--project", "fixture-project",
-      ]);
-      expect(pendingBefore.exitCode).toBe(0);
-      expect(pendingBefore.data.intents).toEqual([]);
+      expect(sandbox.observe(fixture.observe(REMOTE_PROJECT, 0)).exitCode).toBe(0);
+
+      // note: The observed source issue is the subject of the move: it must still read the same
+      // after the refusal, which is what makes the refusal non-destructive rather than silent.
+      const readIssue = () =>
+        sandbox.runJson([
+          "issue", "show",
+          "--id", FIXTURE_ISSUE_ID,
+          "--project", REMOTE_PROJECT.localProjectId,
+          "--harness", sandbox.harness,
+        ]);
+      const issueBefore = readIssue();
+      expect(issueBefore.exitCode).toBe(0);
+      expect(issueBefore.data).toMatchObject({ kind: "provider-only", issueRef: null, projectId: REMOTE_PROJECT.localProjectId });
+      const statusBefore = sandbox.status();
+      expect(statusBefore.data.binding, statusBefore.result.stderr).toMatchObject({ state: "bound", generation: 1 });
 
       const moved = sandbox.runJson([
         "issue", "move",
-        "--id", "mstar:issue:77777777-7777-4777-8777-777777777702",
+        "--id", FIXTURE_ISSUE_ID,
         "--expect", "1",
         "--expect-store", "0",
         "--actor", "project-manager",
+        "--operation-id", moveOperation,
         "--harness", sandbox.harness,
-        "--payload", JSON.stringify({ projectId: "fixture-project", reason: "elsewhere" }),
+        "--payload", JSON.stringify({ projectId: REMOTE_PROJECT.localProjectId, reason: "elsewhere" }),
       ]);
       expect(moved.exitCode).toBe(1);
       expect(moved.code).toBe("collaboration.mode-unavailable");
-      // invariant: Nothing was frozen and the selected generation still answers, so the
-      // source authority is untouched by the refused move.
-      const pendingAfter = sandbox.runJson([
-        "store", "collaboration", "remote", "outbox-pending",
-        "--harness", sandbox.harness, "--project", "fixture-project",
+
+      // invariant: The same source generation still selects the same authority — nothing was
+      // re-pointed, re-bound or advanced by the refused move.
+      const statusAfter = sandbox.status();
+      expect(statusAfter.data.selector).toEqual(statusBefore.data.selector);
+      expect(statusAfter.data.binding).toEqual(statusBefore.data.binding);
+      // invariant: The observed issue is unchanged and still not adopted or moved.
+      expect(readIssue().data).toEqual(issueBefore.data);
+      // invariant: The refusal froze no intent at all — the named operation id has no recorded
+      // intent, and the project's pending queue is empty.
+      const recorded = sandbox.runJson([
+        "store", "collaboration", "remote", "outbox-show",
+        "--harness", sandbox.harness, "--operation", moveOperation,
       ]);
-      expect(pendingAfter.exitCode).toBe(0);
-      expect(pendingAfter.data).toMatchObject({ generation: pendingBefore.data.generation, intents: [] });
+      expect(recorded.exitCode).toBe(1);
+      expect(recorded.code).toBe("remote.intent-not-found");
+      const pending = sandbox.runJson([
+        "store", "collaboration", "remote", "outbox-pending",
+        "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId,
+      ]);
+      expect(pending.exitCode).toBe(0);
+      expect(pending.data).toMatchObject({ generation: 1, intents: [] });
     } finally {
       fixture.dispose();
     }
