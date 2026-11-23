@@ -19,7 +19,7 @@
 5. **Iteration:** PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `reviewed-bot` / `owner-gated`）—— reviewer 据此知道本 PR 的 review 由本地 loop 还是挂载的 bot 提供，以及是否被期待给出 merge 批准
 6. Follow the shared public PR body interface → `mstar-roles/references/project-manager/pr-description.md`; item 4 above is that interface's residual disclosure applied to the iteration's plans, and item 5 is iteration-only.
 7. Record PR URL / number and link the owning-session PM Task Board task (create it when none exists under the board contract) → `mstar-dispatch-gates` § PR feedback ownership (PM only).
-8. **Immediately** 继续进入 「Merge-ready loop」——**PR delivery exit ≠ 迭代交付完成**
+8. **Immediately** 继续进入 「Merge-ready loop」——**PR delivery exit ≠ 交付完成**，两条路线皆然
 
 ## Fix boundary
 
@@ -127,7 +127,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ## Merge-ready checklist
 
-打印 **`## Merge-ready checklist`**；**第 1–5 项全 `[x]` = merge-ready**（第 6 项是 merge-ready 的 todo 勾选动作，其条件即第 1–5 项），第 7 项（**Merge authorization**）是 merge 与 **Workflow Close Out** 的独立前置（见「Merge authorization」），第 8 项为 **Workflow Close Out**（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（**Workflow Close Out** 的前置），不得作为 merge-ready 的定义或该 merge-ready session todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；**Standalone development 路线：声明 merge-ready 之前必须已取得只读 close-state probe 的记录结果，且其中只有预期的 running-state 代码；出现 defect 代码即在该代码清除前不算 merge-ready**（命令、预期代码与 defect 恢复归其所有者：`workflow-close.md` 的 engine-check callout 与 `plan-management.md`「Merge-ready precondition」）；此后唯一出口是 **Workflow Close Out**（PR merged 后执行 `mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff）——本 checklist **不是**「迭代交付完成」：
+打印 **`## Merge-ready checklist`**；**第 1–5 项全 `[x]` = merge-ready**（第 6 项是 iteration 路线的 merge-ready session todo 勾选动作，其条件即第 1–5 项），第 7 项（**Merge authorization**）是 merge 的独立前置（见「Merge authorization」），第 8 项只是 PR **merge** 后的 exit marker，不构成进入条件。PR **merge** 后且第 1–7 项中每个适用项成立即进入 **Workflow Close Out**（`mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff）；**不得要求整表全 `[x]`**（否则要求先 merge，`owner-gated` 下自相矛盾，且第 6 项仅属 iteration 路线）；**Standalone development 路线：声明 merge-ready 之前必须已取得只读 close-state probe 的记录结果，且其中只有预期的 running-state 代码；出现 defect 代码即在该代码清除前不算 merge-ready**（命令、预期代码与 defect 恢复归其所有者：`workflow-close.md` 的 engine-check callout 与 `plan-management.md`「Merge-ready precondition」）——本 checklist 通过不等于交付完成：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
@@ -136,7 +136,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - [ ] 「Merge-ready loop」 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] **Iteration:** the iteration's merge-ready session todo 可勾选（todo table → `mstar-iteration/references/command-shared-invariants.md`）
 - [ ] **Merge authorization** — satisfied per 「Merge authorization」, and 「Unresolved conversation gate」 passed (no unresolved thread, or each named and confirmed twice)
-- [ ] PR **merge** 完成后执行 **Workflow Close Out**（`mstar-roles/references/project-manager/workflow-close.md`）
+- [ ] PR **merge** 后的 exit marker — 进入 **Workflow Close Out**（`mstar-roles/references/project-manager/workflow-close.md`）；勾选它不表示 close 已执行
 
 ## Merge authorization (HARD)
 
