@@ -20,7 +20,7 @@ export {
   isCoordinatorSeatCommand,
 } from "./coordinator-seat.js";
 export { isCliOnlyCommand } from "./cli-only.js";
-export { getPlanCommandDefinitions, PLAN_COMPLETION_EVIDENCE_SCHEMA } from "./families/plan.js";
+export { getPlanCommandDefinitions } from "./families/plan.js";
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";
 export { getIssueCommandDefinitions } from "./families/issue.js";
