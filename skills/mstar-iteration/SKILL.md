@@ -41,7 +41,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 Terminal wri
 **关键定位**：
 
 - **Phase 3** 在 integration 分支收口 specs/ADR 与 roadmap；per-plan knowledge compound 已在各 plan `Done` 后完成。**开 PR（Phase 4）≠ 迭代交付完成**。
-- **Phase 5** 是 **merge-ready loop**（修复 → 等 CI/review 波次结束再 push → 再验证，至「Merge-ready checklist」第 1–5 项全 `[x]`（merge-ready）；merge 授权另见「Merge authorization」）；**Loop 理念与 push cadence SSOT 在本 skill**（§2.6；push cadence 细则 → `mstar-roles/references/project-manager/pr-delivery.md`「Push cadence」）；宿主 command 可叠加额外 **non-`mstar-*`** helper（**优先** `babysit` / `*-babysit`；**`greploop` 可选**），但不写入 `mstar-*` load order；`reviewed-bot` 下 helper 只做 CI 与线程 follow-up，**不**引入任何本地 review driver。
+- **Phase 5** 是 **merge-ready loop**（修复 → 等 CI/review 波次结束再 push → 再验证，至「Merge-ready checklist」第 1–5 项全 `[x]`（merge-ready）；merge 授权另见「Merge authorization」）；**Loop 理念 SSOT 在本 skill**（§2.6）；**push cadence 时序 SSOT 在 `mstar-roles/references/project-manager/pr-delivery.md`「Push cadence」**；宿主 command 可叠加额外 **non-`mstar-*`** helper（**优先** `babysit` / `*-babysit`；**`greploop` 可选**），但不写入 `mstar-*` load order；`reviewed-bot` 下 helper 只做 CI 与线程 follow-up，**不**引入任何本地 review driver。
 - **Phase 6** 是 **post-merge close**（verified PR merged 后：terminal execution transition → DB root unregister → 投影对齐 → 显式 cleanup；细则 → `mstar-roles/references/project-manager/workflow-close.md`，cleanup 契约 → `mstar-branch-worktree`）。**「Merge-ready checklist」exit / PR mergeable ≠ 生命周期已关闭**。
 - 一次迭代 = 一个 PR；per-plan compound 与 Phase 3 specs/ADR 产物随 PR 合入 workflow `branch.target`（ACTIVE：执行行）。
 

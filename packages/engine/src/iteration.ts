@@ -2,45 +2,13 @@
  * Engine iteration module — compass frontmatter schema, phase-transition
  * gate evaluation, push-cadence probe, catalog completeness.
  *
- * Spec sources (each export cites the skill/reference section it enforces):
- * - Compass template + frontmatter fields (iteration_id / start_date /
- *   status / iteration_base_branch / target_branch / plans; `end_date` only
- *   at close): `mstar-iteration` SKILL.md §1.3 +
- *   `mstar-iteration/references/iteration-compass-template.md` Fields guide
- *   — `end_date` No (Phase 3 §3.4 only), `status`
- *   `active` | `locked` | `completed`.
- * - Phase transition gates (all compass-registered plans `Done` → Phase 3
- *   required; §3.5 exit checklist all `[x]` + frontmatter `completed` +
- *   `end_date` → Phase 4): `mstar-iteration` SKILL.md Phase transition
- *   gates table.
- * - §3.1 close entry checklist (checkable subset — plans all Done, compass
- *   frontmatter complete): `mstar-iteration/references/
- *   phase-3-iteration-close.md` §3.1. The residual item relocated to the
- *   project-layer `findingsCleanupGate(register, planId)` in the v3 cutover
- *   (the workflow snapshot carries no residuals; residual close is a
- *   project-register state change).
- *   Un-checkable items (Acceptance Criteria waiver reasoning,
- *   `## Plans` table prose sync) stay judgment and are NOT asserted here.
- * - §3.5 close exit checklist (checkable subset — frontmatter `status:
- *   completed` + `end_date`, current branch is `spec_integration_branch`,
- *   PR base = `target_branch`): phase-3-iteration-close.md §3.5. The
- *   compound / roadmap / quality-summary items are prose artifacts and stay
- *   judgment.
- * - Push cadence probe (never push while CI is queued/in_progress or an AI
- *   review wave is running): `mstar-iteration` SKILL.md §2.6 +
- *   the project-manager role's `pr-delivery.md`「Push cadence」push gate 1
- *   + 2.
- * - Catalog completeness (every discovered iteration/plan/project/document
- *   store has a `store.db` catalog row; the Markdown index tables are not
- *   registers): state-projection contract §4. Legacy flat
- *   `<id>-delivery-compass.md` files are read-compatible only (§1.3) and are
- *   not indexed by this check.
- * - Phase 6 post-merge close local-state gate (valid terminal snapshot
- *   shape + no leftover lease + root status.json entry unregistered;
- *   invalid/unreadable root is NOT proof of root absence): the
- *   project-manager role's `workflow-close.md`「Cleanup handoff」+
- *   「Evidence」. Pure and additive over the Phase 2–5 `evaluatePhaseGate`
- *   contract.
+ * Spec pointers (each export cites the skill section it enforces):
+ * - skills/mstar-iteration/SKILL.md — §1.3 fields, phase transition gates, §2.6
+ * - skills/mstar-iteration/references/iteration-compass-template.md — Fields guide
+ * - skills/mstar-iteration/references/phase-3-iteration-close.md — §3.1, §3.5
+ * - the project-manager `pr-delivery.md`「Push cadence」push gate 1 + 2
+ * - the project-manager `workflow-close.md`「Cleanup handoff」+「Evidence」
+ * - state-projection contract §4 — catalog completeness
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";

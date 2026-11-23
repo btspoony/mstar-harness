@@ -478,28 +478,12 @@ describe("skill load closure", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// mstar-iteration phase route map — progressive-disclosure iteration (Spec A5). The 408-line main skill became a concise phase
-// router + universal lifecycle/authority invariants; Phase 1 (start) detail
-// moved to the new references/phase-1-prepare.md; §2.0–§2.5 moved into
-// references/phase-2-worktree-lease.md; phase 3 detail lives in its reference
-// and PR delivery dispatches to the shared project-manager reference.
-// Pins (STRUCTURAL evidence only, AC1/AC2):
-// 1. Route map — start→phase1, execute/resume→phase2, close→phase3,
-// PR/merge-ready→shared PR delivery; each route row names exactly its file.
-// 2. No missing local file/anchor — every dispatched file exists and carries
-// its entry heading and named section anchors (five gates, push cadence,
-// phase boundary, SP5 retarget pointers).
-// 3. No unconditional all-phase read edge — the unconditional Load order
-// names zero phase detail files, and no single line names ≥2 of them.
-// Policy prose is not pinned: a semantic rephrase must not fail these gates.
-// Never substitutes for model traces (Spec A1 runner/efficacy separation).
-// ---------------------------------------------------------------------------
+// see skills/mstar-iteration/SKILL.md § Phase route map — the pins below are
+// structural evidence only: each route row names exactly its file, and every
+// dispatched file exists with its entry heading. Policy prose is not pinned.
 
 const ITERATION_SKILL = join(SKILLS_DIR, "mstar-iteration/SKILL.md");
 const ITERATION_DIR = join(SKILLS_DIR, "mstar-iteration");
-/** The PR route dispatches to the shared project-manager reference, outside the
- * iteration skill directory, so it resolves from the skills root. */
 const SHARED_PR_DELIVERY = "mstar-roles/references/project-manager/pr-delivery.md";
 const PHASE_ROUTE_FILES = [
   "references/phase-1-prepare.md",
@@ -508,8 +492,6 @@ const PHASE_ROUTE_FILES = [
   "references/pr-helper-discovery.md",
 ] as const;
 const ALL_ROUTE_FILES = [...PHASE_ROUTE_FILES, SHARED_PR_DELIVERY];
-/** Resolve a route file: iteration-local paths under the skill, the shared PR
- * delivery reference under the skills root. */
 function routeFilePath(file: string): string {
   return file === SHARED_PR_DELIVERY ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
 }
