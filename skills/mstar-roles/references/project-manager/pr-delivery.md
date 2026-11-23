@@ -4,11 +4,11 @@
 
 | Caller | Route inputs |
 |---|---|
-| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.target` and `integration_worktree_path` — mirrored in the compass frontmatter; each PR's head is its own layer ref and its base is the live predecessor layer, per `mstar-iteration/references/pr-stack.md`; the compass `pr_merge_policy` selects the review path and the compass `PR stack` table records the chain. |
+| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.target` and `integration_worktree_path` — mirrored in the compass frontmatter; the head is the layer ref and the base is the live predecessor layer ref, or `branch.target` for the first open layer after a merged prefix — and, for the final layer once no other layer is open, head `branch.integration` with base `branch.target` — per `mstar-iteration/references/pr-stack.md`; the compass `pr_merge_policy` selects the review path and the compass `PR stack` table records the chain. |
 | Standalone development | Its registered delivery branch and target. |
 | Report-only | None: a report-only workflow has no PR and does not enter this file. |
 
-**Authorization source (one statement for both callers).** An iteration takes `pr_merge_policy` from its compass — exactly one of `reviewed-auto`, `reviewed-bot` or `owner-gated`, confirmed with the user at direction lock and never defaulted; a missing value → STOP and return to the iteration's direction-lock step. A standalone development PR takes the project's merge requirements plus the owner's approval naming the PR and head; absent → STOP and ask, and no compass is invented. **Route entry.** Iteration: its iteration-close exit checklist is all `[x]` and the close commit is pushed to `spec_integration_branch`; after its PR exists, the loop starts on that PR. Standalone: the compound disposition is recorded and the delivery branch head is finalized.
+**Authorization source (one statement for both callers).** An iteration takes `pr_merge_policy` from its compass — exactly one of `reviewed-auto`, `reviewed-bot` or `owner-gated`, confirmed with the user at direction lock and never defaulted; a missing value → STOP and return to the iteration's direction-lock step. A standalone development PR takes the project's merge requirements plus the owner's approval naming the PR and head; absent → STOP and ask, and no compass is invented. **Route entry.** Iteration: a review-ready layer may be published during execution per `mstar-iteration/references/pr-stack.md`, and the iteration-close exit checklist all `[x]` plus the pushed close commit are required for the final layer only; after the layer's PR exists, the loop starts on that PR. Standalone: the compound disposition is recorded and the delivery branch head is finalized.
 
 ## Stacked PRs (iteration only)
 
@@ -17,8 +17,8 @@ An iteration is delivered as a chain of stacked PRs, never as one aggregate PR: 
 ## Publish the PR
 
 1. 打印 **`## Phase 4: PR delivery`**
-2. Resolve target：iteration → ACTIVE workflow 执行行 `branch.target`（compass frontmatter 镜像）；standalone → registered target。缺失 → **STOP**，问用户
-3. 创建 PR：iteration `spec_integration_branch` → `target_branch`；standalone → registered delivery branch → registered target
+2. Resolve base：iteration → 首个 open layer（已有 merged prefix 时）与 final layer 用 ACTIVE workflow 执行行 `branch.target`（compass frontmatter 镜像），其余 layer 用 live predecessor layer ref；standalone → registered target。base 缺失或 predecessor 不可核实 → **STOP**，问用户
+3. 创建 PR：iteration 的 head 为 layer ref（`iteration-stack/<iteration-id>/sNN`；close 后且无其它 open layer 时 final layer 为 `spec_integration_branch`），base 按 step 2；standalone → registered delivery branch → registered target
 4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
 5. PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `reviewed-bot` / `owner-gated`）—— reviewer 据此知道本 PR 的 review 由本地 loop 还是挂载的 bot 提供，以及是否被期待给出 merge 批准
 6. Follow the shared public PR body interface → `mstar-roles/references/project-manager/pr-description.md`; item 4 above is that interface's residual disclosure applied to the iteration's plans, and item 5 is iteration-only.
@@ -30,7 +30,8 @@ An iteration is delivered as a chain of stacked PRs, never as one aggregate PR: 
 - **Iteration.** Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
 - **Checkout / worktree（HARD，iteration）**：Phase 5 是 PR 级 **hotfix** loop。产品修复在从 `spec_integration_branch` 出的独立 **fix feature worktree** 上编辑、commit；review 后在 **integration worktree**（路径取 ACTIVE workflow 执行行 `integration_worktree_path`）串行 merge 回 integration，再按 「Push cadence」 push。禁止在 integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
   Hotfix commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
-- **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges back in the **integration worktree**.
+- **Iteration layer head.** 当 PR head 是 layer ref 时，产品修复在从**该 layer ref** 出的独立 fix worktree 上编辑、commit；review 后由**该 PR 的单一 pusher** fast-forward 或 merge 到该 layer ref，并按 「Push cadence」 push；integration 分支的更新与向上层传播由 coordinator 在 checkpoint 串行执行 → `mstar-iteration/references/pr-stack.md`（Propagation）。上一行的 integration worktree 串行 merge 属 final layer（head 为 `branch.integration`）。
+- **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges back in the **integration worktree** for the final layer, or onto the affected layer ref for a stack PR (previous bullet).
 - **Standalone development.** The fix is committed on the registered delivery branch in its dedicated worktree and pushed under 「Push cadence」, never the primary checkout (fix sites table → `mstar-pr-loop/SKILL.md`); the hotfix identity rule above still applies.
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → 下一节（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
@@ -104,12 +105,12 @@ gh api --paginate "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
 
 ## Merge-ready loop
 
-**Precondition**: the route's PR is created and its head is the route's head branch (iteration: `spec_integration_branch`).
+**Precondition**: the route's PR is created and its head is the route's head branch (iteration: `spec_integration_branch` for the final layer, or that layer's ref while a stack is open).
 
 **Loop 理念**（mstar SSOT）：PR 开完后进入 **验证—修复—再验证** 循环，直至 PR 可合并。与 Phase 2 per-plan loop 类似，但对象是 **PR 级** merge 门禁（CI、review、冲突），不是 plan 实现。（repeat until the Merge-ready checklist items 1–5 are all `[x]`）
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
-2. **Merge conflicts** — blocking 则**本地**解决：iteration 在 integration 分支；standalone development 在 registered delivery branch 的专属 worktree。**仅当 「Push cadence」 push gate 满足时**再 push（意图冲突 → **Blocked**）；standalone 且本地 `mstar-pr-loop` 进行中时，冲突修复只在本地 commit，由该 loop 的批一并 push——仅在无本地 loop 运行时才由本 loop 自行 push。
+2. **Merge conflicts** — blocking 则**本地**解决：iteration 在 PR head 上（layer head 时在该 layer ref 的 fix worktree，由该 PR 的单一 pusher 合回该 ref；final layer 在 integration 分支）；standalone development 在 registered delivery branch 的专属 worktree。**仅当 「Push cadence」 push gate 满足时**再 push（意图冲突 → **Blocked**）；standalone 且本地 `mstar-pr-loop` 进行中时，冲突修复只在本地 commit，由该 loop 的批一并 push——仅在无本地 loop 运行时才由本 loop 自行 push。
 3. **Review dispatch** — **Iteration（按 compass `pr_merge_policy`）**：`reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 「Push cadence」 的 push cadence 推进；**不要**在每个 merge-ready 迭代里另起第二个 review loop。「Merge-ready loop」 在该轮内**暂停第 4 步的 review 修复分派与第 6 步的 push**——这两项由该 loop 一并执行（「Push cadence」 仍逐次适用，单一 pusher，避免同一 head 两个推手）。**第 5 步的 required-CI 修复保留**：可由 「Merge-ready loop」 本地开工，但其 push 同样走该 loop 的批（「Push cadence」），不得另起第二推手。「Merge-ready loop」 仍负责 mergeable 与 required-CI 观测。「Merge authorization」 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`reviewed-bot`：**不**起任何本地 review loop——挂载的 bot 按其自身触发模式（push 触发或手动触发）产出 review，「Merge-ready loop」 只监控该 review 是否已落到当前 head 并达到其自身门（「Review paths and surfaces」），其 findings 走第 4 步普通第三方 triage，push 仍守 「Push cadence」。`owner-gated`：**完全**不起 PR 级 review loop，**人类 owner** 的 review 就是 gate，Phase 5 停在 merge-ready 等其书面批准。**Standalone development**：不按 compass 选择——按项目挂载的 review surface 推进，每个 bot 按其自身门在 current head settled（「Review paths and surfaces」）；只有用户明确要求时才运行本地 `mstar-pr-loop`，不得自行启动；一旦用户明确要求，该 loop 即拥有**它自己产出的 review findings** 的修复分派与 PR-head push 批次；第三方与 bot findings 仍由本 loop 确认、dispatch，连同 required-CI 修复一并进入**同一 push 批**（与无本地 loop 时一致）。「Merge-ready loop」 在该轮内只**暂停会与本地 loop 重复的 review 修复工作，以及它自己的 push**——「Push cadence」 仍逐次适用，单一 pusher；挂载 bot 与 required-CI 观测仍归本 loop。
 4. **Reviews** — `reviewed-auto`：fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）。`reviewed-bot`：读 bot 在当前 head 上的证据并按 「Review paths and surfaces」 Bot evidence 取全量 findings——整体 review comment（全部 finding 块，含被折叠的 omitted 声明）、anchored line comments（行内副本，即可 resolve 的 thread）、`mstar-inspector review` check（结论与 summary）；**不要**只 fetch threads 就当作该 head 的全部 findings。triage 与本地修复同本地路径，bot 已自行 resolve 的线程不重复处理。
 5. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push

@@ -49,7 +49,7 @@
 
 ## Cleanup
 
-- The cleanup CLI does not own stack refs (GitHub #821). After terminal close, delete a local layer ref only when it is an ancestor of the target ref (`git branch -d`, never `-D`) and no open PR uses it; delete a remote ref only after the provider shows its PR merged; otherwise stop and report the residue.
+- The cleanup CLI does not own stack refs (GitHub #821). Before deleting any layer ref, local or remote, reconcile the actual ref and its head exactly with the ref and head witnessed in the compass `PR stack` table — a moved ref no longer matches and is not deleted — and confirm no open PR uses it as base or head. A local ref is deleted only as an ancestor of the target ref (`git branch -d`, never `-D`); a remote ref only after its PR shows merged. Any condition that fails stops the deletion and reports the residue; no force.
 
 ## Rollout
 
