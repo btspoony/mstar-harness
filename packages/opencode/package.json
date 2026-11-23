@@ -38,7 +38,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "@mstar-harness/engine": "workspace:*",
-    "@mstar-harness/commands": "workspace:*"
+    "@mstar-harness/engine": "workspace:*"
   }
 }

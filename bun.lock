@@ -204,7 +204,6 @@
       "name": "@mstar-harness/omp",
       "version": "4.8.4",
       "devDependencies": {
-        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
         "@oh-my-pi/pi-coding-agent": "18.19.0",
       },
@@ -222,7 +221,6 @@
         "@opencode-ai/plugin": "1.19.6",
       },
       "devDependencies": {
-        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
       },
     },
@@ -235,7 +233,6 @@
         "effect": "4.1.4",
       },
       "devDependencies": {
-        "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
       },
     },
