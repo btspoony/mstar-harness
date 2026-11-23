@@ -23,8 +23,8 @@
  * `spec_integration_branch`, PR base = `target_branch`):
  * `skills/mstar-iteration/references/phase-3-iteration-close.md` §3.5.
  * - Push cadence probe (never push while CI is queued/in_progress or an AI
- * review wave is running): `skills/mstar-iteration/SKILL.md` §5.1a +
- * `skills/mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a
+ * review wave is running): `skills/mstar-iteration/SKILL.md` §2.6 +
+ * the project-manager role's `pr-delivery.md`「Push cadence」
  * (push gate 1 + 2).
  * - Catalog completeness (every discovered iteration/plan store has a
  * catalog row; the README tables are not registers): state-projection

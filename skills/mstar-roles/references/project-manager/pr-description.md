@@ -39,6 +39,6 @@ Write `Door: one-way | two-way` and one `Blast radius` line naming the affected 
 
 ## Iteration-only addition
 
-Include the `pr_merge_policy` required by `mstar-iteration/references/phase-4-5-pr-delivery.md` § Phase 4, item 5. Its definition stays there; standalone PRs do not invent a compass or iteration policy.
+Include the `pr_merge_policy` required by `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」item 5. Its definition stays there; standalone PRs do not invent a compass or iteration policy.
 
 Follow the project's title convention when one is declared.

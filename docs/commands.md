@@ -98,7 +98,7 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 
 **When/arguments** — resume or advance an already locked iteration, with no arguments. Reject every nonempty argument shape before boot; never reinterpret unsupported input as whole-iteration authorization. PM stays in the primary session; a leaf receiving this command refuses it.
 
-**Defined in** — [`commands/iteration-drive.md`](../commands/iteration-drive.md); phase route and transition gates → `mstar-iteration` (`references/phase-2-worktree-lease.md`, `references/phase-3-iteration-close.md`, `references/phase-4-5-pr-delivery.md`, `mstar-roles/references/project-manager/workflow-close.md`); Phase 5 helper-skill discovery → `references/phase5-helper-discovery.md`.
+**Defined in** — [`commands/iteration-drive.md`](../commands/iteration-drive.md); phase route and transition gates → `mstar-iteration` (`references/phase-2-worktree-lease.md`, `references/phase-3-iteration-close.md`, `mstar-roles/references/project-manager/pr-delivery.md`, `mstar-roles/references/project-manager/workflow-close.md`); helper-skill discovery → `references/pr-helper-discovery.md`.
 
 ### Direct row operations
 

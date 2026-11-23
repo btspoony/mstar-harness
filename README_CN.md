@@ -105,7 +105,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ## 工作流
 
-![交付工作流：你描述工作，PM 澄清并制定计划，在功能分支上实现，独立审查（要求修改回环）与 PM Acceptance（未通过回环）回到实现，迭代决策在还有计划时回到下一个计划，收尾后开 PR，CI 与 review 全绿门禁在未通过时回到修正验证，Merge-ready 后按记录的 merge policy §5.3 或你的批准合并，最后核实合并并完成 post-merge 收尾](assets/workflow.zh.svg)
+![交付工作流：你描述工作，PM 澄清并制定计划，在功能分支上实现，独立审查（要求修改回环）与 PM Acceptance（未通过回环）回到实现，迭代决策在还有计划时回到下一个计划，收尾后开 PR，CI 与 review 全绿门禁在未通过时回到修正验证，Merge-ready 后按记录的 merge policy（`pr-delivery.md` § Merge authorization）或你的批准合并，最后核实合并并完成 post-merge 收尾](assets/workflow.zh.svg)
 
 主路径展示 **development** 交付。每个 plan 都有 plan 级 QC，默认三个独立席位；多任务 plan 另有 per-task review，hotfix/inline 仍保留较轻的席位规则。**PM Acceptance** 是所有范围唯一的验收路径：每条必需标准都映射到相关证据与真实结果，QC 批准本身不是测试证明。PM 可为具名缺口执行短小、有界的验收检查，但不得代做实现、编写测试、长套件或运维。已确认但未修复的问题仍作为 issue 跟踪。
 

@@ -9,7 +9,7 @@ description: "Use only when the user explicitly starts a review→fix loop on an
 
 1. `mstar-harness-core` — lifecycle and authorization authority.
 2. `mstar-audit`, `pr` variant → `mstar-audit/references/pr-review.md` — review execution, re-review, verdict synthesis, posting and archival contracts.
-3. `mstar-iteration` → `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.0 / §5.1a — iteration fix-worktree discipline and push cadence; §5.0 applies only to iteration Phase 5.
+3. `mstar-roles` → `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」/「Push cadence」 — iteration fix-worktree discipline and push cadence; the fix boundary applies only to an iteration PR.
 4. `mstar-branch-worktree` — checkout authorization and the three-domain write table.
 5. `mstar-dispatch-gates` — Assignment fields, writable dispatch and leaf boundaries.
 
@@ -21,7 +21,7 @@ The project-manager orchestrates; implementers fix; review seats remain read-onl
 
 Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. Not under `reviewed-bot`: that policy makes an attached review bot the PR's review producer, so this loop must not start, and its findings are triaged by iteration Phase 5 like any third-party reviewer's. This is not routine review, and the loop never starts on its own initiative.
 
-Under a recorded `reviewed-auto` this loop is that iteration's Phase 5 review gate, and its `ship it` row is the merge authorization `mstar-iteration` → `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.3 reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
+Under a recorded `reviewed-auto` this loop is that iteration's Phase 5 review gate, and its `ship it` row is the merge authorization `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
 
 - Resolve `pr:<n>` preferentially, otherwise a branch with an open PR. If resolution fails or the PR is not ready, refuse with the actual cause and accepted forms: `pr:<n>` or a branch with an open, ready PR; supply that target or make the existing PR ready, then retry this entry.
 - Accept one optional tier: `quick`, `default` or `deep`; otherwise use the review's own inference ladder (§ Review depth (tiers)), not a loop-specific default.
@@ -33,7 +33,7 @@ The loop does not own CI babysitting, third-party review threads (those an exter
 
 One round is a review and its tally-derived transition, followed by a qualifying fix batch when required:
 
-1. Check the current head's push gate (`mstar iteration push-cadence`) using §5.1a. Local diagnosis and fix commits may proceed while waves run, but head updates wait for idle CI and AI-review waves.
+1. Check the current head's push gate (`mstar iteration push-cadence`) using「Push cadence」. Local diagnosis and fix commits may proceed while waves run, but head updates wait for idle CI and AI-review waves.
    - When the external review-seat channel is available, steps 2–3 (review, tally, synthesis and posting) run inside it: this session dispatches the round to that channel's independent host session, reads the archived report, and coordinates fixes for step 1, step 4 and the round loop.
 2. Run the `mstar-audit` `pr` variant against the resolved PR head. Round 1 is a full review. Round 2 onward follows § Re-review (same target, later head): a settled ancestor report permits the covering path, revalidation of prior findings and the increment pack; otherwise review the full diff and state why. Use § Local report archive for `report.md` / `report-rN.md` and immutable evidence paths; do not overwrite prior reports.
 3. Synthesize the current tally and verdict through § Verdict synthesis. Post a new `COMMENT` review, run the thread lifecycle (resolve `fixed` threads, fold superseded review bodies — `mstar-audit` → `mstar-audit/references/pr-review.md` § Comment posting — Thread lifecycle), and save the report under § Comment posting / § Local report archive; inline comments of still-open findings are never edited. Posting failure retains the local report and error, not a success claim.
@@ -65,7 +65,7 @@ Leftover `unmet` acceptance criteria are separate tally increments, not findings
 
 | PR context | Head and fix site |
 | --- | --- |
-| Iteration PR | PR head = `branch.integration`; edit and commit in a fix feature worktree, then serially merge into the integration worktree. Follow §5.0, which is Phase-5-only. |
+| Iteration PR | PR head = `branch.integration`; edit and commit in a fix feature worktree, then serially merge into the integration worktree. Follow its「Fix boundary」, which applies only to an iteration PR. |
 | Standalone `development` plan | PR head = registered `branch.work`; commits land in a dedicated worktree checked out on that branch, never the primary checkout. |
 
 The iteration merge ritual is not generalized to standalone plans.
@@ -73,7 +73,7 @@ The iteration merge ritual is not generalized to standalone plans.
 ### Fixable findings and push discipline
 
 - Dispatch only findings with `file:line`, a fix sketch and merge class `must-fix` or `should-fix`; do not dispatch `may-fix` or `nit` by default. Missing evidence returns to review triage, not speculative implementation. Findings requiring product, permission or external decisions stop and report the decision needed.
-- Fix commits stay local in the fix worktree until CI and AI-review waves are idle (§5.1a); then push one batch. Do not rebase or force-push inside the loop: rewritten history degrades the next round to a full review (§ Re-review).
+- Fix commits stay local in the fix worktree until CI and AI-review waves are idle (「Push cadence」); then push one batch. Do not rebase or force-push inside the loop: rewritten history degrades the next round to a full review (§ Re-review).
 - Keep product edits out of the primary checkout; review worktrees stay read-only. Report/evidence placement follows the review archive contract and `mstar-branch-worktree`'s three-domain statement, not the fix-worktree location.
 
 ### Stop and recovery
@@ -87,6 +87,6 @@ Return the PR identity and current head, latest report path and review URL, tall
 ## References
 
 - open when running a review seat or synthesizing its verdict — Review, tier inference, revalidation, settlement, tally, new COMMENT posting and report archival → `mstar-audit` → `mstar-audit/references/pr-review.md` §§ Re-review (same target, later head), Verdict synthesis, Review depth (tiers), Comment posting, Local report archive.
-- open when a verdict turns into an iteration fix batch — Iteration-only fix integration and shared push timing → `mstar-iteration` → `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.0 / §5.1a; legal STOP semantics → `mstar-iteration/references/command-shared-invariants.md`.
+- open when a verdict turns into an iteration fix batch — Iteration-only fix integration and shared push timing → `mstar-roles` → `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」/「Push cadence」; legal STOP semantics → `mstar-iteration/references/command-shared-invariants.md`.
 - Checkout/write-domain ownership → `mstar-branch-worktree`; Assignment and dispatch shape → `mstar-dispatch-gates`.
 - open when the review runs on a separate live seat (`herdr-core` / `herdr`) — External review-seat channel → `references/terminal-agent-channel.md`.

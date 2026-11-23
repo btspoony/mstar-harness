@@ -27,8 +27,8 @@
  *   compound / roadmap / quality-summary items are prose artifacts and stay
  *   judgment.
  * - Push cadence probe (never push while CI is queued/in_progress or an AI
- *   review wave is running): `mstar-iteration` SKILL.md §5.1a +
- *   `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a push gate 1
+ *   review wave is running): `mstar-iteration` SKILL.md §2.6 +
+ *   the project-manager role's `pr-delivery.md`「Push cadence」push gate 1
  *   + 2.
  * - Catalog completeness (every discovered iteration/plan/project/document
  *   store has a `store.db` catalog row; the Markdown index tables are not

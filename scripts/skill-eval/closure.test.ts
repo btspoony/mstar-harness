@@ -482,10 +482,11 @@ describe("skill load closure", () => {
 // mstar-iteration phase route map — progressive-disclosure iteration (Spec A5). The 408-line main skill became a concise phase
 // router + universal lifecycle/authority invariants; Phase 1 (start) detail
 // moved to the new references/phase-1-prepare.md; §2.0–§2.5 moved into
-// references/phase-2-worktree-lease.md; phase 3 / 4-5 detail already lived in
-// their references. Pins (STRUCTURAL evidence only, AC1/AC2):
+// references/phase-2-worktree-lease.md; phase 3 detail lives in its reference
+// and PR delivery dispatches to the shared project-manager reference.
+// Pins (STRUCTURAL evidence only, AC1/AC2):
 // 1. Route map — start→phase1, execute/resume→phase2, close→phase3,
-// PR/merge-ready→phase4-5; each route row names exactly its phase file.
+// PR/merge-ready→shared PR delivery; each route row names exactly its file.
 // 2. No missing local file/anchor — every dispatched file exists and carries
 // its entry heading and named section anchors (five gates, push cadence,
 // phase boundary, SP5 retarget pointers).
@@ -497,20 +498,28 @@ describe("skill load closure", () => {
 
 const ITERATION_SKILL = join(SKILLS_DIR, "mstar-iteration/SKILL.md");
 const ITERATION_DIR = join(SKILLS_DIR, "mstar-iteration");
+/** The PR route dispatches to the shared project-manager reference, outside the
+ * iteration skill directory, so it resolves from the skills root. */
+const SHARED_PR_DELIVERY = "mstar-roles/references/project-manager/pr-delivery.md";
 const PHASE_ROUTE_FILES = [
   "references/phase-1-prepare.md",
   "references/phase-2-worktree-lease.md",
   "references/phase-3-iteration-close.md",
-  "references/phase-4-5-pr-delivery.md",
-  "references/phase5-helper-discovery.md",
+  "references/pr-helper-discovery.md",
 ] as const;
+const ALL_ROUTE_FILES = [...PHASE_ROUTE_FILES, SHARED_PR_DELIVERY];
+/** Resolve a route file: iteration-local paths under the skill, the shared PR
+ * delivery reference under the skills root. */
+function routeFilePath(file: string): string {
+  return file === SHARED_PR_DELIVERY ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
+}
 /** Route → dispatched file + keywords that must share ONE route-map row, and
  * the entry heading that must exist in the dispatched file. */
 const PHASE_ROUTES: Array<{ keywords: string[]; file: string; entryAnchor: string }> = [
   { keywords: ["start"], file: "references/phase-1-prepare.md", entryAnchor: "# Phase 1: start" },
   { keywords: ["execute", "resume"], file: "references/phase-2-worktree-lease.md", entryAnchor: "# Phase 2: Autonomous Execute" },
   { keywords: ["close"], file: "references/phase-3-iteration-close.md", entryAnchor: "# Phase 3: iteration-close" },
-  { keywords: ["PR", "merge-ready"], file: "references/phase-4-5-pr-delivery.md", entryAnchor: "# Phase 4 & 5" },
+  { keywords: ["PR", "merge-ready"], file: SHARED_PR_DELIVERY, entryAnchor: "# PR delivery: publish, merge-ready, authorize and verify" },
 ];
 
 describe("mstar-iteration phase route map ", () => {
@@ -524,11 +533,11 @@ describe("mstar-iteration phase route map ", () => {
     return iterationLines.slice(start, end === -1 ? iterationLines.length : end);
   }
 
-  test("route map: start→phase1, execute/resume→phase2, close→phase3, PR/merge-ready→phase4-5", () => {
+  test("route map: start→phase1, execute/resume→phase2, close→phase3, PR/merge-ready→shared delivery", () => {
  // The single route map names every phase detail file (router completeness).
     const routeMap = sectionLines("## Phase route map").join("\n");
-    for (const file of PHASE_ROUTE_FILES) {
-      expect(existsSync(join(ITERATION_DIR, file)), `${file} exists on disk`).toBe(true);
+    for (const file of ALL_ROUTE_FILES) {
+      expect(existsSync(routeFilePath(file)), `${file} exists on disk`).toBe(true);
       expect(routeMap.includes(file), `route map names ${file}`).toBe(true);
     }
  // Each iteration action reaches exactly its phase reference: one row
@@ -541,9 +550,9 @@ describe("mstar-iteration phase route map ", () => {
 
   test("no missing local file/anchor: entry headings + load-bearing AC2 semantics resolve", () => {
     for (const { file, entryAnchor } of PHASE_ROUTES) {
-      expect(read(join(ITERATION_DIR, file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
+      expect(read(routeFilePath(file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
     }
-    expect(read(join(ITERATION_DIR, PHASE_ROUTE_FILES[4])).includes("# Phase 5 helper skill discovery")).toBe(true);
+    expect(read(routeFilePath("references/pr-helper-discovery.md")).includes("# PR helper discovery")).toBe(true);
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
     expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）")).toBe(true);
@@ -563,20 +572,20 @@ describe("mstar-iteration phase route map ", () => {
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.1 Close entry checklist（HARD GATE）")).toBe(true);
     expect(phase3.includes("## 3.5 Close exit checklist + commit")).toBe(true);
-    const phase45 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[3]));
-    expect(phase45.includes("### 5.1a Push cadence")).toBe(true);
-    expect(phase45.includes("### 5.2 Phase 5 exit checklist")).toBe(true);
+    const prDelivery = read(routeFilePath(SHARED_PR_DELIVERY));
+    expect(prDelivery.includes("## Push cadence")).toBe(true);
+    expect(prDelivery.includes("## Merge-ready checklist")).toBe(true);
   });
 
   test("no unconditional all-phase read edge: Load order names zero phase files; no line names ≥2", () => {
  // The unconditional bootstrap section must not pull in phase detail…
     const loadOrder = sectionLines("## Load order").join("\n");
-    for (const file of PHASE_ROUTE_FILES) {
+    for (const file of ALL_ROUTE_FILES) {
       expect(loadOrder.includes(file), `Load order must not unconditionally name ${file}`).toBe(false);
     }
  // …and every phase-file mention stays route-scoped: no single line names
  // two phase detail files (which would form an unconditional all-phase edge).
-    const offenders = iterationLines.filter((l) => PHASE_ROUTE_FILES.filter((f) => l.includes(f)).length >= 2);
+    const offenders = iterationLines.filter((l) => ALL_ROUTE_FILES.filter((f) => l.includes(f)).length >= 2);
     expect(offenders, `lines naming ≥2 phase files: ${JSON.stringify(offenders)}`).toEqual([]);
   });
 
