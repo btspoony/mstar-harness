@@ -595,15 +595,15 @@ rect.c-bg-rect { fill: var(--bg); }
           <text data-node-label="" x="115" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Merge-ready</text>
         </g>
 
-        <g id="node-merge" data-node-id="merge" data-node-label="Merge" tabindex="0" role="button" aria-label="Focus Merge, policy 5.3 or owner approval, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="policy 5.3 or owner approval" data-node-context="Architecture component">
-          <title>Merge · policy 5.3 or owner approval · Architecture component</title>
+        <g id="node-merge" data-node-id="merge" data-node-label="Merge" tabindex="0" role="button" aria-label="Focus Merge, Merge authorization, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Merge authorization" data-node-context="Architecture component">
+          <title>Merge · Merge authorization · Architecture component</title>
           <rect x="240" y="540" width="170" height="66" rx="6" class="c-mask"/>
           <rect x="240" y="540" width="170" height="66" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(246 546) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
           <text data-node-label="" x="325" y="571" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Merge</text>
-        <text x="325" y="587" class="t-muted" font-size="9" text-anchor="middle">policy 5.3 or owner approval</text>
+        <text x="325" y="587" class="t-muted" font-size="9" text-anchor="middle">Merge authorization</text>
         </g>
 
         <g id="node-verify" data-node-id="verify" data-node-label="Verify and close" tabindex="0" role="button" aria-label="Focus Verify and close, post-merge close, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="post-merge close" data-node-context="Architecture component">
