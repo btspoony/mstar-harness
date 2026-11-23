@@ -6,7 +6,7 @@
 |---|---|
 | Standalone development | Its own PR is merged, and close consults the local Git association proof. |
 | Report-only | QC and PM Acceptance under the registered completion policy, with no PR and no merge. |
-| Iteration | Every delivery PR is merged and the accepted content is on `branch.target`, verified by the primary coordinator because the engine verifies no iteration merge today (#819). |
+| Iteration | Every delivery PR is merged and the accepted content is on `branch.target`, verified by the primary coordinator because the engine verifies no iteration merge today (#819); the entry rests on the PR owner's merge-ready, authorization and unresolved-thread evidence — `pr-delivery.md`「Merge-ready checklist」,「Merge authorization」and「Unresolved conversation gate」 — including an owner self-merge before confirmation, which enters close with that head's per-thread dispositions recorded under「Unresolved conversation gate」. |
 
 ## Entry
 
@@ -40,18 +40,18 @@ The same command closes the lifecycle with terminal-then-unregister semantics: i
 
 ## Projection reconciliation
 
-Align the local narrative surface to the ACTIVE DB terminal state and the store issue rollup:
+Align only the projections the selected route actually has to the ACTIVE DB terminal state and the store issue rollup:
 
-1. the `{PLAN_DIR}` authored plan
-2. compass `## Plans`; the iteration README is prose only, with no status registration rows
-3. store project roadmap content and issue rollup; the project register is migration history only and is not updated
+1. the `{PLAN_DIR}` authored plan — every route
+2. compass `## Plans` — an iteration route only; the iteration README is prose only, with no status registration rows
+3. the store project roadmap content and issue rollup — where the project has them; the project register is migration history only and is not updated
 
 - **Never** forge a `Done` row and **never** close an open residual to match. Reconciliation invents no Done/closed, closes no entry to align, and does not relax the `zero-residual` rule; under `allow-residual`, a registered and disclosed non-blocking open R# **stays open** and does not "close along with" the lifecycle end (a real remaining finding blocks `zero-residual` delivery instead of being silently closed).
 - **Never** slip new tracked product or documentation commits into the close (any step) — a newly found product fix opens its own authorized workflow.
 
 ## Cleanup handoff
 
-Physical cleanup (integration worktree / local branch / remote branch deletion) is an **explicit separate step** after Terminal write → Unregister → Projection reconciliation — timing lane 2: the integration surface is cleaned only after a valid terminal close plus a verified merge. This file fixes only the order and the guards; it does not implement deletion:
+Physical cleanup (integration worktree / local branch / remote branch deletion) is an **explicit separate step** after Terminal write → Unregister → Projection reconciliation — timing lane 2: the integration surface is cleaned only after a valid terminal close plus a verified merge. It covers only the merge-backed resources of the development routes: a report-only close has none and records the handoff as not applicable, while the guarded timing below is unchanged for development resources. This file fixes only the order and the guards; it does not implement deletion:
 
 - Cleanup is **never automatic** and never bypasses ownership or merge-evidence guards. The contract body (ownership, merge evidence, refusals, apply order) has one home → **`mstar-branch-worktree`**「Worktree / branch cleanup」; this section is only the call site.
 - `mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose]` — dry-run by default, printing `verdict | kind | ref | reason` per candidate (flag semantics, default candidate scope and guards live in the owning contract above); check that every protected row reads `keep`/`refuse` in the dry run before `--apply`.
