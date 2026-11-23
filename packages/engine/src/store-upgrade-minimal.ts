@@ -1,4 +1,5 @@
 export {
+  advanceSchemaWithGeneratedAttestation,
   importExecutionMinimal,
   upgradeStoreMinimal,
   type MinimalImportResult,

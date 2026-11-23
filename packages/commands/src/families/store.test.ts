@@ -719,3 +719,158 @@ test("store.upgrade advances a combined source's execution schema before directi
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** note: A combined store rewound to the last schema a released 4.8.x build writes and admits. */
+function rewindToReleasedSchema(harness: string): void {
+  const fenceVersion = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version;
+  const rewind = new DatabaseSync(join(harness, "store.db"));
+  try {
+    rewind.prepare("delete from schema_version where version >= ?").run(fenceVersion);
+    // why: Both later migrations ADD objects, so dropping them keeps their re-application a
+    // real migration rather than a no-op: the fence ledger and the reservation table.
+    rewind.exec("drop table collaboration_cutover; drop table execution_collaboration_intents;");
+  } finally {
+    rewind.close();
+  }
+}
+
+/** note: One refusal's recovery line, from the envelope details it publishes. */
+function recoveryOf(envelope: { details?: unknown }): string {
+  const details = envelope.details;
+  return details !== null && typeof details === "object" && "recovery" in details && typeof details.recovery === "string"
+    ? details.recovery
+    : "";
+}
+
+test("store.upgrade refuses an open mirror run before the schema leaves the released build, and settling it proceeds", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-run-open-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const initialized = await initializeStore({ harnessDir: harness, checkoutRoot: root });
+    initialized.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+          "identity_key) values ('I-000001', '_default', 'Combined source finding', 'bug', 'high', 'open', 'i', 'a', ?, ?, 'run-open-key')",
+      )
+      .run("2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    initialized.db
+      .prepare(
+        "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) " +
+          "values ('linear:p-one', 'push', 'run-open', 4242, 'host-a', '2026-11-21T00:00:00.000Z', 'issue-sync pending')",
+      )
+      .run();
+    initialized.close();
+    rewindToReleasedSchema(harness);
+    const releasedSchema = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version - 1;
+
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = () => definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
+
+    const refused = await upgrade();
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-sync-run-open", exitCode: 1 });
+    if (refused.status === "ok" || refused.status === "usage") throw new Error("expected the run-open refusal");
+    expect(refused.message).toContain("run-open");
+    // invariant: The recovery names the released build's own settlement verb, never this build's.
+    expect(recoveryOf(refused)).toContain("mstar issue-sync apply --project <project-id> --results <file|->");
+    // invariant: The refusal left the store at the last schema the 4.8.x build admits, with the
+    // run row intact, so that build can still settle it.
+    const after = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(after.schemaVersion).toBe(releasedSchema);
+      expect(after.db.prepare("select run_id from sync_runs").all()).toEqual([{ run_id: "run-open" }]);
+    } finally {
+      after.close();
+    }
+
+    // note: Settling the run (as that build would) lets the same command reach the schema advance
+    // and the reviewed cutover route it documents.
+    const settle = new DatabaseSync(join(harness, "store.db"));
+    try {
+      settle.prepare("delete from sync_runs where run_id = 'run-open'").run();
+    } finally {
+      settle.close();
+    }
+    expect(await upgrade()).toMatchObject({ status: "refused", code: "collaboration.cutover-required", exitCode: 1 });
+    const upgraded = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(upgraded.schemaVersion).toBe(MIGRATIONS[MIGRATIONS.length - 1]!.version);
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("store.upgrade's combined branch reaches the same generated-attestation path as the import branch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-combined-claim-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const workflowId = "combined-claim-workflow";
+    const planId = `${workflowId}-plan`;
+    const sessionId = "combined-claim-holder";
+    // note: A genuine schema-8 combined store: versions 1..8 applied verbatim, so the historical
+    // plan-PM seat, leases and integration claims exist exactly as migration 8 left them.
+    const db = new DatabaseSync(join(harness, "store.db"));
+    db.exec("pragma foreign_keys=on");
+    db.exec("begin immediate");
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    for (const migration of MIGRATIONS.slice(0, 8)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version, migration.name, migrationChecksum(migration), "2026-10-04T00:00:00.000Z",
+      );
+    }
+    db.exec("commit");
+    db.close();
+    const initialized = await openStore({ harnessDir: harness }, "write");
+    try {
+      initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+      // note: Held collaboration rows are what make this a combined source, so the upgrade takes
+      // the cutover branch instead of the legacy import branch.
+      initialized.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Combined claim finding', 'bug', 'high', 'open', 'i', 'a', '2026-10-04', '2026-10-04', 'claim-key')",
+      ).run();
+      initialized.db.prepare(
+        "insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)",
+      ).run(workflowId, JSON.stringify({
+        schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04",
+        delivery_kind: "development", branch: { source: `feature/${planId}`, target: "main" },
+      }), "2026-10-04", "2026-10-04");
+      initialized.db.prepare(
+        "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, '{}')",
+      ).run(workflowId, planId, JSON.stringify({ id: planId, title: "Combined claim plan", file: `${planId}.md`, status: "InProgress" }));
+      initialized.db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+          "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
+      ).run(workflowId, sessionId, planId);
+      initialized.db.prepare(
+        "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+      ).run(workflowId, JSON.stringify({
+        holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z",
+        source_branch: `feature/${planId}`, target_branch: "main", status: "held",
+      }));
+    } finally {
+      initialized.close();
+    }
+    const before = await protectedStoreState(harness);
+
+    // invariant: The combined branch GENERATES the operator document exactly like the import
+    // branch. The Bun test runtime is never an admissible attested consumer, so the generated
+    // path refuses with THIS cause — not a direct engine caller's "no document supplied".
+    const refused = await executeCommand("store.upgrade", { harness, operator: "fixture-operator" }, invocation(root));
+    expect(refused).toMatchObject({ status: "refused", code: "store.attestation-invalid", exitCode: 1 });
+    if (refused.status === "ok" || refused.status === "usage") throw new Error("expected the generated-attestation refusal");
+    expect(refused.message).toContain("the running process is Bun");
+    expect(recoveryOf(refused)).toContain("mstar store upgrade --operator <name>");
+    expect(await protectedStoreState(harness)).toEqual(before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

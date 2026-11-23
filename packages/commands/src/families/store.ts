@@ -22,8 +22,9 @@ import {
   restoreCollaborationBackup,
   retireStoreSources,
   upgradeExistingCollaborationStore,
-  upgradeStore,
+  advanceSchemaWithGeneratedAttestation,
   upgradeStoreMinimal,
+  validateActivationAttestation,
   bindRemoteAuthority,
   ingestRemoteObservation,
   prepareRemoteAdoption,
@@ -163,6 +164,10 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
+          // invariant: The schema advance would pass the last version a released build admits,
+          // and only that build settles a mirror run in a combined store.
+          : code === "store.upgrade-sync-run-open"
+          ? "Settle or take over the open mirror run(s) the refusal names with the 4.8.x build's mstar issue-sync apply --project <project-id> --results <file|-> (add --take-run with an empty result list for a dead holder), then retry mstar store upgrade --operator <name>; after this build's schema advance neither build can settle the run."
           : code === "store.runtime-unsupported"
           ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
           : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
@@ -390,7 +395,14 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           // lifecycle write unreachable. Only EXECUTION advances; collaboration rows are the
           // cutover's to move.
           if (!(error instanceof StoreError) || error.code !== "collaboration.cutover-required") throw error;
-          await upgradeStore(context, { attestation, operator });
+          // note: The SAME provision-and-retry the legacy-import branch uses, so the help's
+          // automatic-attestation promise holds here too; it also refuses an open mirror run
+          // before the schema passes the released build's ceiling.
+          await advanceSchemaWithGeneratedAttestation({
+            context,
+            operator,
+            attestation: attestation === undefined ? undefined : validateActivationAttestation(attestation),
+          });
           throw error;
         }
         const upgraded = await upgradeStoreMinimal({

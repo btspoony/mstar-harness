@@ -21,7 +21,7 @@ import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
-import { openStore, readStoreAuthority, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
 import { openCollaborationStore, openRemoteCache, withCollaborationWrite, withRemoteCacheWrite } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
@@ -762,13 +762,38 @@ function journalOwnerOf(context: StoreContext, execution: StoreDb): JournalOwner
   return resolveCollaborationLocation(context).mode === "remote" ? "remote-cache" : "domain";
 }
 
+/**
+ * invariant: A bound split checkout that reaches the journal through its private remote cache
+ * must not be told to run `store init`: that verb never creates a remote cache, and the only
+ * supported route to one is the reviewed `remote bind`. The code and the lane's own words stay;
+ * only the recovery this path publishes changes.
+ */
+const REMOTE_CACHE_RECOVERY =
+  "This checkout's remote cache does not exist, and a remote checkout never creates one locally: " +
+  "re-establish it with the reviewed mstar store collaboration remote bind --harness <abs> --input <file|->, then retry.";
+
+/** note: Mark a cache-lane refusal with the remote-specific recovery, preserving its code and message. */
+function withRemoteCacheRecovery(error: unknown): unknown {
+  if (!(error instanceof StoreError) || error.code !== "collaboration.not-initialized") return error;
+  return Object.assign(error, { recovery: REMOTE_CACHE_RECOVERY });
+}
+
+/** note: The remote cache's read handle, with the missing-lane refusal mapped for this path. */
+async function openRemoteJournalLane(context: StoreContext): Promise<{ db: StoreDb; close(): void }> {
+  try {
+    return await openRemoteCache(context, "read");
+  } catch (error) {
+    throw withRemoteCacheRecovery(error);
+  }
+}
+
 /** note: The split owner's read connection; a remote selection never opens the domain lane. */
 async function openJournalLane(
   context: StoreContext,
   owner: "domain" | "remote-cache",
 ): Promise<{ db: StoreDb; close(): void }> {
   return owner === "remote-cache"
-    ? await openRemoteCache(context, "read")
+    ? await openRemoteJournalLane(context)
     : await openCollaborationStore(context, "read");
 }
 
@@ -862,7 +887,9 @@ async function withJournalWrite<T>(
     const apply = (handle: { db: StoreDb; authority: { storeId: string; epoch: number } }) =>
       fn(handle.db, { storeId: handle.authority.storeId, epoch: handle.authority.epoch }, execution.db);
     return owner === "remote-cache"
-      ? await withRemoteCacheWrite(context, apply)
+      ? await withRemoteCacheWrite(context, apply).catch((error: unknown) => {
+          throw withRemoteCacheRecovery(error);
+        })
       : await withCollaborationWrite(context, apply);
   } finally {
     execution.close();
