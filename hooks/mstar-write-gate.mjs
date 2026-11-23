@@ -37,7 +37,7 @@ import { readlinkSync, realpathSync as realpathSync10 } from "node:fs";
 import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve19 } from "node:path";
 import { createHash as createHash17 } from "node:crypto";
 import { readFileSync as readFileSync24 } from "node:fs";
-import { join as join31 } from "node:path";
+import { join as join30 } from "node:path";
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
@@ -14476,7 +14476,6 @@ init_coordination_write();
 init_path();
 init_coordination();
 init_coordination_write();
-init_path();
 init_coordination();
 init_store_db();
 init_store_db();
@@ -14978,7 +14977,7 @@ async function captureExecutionProjectionSources(context) {
     const terminalIterations = new Set(rows.workflows.filter((workflow) => workflow.type === "iteration" && !workflow.activeRegistration && WORKFLOW_TERMINAL_STATUSES.includes(workflow.status)).map((workflow) => workflow.id));
     const historicalIteration = (iterationId, lifecycle) => !registeredIterations.has(iterationId) && (lifecycle === "archived" || lifecycle === "superseded" || terminalIterations.has(iterationId));
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         if (read.state === "missing" && historicalIteration(doc.iterationId, doc.lifecycle))

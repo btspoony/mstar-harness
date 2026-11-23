@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [4.8.5] - 2026-11-23
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.5**。
+
 ## [4.8.4] - 2026-11-22
 
 ### Breaking

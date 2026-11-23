@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Uncalled cache test hook.** Removed the `_terminalStatusCacheHas` test hook, which no test or production code calls.
+- **Uncalled panel guards.** Removed the uncalled `bool` and `count` panel payload guards; only `str` and `record` have callers.
+
+- Version alignment with harness **4.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
 ## [4.8.4] - 2026-11-22
 
 - Version alignment with harness **4.8.4**.

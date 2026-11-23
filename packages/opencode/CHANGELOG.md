@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Unused commands devDependency.** Dropped the unused `@mstar-harness/commands` devDependency from the omp, opencode and opencode-v2 packages; none of their sources, tests or build scripts import it.
+
+- Version alignment with harness **4.8.5** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
 ## [4.8.4] - 2026-11-22
 
 - Version alignment with harness **4.8.4** (no OpenCode package API change).
