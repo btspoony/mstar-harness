@@ -65,7 +65,7 @@ Leftover `unmet` acceptance criteria are separate tally increments, not findings
 
 | PR context | Head and fix site |
 | --- | --- |
-| Iteration PR | PR head = `branch.integration`; edit and commit in a fix feature worktree, then serially merge into the integration worktree. Follow its「Fix boundary」, which applies only to an iteration PR. |
+| Iteration PR | PR head = `branch.integration`; edit and commit in a fix feature worktree, then serially merge into the integration worktree. Follow `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」, which applies only to an iteration PR. |
 | Standalone `development` plan | PR head = registered `branch.work`; commits land in a dedicated worktree checked out on that branch, never the primary checkout. |
 
 The iteration merge ritual is not generalized to standalone plans.

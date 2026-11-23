@@ -273,6 +273,10 @@ Minimum invariants:
   - `references/project-manager/acceptance.md`
 - Public PR body interface (standalone and iteration delivery):
   - `references/project-manager/pr-description.md`
+- PR delivery on any development route — publish, drive to merge-ready, authorize and verify the merge:
+  - `references/project-manager/pr-delivery.md`
+- Workflow close after a verified merge — terminal write, unregister, projection reconciliation, cleanup handoff:
+  - `references/project-manager/workflow-close.md`
 
 Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/findings consolidation.
 
