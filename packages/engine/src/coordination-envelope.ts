@@ -9,7 +9,7 @@
  * not-yet-cut issue-domain authorization surface (`issue.ts`). Nothing here is
  * authority: a file that parses as an envelope authorizes nothing.
  *
- * It imports only `node:*`, `./coordination-write.js` and `./path.js` (all
+ * It imports only `node:*` and `./coordination-write.js` (all
  * leaves) so it closes no ESM cycle back through `store.ts`.
  */
 import { existsSync, readFileSync } from "node:fs";
