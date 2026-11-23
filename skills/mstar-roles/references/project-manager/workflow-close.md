@@ -1,6 +1,6 @@
-# Workflow close after a verified merge
+# Workflow Close Out after a verified merge
 
-> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file: the iteration route (`mstar-iteration` SKILL.md「Phase route map」workflow close) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
+> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file for Workflow Close Out: the iteration route (`mstar-iteration` SKILL.md「Phase route map」workflow close) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
 
 | Route | Entry fact |
 |---|---|
@@ -10,8 +10,8 @@
 
 ## Entry
 
-1. Print `## Phase 6: post-merge close`.
-2. Append the host todo `workflow-close` (session todos SSOT → `mstar-iteration/references/command-shared-invariants.md`).
+1. Print `## Workflow Close Out`.
+2. **Iteration:** Append the iteration's close-out session todo (todo table — session todos SSOT → `mstar-iteration/references/command-shared-invariants.md`); a standalone development close has no such todo.
 3. Resumable: close may run in a later session, and it is idempotent against an already terminal lifecycle (a fully closed retry changes no authoritative target and does not rewrite `ended_at`).
 
 Ordered pipeline (HARD — fixed order, no skipping or inversion): **Terminal write → Unregister → Projection reconciliation → Cleanup handoff.**
@@ -70,7 +70,7 @@ The close-state gate checks **local state only** (valid terminal shape + no dang
 
 ## Evidence
 
-Close is complete when the ACTIVE `mstar status workflow-close` applied/replay receipt is retained, terminal `completed` + `ended_at` and the same-transaction unregister are confirmed, `mstar status validate` (no explicit file path) confirms the current DB root register does not contain the id, and `mstar iteration gate --phase 6 --workflow <id>` exits 0 with no dangling lease and consistent narrative projections. A current ACTIVE read does not return unregistered workflow history, so root absence alone is not terminal proof. Tick the host todo when done.
+Close is complete when the ACTIVE `mstar status workflow-close` applied/replay receipt is retained, terminal `completed` + `ended_at` and the same-transaction unregister are confirmed, `mstar status validate` (no explicit file path) confirms the current DB root register does not contain the id, and `mstar iteration gate --phase 6 --workflow <id>` exits 0 with no dangling lease and consistent narrative projections. A current ACTIVE read does not return unregistered workflow history, so root absence alone is not terminal proof. Tick the iteration's host todo when done.
 
 ## References
 
