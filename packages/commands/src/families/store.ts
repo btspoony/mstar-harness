@@ -418,7 +418,9 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         const upgraded = await upgradeStoreMinimal({
           context,
           operator,
-          operationId: randomUUID(),
+          // invariant: The composite recovery names `--operation` so a retry can address the
+          // SAME reservation; a minted id would make that advertised retry create a second one.
+          operationId: input.operation ?? randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
           ...(input.ackSkipWorkflow === undefined ? {} : { acknowledgedWorkflowSkips: input.ackSkipWorkflow }),
@@ -735,7 +737,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "ackSkipCompass", "delivery"],
+    upgrade: ["harness", "operator", "operation", "attestation", "ackSkipDsh", "ackSkipWorkflow", "ackSkipCompass", "delivery"],
     backup: ["harness", "out"],
     migrate: ["harness", "apply", "manifest", "out"],
     activate: ["harness", "manifest", "operator", "attestation", "out"],
@@ -746,6 +748,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     operator: "the invoking operator, recorded on the generated attestation document (required for store activate; also the upgrade path's recorded operator)",
+    operation: "caller-owned operation id for this upgrade; reissue a failed upgrade with the SAME value so its reservation and receipt are addressed instead of duplicated",
     attestation: verb === "upgrade"
       ? `absolute path to the operator's full ActivationAttestation JSON; optional — when a retired held claim exists and the file is omitted, the verb generates the operator document automatically. Supply it only to override that generated document. ${attestationHelp}`
       : `absolute path to the operator's full ActivationAttestation JSON; optional — when omitted the verb generates the document from live process facts (a Bun-driven run refuses: run the installed Node CLI). Supply it only to override that generated document. ${attestationHelp}`,

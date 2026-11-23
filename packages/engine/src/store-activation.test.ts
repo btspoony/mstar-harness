@@ -34,7 +34,6 @@ import {
   writeCollaborationStage,
 } from "./collaboration-store.js";
 import { registerCatalogEntity } from "./catalog.js";
-import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { bindRemoteAuthority, type ScopeCheck } from "./collaboration-remote.js";
 import { captureIssue } from "./issue.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
@@ -4153,68 +4152,6 @@ describe("remote bootstrap admission", () => {
     expect((error as Error).message).toContain("mstar store collaboration remote bind");
     expect(existsSync(location.dbPath)).toBe(false);
     expect(existsSync(join(fixture.harness, "store.db"))).toBe(false);
-  });
-
-  test("remote bootstrap: a bound checkout with no cache still passes workflow selection", async () => {
-    const fixture = remoteFixture("gate-missing-lane");
-    const { commit } = fixture.publish(1);
-    await bindRemoteAuthority(fixture.context, {
-      version: 1,
-      selectorCommit: commit,
-      generation: 1,
-      checks: [fixture.check()],
-    });
-    const initialized = await initializeStore(fixture.context);
-    // why: The post-fence shape — the collaboration lane owns `catalog_operations`, so the
-    // execution store does not carry the table and the journal verdict is a cross-file read.
-    initialized.db.exec("drop table catalog_operations");
-    initialized.db
-      .prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values ('wf-registered', 1, '{}', ?, ?)")
-      .run("2026-11-24T00:00:00.000Z", "2026-11-24T00:00:00.000Z");
-    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-registered', '{}')").run();
-    initialized.close();
-    const location = resolveCollaborationLocation(fixture.context);
-    for (const path of [location.dbPath, `${location.dbPath}-wal`, `${location.dbPath}-shm`]) rmSync(path, { force: true });
-
-    // invariant: A lane this workspace does not hold carries no journal row, so it is the same
-    // pre-activation pass-through `store.not-active` gets — never a `collaboration.not-initialized`
-    // refusal of the selection. An unregistered workflow never even pays for that read.
-    await expect(assertCatalogExecutionCommitted(fixture.context, "wf-unregistered")).resolves.toBeUndefined();
-    await expect(assertCatalogExecutionCommitted(fixture.context, "wf-registered")).resolves.toBeUndefined();
-  });
-
-  test("remote bootstrap: a bound checkout's pending journal still refuses a registered workflow", async () => {
-    const fixture = remoteFixture("gate-pending");
-    const { commit } = fixture.publish(1);
-    await bindRemoteAuthority(fixture.context, {
-      version: 1,
-      selectorCommit: commit,
-      generation: 1,
-      checks: [fixture.check()],
-    });
-    const initialized = await initializeStore(fixture.context);
-    initialized.db.exec("drop table catalog_operations");
-    initialized.db
-      .prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values ('wf-registered', 1, '{}', ?, ?)")
-      .run("2026-11-24T00:00:00.000Z", "2026-11-24T00:00:00.000Z");
-    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-registered', '{}')").run();
-    initialized.close();
-    const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
-    try {
-      lane.prepare(
-        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
-          "values ('op-gate-pending', 'hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
-      ).run(JSON.stringify({ workflow: { workflowId: "wf-registered" } }), "2026-11-24T00:00:00.000Z", "2026-11-24T00:00:00.000Z");
-    } finally {
-      lane.close();
-    }
-
-    // invariant: Tolerating a lane this workspace does not hold never hides a journal it DOES
-    // hold: a registered workflow with a pending registration still refuses, from the same
-    // selection reader.
-    await expect(assertCatalogExecutionCommitted(fixture.context, "wf-registered")).rejects.toMatchObject({
-      code: "catalog.registration-pending",
-    });
   });
 
   test("remote bootstrap: a moved selector refuses the previously bound checkout", async () => {

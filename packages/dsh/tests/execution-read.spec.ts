@@ -20,6 +20,7 @@ import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
+import { DatabaseSync } from 'node:sqlite'
 import {
   createExecutionWorkflow,
   ensureCollaborationAuthority,
@@ -27,6 +28,7 @@ import {
   openStore,
   readExecutionState,
   registerCatalogEntity,
+  resolveCollaborationLocation,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
@@ -222,6 +224,42 @@ function mergeLease(overrides: Record<string, unknown> = {}): IntegrationMergeLe
 async function sealStoreForReaders(harnessDir: string): Promise<void> {
   const handle = await openStore({ harnessDir }, 'read')
   handle.close()
+}
+
+/**
+ * Seed one PENDING catalog-registration journal row for a workflow on the file
+ * that OWNS the journal: the execution store while it still carries
+ * `catalog_operations` (a combined source), otherwise this repository's
+ * collaboration database. That is the half-registered state a dispatch must
+ * never walk into.
+ */
+function seedPendingRegistration(harnessDir: string, workflowId: string): void {
+  const storePath = join(harnessDir, 'store.db')
+  const owned = new DatabaseSync(storePath, { readOnly: true })
+  let ownerPath: string
+  try {
+    ownerPath = owned
+      .prepare("select 1 as found from sqlite_master where type = 'table' and name = 'catalog_operations'")
+      .get() === undefined
+      ? resolveCollaborationLocation({ harnessDir }).dbPath
+      : storePath
+  } finally {
+    owned.close()
+  }
+  const owner = new DatabaseSync(ownerPath)
+  try {
+    owner.prepare(
+      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+        "values (?, 'dsh-hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
+    ).run(
+      `op-pending-${workflowId}`,
+      JSON.stringify({ workflow: { workflowId }, execution: {}, catalog: {} }),
+      TS,
+      TS,
+    )
+  } finally {
+    owner.close()
+  }
 }
 
 let execSeq = 0
@@ -650,5 +688,29 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(source.snapshot.integration_merge_lease).toEqual(held)
     // The DB selection is otherwise unchanged: the plan rows still re-join.
     expect(activeRowsOf(source.snapshot).map((row) => row.id)).toEqual(['plan-db'])
+  })
+
+  it('refuses a half-registered selection on the source read every consumer uses, and still selects a committed one', async () => {
+    const { harnessDir } = await appWithRoot('execution-registration-gate')
+    // Two ACTIVE lifecycles, so the durable pick (not position) decides — the
+    // verdict has to follow the SELECTION, not the registry.
+    await seedExecutionAuthority(harnessDir, [
+      { id: 'wf-committed', planId: 'plan-committed' },
+      { id: 'wf-half', planId: 'plan-half' },
+    ])
+    seedPendingRegistration(harnessDir, 'wf-half')
+
+    // invariant: A pending registration is a STRUCTURED selection error on the read itself — the
+    // route `readExecutionWorkflowSource` serves every host gate — never a dispatchable lifecycle.
+    const half = await readExecutionWorkflowSource({ harnessDir }, { selectedWorkflowId: 'wf-half' })
+    expect(half.kind).toBe('error')
+    if (half.kind !== 'error' || half.selection.kind !== 'error') return
+    expect(half.selection.code).toBe('catalog.registration-pending')
+
+    // invariant: Tolerating a pending journal elsewhere never hides a committed lifecycle: the same
+    // reader still selects it, with its plan rows, when the pick names it.
+    const committed = await readExecutionWorkflowSource({ harnessDir }, { selectedWorkflowId: 'wf-committed' })
+    expect(committed.kind === 'active' ? committed.workflowId : null).toBe('wf-committed')
+    expect(committed.kind === 'active' ? activeRowsOf(committed.snapshot).map((row) => row.id) : []).toEqual(['plan-committed'])
   })
 })

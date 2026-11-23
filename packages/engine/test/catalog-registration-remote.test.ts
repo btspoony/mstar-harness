@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   abortCatalogExecution,
+  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   purgeCatalogRegistration,
   readCatalogRevisions,
@@ -55,6 +56,19 @@ async function fencedRemoteCheckout(label: string) {
     fenced.close();
   }
   return { scope, context };
+}
+
+/** note: One REGISTERED lifecycle in the execution registry — the fact the gate decides first. */
+function registerWorkflow(harness: string, workflowId: string): void {
+  const store = new DatabaseSync(join(harness, "store.db"));
+  try {
+    store
+      .prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, '{}', ?, ?)")
+      .run(workflowId, "2026-11-24T00:00:00.000Z", "2026-11-24T00:00:00.000Z");
+    store.prepare("insert into execution_registry(workflow_id, entry_json) values (?, '{}')").run(workflowId);
+  } finally {
+    store.close();
+  }
 }
 
 /** note: One prepared journal row on the lane that owns it. */
@@ -148,6 +162,33 @@ describe("a remote checkout's catalog journal", () => {
 
     // invariant: Settlement retains the source document itself, never a re-serialized copy.
     expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual({ identity: workflowId });
+  });
+
+  test("a lane this checkout does not hold passes registration through instead of refusing selection", async () => {
+    const { scope, context } = await fencedRemoteCheckout("remote-journal-gate-missing-lane");
+    registerWorkflow(scope.harness, "wf-registered");
+    // note: The cache the bind created is gone, so the journal's owner cannot be opened at all.
+    const location = resolveCollaborationLocation(context);
+    for (const path of [location.dbPath, `${location.dbPath}-wal`, `${location.dbPath}-shm`]) rmSync(path, { force: true });
+
+    // invariant: A lane this workspace does not hold carries no journal row, so it is the same
+    // pre-activation pass-through `store.not-active` already had — never a
+    // `collaboration.not-initialized` refusal of a workflow selection. An unregistered workflow
+    // never even pays for that read.
+    await expect(assertCatalogExecutionCommitted(context, "wf-unregistered")).resolves.toBeUndefined();
+    await expect(assertCatalogExecutionCommitted(context, "wf-registered")).resolves.toBeUndefined();
+  });
+
+  test("a bound checkout's pending journal still refuses its registered workflow", async () => {
+    const { scope, context } = await fencedRemoteCheckout("remote-journal-gate-pending");
+    registerWorkflow(scope.harness, "wf-registered");
+    insertPrepared(resolveCollaborationLocation(context).dbPath, { operationId: "op-gate-pending", workflowId: "wf-registered" });
+
+    // invariant: Tolerating a lane this workspace does not hold never hides a journal it DOES
+    // hold: a registered workflow with a pending registration still refuses.
+    await expect(assertCatalogExecutionCommitted(context, "wf-registered")).rejects.toMatchObject({
+      code: "catalog.registration-pending",
+    });
   });
 
   test("a bound checkout with no cache names the reviewed remote bind, never local setup", async () => {

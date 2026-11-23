@@ -139,6 +139,50 @@ test("store.upgrade discovers the canonical project harness and imports its lega
   }
 });
 
+test("store.upgrade records and replays under the caller's --operation id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-operation-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = (operation: string) =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator", operation }), invocation(root));
+
+    // invariant: The caller's id is the one the import operation uses — the recovery this verb
+    // advertises tells the operator to reissue with it, so it must address THIS reservation.
+    const first = await upgrade("caller-owned-operation");
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
+
+    const operations = () => {
+      const store = new DatabaseSync(join(harness, "store.db"));
+      try {
+        return store.prepare("select operation_id from store_operations order by rowid").all()
+          .map((row) => String((row as { operation_id?: unknown }).operation_id));
+      } finally {
+        store.close();
+      }
+    };
+    // note: The legacy import records its own receipt under the caller's id; the DSH host-state
+    // phase derives its id from it, so every recorded id is namespaced by the caller's value.
+    const recorded = operations()
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded.every((id) => id.startsWith("caller-owned-operation"))).toBe(true);
+
+    // invariant: Reissuing the SAME id replays its retained receipt instead of reserving a second
+    // operation, so the advertised retry is reachable in one step.
+    const replay = await upgrade("caller-owned-operation");
+    expect(replay.status).toBe("ok");
+    expect(operations()).toEqual(recorded);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("store.upgrade names the required operator input before writing", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-missing-operator-"));
   try {
