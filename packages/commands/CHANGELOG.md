@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Orphaned plan evidence schema export.** Removed the `PLAN_COMPLETION_EVIDENCE_SCHEMA` export from the private commands package; no package imports it and `plan complete` keeps publishing the same evidence schema.
+
+- Version alignment with harness **4.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
 ## [4.8.4] - 2026-11-22
 
 ### Breaking

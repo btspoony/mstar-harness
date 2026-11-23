@@ -10493,7 +10493,6 @@ var init_engine = __esm(() => {
   init_path();
   init_coordination();
   init_coordination_write();
-  init_path();
   init_coordination();
   init_store_db();
   init_store_db();

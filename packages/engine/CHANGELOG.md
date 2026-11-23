@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Unused zod devDependency.** Dropped the unused `zod` devDependency from `@mstar-harness/engine`; no engine source or test imports it since the compass schema became hand-rolled.
+- **Uncalled coordination helpers.** Removed the uncalled `sessionFilePath` and `requireRowStatus` coordination helpers; neither is re-exported from the engine entry point nor called anywhere in the repository.
+
+- Version alignment with harness **4.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
 ## [4.8.4] - 2026-11-22
 
 - Version alignment with harness **4.8.4**.
