@@ -161,7 +161,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Args** — a `path|subsystem` token narrows the pass; `dry-run` is a read-only exit that reports the triage and, optionally, the measured baseline, and claims no net-change figure; no token means the whole codebase.
 
-**Gate** — no repo-wide comment ban ships: the existing bound gate (`mstar lint packages --type code`, `mstar lint scripts --type code`) plus the per-PR `--diff-base` ratchet is the ban's equivalent. The ratchet only reads comments the diff touches, so an untouched *unclassified* comment does not trip it; the whole-tree bound gate still fails a pre-existing unbounded marker.
+**Gate** — no repo-wide comment ban ships: the per-PR `--diff-base` ratchet is the ban's equivalent. It reads only the comments a diff touches, so an untouched *unclassified* comment never trips it, and CI asserts no whole-corpus count — a lower bound cannot distinguish a detector regression from a genuine cleanup, so the detector itself is pinned by `packages/cli/test/lint-cli.test.ts`.
 
 **Defined in** — [`commands/codebase-comment-cleanup.md`](../commands/codebase-comment-cleanup.md); semantics → `mstar-coding-behavior` (`references/comments.md`, `references/comment-cleanup.md`); Decision Record promotion → `mstar-doc-corpus` → `references/adr.md`.
 
