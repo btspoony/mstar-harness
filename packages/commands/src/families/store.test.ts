@@ -696,8 +696,15 @@ test("store.upgrade advances a combined source's execution schema before directi
     if (definition === undefined) throw new Error("missing store.upgrade definition");
     const upgrade = () => definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
 
-    // note: The collaboration authority is still the cutover's to move.
-    expect(await upgrade()).toMatchObject({ status: "refused", code: "collaboration.cutover-required", exitCode: 1 });
+    // note: The collaboration authority is still the cutover's to move, and the refusal must
+    // disclose the schema advance it committed: the released 4.8.x ceiling is already behind
+    // this store, so that build refuses it and the ladder is the only way back.
+    const refused = await upgrade();
+    expect(refused).toMatchObject({ status: "refused", code: "collaboration.cutover-required", exitCode: 1 });
+    if (refused.status !== "refused") throw new Error("expected the cutover refusal");
+    expect(refused.message).toContain("The execution schema now stands at version");
+    expect(refused.message).toContain("store.schema-unsupported");
+    expect(refused.message).toContain("cutover ladder must be completed");
 
     // invariant: The execution schema reached this build, so the cutover's source floor and the
     // terminal lifecycle write are both reachable from the store the refusal left behind.

@@ -400,12 +400,22 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           // note: The SAME provision-and-retry the legacy-import branch uses, so the help's
           // automatic-attestation promise holds here too; it also refuses an open mirror run
           // before the schema passes the released build's ceiling.
-          await advanceSchemaWithGeneratedAttestation({
+          const schemaVersion = await advanceSchemaWithGeneratedAttestation({
             context,
             operator,
             attestation: attestation === undefined ? undefined : validateActivationAttestation(attestation),
           });
-          throw error;
+          // invariant: The refusal must disclose what it changed: the schema now stands past the
+          // last released 4.8.x build's ceiling, so that build refuses this store as
+          // `store.schema-unsupported` and the cutover ladder is the only way back to a store
+          // any 4.8.x command can use. The original cause stays verbatim.
+          throw new StoreError(
+            "collaboration.cutover-required",
+            `${error.message.replace(/^\[[^\]]+\]\s*/, "")} ` +
+              `The execution schema now stands at version ${schemaVersion}, past the last released 4.8.x build's ceiling: ` +
+              `that build refuses this store as \`store.schema-unsupported\`, so the cutover ladder must be completed before ` +
+              `the store is usable by any 4.8.x command.`,
+          );
         }
         const upgraded = await upgradeStoreMinimal({
           context,

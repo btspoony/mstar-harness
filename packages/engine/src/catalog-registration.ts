@@ -1208,24 +1208,41 @@ export function assertCatalogExecutionCommittedOn(
   pending: { operationId: string; phase: "prepared" | "execution-written" } | null,
 ): void {
   const id = requireText(workflowId, "workflowId");
-  if (readStoreAuthority(db).authorityState !== "active") return;
-  if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
+  if (!catalogVerdictApplies(db, id)) return;
   if (pending === null) return;
   // note: This caller READ the registry row above, so the refusal may say so.
   refusePendingRegistration(id, pending, true);
 }
 
 /**
- * why: Async handle-taking gate. Its remaining caller is OUTSIDE this change's Files
- * list — `packages/dsh/src/gates/workflow-selection.ts` — so the wrapper stays
- * for that boundary rather than being cut here.
+ * note: Whether the gate has any verdict to give: ACTIVE authority AND a row in the
+ * execution store's own registry. Both facts are that handle's, so the caller reads
+ * them before it pays for the journal's cross-file read.
  */
-// note: T21: dsh workflow-selection gate still calls this wrapper.
+function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
+  if (readStoreAuthority(db).authorityState !== "active") return false;
+  return db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(workflowId) !== undefined;
+}
+
+/**
+ * why: Async handle-taking gate for callers outside an execution transaction
+ * (`packages/dsh/src/gates/workflow-selection.ts`).
+ *
+ * The gate is ADVISORY here: registry visibility first on this execution handle,
+ * then the journal verdict from whichever file owns `catalog_operations`. These
+ * are two independent reads, never a snapshot across the databases, so a row
+ * committed after either read is not seen by this call. The authoritative
+ * refusal is the in-transaction one (`pendingRegistrationInTransaction`), which
+ * re-reads the verdict under the committing transaction's own lock.
+ */
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
-  const pending = await readPendingRegistration(context, workflowId);
+  const id = requireText(workflowId, "workflowId");
   const handle = await openStore(context, "read");
   try {
-    assertCatalogExecutionCommittedOn(handle.db, workflowId, pending);
+    // note: Registry-first: a workflow this store does not hold is never a gate, so the
+    // journal lane is not even opened for it.
+    if (!catalogVerdictApplies(handle.db, id)) return;
+    assertCatalogExecutionCommittedOn(handle.db, id, await readPendingRegistration(context, id));
   } finally {
     handle.close();
   }
