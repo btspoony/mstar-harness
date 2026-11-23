@@ -58,10 +58,12 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { resolveCollaborationLocation, type CollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
 import {
-  COLLABORATION_CURRENT_COLUMNS,
+  COLLABORATION_MIGRATIONS,
   admitCollaborationImage,
+  applyCollaborationLadder,
   beginBindingClaim,
   clearBindingClaim,
+  collaborationInventoryOf,
   readBindingClaim,
   assertCollaborationTargetAdmission,
   assertControlCheckoutScope,
@@ -1111,11 +1113,11 @@ function canonicalJsonOf(value: unknown): string {
 }
 
 /**
- * invariant: Re-open ONE collaboration image and verify it as this build's complete
- * collaboration store: consistent SQLite, the closed table/column inventory,
- * a contiguous schema ledger, the singleton metadata and its row counts. Every
- * fact is read from the copy, so a truncated, hand-assembled or foreign image
- * cannot borrow the receipt's identity.
+ * invariant: Re-open ONE collaboration image and verify it as a complete collaboration store of
+ * the schema generation its own ledger records: consistent SQLite, that generation's closed
+ * table/column inventory, a contiguous schema ledger, the singleton metadata and its row counts.
+ * Every fact is read from the copy, so a truncated, hand-assembled or foreign image cannot borrow
+ * the receipt's identity — and an image older than this build is verified, never migrated here.
  */
 async function inspectCollaborationImage(path: string, expected: Readonly<{ repoKey: string; mode: CollaborationMode }>): Promise<CollaborationImageInspection> {
   assertStoreRuntimeSupported();
@@ -1142,8 +1144,23 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
     if (violations.length > 0) {
       throw incompletePair(`The collaboration image ${path} holds ${violations.length} row(s) violating its foreign keys.`);
     }
+    const maxVersion = scalar(db, "select max(version) as n from schema_version");
+    const applied = scalar(db, "select count(*) as n from schema_version");
+    if (maxVersion < 1 || applied !== maxVersion) {
+      throw incompletePair(`The collaboration image ${path} records a non-contiguous schema ledger.`);
+    }
+    if (maxVersion > COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
+      throw incompletePair(
+        `The collaboration image ${path} records schema version ${String(maxVersion)}, which this build does not have; ` +
+          `it is not a recovery point for this build. Restore it with a build that supports schema version ` +
+          `${String(maxVersion)}, or select another verified pair this build can admit.`,
+      );
+    }
+    // invariant: An image is verified against the inventory ITS generation declared, so a verified
+    // backup of an older supported schema is still a recovery point.
+    const inventory = collaborationInventoryOf(maxVersion);
     const tables = tableNamesOn(db);
-    for (const [table, columns] of Object.entries(COLLABORATION_CURRENT_COLUMNS)) {
+    for (const [table, columns] of Object.entries(inventory)) {
       if (!tables.has(table)) {
         throw incompletePair(`The collaboration image ${path} is missing the collaboration table ${table}.`);
       }
@@ -1156,11 +1173,6 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
           `The collaboration image ${path} table ${table} is missing the column(s) ${missing.join(", ")}.`,
         );
       }
-    }
-    const maxVersion = scalar(db, "select max(version) as n from schema_version");
-    const applied = scalar(db, "select count(*) as n from schema_version");
-    if (maxVersion < 1 || applied !== maxVersion) {
-      throw incompletePair(`The collaboration image ${path} records a non-contiguous schema ledger.`);
     }
     const meta = db
       .prepare(
@@ -1189,7 +1201,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       );
     }
     const counts: Record<string, number> = {};
-    for (const table of Object.keys(COLLABORATION_CURRENT_COLUMNS)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
+    for (const table of Object.keys(inventory)) counts[table] = scalar(db, `select count(*) as n from ${table}`);
     const operations = (
       db
         .prepare(`select ${LANE_OPERATION_COLUMNS} from collaboration_operations order by operation_id`)
@@ -2137,9 +2149,41 @@ export async function restoreCollaborationBackup(
   try {
     copyFileSync(collaborationImagePath, stagingPath);
     chmodSync(stagingPath, 0o600);
+    // why: The receipt names the verified recovery image this request restores, so its identity is
+    // sampled from the private copy BEFORE any migration rewrites it and is never re-sampled from
+    // the source pathname, which another writer could replace in that gap.
+    const imageSha = sha256Bytes(readFileSync(stagingPath));
     const stagedInspection = await inspectCollaborationImage(stagingPath, location);
     if (canonicalJsonOf(stagedInspection.counts) !== canonicalJsonOf(collaborationInspection.counts)) {
       throw incompletePair(`The staged copy of ${collaborationImagePath} does not hold the verified rows.`);
+    }
+    // invariant: An image older than this build advances HERE, on the private staged copy only:
+    // the source image is never mutated, and the ladder runs under the same transaction shape an
+    // explicit upgrade uses, so an unreadable or partial image refuses instead of being "repaired".
+    if (collaborationInspection.authority.schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
+      const db = await connect(stagingPath, "write", busyTimeoutMs(), { keepJournalMode: true });
+      try {
+        db.exec("begin immediate");
+        try {
+          applyCollaborationLadder(db, stagingPath);
+          db.exec("commit");
+        } catch (error) {
+          try {
+            db.exec("rollback");
+          } catch {
+            // note: nothing committed either way
+          }
+          throw error;
+        }
+      } catch (error) {
+        throw error instanceof StoreError
+          ? error
+          : incompletePair(
+              `The verified collaboration image ${collaborationImagePath} could not be advanced to this build's schema (${messageOf(error)}).`,
+            );
+      } finally {
+        db.close();
+      }
     }
     // invariant: The runtime's OWN admission over the private staged bytes (migration and
     // checksum, closed inventory, metadata) — the same proof the live read will
@@ -2154,7 +2198,6 @@ export async function restoreCollaborationBackup(
         `The staged copy of ${collaborationImagePath} is not the generation the manifest records (identity, epoch or state changed).`,
       );
     }
-    const imageSha = sha256Bytes(readFileSync(stagingPath));
     const restoredAt = nowRfc3339();
     // invariant: A recovery generation is NEVER reused: the epoch comes from a lineage
     // ledger that only ever advances, so a second restore of the same point

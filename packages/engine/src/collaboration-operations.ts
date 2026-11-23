@@ -37,7 +37,7 @@
  */
 import { createHash } from "node:crypto";
 import { withCollaborationWrite, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
-import type { RemoteIntent } from "./collaboration-remote.js";
+import { declineUnderFreezeLane, readRemoteIntent, type RemoteIntent, type RemoteIntentRead } from "./collaboration-remote.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { isPlainObject } from "./coordination-write.js";
 import {
@@ -49,6 +49,7 @@ import {
   type ExecutionTransaction,
 } from "./execution-store.js";
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb } from "./store-db.js";
+import { TERMINAL_DISPOSITIONS, terminalReopenRoute } from "./issue.js";
 
 export type CompositeKind = "residual-add" | "residual-close" | "execution-register" | "execution-import";
 
@@ -128,6 +129,13 @@ const RECOVERABLE_CODES: Readonly<Record<string, true>> = {
   "collaboration.not-active": true,
   "collaboration.unreadable": true,
   "collaboration.stale-binding": true,
+  // note: A scope that moved under a write's sampled base is an observation state, not a decision
+  // about this request: the SAME operation id reissues after a fresh observe and freezes then.
+  "collaboration.observation-stale": true,
+  // note: Provider read availability (a denied or expired access check, an unreadable scope) is
+  // an environment state, never a decision about this request: a replay of an ALREADY FROZEN
+  // outbox row fails through it too, so releasing the reservation could expose a duplicate send.
+  "remote.unavailable": true,
   "execution.not-active": true,
   "execution.reentrant": true,
 };
@@ -141,10 +149,26 @@ function codeOf(error: unknown): string | null {
   return typeof error.code === "string" && error.code !== "" ? error.code : null;
 }
 
+/** note: The structured facts a refusal already carries, or null when it carries none. */
+function detailsOf(error: unknown): Record<string, unknown> | null {
+  if (error === null || typeof error !== "object" || !("details" in error)) return null;
+  return isPlainObject(error.details) ? error.details : null;
+}
+
 /** note: A coded domain refusal is deterministic; silence, a crash or an environment code is not. */
 function isDeterministicRefusal(error: unknown): boolean {
   const code = codeOf(error);
   return code !== null && RECOVERABLE_CODES[code] !== true;
+}
+
+/**
+ * note: The decline-decision gap seam: a regression starts a same-id provider freeze between the
+ * fenced lane's absence check and the durable decline, proving the freeze cannot land in that gap.
+ * Production runs without a callback.
+ */
+let compositeDeclineGapForTest: (() => void | Promise<void>) | undefined;
+export function setCompositeDeclineGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  compositeDeclineGapForTest = callback;
 }
 
 function corrupt(detail: string): StoreError {
@@ -228,12 +252,25 @@ function recordedRefusal(operationId: string, cause: DeclineCause | null): Error
   error.code = code;
   // why: The original refusal's machine facts survive the decline, so a replayed
   // refusal still names the entry/path/field the first attempt reported.
+  // invariant: A decline's own recovery is the actionable one (repair the fork, recover only the
+  // missing work); the durable-decline fact is prepended instead of replacing it, so a replayed
+  // refusal never sends the operator at a retry the fenced fork would refuse. Confirmed components
+  // are DURABLE work — a decline that names them must not claim an effect-free operation; only the
+  // execution acknowledgement stayed unapplied.
+  const recovery =
+    typeof cause?.details?.recovery === "string"
+      ? cause.details.recovery
+      : "issue the corrected request under a new operation id";
+  const confirmedComponents = cause?.details?.confirmed_components;
+  const durable = Array.isArray(confirmedComponents) && confirmedComponents.length > 0;
   error.details = {
     ...(cause?.details ?? {}),
     operation_id: operationId,
     phase: "declined",
-    recovery:
-      "This operation id was declined durably and its effect was never applied; issue the corrected request under a new operation id.",
+    recovery: durable
+      ? `This operation id was declined durably; the confirmed components named here are durable and are never re-sent, ` +
+        `while its execution acknowledgement was not applied. ${recovery}`
+      : `This operation id was declined durably and its effect was never applied. ${recovery}`,
   };
   return error;
 }
@@ -691,32 +728,38 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
  * workflow mutation and every verified backup, so the caller must report a
  * PARTIAL — never the terminal business refusal — until this transaction lands.
  */
+function markDeclinedIn(
+  tx: ExecutionTransaction,
+  intent: CompositeIntent,
+  cause: DeclineCause,
+): void {
+  assertIntentGeneration(tx, intent);
+  const row = readIntent(tx.db, intent.key);
+  if (row === null || row.phase !== "prepared") return;
+  tx.db
+    .prepare(
+      "update execution_collaboration_intents set phase = 'declined', cause_code = ?, cause_message = ?, " +
+        "cause_details_json = ?, updated_at = ? " +
+        "where execution_store_id = ? and execution_epoch = ? and operation_id = ? and phase = 'prepared'",
+    )
+    .run(
+      cause.code,
+      cause.message,
+      cause.details === null ? null : JSON.stringify(cause.details),
+      nowRfc3339(),
+      intent.key.executionStoreId,
+      intent.key.executionEpoch,
+      intent.key.operationId,
+    );
+}
+
 async function markDeclined(
   context: StoreContext,
   intent: CompositeIntent,
   cause: DeclineCause,
 ): Promise<{ settled: true } | { settled: false; error: unknown }> {
   try {
-    await withExecutionTransaction(context, (tx) => {
-      assertIntentGeneration(tx, intent);
-      const row = readIntent(tx.db, intent.key);
-      if (row === null || row.phase !== "prepared") return;
-      tx.db
-        .prepare(
-          "update execution_collaboration_intents set phase = 'declined', cause_code = ?, cause_message = ?, " +
-            "cause_details_json = ?, updated_at = ? " +
-            "where execution_store_id = ? and execution_epoch = ? and operation_id = ? and phase = 'prepared'",
-        )
-        .run(
-          cause.code,
-          cause.message,
-          cause.details === null ? null : JSON.stringify(cause.details),
-          nowRfc3339(),
-          intent.key.executionStoreId,
-          intent.key.executionEpoch,
-          intent.key.operationId,
-        );
-    });
+    await withExecutionTransaction(context, (tx) => markDeclinedIn(tx, intent, cause));
     return { settled: true };
   } catch (error) {
     return { settled: false, error };
@@ -940,7 +983,8 @@ function partialRefusal(input: {
 /**
  * note: The refusal of a MULTI-ENTRY composite whose provider preparation stopped part-way. Each
  * earlier entry is already durable, so the refusal names them: reporting "nothing was frozen" would
- * strand them and invite a duplicate identity.
+ * strand them and invite a duplicate identity. Only a confirmation whose receipt is readable counts
+ * as provider work, and the durable intents are never described as an unapplied effect.
  */
 export function remoteCompositePreparationPartial(
   intent: CompositeIntent,
@@ -948,16 +992,21 @@ export function remoteCompositePreparationPartial(
   cause: unknown,
 ): ExecutionError {
   const pending = frozen[frozen.length - 1];
+  const confirmed = frozen.filter((entry) => entry.state === "confirmed" && entry.confirmed !== null);
   return partialRefusal({
     intent,
     phase: "prepared",
-    confirmed: frozen.filter((entry) => entry.state === "confirmed").map((entry) => `provider:${entry.operationId}`),
+    confirmed: confirmed.map((entry) => `provider:${entry.operationId}`),
     frozen: frozen.map((entry) => entry.operationId),
     cause,
     recovery:
-      `The provider intents named in frozen_components are durable and are reused when this SAME verb is reissued with ` +
-      `the SAME --operation id${pending === undefined ? "" : `; inspect ${pending.operationId} with \`outbox-show\``}. ` +
-      `Nothing was applied.`,
+      `The provider intents named in frozen_components are durable provider work, not a local effect: they are reused ` +
+      `when this SAME verb is reissued with the SAME --operation id` +
+      `${pending === undefined ? "" : `; inspect ${pending.operationId} with \`outbox-show\``}, and the execution ` +
+      `acknowledgement was not applied. ` +
+      (confirmed.length === 0
+        ? `No provider component holds a readable confirmation yet.`
+        : `The confirmed components above are never re-sent; recover only the entries that did not freeze.`),
   });
 }
 
@@ -975,6 +1024,14 @@ export type CollaborationCompositeEffects<T> = Readonly<{
    * admitted remote rewrite, and the frame refuses.
    */
   remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[] | null>;
+  /**
+   * note: Every remote operation id this composite's provider effect is addressed by, derived
+   * from the reservation key exactly as `remote` derives them. A remote effect always names
+   * them: the frame's decline decision re-reads these rows at the freeze/decline boundary
+   * (`durableRemoteIntentIds`), so a winner that froze between this attempt's sample and its
+   * refusal is never declined away.
+   */
+  remoteIds?(intent: CompositeIntent): readonly string[];
 }>;
 
 /**
@@ -1002,6 +1059,261 @@ function derivedOperationUuid(material: string): string {
   const bytes = createHash("sha256").update(material, "utf8").digest();
   const hex = Buffer.from(bytes.subarray(0, 16)).toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * note: How one provider intent the composite froze is settled beyond its own row: a confirmed
+ * repair reached through the live `resolved_by` chain, a recorded abandonment that will never
+ * produce an effect (naming the fork it withdrew from), or the chain's LIVE leaf — an enqueued,
+ * uncertain or still-unresolved-conflict replacement the operator must finish. `null` means the
+ * intent itself is the live row (its own refusal names it) or its settlement is unreadable.
+ */
+type RemoteSettlement =
+  | { kind: "confirmed"; repair: RemoteIntentRead; settled: RemoteIntentRead }
+  | { kind: "abandoned"; operationId: string; reason: string | null; fork: string | null }
+  | { kind: "live"; intent: RemoteIntentRead };
+
+/**
+ * why: An outbox row is not always the answer: `outbox-resolve` confirms a SEPARATE intent with a
+ * `resolved_by` link, and `outbox-abandon` records that no effect will ever land. The composite
+ * reads the WHOLE chain to its leaf rather than reporting the original row forever: a live repair
+ * (enqueued, or an uncertain send) is the work to dispatch, and a withdrawn repair leaves the fork
+ * it withdrew from as the only repair still admitted.
+ */
+async function remoteSettlementOf(context: StoreContext, operationId: string): Promise<RemoteSettlement | null> {
+  const visited = new Set<string>();
+  let cursor = operationId;
+  let fork: string | null = null;
+  let settled: RemoteIntentRead | null = null;
+  for (;;) {
+    if (visited.has(cursor)) return null;
+    visited.add(cursor);
+    const read = await readRemoteIntent(context, cursor);
+    settled ??= read;
+    if (read.state === "confirmed") {
+      // invariant: The entry's OWN frozen request travels with the repair, so the composite can
+      // prove the settled outcome against what this reservation asked for.
+      return { kind: "confirmed", repair: read, settled };
+    }
+    if (read.state === "abandoned") return { kind: "abandoned", operationId: cursor, reason: read.abandonReason, fork };
+    if (read.state !== "conflict") {
+      // note: A leaf reached through a `resolved_by` edge is this entry's effective work; the entry
+      // itself is reported by its own state.
+      return cursor === operationId ? null : { kind: "live", intent: read };
+    }
+    if (read.resolvedBy === null) {
+      // invariant: The chain's LAST leaf can itself be an unresolved conflict. That leaf — not the
+      // ancestor whose `resolved_by` already links to it — is the fork a reviewed replacement must
+      // address, so it is the entry's live work instead of an unreadable settlement.
+      return cursor === operationId ? null : { kind: "live", intent: read };
+    }
+    fork = cursor;
+    cursor = read.resolvedBy;
+  }
+}
+
+/**
+ * note: The durable decline cause of a composite whose outstanding provider intents are all
+ * abandoned ORIGINALS and whose confirmed components all carry a readable receipt. Confirmed
+ * components are named in the cause: an effect-free claim would invite a duplicate publish of work
+ * the provider already carries. A withdrawn REPAIR never reaches this cause - its fork is still
+ * repairable, so it keeps the reservation prepared instead.
+ */
+function abandonedRemoteCause(
+  abandoned: readonly { operationId: string; reason: string | null }[],
+  confirmed: readonly RemoteIntent[] = [],
+): DeclineCause {
+  const first = abandoned[0]!;
+  const named = abandoned
+    .map((entry) => `${entry.operationId}${entry.reason === null ? "" : ` (${entry.reason})`}`)
+    .join(", ");
+  const settled = confirmed
+    .map((entry) => `provider:${entry.operationId}${entry.confirmed === null ? "" : ` (issue ${entry.confirmed.identity.issueId})`}`)
+    .join(", ");
+  // invariant: A mixed decline names the request that can finish the batch: confirmed components are
+  // durable, so only the entries that did not settle belong in the new request.
+  const retry =
+    settled === ""
+      ? "reissue the verb under a new operation id"
+      : "issue a new request under a new operation id containing ONLY the entries that did not settle";
+  const details = {
+    abandoned_components: abandoned.map((entry) => entry.operationId),
+    abandon_reason: first.reason,
+  };
+  if (settled === "") {
+    return {
+      code: "remote.effect-abandoned",
+      message:
+        `The provider intent ${named} was abandoned, so it will never confirm and the composite waits on nothing. Its ` +
+        `reservation is declined instead of retained: inspect it with \`mstar store collaboration remote outbox-show ` +
+        `--harness <abs> --operation ${first.operationId}\`, correct the named cause, then ${retry}. Nothing was applied.`,
+      details: {
+        ...details,
+        recovery:
+          `Inspect the abandoned intent with \`mstar store collaboration remote outbox-show --harness <abs> ` +
+          `--operation ${first.operationId}\`, then ${retry}.`,
+      },
+    };
+  }
+  return {
+    code: "remote.effect-abandoned",
+    message:
+      `The provider intent ${named} was abandoned, so the composite can never complete as admitted \u2014 but the components ` +
+      `${settled} ARE confirmed and durably recorded, and are never re-sent. The reservation is declined without an ` +
+      `effect-free claim: inspect the abandonment with \`mstar store collaboration remote outbox-show --harness <abs> ` +
+      `--operation ${first.operationId}\`, then ${retry}. The confirmed components above are durable; recover ONLY ` +
+      `the incomplete work.`,
+    details: {
+      ...details,
+      confirmed_components: confirmed.map((entry) => `provider:${entry.operationId}`),
+      recovery: `Recover ONLY the incomplete work: ${retry}; the confirmed components ${settled} are durable and are never re-sent.`,
+    },
+  };
+}
+
+/**
+ * note: The recovery of an entry whose reviewed repair was withdrawn before it confirmed. The fork
+ * that repair replaced is still repairable (a resolution is admitted over an abandoned one), so a
+ * NEW reviewed replacement confirmed there finalizes THIS reservation: the verb resumes on its own
+ * operation id instead of starting over.
+ */
+function withdrawnRepairRecovery(withdrawn: { repair: string; reason: string | null; fork: string }): string {
+  return (
+    `The reviewed replacement ${withdrawn.repair} of ${withdrawn.fork} was abandoned` +
+    `${withdrawn.reason === null ? "" : ` (${withdrawn.reason})`}, so no effect can arrive from it, but the fork stays ` +
+    `repairable: record a new reviewed replacement with \`mstar store collaboration remote outbox-resolve --harness <abs> ` +
+    `--operation ${withdrawn.fork} --input <file|->\`, dispatch it with its fork observation ` +
+    `(\`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->\`), record ` +
+    `its result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, then reissue ` +
+    `this SAME verb with the SAME --operation id once it confirms.`
+  );
+}
+
+/**
+ * invariant: A confirmed repair acknowledges the business outcome the ORIGINAL request named, never
+ * merely that its fork merged. The confirmed record's CURRENT disposition must be the one the frozen
+ * request asked for: a closure whose repair kept the record open published no closure, so the plan
+ * effect is never acknowledged from it. Mirrors the registration's changed-content refusal: the
+ * settled effect is named, and the correction route re-freezes against the merged head under a NEW
+ * operation id.
+ */
+function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "confirmed" }>): StoreError | null {
+  const repair = settlement.repair;
+  const frozen = settlement.settled.event;
+  const confirmed = repair.confirmed;
+  if (frozen === null || confirmed === null) {
+    return new StoreError(
+      "collaboration.unreadable",
+      `The settlement of operation ${settlement.settled.operationId} is confirmed, but its frozen request and the ` +
+        `repair's confirmed event are not both readable under this checkout's current disclosure, so the settled ` +
+        `outcome cannot be proved. Nothing was acknowledged.`,
+    );
+  }
+  if (frozen.change.kind === "project-replace" || confirmed.event.change.kind === "project-replace") return null;
+  const expected = (frozen.change.mstar.fields as Record<string, unknown>).disposition;
+  const actual = (confirmed.event.change.mstar.fields as Record<string, unknown>).disposition;
+  if (expected === actual) return null;
+  // invariant: The recovery is disposition-specific, because only one of the two settlements leaves a
+  // retried closure runnable. An OPEN settlement keeps the issue closable, so the retry is admitted
+  // once the operator has the CURRENT revision. A TERMINAL settlement is the decision that now
+  // stands: closure requires `open`, so the retry is unreachable until the issue is deliberately
+  // reopened, and only the reopened revision makes a new closure admissible.
+  const showId = frozen.change.issueRef;
+  const terminal =
+    typeof actual === "string" && (TERMINAL_DISPOSITIONS as readonly string[]).includes(actual);
+  const recovery = terminal
+    ? `Inspect the settled replacement with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${repair.operationId}\`. The confirmed terminal decision ${JSON.stringify(actual)} stands: a closure is admitted ` +
+      `only from an open issue, so this request is never retried over it. ${terminalReopenRoute(showId)} Then ` +
+      `re-observe the project with \`mstar store collaboration remote observe --harness <abs> --input <file|->\` and ` +
+      `reissue this SAME verb under a NEW operation id with the reopened issue's revision: the settled replacement is ` +
+      `never re-sent.`
+    : `Inspect the settled replacement with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${repair.operationId}\` and the issue with \`mstar issue show --id ${showId}\` for its current revision, ` +
+      `re-observe the project with \`mstar store collaboration remote observe --harness <abs> --input <file|->\`, then ` +
+      `reissue this SAME verb under a NEW operation id with that CURRENT revision: the fork is already merged, so the ` +
+      `fresh intent freezes against the merged head and publishes the reviewed disposition while the settled ` +
+      `replacement is never re-sent.`;
+  return new StoreError(
+    "remote.effect-mismatch",
+    `The confirmed provider effect ${repair.operationId} (record ${confirmed.recordId}) replaced ` +
+      `${settlement.settled.operationId} with disposition ${JSON.stringify(actual)}, not the ${JSON.stringify(expected)} ` +
+      `the frozen request asked for, so this request's business outcome never landed and no plan effect is acknowledged ` +
+      `from it. ${recovery}`,
+    {
+      settled_operations: [repair.operationId],
+      settled_records: [confirmed.recordId],
+      // invariant: The settled provider work is DURABLE; a replayed decline names it so the operator
+      // never re-sends it while the execution acknowledgement stays unapplied.
+      confirmed_components: [`provider:${repair.operationId}`],
+      requested_disposition: expected,
+      confirmed_disposition: actual,
+      recovery,
+    },
+  );
+}
+
+/**
+ * note: The state-specific recovery of ONE outstanding provider entry: the live replacement when the
+ * chain has one (dispatch it with its fork observation, or reconcile an uncertain send), otherwise
+ * the action that can settle the entry's own state.
+ */
+function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undefined): string {
+  if (entry.state === "confirmed") {
+    // invariant: The supported re-observation form is the reviewed bind's own `observe --input`
+    // command; a `--project` observation is not a command this release publishes.
+    return (
+      `Restore this project's read permission by submitting a verified observation with ` +
+      `\`mstar store collaboration remote observe --harness <abs> --input <file|->\`, then reissue this SAME verb with ` +
+      `the SAME --operation id: the settled receipt is re-read, never re-sent.`
+    );
+  }
+  if (leaf !== undefined) {
+    if (leaf.state === "conflict") {
+      // invariant: The live leaf is itself an unresolved conflict, so the original already links to
+      // it: a second `outbox-resolve` of the original is refused. The leaf's OWN fork takes the
+      // reviewed successor.
+      return (
+        `The conflicted intent ${entry.operationId} is taken over by ${leaf.operationId}, which is itself an unresolved ` +
+        `conflict: record a reviewed replacement of THAT fork with \`mstar store collaboration remote outbox-resolve ` +
+        `--harness <abs> --operation ${leaf.operationId} --input <file|->\`, dispatch it with its fork observation ` +
+        `(\`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->\`), ` +
+        `record its result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, ` +
+        `then reissue this SAME verb with the SAME --operation id once it confirms.`
+      );
+    }
+    return leaf.state === "unconfirmed"
+      ? `The conflicted intent ${entry.operationId} is taken over by resolution ${leaf.operationId}, whose send is ` +
+          `uncertain: reconcile that attempt with \`mstar store collaboration remote outbox-reconcile --harness <abs> ` +
+          `--input <file|->\`, then reissue this SAME verb with the SAME --operation id once it confirms.`
+      : `The conflicted intent ${entry.operationId} is taken over by the live resolution ${leaf.operationId}: dispatch ` +
+          `THAT intent with its fork observation (\`mstar store collaboration remote outbox-dispatch --harness <abs> ` +
+          `--operation ${leaf.operationId} --input <file|->\`), record its result with \`mstar store collaboration ` +
+          `remote outbox-receipt --harness <abs> --input <file|->\`, then reissue this SAME verb with the SAME ` +
+          `--operation id once it confirms.`;
+  }
+  if (entry.state === "conflict") {
+    return (
+      `A conflicted intent is settled only by review: inspect it with \`mstar store collaboration remote outbox-show ` +
+      `--harness <abs> --operation ${entry.operationId}\`, then record a reviewed replacement with ` +
+      `\`mstar store collaboration remote outbox-resolve --harness <abs> --operation ${entry.operationId} --input ` +
+      `<file|->\`, and reissue this SAME verb with the SAME --operation id once the replacement confirms.`
+    );
+  }
+  if (entry.state === "unconfirmed") {
+    return (
+      `The send of ${entry.operationId} is uncertain: reconcile the attempt with \`mstar store collaboration remote ` +
+      `outbox-reconcile --harness <abs> --input <file|->\`, then reissue this SAME verb with the SAME --operation id ` +
+      `once it confirms.`
+    );
+  }
+  return (
+    `Inspect it with \`mstar store collaboration remote outbox-show --harness <abs> --operation ${entry.operationId}\`, ` +
+    `send it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ${entry.operationId}\`, ` +
+    `record the result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, then ` +
+    `reissue this SAME verb with the SAME --operation id: only the execution delta is committed, and the confirmed ` +
+    `effect is never re-applied.`
+  );
 }
 
 /**
@@ -1035,14 +1347,78 @@ async function runRemoteComposite<T>(
     remoteIntents = outcome === null ? null : Array.isArray(outcome) ? outcome : [outcome];
   } catch (error) {
     if (codeOf(error) === "collaboration.operation-partial") throw error;
+    // invariant: A DETERMINISTIC refusal of the preparation itself froze no provider intent (a
+    // partially frozen multi-entry preparation reports its own `collaboration.operation-partial`
+    // above). Retaining the reservation would block the addressed row and every corrected
+    // retry, so it is declined durably and the corrected request proceeds under a new id.
+    //
+    // A `remote.operation-conflict` that READ a durable outbox row (`durable_intent`) proves the
+    // opposite: another same-id attempt already froze the entry, so this is a race-safe proof of
+    // POST-freeze state, never a pre-freeze failure. Declining here would release the winner's
+    // reservation out from under its durable intent; the reservation is retained and the same-id
+    // replay completes from the frozen intent instead.
+    if (isDeterministicRefusal(error) && detailsOf(error)?.durable_intent !== true) {
+      // invariant: This refusal proves a PRE-freeze failure only against the sample it was decided
+      // on, and a same-id attempt admitted before this decline can still freeze after that sample.
+      // The absence check and the durable decline therefore happen INSIDE the freeze's own write
+      // lane: a durable intent found there retains the reservation, and a freeze that begins after
+      // the decline commits meets the reservation's declined phase in that same lane and refuses.
+      const cause: DeclineCause = {
+        code: codeOf(error) as string,
+        message:
+          `${messageOf(error)} The provider intent was not frozen, so this reservation is declined and released; ` +
+          `correct the named cause and reissue the verb under a new operation id.`,
+        details: detailsOf(error),
+      };
+      const decision = await declineUnderFreezeLane(
+        context as StoreContext,
+        effects.remoteIds?.(intent) ?? [],
+        async () => {
+          await compositeDeclineGapForTest?.();
+          return markDeclined(context, intent, cause);
+        },
+      );
+      if (decision.kind === "durable" || decision.kind === "unproven") {
+        throw partialRefusal({
+          intent,
+          phase: "prepared",
+          confirmed: [],
+          cause: error,
+          recovery:
+            decision.kind === "durable"
+              ? `This refusal was decided on a sampled provider state, but operation ` +
+                `${decision.operationIds.join(", ")} already holds a durable intent under this reservation, so the ` +
+                `reservation is retained: reissue the SAME verb with the SAME --operation id and payload; the frozen ` +
+                `intent is reused (settled by dispatch, receipt and confirmation), never re-frozen or re-sent.`
+              : `The remote-cache lane that holds this composite's durable intents could not be read ` +
+                `(${messageOf(decision.error)}), so this refusal proves nothing either way and the reservation is ` +
+                `retained: repair the lane, then reissue the SAME verb with the SAME --operation id; any frozen intent ` +
+                `is reused, never re-frozen or re-sent.`,
+        });
+      }
+      if (decision.kind === "unsettled") throw unsettledDeclineRefusal(intent, cause, decision.error);
+      throw recordedRefusal(intent.key.operationId, cause);
+    }
+    if (codeOf(error) === "remote.operation-conflict") {
+      throw partialRefusal({
+        intent,
+        phase: "prepared",
+        confirmed: [],
+        cause: error,
+        recovery:
+          `A provider intent is already frozen under this operation id, so this attempt proves no pre-freeze ` +
+          `failure: the reservation is retained. Reissue the SAME verb with the SAME --operation id and payload: ` +
+          `the frozen intent is reused (settled by dispatch, receipt and confirmation), never re-frozen or re-sent.`,
+      });
+    }
     throw partialRefusal({
       intent,
       phase: "prepared",
       confirmed: [],
       cause: error,
       recovery:
-        `The provider intent was not frozen (${messageOf(error)}). Reissue the same verb with the same --operation id ` +
-        `once the named cause is corrected; nothing was applied.`,
+        `The reservation is retained: reissue the same verb with the same --operation id once the named cause is ` +
+        `corrected; any provider intent already frozen under this id is reused, never re-frozen or re-sent.`,
     });
   }
   if (remoteIntents === null) {
@@ -1071,43 +1447,165 @@ async function runRemoteComposite<T>(
       });
     }
   }
-  const pending = remoteIntents.find((entry) => entry.state !== "confirmed");
-  if (pending !== undefined) {
+  // invariant: An intent row is not always the answer: a conflicted fork is repaired by a
+  // separate confirmed intent linked through `resolved_by`, and an abandoned intent will never
+  // confirm. Both are settled HERE, so a plan reservation never waits on them forever. A
+  // settlement counts only with its own readable receipt: a confirmed state whose effect is
+  // undisclosed or unreadable proves nothing and never finalizes (state alone is not a receipt).
+  const effective: RemoteIntent[] = [];
+  const abandoned: Array<{ operationId: string; reason: string | null }> = [];
+  const liveLeaves = new Map<string, RemoteIntentRead>();
+  const withdrawnRepairs = new Map<string, { repair: string; reason: string | null; fork: string }>();
+  let repairedMismatch: StoreError | null = null;
+  const unreadSettlements: string[] = [];
+  for (const entry of remoteIntents) {
+    if (entry.state === "confirmed") {
+      effective.push(entry);
+      continue;
+    }
+    if (entry.state === "conflict" || entry.state === "abandoned") {
+      let settlement: RemoteSettlement | null;
+      try {
+        settlement = await remoteSettlementOf(context, entry.operationId);
+      } catch (error) {
+        // note: An unreadable settlement is reported as outstanding with its read failure named,
+        // never masked into an ordinary pending row that points the operator at the wrong command.
+        unreadSettlements.push(`${entry.operationId}: ${messageOf(error)}`);
+        settlement = null;
+      }
+      if (settlement?.kind === "confirmed") {
+        // invariant: A repair acknowledges the OUTCOME the frozen request named, not merely that its
+        // fork merged; a mismatch is decided below, with every settled component named and durable.
+        repairedMismatch ??= repairedOutcomeMismatch(settlement);
+        effective.push({
+          ...entry,
+          operationId: settlement.repair.operationId,
+          requestHash: settlement.repair.requestHash,
+          state: "confirmed",
+          confirmed: settlement.repair.confirmed,
+          result: settlement.repair.result,
+          updatedAt: settlement.repair.updatedAt,
+        });
+        continue;
+      }
+      if (settlement?.kind === "abandoned") {
+        if (settlement.fork === null) {
+          // invariant: Only an abandoned ORIGINAL can never acquire a successor. It is carried as
+          // abandoned, which lets the settled-composite decision below see the whole chain instead
+          // of waiting on the original conflict forever.
+          abandoned.push({ operationId: settlement.operationId, reason: settlement.reason });
+          effective.push({ ...entry, state: "abandoned" });
+          continue;
+        }
+        // invariant: An abandoned REPAIR is withdrawn work, not settled work: the fork it withdrew
+        // from stays repairable (`outbox-resolve` admits a replacement over an abandoned one), so a
+        // successor confirmed there still finalizes THIS reservation. The entry stays outstanding,
+        // and its recovery names that replacement instead of a new request.
+        withdrawnRepairs.set(entry.operationId, {
+          repair: settlement.operationId,
+          reason: settlement.reason,
+          fork: settlement.fork,
+        });
+      }
+      if (settlement?.kind === "live") {
+        // invariant: The chain ends in a LIVE replacement, not in a settlement: the entry stays
+        // outstanding, and the recovery names the replacement to dispatch (or reconcile) instead of
+        // the original conflicted row — a second `outbox-resolve` of that fork is refused while the
+        // live repair is linked.
+        liveLeaves.set(entry.operationId, settlement.intent);
+      }
+    }
+    effective.push(entry);
+  }
+  // note: Only a PROVED confirmation settles an entry: state with no readable receipt stays
+  // outstanding, and the composite finalizes only on entries whose effect it can actually read.
+  const proved = (entry: RemoteIntent): boolean => entry.state === "confirmed" && entry.confirmed !== null;
+  const confirmedEntries = effective.filter((entry) => proved(entry));
+  // invariant: EVERY entry is scanned, not just the first outstanding one: one confirmed entry with
+  // an unreadable receipt keeps the reservation (a mixed decline would hide provider work), and
+  // every outstanding entry is named in the refusal.
+  const outstanding = effective.filter((entry) => !proved(entry));
+  const unreadableConfirmed = outstanding.find((entry) => entry.state === "confirmed");
+  if (outstanding.length > 0) {
+    if (
+      abandoned.length > 0 &&
+      unreadableConfirmed === undefined &&
+      effective.every((entry) => entry.state === "confirmed" || entry.state === "abandoned")
+    ) {
+      // invariant: Every outstanding provider intent is abandoned with no live repair, so no
+      // provider effect can ever arrive from them, and every confirmed component carries a readable
+      // receipt. Confirmed components are named in the decline: an effect-free claim would hide
+      // provider work already committed and invite duplicates.
+      const cause = abandonedRemoteCause(abandoned, confirmedEntries);
+      const settlement = await markDeclined(context, intent, cause);
+      if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
+      throw recordedRefusal(intent.key.operationId, cause);
+    }
+    const named = outstanding.map((entry) => `${entry.operationId} (${entry.state})`).join(", ");
     throw partialRefusal({
       intent,
       phase: "prepared",
-      confirmed: remoteIntents
-        .filter((entry) => entry.state === "confirmed")
-        .map((entry) => `provider:${entry.operationId}`),
-      frozen: remoteIntents.map((entry) => entry.operationId),
-      cause: new StoreError(
-        "remote.effect-pending",
-        `the provider intent ${pending.operationId} is ${pending.state}, not confirmed`,
-      ),
-      recovery:
-        `Inspect it with \`mstar store collaboration remote outbox-show --harness <abs> --operation ${pending.operationId}\`, ` +
-        `send it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ${pending.operationId}\`, ` +
-        `record the result with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, then ` +
-        `reissue this SAME verb with the SAME --operation id: only the execution delta is committed, and the confirmed ` +
-        `effect is never re-applied.`,
+      confirmed: confirmedEntries.map((entry) => `provider:${entry.operationId}`),
+      frozen: effective.map((entry) => entry.operationId),
+      cause:
+        unreadableConfirmed !== undefined
+          ? new StoreError(
+              "collaboration.unreadable",
+              `the provider intent ${unreadableConfirmed.operationId} is confirmed but its receipt is not readable under ` +
+                `this checkout's current disclosure; state alone is not a receipt`,
+            )
+          : new StoreError(
+              "remote.effect-pending",
+              `the provider intents ${named} are not confirmed` +
+                (abandoned.length === 0
+                  ? ""
+                  : `, and ${abandoned.map((entry) => entry.operationId).join(", ")} was abandoned`) +
+                (unreadSettlements.length === 0
+                  ? ""
+                  : `; a settlement could not be read (${unreadSettlements.join("; ")})`),
+            ),
+      recovery: outstanding
+        .map((entry) => {
+          const withdrawn = withdrawnRepairs.get(entry.operationId);
+          return withdrawn === undefined
+            ? outstandingRecovery(entry, liveLeaves.get(entry.operationId))
+            : withdrawnRepairRecovery(withdrawn);
+        })
+        .join(" "),
     });
+  }
+  if (repairedMismatch !== null) {
+    // invariant: Every provider component is durable, but the settled repair does not carry the
+    // business outcome this reservation asked for, so NO execution binding is acknowledged from it.
+    // The reservation is declined with the settled disclosure and a supported correction route
+    // instead of retrying a finalization that can never succeed.
+    const cause: DeclineCause = {
+      code: codeOf(repairedMismatch) as string,
+      message: messageOf(repairedMismatch),
+      details: detailsOf(repairedMismatch),
+    };
+    const settlement = await markDeclined(context, intent, cause);
+    if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
+    throw recordedRefusal(intent.key.operationId, cause);
   }
   // invariant: A remote composite owns no local collaboration revision; the confirmed provider
   // events ARE its effect receipt. Every entry is named with the record and issue it confirmed, so
-  // a multi-entry kind's effects stay inspectable after the fact.
+  // a multi-entry kind's effects stay inspectable after the fact, and the confirmed event itself
+  // is carried so the finalizer validates the frozen request against what the provider published.
   const receipt: CollaborationEffectReceipt = {
     key: intent.key,
     requestHash: intent.requestHash,
     collaborationRevision: 0,
     catalogRevision: 0,
-    committedAt: remoteIntents.reduce((latest, entry) => (entry.updatedAt > latest ? entry.updatedAt : latest), ""),
+    committedAt: confirmedEntries.reduce((latest, entry) => (entry.updatedAt > latest ? entry.updatedAt : latest), ""),
     facts: JSON.stringify({
-      remote: remoteIntents.map((entry) => ({
+      remote: confirmedEntries.map((entry) => ({
         operationId: entry.operationId,
         requestHash: entry.requestHash,
         issueId: entry.confirmed?.identity.issueId ?? null,
         recordId: entry.confirmed?.recordId ?? null,
         result: entry.result,
+        event: entry.confirmed?.event ?? null,
       })),
     }),
   };
@@ -1115,13 +1613,27 @@ async function runRemoteComposite<T>(
     return await finalizeComposite(context, intent, receipt, effects.finalize);
   } catch (error) {
     if (codeOf(error) === "collaboration.operation-partial") throw error;
+    if (codeOf(error) === "remote.effect-mismatch") {
+      // invariant: The settled provider effect does not carry the business outcome the frozen
+      // request reviewed, so NO execution binding is recorded from it. The reservation is declined
+      // with the settled disclosure and a supported correction route instead of retrying a
+      // finalization that can never succeed.
+      const cause: DeclineCause = {
+        code: codeOf(error) as string,
+        message: messageOf(error),
+        details: detailsOf(error),
+      };
+      const settlement = await markDeclined(context, intent, cause);
+      if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
+      throw recordedRefusal(intent.key.operationId, cause);
+    }
     // invariant: Q2: every provider effect is confirmed and durable. An execution-acknowledgement
     // failure discloses exactly those components and the same-operation replay path instead of
     // reporting the local error alone and obscuring the external effect.
     throw partialRefusal({
       intent,
       phase: "collaboration-confirmed",
-      confirmed: remoteIntents.map((entry) => `provider:${entry.operationId}`),
+      confirmed: effective.map((entry) => `provider:${entry.operationId}`),
       cause: error,
       recovery:
         `The confirmed provider components named above are recorded and are never re-sent. Reissue this SAME verb ` +

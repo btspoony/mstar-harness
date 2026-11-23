@@ -8,12 +8,23 @@
  * same public engine DTOs, never a mocked database or provider.
  */
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spyOn } from "bun:test";
 import * as nodeOs from "node:os";
-import type { RemoteSnapshot, ScopeCheck, ScopeCapabilities, ProviderProjectScope } from "./collaboration-remote.js";
+import {
+  dispatchRemoteIntent,
+  readRemoteIntent,
+  recordRemoteReceipt,
+  remoteEventHead,
+  type ProviderProjectScope,
+  type RemoteIntentRead,
+  type RemoteSnapshot,
+  type ScopeCapabilities,
+  type ScopeCheck,
+} from "./collaboration-remote.js";
 import type { StoreContext } from "./store-db.js";
 
 export const REMOTE_SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
@@ -369,4 +380,132 @@ export function completeSnapshotFor(projectId: string, check: ScopeCheck): Remot
 /** note: The observation submission the Host Agent posts for one snapshot. */
 export function submission(commit: string, check: ScopeCheck, snapshot: RemoteSnapshot | null, expectRevision: number) {
   return { version: 1 as const, selectorCommit: commit, generation: 3, check, expectRevision, snapshot };
+}
+
+/* ------------------------------------------------------------------------ *
+ * note: Outbox settlement: the host's own evidence for one frozen intent
+ * ------------------------------------------------------------------------ */
+
+/** note: Dispatch one intent and return its single send permit's attempt id. */
+async function permitAttempt(context: StoreContext, operationId: string): Promise<string> {
+  const read = await readRemoteIntent(context, operationId);
+  // invariant: A reviewed resolution's base IS its recorded fork: the permit needs the host's own
+  // complete traversal of exactly those heads, started after the conflict evidence was recorded.
+  const fork = read.resolves === null ? null : await forkObservationOf(context, read);
+  const permit = await dispatchRemoteIntent(context, operationId, fork ?? undefined);
+  if (permit.kind !== "permit") {
+    throw new Error(`fixture: operation ${operationId} issued no send permit (it is ${permit.state})`);
+  }
+  return permit.permit.attemptId;
+}
+
+/** note: The host-attested fork traversal a resolution's dispatch must carry. */
+async function forkObservationOf(context: StoreContext, resolution: RemoteIntentRead): Promise<Record<string, unknown>> {
+  const conflictedId = resolution.resolves;
+  if (conflictedId === null) throw new Error(`fixture: operation ${resolution.operationId} is not a resolution`);
+  const conflicted = await readRemoteIntent(context, conflictedId);
+  const evidence = conflicted.receipts.find((entry) => entry.outcome.kind === "conflict");
+  if (evidence === undefined || evidence.outcome.kind !== "conflict") {
+    throw new Error(`fixture: conflicted operation ${conflicted.operationId} carries no fork evidence`);
+  }
+  const heads = evidence.outcome.observedRecords
+    .map((record) => ({ recordId: record.recordId, issueRef: REMOTE_IDS.issueRef, head: remoteEventHead(record.event) }))
+    .sort((left, right) => (left.head < right.head ? -1 : left.head > right.head ? 1 : 0));
+  return {
+    version: 1,
+    selectorCommit: resolution.binding.selectorCommit,
+    generation: resolution.generation,
+    projectId: resolution.projectId,
+    conflictOperationId: conflicted.operationId,
+    asOf: new Date(Date.parse(evidence.recordedAt) + 1_000).toISOString(),
+    coverage: "complete",
+    heads,
+  };
+}
+
+/** note: The receipt envelope every settlement below submits for one attempt. */
+function receiptOf(
+  read: RemoteIntentRead,
+  attemptId: string,
+  outcome: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    selectorCommit: read.binding.selectorCommit,
+    generation: read.generation,
+    projectId: read.projectId,
+    operationId: read.operationId,
+    attemptId,
+    requestHash: read.requestHash,
+    observedAt: new Date().toISOString(),
+    outcome,
+  };
+}
+
+/** note: The provider identity a receipt names for the record its intent addresses. */
+function receiptIdentity(read: RemoteIntentRead, issueId: string): Record<string, unknown> {
+  return {
+    provider: read.binding.provider,
+    workspaceId: read.binding.workspaceId,
+    teamId: read.binding.teamId,
+    projectId: read.binding.projectId,
+    issueId,
+  };
+}
+
+/**
+ * note: Confirm one frozen intent with the provider record its own frozen event proves. A create
+ * needs the new issue id (its record id IS that issue); every other kind addresses `target`.
+ */
+export async function confirmFrozenIntent(
+  context: StoreContext,
+  operationId: string,
+  createdIssueId?: string,
+): Promise<void> {
+  const read = await readRemoteIntent(context, operationId);
+  if (read.event === null) throw new Error(`fixture: operation ${operationId} discloses no frozen event`);
+  const create = read.event.change.kind === "issue-create";
+  const issueId = create ? createdIssueId : read.target;
+  if (issueId === undefined || issueId === null) {
+    throw new Error(`fixture: operation ${operationId} needs the ${create ? "created issue id" : "addressed target"}`);
+  }
+  const attemptId = await permitAttempt(context, operationId);
+  await recordRemoteReceipt(context, receiptOf(read, attemptId, {
+    kind: "confirmed",
+    identity: receiptIdentity(read, issueId),
+    recordId: create ? issueId : randomUUID(),
+    event: read.event,
+  }));
+}
+
+/**
+ * note: Record a complete fork against one dispatched intent: one competing record per observed
+ * head, each carrying the same subject as the frozen event under another operation id. Returns the
+ * observed heads a reviewed resolution must cite as its parents.
+ */
+export async function conflictFrozenIntent(context: StoreContext, operationId: string): Promise<string[]> {
+  const read = await readRemoteIntent(context, operationId);
+  const frozen = read.event;
+  const target = read.target;
+  if (frozen === null || target === null) {
+    throw new Error(`fixture: operation ${operationId} is not a replaceable frozen event`);
+  }
+  const competing = [8, 9].map((digit) => ({
+    ...frozen,
+    operationId: randomUUID(),
+    parents: [String(digit).repeat(64)],
+  }));
+  const heads = competing.map(remoteEventHead).sort();
+  const attemptId = await permitAttempt(context, operationId);
+  await recordRemoteReceipt(context, receiptOf(read, attemptId, {
+    kind: "conflict",
+    expectedHeads: read.expectedHeads,
+    observedHeads: heads,
+    observedRecords: competing.map((event) => ({
+      identity: receiptIdentity(read, target),
+      recordId: randomUUID(),
+      event,
+    })),
+  }));
+  return heads;
 }

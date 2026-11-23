@@ -120,6 +120,9 @@ export type StoreErrorCode =
   | "remote.intent-not-found"
   | "remote.dispatch-refused"
   | "remote.effect-pending"
+  // note: A settled provider effect that does not carry the business outcome its frozen request
+  // reviewed: the composite declines instead of recording an execution binding from a guess.
+  | "remote.effect-mismatch"
   // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
   // partially cut store is not runtime authority, a competing source/mode/
   // manifest cannot win by force, pending catalog or mirror work must be

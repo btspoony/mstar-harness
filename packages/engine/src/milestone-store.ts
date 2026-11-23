@@ -110,8 +110,8 @@ function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, mile
     throw new MilestoneError(
       "milestone.operation-conflict",
       `Operation ${intent.operationId} is confirmed without its recorded business result, so its change and revision ` +
-        `cannot be reported. Inspect it with mstar store collaboration remote outbox-show --harness <abs>; ` +
-        `nothing was read or changed.`,
+        `cannot be reported. Inspect it with mstar store collaboration remote outbox-show --harness <abs> ` +
+        `--operation ${intent.operationId}; nothing was read or changed.`,
     );
   }
   return {
@@ -159,8 +159,9 @@ async function queueMilestoneWrite(
         "milestone.revision-conflict",
         `Project ${projectId}'s observed base is revision ${String(observationRevision)}, not the ` +
           `${String(expectedStoreRevision)} this write was planned against; another write or observation moved it. ` +
-          `Re-read the project revision with \`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, ` +
-          `then retry with a fresh --operation. Nothing was enqueued.`,
+          `Read this project's current observation revision with ` +
+          `\`mstar store collaboration remote status --harness <abs> --project ${projectId}\`, pass it as ` +
+          `--expect-store, then retry with a fresh --operation. Nothing was enqueued.`,
       );
     },
   });

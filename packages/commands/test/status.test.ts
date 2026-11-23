@@ -191,11 +191,14 @@ describe("status command family", () => {
       const store = await initializeStore({ harnessDir: dir });
       store.close();
       // invariant: A schema version this build does not support is a STRUCTURED refusal:
-      // three distinct facts the command envelope must not drop.
+      // three distinct facts the command envelope must not drop. Two future rows keep
+      // `storeSchemaVersion` distinct from `firstUnsupportedMigration`: the store's highest
+      // applied row is one generation past the first the build cannot interpret.
       const unsupported = Math.max(...COLLABORATION_MIGRATIONS.map((migration) => migration.version)) + 1;
       const writer = new DatabaseSync(resolveCollaborationLocation({ harnessDir: dir }).dbPath);
       try {
-        writer.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, 'future-schema', 'fixture', '2026-11-21')").run(unsupported);
+        writer.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, 'fixture', '2026-11-21')").run(unsupported, "future-schema-1");
+        writer.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, 'fixture', '2026-11-21')").run(unsupported + 1, "future-schema-2");
       } finally {
         writer.close();
       }
@@ -203,7 +206,7 @@ describe("status command family", () => {
       expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported" });
       if (result.status !== "ok") {
         expect(result.details).toMatchObject({
-          storeSchemaVersion: unsupported,
+          storeSchemaVersion: unsupported + 1,
           supportedSchemaMax: unsupported - 1,
           firstUnsupportedMigration: unsupported,
         });

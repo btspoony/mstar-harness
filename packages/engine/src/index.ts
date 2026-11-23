@@ -892,6 +892,19 @@ export {
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
 } from "./issue.js";
+// why: The engine-owned structural definitions of the strict remote/outbox `--input`
+// documents (F-07 convergence): the published command derives its `payloadSchemas
+// .inputDocument` descriptors from these, so discovery and the runtime parsers share one
+// structural owner and the engine's vocabularies are never restated in a second package.
+export {
+  remoteAdoptionDocumentSchema,
+  remoteBindDocumentSchema,
+  remoteForkObservationDocumentSchema,
+  remoteObserveDocumentSchema,
+  remoteReceiptDocumentSchema,
+  remoteReconcileDocumentSchema,
+  remoteResolutionDocumentSchema,
+} from "./remote-documents.js";
 // why: The remote record shapes the sync ledger consumes (issue-sync): what an
 // agent's external issue tools hand back, normalized. The engine owns no
 // transport and no credential, so no provider interface, page envelope or

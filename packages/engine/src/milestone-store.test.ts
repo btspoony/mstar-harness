@@ -6,8 +6,15 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, writeCollaborationBinding } from "./collaboration-store.js";
-import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
-import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
+import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteProjectWrite } from "./collaboration-remote.js";
+import {
+  completeSnapshot,
+  confirmFrozenIntent,
+  createRemoteScope,
+  positiveCheck,
+  REMOTE_IDS,
+  submission,
+} from "./remote-scope.fixture.js";
 import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from "./milestone-store.js";
 import { queryMilestones } from "./milestone-store.js";
 import { withStoreRead } from "./store-read.js";
@@ -203,6 +210,54 @@ describe("milestone store", () => {
 // ---------------------------------------------------------------------------
 
 describe("remote milestones", () => {
+  test("a confirmed intent without a recorded result names a runnable outbox-show command", async () => {
+    const fixture = createRemoteScope(root, "remote-milestones-recovery");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    // note: The observed base the verb must be planned against: the cache's own revision.
+    const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    let revision = 0;
+    try {
+      const row = db
+        .prepare("select revision from remote_observations where project_key = ?")
+        .get(REMOTE_IDS.projectId) as { revision?: unknown } | undefined;
+      revision = typeof row?.revision === "number" ? row.revision : 0;
+    } finally {
+      db.close();
+    }
+
+    // why: An earlier release froze this write's intent without recording a business result, and
+    // the provider confirmed it. The replay must name the exact intent an operator can inspect.
+    const operationId = crypto.randomUUID();
+    const patch = { name: "Renamed delivery" };
+    const origin = {
+      verb: "milestone-update",
+      request: { projectId: REMOTE_IDS.projectId, milestoneId: "milestone-1", patch, expectedStoreRevision: revision },
+    };
+    await prepareRemoteProjectWrite(context, {
+      projectId: REMOTE_IDS.projectId,
+      operationId,
+      origin,
+      next: (current) => current,
+    });
+    await confirmFrozenIntent(context, operationId);
+
+    const refused = await updateMilestone(context, REMOTE_IDS.projectId, "milestone-1", patch, {
+      operationId,
+      expectedStoreRevision: revision,
+    }).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ code: "milestone.operation-conflict" });
+    expect(refused).toBeInstanceOf(Error);
+    const message = (refused as Error).message;
+    expect(message).toContain("outbox-show");
+    expect(message).toContain(`--operation ${operationId}`);
+    expect(message).toContain("--harness");
+  });
+
   test("a remote checkout groups MStar subjects under the observed milestones", async () => {
     const fixture = createRemoteScope(root, "remote-milestones");
     const commit = fixture.publish();

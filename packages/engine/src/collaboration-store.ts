@@ -1136,14 +1136,26 @@ function notActive(dbPath: string, state: "staged" | "active"): StoreError {
   );
 }
 
-/** note: An admitted old lane is never migrated implicitly; the explicit upgrade is the only route. */
-function upgradeRequired(dbPath: string, found: number): StoreError {
+/**
+ * note: An admitted old lane is never migrated implicitly. A local/mirror lane advances through
+ * `store upgrade`; a `remote` lane is derived observation state, so its recovery is the reviewed
+ * bind that replaces it — no local upgrade verb produces its receipt.
+ */
+function upgradeRequired(location: CollaborationLocation, found: number): StoreError {
   const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+  const recovery =
+    location.mode === "remote"
+      ? `A remote cache is derived observation state and is never upgraded in place: run ` +
+        `"mstar store collaboration remote bind --harness <abs> --input <file|->" with a verified batch that ` +
+        `proves the current provider scope (its document shape is published by ` +
+        `"mstar schema --command store.collaboration.remote.bind"), which replaces a pre-v${String(current)} cache ` +
+        `under the checked selector`
+      : `run "mstar store upgrade --operator <name>" once for this scope`;
   return new StoreError(
     "collaboration.upgrade-required",
-    `The collaboration store at ${dbPath} records schema version ${String(found)}, and this build reads ` +
-      `version ${String(current)}. Ordinary reads never migrate a lane: run "mstar store upgrade --operator <name>" ` +
-      `once for this scope, then retry the same verb. Nothing was read or modified.`,
+    `The collaboration store at ${location.dbPath} records schema version ${String(found)}, and this build reads ` +
+      `version ${String(current)}. Ordinary reads never migrate a lane: ${recovery}, then retry the same verb. ` +
+      `Nothing was read or modified.`,
   );
 }
 
@@ -1523,7 +1535,7 @@ function admit(
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
-      throw upgradeRequired(location.dbPath, schemaVersion);
+      throw upgradeRequired(location, schemaVersion);
     }
     assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
@@ -1752,6 +1764,69 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 }
 
 /**
+ * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
+ * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
+ * singleton naming this repository and mode (and, when this checkout records one, exactly the
+ * store identity that record names), and (by being below the outbox schema) no outbox work.
+ * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
+ * reads: the canonical name is released after the successor is staged, never before.
+ */
+async function replaceDerivedLaneBelow(
+  location: CollaborationLocation,
+  below: number,
+  timeout: number,
+  expected: RetainedLaneIdentity | undefined,
+): Promise<RetainedLaneIdentity | undefined> {
+  const dbPath = location.dbPath;
+  const db = await connectAt(dbPath, "read", timeout);
+  let recorded: { version: number; meta: CollaborationMeta };
+  try {
+    recorded = { version: validateCollaborationMigrations(readAppliedMigrations(db, false)), meta: readMeta(db) };
+  } finally {
+    db.close();
+  }
+  if (recorded.version >= below) return undefined;
+  if (recorded.meta.repoKey !== location.repoKey || recorded.meta.mode !== location.mode) {
+    throw staleBinding(dbPath, recorded.meta, `this checkout's ${location.repoKey} (${location.mode})`);
+  }
+  // invariant: The bytes about to be replaced must be the generation this checkout's own binding
+  // names; another identity is a replacement it never recorded, so it is refused before any move.
+  if (
+    expected !== undefined &&
+    (recorded.meta.storeId !== expected.storeId || recorded.meta.epoch !== expected.epoch)
+  ) {
+    throw staleBinding(
+      dbPath,
+      recorded.meta,
+      `this checkout's recorded cache store ${expected.storeId} epoch ${String(expected.epoch)}`,
+    );
+  }
+  return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
+}
+
+/**
+ * note: The replacement's stale-probe seam: a competing bind (and, behind it, a real writer that
+ * freezes an outbox row) lands between this attempt's decision to replace and its critical section.
+ * The probe is re-taken inside that critical section, so the seam never authorizes replacing bytes
+ * that advanced.
+ */
+let remoteCacheReplacementGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteCacheReplacementGapForTest = callback;
+}
+
+/**
+ * note: The publication seam: a regression fails after the predecessor is preserved and the
+ * successor is fully staged, immediately before the one atomic rename that publishes it.
+ */
+let remoteCacheReplacementPublishGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementPublishGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementPublishGapForTest = callback;
+}
+
+/**
  * invariant: Ensure the store's directory chain exists: every existing component must
  * already be a real directory, and creation makes the missing chain private.
  */
@@ -1814,18 +1889,45 @@ export async function initializeCollaborationStore(location: CollaborationLocati
  * note: The remote cache lane's own initializer. `remote bind` owns it: the local domain
  * entries never create or open a remote lane, so no local-authority verb can
  * stand in for the verified cache.
+ *
+ * A cache below the outbox schema is DERIVED observation state with no outbox work to preserve,
+ * so the reviewed bind replaces it in place instead of failing its own documented recovery. The
+ * successor is staged and verified first; only then are the previous bytes preserved beside the
+ * lane and the canonical name released, so a failed or raced publication never destroys them.
+ * The replaced lane's store identity is kept: the checkout binding that named it stays valid, so
+ * the bind publishes over the same generation.
  */
-export async function initializeRemoteCacheStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
+export async function initializeRemoteCacheStore(
+  location: CollaborationLocation,
+  expected?: RetainedLaneIdentity,
+): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
-  return createOrContinueStore(location);
+  // note: `remote` has existed only since v2, so every pre-current remote cache is below the outbox
+  // schema and holds no outbox work: any of them is replaced, never migrated in place. The floor is
+  // the outbox schema itself, never a later migration, so a cache that HAS an outbox is never replaced.
+  return createOrContinueStore(location, {
+    replaceBelowVersion: COLLABORATION_OUTBOX_SCHEMA.version,
+    expectedIdentity: expected,
+  });
 }
 
-async function createOrContinueStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
-  const dbPath = location.dbPath;
-  const timeout = busyTimeoutMs();
-  assertAdmittedTarget(dbPath);
-  if (existsSync(dbPath)) return continueExisting(location, timeout);
+/** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
+type RetainedLaneIdentity = Readonly<{ storeId: string; epoch: number }>;
 
+/** note: One staged, admitted successor: its private names and the authority its bytes prove. */
+type StagedStore = Readonly<{ stagingDir: string; stagingPath: string; authority: CollaborationAuthority }>;
+
+/**
+ * invariant: Build the complete successor in a private staging directory before it can be named:
+ * every supported migration applied in order, the retained (or a fresh) identity recorded, the
+ * bytes admitted as this build's own complete store, and the journal folded into one database file.
+ */
+async function stageCompleteStore(
+  location: CollaborationLocation,
+  retained: RetainedLaneIdentity | undefined,
+  timeout: number,
+): Promise<StagedStore> {
+  const dbPath = location.dbPath;
   const dir = dirname(dbPath);
   createStoreDirectories(dir);
   const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
@@ -1869,8 +1971,8 @@ async function createOrContinueStore(location: CollaborationLocation): Promise<C
       }
       db.prepare(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
-          "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', 1, 0, 0, ?)",
-      ).run(location.repoKey, location.mode, randomUUID(), at);
+          "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', ?, 0, 0, ?)",
+      ).run(location.repoKey, location.mode, retained?.storeId ?? randomUUID(), retained?.epoch ?? 1, at);
       db.exec("commit");
     } catch (error) {
       try {
@@ -1906,13 +2008,22 @@ async function createOrContinueStore(location: CollaborationLocation): Promise<C
     throw asRefusal(dbPath, error);
   }
 
+  return { stagingDir, stagingPath, authority };
+}
+
+/**
+ * invariant: Create the scope's store when no bytes are named: one create-only hard link publishes
+ * the staged successor. A competing initializer that won the name first keeps its cache; nothing
+ * another attempt published is ever deleted.
+ */
+async function createFreshStore(location: CollaborationLocation, timeout: number): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const staged = await stageCompleteStore(location, undefined, timeout);
   try {
-    linkSync(stagingPath, dbPath);
+    linkSync(staged.stagingPath, dbPath);
   } catch (error) {
-    discardStaging(stagingDir, stagingPath);
+    discardStaging(staged.stagingDir, staged.stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      // note: A competing initializer published this scope first: continue that record
-      // only after it is verified and its directory entry is confirmed.
       return continueExisting(location, timeout);
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
@@ -1921,10 +2032,104 @@ async function createOrContinueStore(location: CollaborationLocation): Promise<C
     // note: The published subtree and its own name become durable before success.
     confirmPublishedChain(dbPath);
   } finally {
-    discardStaging(stagingDir, stagingPath);
+    discardStaging(staged.stagingDir, staged.stagingPath);
   }
-  return authority;
+  return staged.authority;
 }
+
+/**
+ * invariant: Replace one verified pre-outbox derived lane with a staged successor, inside ONE
+ * critical section under the lane's replacement lock: the ownership/schema probe, the staging, the
+ * preservation of the predecessor and the publication all hold that lock, so a probe taken before
+ * another binder advanced the lane can never authorize overwriting its bytes — and a replacement
+ * that publishes a v3 cache and an ordinary writer's frozen outbox row are never unlinked.
+ *
+ * The predecessor is preserved by hard link (same inode) before the name moves, and the successor
+ * is published with ONE atomic rename: the canonical name is never absent, so an interruption
+ * leaves either the predecessor or the successor named, never a fresh-init ambiguity.
+ */
+async function replaceDerivedLane(
+  location: CollaborationLocation,
+  below: number,
+  expected: RetainedLaneIdentity | undefined,
+  timeout: number,
+): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const retained = await replaceDerivedLaneBelow(location, below, timeout, expected);
+  if (retained === undefined) return continueExisting(location, timeout);
+  const staged = await stageCompleteStore(location, retained, timeout);
+  const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
+  try {
+    // note: Create-only, so a preserved image of other bytes is never overwritten.
+    linkSync(dbPath, preservedPath);
+  } catch (error) {
+    discardStaging(staged.stagingDir, staged.stagingPath);
+    throw unreadable(dbPath, `its derived cache could not be preserved before replacement (${publicationCause(error)})`);
+  }
+  try {
+    await remoteCacheReplacementPublishGapForTest?.();
+    // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
+    // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
+    // cache another process advanced while the successor was staged.
+    const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
+    if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
+      // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
+      discardStaging(staged.stagingDir, staged.stagingPath);
+      rmSync(preservedPath, { force: true });
+      return continueExisting(location, timeout);
+    }
+    // note: A stale sidecar would otherwise be picked up by the replacement's name.
+    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+    renameSync(staged.stagingPath, dbPath);
+  } catch (error) {
+    // note: The canonical name still holds the predecessor; the preserved duplicate is dropped.
+    discardStaging(staged.stagingDir, staged.stagingPath);
+    rmSync(preservedPath, { force: true });
+    throw asRefusal(
+      dbPath,
+      error instanceof StoreError
+        ? error
+        : unreadable(dbPath, `the staged store could not be published over its predecessor (${publicationCause(error)})`),
+    );
+  }
+  try {
+    // note: The published subtree and its own name become durable before success.
+    confirmPublishedChain(dbPath);
+  } finally {
+    discardStaging(staged.stagingDir, staged.stagingPath);
+  }
+  rmSync(preservedPath, { force: true });
+  return staged.authority;
+}
+
+async function createOrContinueStore(
+  location: CollaborationLocation,
+  options: { replaceBelowVersion?: number; expectedIdentity?: RetainedLaneIdentity } = {},
+): Promise<CollaborationAuthority> {
+  const dbPath = location.dbPath;
+  const timeout = busyTimeoutMs();
+  assertAdmittedTarget(dbPath);
+  if (options.replaceBelowVersion !== undefined && location.mode === "remote") {
+    // note: The replacement decision is taken INSIDE the lane's critical section (below), so a
+    // probe taken before it can never authorize replacing bytes that advanced in the meantime.
+    await remoteCacheReplacementGapForTest?.();
+    // note: The lane's own directory chain exists before its lock file can be created.
+    createStoreDirectories(dirname(dbPath));
+    // note: A lazy import keeps this module free of a static cycle with the lock primitive's owner.
+    const { withCollaborationLockFile } = await import("./collaboration-cutover.js");
+    return withCollaborationLockFile(
+      join(dirname(dbPath), "collaboration-cache-replace.lock"),
+      "remote cache replacement",
+      async () =>
+        existsSync(dbPath)
+          ? replaceDerivedLane(location, options.replaceBelowVersion as number, options.expectedIdentity, timeout)
+          : createFreshStore(location, timeout),
+    );
+  }
+  if (existsSync(dbPath)) return continueExisting(location, timeout);
+  return createFreshStore(location, timeout);
+}
+
 
 /** note: What one explicit upgrade did: the versions crossed and the references it minted. */
 export type CollaborationUpgradeReceipt = Readonly<{
@@ -1935,6 +2140,70 @@ export type CollaborationUpgradeReceipt = Readonly<{
   epoch: number;
   issuesBackfilled: number;
 }>;
+
+/**
+ * note: The declared inventory of one supported lane version: every table and column an image of
+ * that generation must carry. A restore verifies an older verified image against ITS OWN declared
+ * shape before advancing the staged copy through the ladder.
+ */
+export function collaborationInventoryOf(version: number): Readonly<Record<string, readonly string[]>> {
+  if (version <= 1) return COLLABORATION_COLUMNS;
+  if (version < COLLABORATION_OUTBOX_SCHEMA.version) return COLLABORATION_V2_COLUMNS;
+  return COLLABORATION_CURRENT_COLUMNS;
+}
+
+/**
+ * invariant: Advance one lane's bytes through this build's supported ladder inside the caller's
+ * open transaction: each recorded predecessor is re-validated, the v2 rebuild+backfill and the v3
+ * outbox each run under a proof of the shape they start from, and every ledger row is appended
+ * only after its layout is verified. An already-current lane is only revalidated.
+ */
+export function applyCollaborationLadder(
+  db: StoreDb,
+  dbPath: string,
+): Readonly<{ fromVersion: number; issuesBackfilled: number }> {
+  const appliedMax = validateCollaborationMigrations(readAppliedMigrations(db, false));
+  const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+  if (appliedMax === current) {
+    assertCurrentSchema(db, dbPath);
+    return { fromVersion: current, issuesBackfilled: 0 };
+  }
+  let issuesBackfilled = 0;
+  if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
+    assertLegacySchema(db, dbPath);
+    const present = db
+      .prepare("pragma table_info(issues)")
+      .all()
+      .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
+    if (present.includes("issue_ref")) {
+      throw new StoreError(
+        "store.corrupt",
+        `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
+          `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
+          `verified backup pair; nothing was modified.`,
+      );
+    }
+    issuesBackfilled = applyRemoteCacheSchema(db);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_REMOTE_SCHEMA.version,
+      COLLABORATION_REMOTE_SCHEMA.name,
+      migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
+  // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
+  assertRemoteCacheSchema(db, dbPath);
+  db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+  db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+    COLLABORATION_OUTBOX_SCHEMA.version,
+    COLLABORATION_OUTBOX_SCHEMA.name,
+    migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+    nowRfc3339(),
+  );
+  assertCurrentSchema(db, dbPath);
+  return { fromVersion: appliedMax, issuesBackfilled };
+}
 
 /**
  * `mstar store upgrade --operator <name>` for the collaboration lane: the ONLY
@@ -1978,8 +2247,6 @@ export async function upgradeCollaborationStore(
   try {
     db.exec("begin immediate");
     try {
-      const applied = readAppliedMigrations(db, false);
-      const appliedMax = validateCollaborationMigrations(applied);
       const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
       const meta = readMeta(db);
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
@@ -2013,47 +2280,12 @@ export async function upgradeCollaborationStore(
         epoch: meta.epoch,
         issuesBackfilled,
       });
-      if (appliedMax === current) {
+      const ladder = applyCollaborationLadder(db, dbPath);
+      if (ladder.fromVersion === current) {
         // note: A committed earlier upgrade revalidates instead of reapplying.
-        assertCurrentSchema(db, dbPath);
         db.exec("commit");
         return receipt(current, 0);
       }
-      const fromVersion = appliedMax;
-      let issuesBackfilled = 0;
-      if (appliedMax < COLLABORATION_REMOTE_SCHEMA.version) {
-        assertLegacySchema(db, dbPath);
-        const present = db
-          .prepare("pragma table_info(issues)")
-          .all()
-          .map((column) => (column !== null && typeof column === "object" && "name" in column ? column.name : undefined));
-        if (present.includes("issue_ref")) {
-          throw new StoreError(
-            "store.corrupt",
-            `The collaboration store at ${dbPath} is a partially applied v2 (its v1 ledger is intact but issues already ` +
-              `carries issue_ref); it is refused instead of re-backfilling stable references. Recover the v1 bytes from a ` +
-              `verified backup pair; nothing was modified.`,
-          );
-        }
-        issuesBackfilled = applyRemoteCacheSchema(db);
-        db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-          COLLABORATION_REMOTE_SCHEMA.version,
-          COLLABORATION_REMOTE_SCHEMA.name,
-          migrationChecksum(COLLABORATION_REMOTE_SCHEMA),
-          nowRfc3339(),
-        );
-      }
-      // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
-      // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
-      assertRemoteCacheSchema(db, dbPath);
-      db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
-      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-        COLLABORATION_OUTBOX_SCHEMA.version,
-        COLLABORATION_OUTBOX_SCHEMA.name,
-        migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
-        nowRfc3339(),
-      );
-      assertCurrentSchema(db, dbPath);
       db.prepare(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
           "values ('standalone', ?, ?, ?, ?)",
@@ -2063,11 +2295,11 @@ export async function upgradeCollaborationStore(
         JSON.stringify({
           version: 1,
           operator: operator.trim(),
-          fromVersion,
+          fromVersion: ladder.fromVersion,
           toVersion: current,
           storeId: meta.storeId,
           epoch: meta.epoch,
-          issuesBackfilled,
+          issuesBackfilled: ladder.issuesBackfilled,
         }),
         nowRfc3339(),
       );
@@ -2075,7 +2307,7 @@ export async function upgradeCollaborationStore(
       // under it: the ladder is never advanced under a selection this process lost.
       assertSelectionUnchanged(context, location);
       db.exec("commit");
-      return receipt(fromVersion, issuesBackfilled);
+      return receipt(ladder.fromVersion, ladder.issuesBackfilled);
     } catch (error) {
       try {
         db.exec("rollback");
@@ -3437,12 +3669,29 @@ export async function withRemoteCacheWrite<T>(
   return withWriteLane(context, apply, undefined, "remote-cache", admission);
 }
 
+/**
+ * invariant: The remote-cache write lane HELD across an awaited effect. The composite decline and
+ * the provider freeze are one pair of decisions over the same outbox: a decline must observe every
+ * intent that froze before it, and a freeze must observe a decline that committed before it. Both
+ * therefore take this one lane, and the decline commits its durable phase while holding it, so
+ * neither ordering can leave a durable intent under a released reservation. Every other effect
+ * stays synchronous — the synchronous-effect refusal of `withRemoteCacheWrite` is unchanged.
+ */
+export async function withRemoteCacheWriteHeld<T>(
+  context: StoreContext,
+  apply: (handle: CollaborationStoreHandle) => Promise<T>,
+  admission: RemoteCacheAdmission = {},
+): Promise<T> {
+  return withWriteLane(context, apply, undefined, "remote-cache", admission, true);
+}
+
 async function withWriteLane<T>(
   context: StoreContext,
-  apply: (handle: CollaborationStoreHandle) => T,
+  apply: (handle: CollaborationStoreHandle) => T | Promise<T>,
   expected: CollaborationStamp | undefined,
   lane: "domain" | "remote-cache",
   admission: RemoteCacheAdmission = {},
+  holdAsync = false,
 ): Promise<T> {
   assertStoreRuntimeSupported();
   let location: CollaborationLocation;
@@ -3490,23 +3739,29 @@ async function withWriteLane<T>(
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
-      const result = apply({
+      const effect = apply({
         db: guardedWriteDb(db),
         authority,
         close(): never {
           throw transactionOwnershipRefusal();
         },
       });
-      if (isThenable(result)) {
-        // invariant: Consume the abandoned result before refusing: an async effect's
-        // rejection must not surface as an unhandled rejection after this call
-        // has already reported the synchronous-effect refusal.
-        void Promise.resolve(result).catch(() => undefined);
-        throw new StoreError(
-          "store.corrupt",
-          "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +
-            "nothing was written.",
-        );
+      let result: T;
+      if (isThenable(effect)) {
+        if (!holdAsync) {
+          // invariant: Consume the abandoned result before refusing: an async effect's
+          // rejection must not surface as an unhandled rejection after this call
+          // has already reported the synchronous-effect refusal.
+          void Promise.resolve(effect).catch(() => undefined);
+          throw new StoreError(
+            "store.corrupt",
+            "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +
+              "nothing was written.",
+          );
+        }
+        result = (await effect) as T;
+      } else {
+        result = effect as T;
       }
       // invariant: The checked selection (and, for a remote lane, the private cache stamp) is
       // re-proved immediately before commit: a selector that moved to a draining or successor

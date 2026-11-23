@@ -18,6 +18,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   readCollaborationBinding,
   initializeRemoteCacheStore,
@@ -30,11 +31,13 @@ import {
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
   withRemoteCacheWrite,
+  withRemoteCacheWriteHeld,
   assertIssueRef,
   assertRemoteCacheIdentity,
   type CollaborationAuthority,
   type CollaborationBinding,
   type CollaborationStoreHandle,
+  type IssueRef,
 } from "./collaboration-store.js";
 import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, occurrenceColumns, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
@@ -46,6 +49,7 @@ import {
   type CollaborationSelection,
 } from "./collaboration-identity.js";
 import { withCollaborationLockFile } from "./collaboration-cutover.js";
+import { declinedReservationCause } from "./execution-store.js";
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +83,26 @@ export function setRemoteBindingPublicationGapForTest(
 let remoteIntentSampleGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteIntentSampleGapForTest(callback: (() => void | Promise<void>) | undefined): void {
   remoteIntentSampleGapForTest = callback;
+}
+
+/**
+ * note: The write-scope gap seam: a regression re-observes the scope between the sampled base a
+ * caller deduped against and the write that freezes against it. Production runs without a callback.
+ */
+let remoteWriteScopeGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteWriteScopeGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteWriteScopeGapForTest = callback;
+}
+
+/**
+ * note: The replay-admission gap seam: a regression completes a concurrent same-id attempt
+ * between the replay admission that saw no durable row and the scope read that decides the
+ * write, so the write is decided against the state the winner's settled effect produced.
+ * Production runs without a callback.
+ */
+let remoteReplayAdmissionGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteReplayAdmissionGapForTest(callback: (() => void | Promise<void>) | undefined): void {
+  remoteReplayAdmissionGapForTest = callback;
 }
 
 /** note: The bound provider record an MStar issue is anchored to. */
@@ -450,10 +474,43 @@ function oneOf<const T extends string>(value: unknown, allowed: readonly T[], pa
   return value as T;
 }
 
-/** note: Reject every member the contract does not name, so no unlisted material reaches the cache. */
-function allowOnly(body: Record<string, unknown>, path: string, allowed: readonly string[]): void {
+/**
+ * note: Reject every member the contract does not name, so no unlisted material reaches the cache.
+ * With `errors` supplied, the unknown members are collected instead of thrown, so one refusal can
+ * answer the whole submitted document.
+ */
+function allowOnly(
+  body: Record<string, unknown>,
+  path: string,
+  allowed: readonly string[],
+  errors?: string[],
+): void {
   for (const key of Object.keys(body)) {
-    if (!allowed.includes(key)) invalid(`${path}.${key}`, "is not a contract field");
+    if (allowed.includes(key)) continue;
+    if (errors === undefined) invalid(`${path}.${key}`, "is not a contract field");
+    errors.push(`${path}.${key}: is not a contract field`);
+  }
+}
+
+/** note: One collected diagnostic's text, without the refusal sentence the aggregate adds once. */
+function diagnosticOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.endsWith(NOTHING_WRITTEN) ? message.slice(0, -NOTHING_WRITTEN.length) : message;
+}
+
+const NOTHING_WRITTEN = ". Nothing was written.";
+
+/** note: Read one member, or collect its diagnostic and fall back while the aggregate is being built. */
+function collected<T>(errors: string[] | undefined, read: () => T, fallback: T): T {
+  if (errors === undefined) return read();
+  try {
+    return read();
+  } catch (error) {
+    // invariant: `remote.unsafe-fidelity` is its own refusal class (the observation boundary
+    // records and replays it), so it is never flattened into a structural aggregate.
+    if (error instanceof StoreError && error.code === "remote.unsafe-fidelity") throw error;
+    errors.push(diagnosticOf(error));
+    return fallback;
   }
 }
 
@@ -485,21 +542,25 @@ function linearId(value: unknown, path: string): string {
   return raw;
 }
 
-/** note: A project's provider tuple, validated without the issue identity. */
-function projectScope(value: unknown, path: string): ProviderProjectScope {
+/**
+ * note: A project's provider tuple, validated without the issue identity. With `errors`, every
+ * member is collected instead of failing on the first defect. Unknown keys are the caller's
+ * check: the identity names one more member than the scope does.
+ */
+function projectScope(value: unknown, path: string, errors?: string[]): ProviderProjectScope {
   const body = record(value, path);
-  if (body.provider !== "linear") invalid(`${path}.provider`, "must be 'linear'");
   return {
-    provider: "linear",
-    workspaceId: linearId(body.workspaceId, `${path}.workspaceId`),
-    teamId: linearId(body.teamId, `${path}.teamId`),
-    projectId: linearId(body.projectId, `${path}.projectId`),
+    provider: collected(errors, () => oneOf(body.provider, ["linear"] as const, `${path}.provider`), "linear"),
+    workspaceId: collected(errors, () => linearId(body.workspaceId, `${path}.workspaceId`), ""),
+    teamId: collected(errors, () => linearId(body.teamId, `${path}.teamId`), ""),
+    projectId: collected(errors, () => linearId(body.projectId, `${path}.projectId`), ""),
   };
 }
 
-function issueIdentity(value: unknown, path: string): ProviderIssueIdentity {
+function issueIdentity(value: unknown, path: string, errors?: string[]): ProviderIssueIdentity {
   const body = record(value, path);
-  return { ...projectScope(body, path), issueId: linearId(body.issueId, `${path}.issueId`) };
+  allowOnly(body, path, ["provider", "workspaceId", "teamId", "projectId", "issueId"], errors);
+  return { ...projectScope(body, path, errors), issueId: collected(errors, () => linearId(body.issueId, `${path}.issueId`), "") };
 }
 
 function sameScope(left: ProviderProjectScope, right: ProviderProjectScope): boolean {
@@ -645,24 +706,24 @@ const MSTAR_FIELD_KEYS = [
   "closureNote", "createdAt", "updatedAt", "revision", "milestoneId",
 ] as const;
 
-function mstarFields(value: unknown, path: string): Record<string, unknown> {
-  const body = record(value, path);
-  allowOnly(body, path, MSTAR_FIELD_KEYS);
+function mstarFields(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
+  allowOnly(body, path, MSTAR_FIELD_KEYS, errors);
   return {
-    title: text(body.title, `${path}.title`),
-    kind: oneOf(body.kind, ISSUE_KINDS, `${path}.kind`),
-    severity: oneOf(body.severity, ISSUE_SEVERITIES, `${path}.severity`),
-    disposition: oneOf(body.disposition, ISSUE_DISPOSITIONS, `${path}.disposition`),
-    impact: text(body.impact, `${path}.impact`),
-    acceptance: text(body.acceptance, `${path}.acceptance`),
-    owner: nullableString(body.owner, `${path}.owner`),
-    registeredAt: nullableInstant(body.registeredAt, `${path}.registeredAt`),
-    closedAt: nullableInstant(body.closedAt, `${path}.closedAt`),
-    closureNote: nullableString(body.closureNote, `${path}.closureNote`),
-    createdAt: instant(body.createdAt, `${path}.createdAt`),
-    updatedAt: instant(body.updatedAt, `${path}.updatedAt`),
-    revision: positiveInteger(body.revision, `${path}.revision`),
-    milestoneId: nullableString(body.milestoneId, `${path}.milestoneId`),
+    title: collected(errors, () => text(body.title, `${path}.title`), ""),
+    kind: collected(errors, () => oneOf(body.kind, ISSUE_KINDS, `${path}.kind`), "bug"),
+    severity: collected(errors, () => oneOf(body.severity, ISSUE_SEVERITIES, `${path}.severity`), "high"),
+    disposition: collected(errors, () => oneOf(body.disposition, ISSUE_DISPOSITIONS, `${path}.disposition`), "open"),
+    impact: collected(errors, () => text(body.impact, `${path}.impact`), ""),
+    acceptance: collected(errors, () => text(body.acceptance, `${path}.acceptance`), ""),
+    owner: collected(errors, () => nullableString(body.owner, `${path}.owner`), null),
+    registeredAt: collected(errors, () => nullableInstant(body.registeredAt, `${path}.registeredAt`), null),
+    closedAt: collected(errors, () => nullableInstant(body.closedAt, `${path}.closedAt`), null),
+    closureNote: collected(errors, () => nullableString(body.closureNote, `${path}.closureNote`), null),
+    createdAt: collected(errors, () => instant(body.createdAt, `${path}.createdAt`), ""),
+    updatedAt: collected(errors, () => instant(body.updatedAt, `${path}.updatedAt`), ""),
+    revision: collected(errors, () => positiveInteger(body.revision, `${path}.revision`), 0),
+    milestoneId: collected(errors, () => nullableString(body.milestoneId, `${path}.milestoneId`), null),
   };
 }
 
@@ -671,23 +732,23 @@ const OCCURRENCE_KEYS = [
   "observedBehavior", "evidence", "discoveredAt", "recordedAt", "imported",
 ] as const;
 
-function occurrence(value: unknown, path: string): Record<string, unknown> {
+function occurrence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, OCCURRENCE_KEYS);
+  allowOnly(body, path, OCCURRENCE_KEYS, errors);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    occurrenceKey: text(body.occurrenceKey, `${path}.occurrenceKey`),
-    sourceKind: text(body.sourceKind, `${path}.sourceKind`),
-    sourceIdentity: text(body.sourceIdentity, `${path}.sourceIdentity`),
-    rootCauseKey: text(body.rootCauseKey, `${path}.rootCauseKey`),
-    acceptanceKey: text(body.acceptanceKey, `${path}.acceptanceKey`),
-    location: text(body.location, `${path}.location`),
-    observedBehavior: text(body.observedBehavior, `${path}.observedBehavior`),
-    evidence: stringList(body.evidence, `${path}.evidence`),
-    discoveredAt: nullableInstant(body.discoveredAt, `${path}.discoveredAt`),
-    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    occurrenceKey: collected(errors, () => text(body.occurrenceKey, `${path}.occurrenceKey`), ""),
+    sourceKind: collected(errors, () => text(body.sourceKind, `${path}.sourceKind`), ""),
+    sourceIdentity: collected(errors, () => text(body.sourceIdentity, `${path}.sourceIdentity`), ""),
+    rootCauseKey: collected(errors, () => text(body.rootCauseKey, `${path}.rootCauseKey`), ""),
+    acceptanceKey: collected(errors, () => text(body.acceptanceKey, `${path}.acceptanceKey`), ""),
+    location: collected(errors, () => text(body.location, `${path}.location`), ""),
+    observedBehavior: collected(errors, () => text(body.observedBehavior, `${path}.observedBehavior`), ""),
+    evidence: collected(errors, () => stringList(body.evidence, `${path}.evidence`), []),
+    discoveredAt: collected(errors, () => nullableInstant(body.discoveredAt, `${path}.discoveredAt`), null),
+    recordedAt: collected(errors, () => instant(body.recordedAt, `${path}.recordedAt`), ""),
     // note: The domain's imported provenance is a business field of the history, not a private detail.
-    imported: boolean(body.imported, `${path}.imported`),
+    imported: collected(errors, () => boolean(body.imported, `${path}.imported`), false),
   };
 }
 
@@ -695,12 +756,12 @@ function occurrence(value: unknown, path: string): Record<string, unknown> {
  * invariant: Freezing a new intent applies the issue domain's dedup rule; an
  * observed chain is provider evidence and is never re-judged by this boundary.
  */
-function frozenOccurrence(value: unknown, path: string): Record<string, unknown> {
-  const row = occurrence(value, path);
+function frozenOccurrence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
+  const row = occurrence(value, path, errors);
   return {
     ...row,
-    rootCauseKey: semanticKey(row.rootCauseKey, `${path}.rootCauseKey`),
-    acceptanceKey: semanticKey(row.acceptanceKey, `${path}.acceptanceKey`),
+    rootCauseKey: collected(errors, () => semanticKey(row.rootCauseKey, `${path}.rootCauseKey`), ""),
+    acceptanceKey: collected(errors, () => semanticKey(row.acceptanceKey, `${path}.acceptanceKey`), ""),
   };
 }
 
@@ -718,14 +779,18 @@ const TRANSITION_KEYS = [
  */
 const TRANSITION_EVIDENCE_KEYS = ["reason", "scope", "references", "canonicalIssueId", "alignmentRef"] as const;
 
-function transitionEvidence(value: unknown, path: string): Record<string, unknown> {
+function transitionEvidence(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, TRANSITION_EVIDENCE_KEYS);
+  allowOnly(body, path, TRANSITION_EVIDENCE_KEYS, errors);
   const evidence: Record<string, unknown> = {};
   for (const key of TRANSITION_EVIDENCE_KEYS) {
     if (!(key in body)) continue;
-    evidence[key] =
-      key === "references" ? stringList(body.references, `${path}.references`) : nullableString(body[key], `${path}.${key}`);
+    evidence[key] = collected(
+      errors,
+      () =>
+        key === "references" ? stringList(body.references, `${path}.references`) : nullableString(body[key], `${path}.${key}`),
+      key === "references" ? [] : null,
+    );
   }
   return evidence;
 }
@@ -766,7 +831,7 @@ const IMPORTED_RECORD_KEYS: ReadonlySet<string> = new Set(
   IMPORTED_RECORD_FIELDS.flatMap(([portable, legacy]) => [portable, legacy]),
 );
 
-function importedRecord(value: unknown, path: string): Record<string, string | null> {
+function importedRecord(value: unknown, path: string, errors?: string[]): Record<string, string | null> {
   const body = record(value, path);
   for (const key of Object.keys(body)) {
     if (!IMPORTED_RECORD_KEYS.has(key)) {
@@ -778,49 +843,72 @@ function importedRecord(value: unknown, path: string): Record<string, string | n
     // note: The portable document is accepted again, so an export of a stored snapshot round-trips.
     // Only a name that differs can be sent twice; most legacy spellings are already the portable one.
     if (key !== legacy && legacy in body && key in body) {
-      invalid(`${path}.${key}`, `duplicates ${legacy}; send one spelling`);
+      const message = `${path}.${key}: duplicates ${legacy}; send one spelling`;
+      if (errors === undefined) invalid(`${path}.${key}`, `duplicates ${legacy}; send one spelling`);
+      errors.push(message);
     }
     if (!(legacy in body) && !(key in body)) continue;
     // note: A refusal names the spelling the sender used, so the offending field is findable.
+    // `portableValue` stays outside the collector: its fidelity refusal is its own class.
     const sent = legacy in body ? legacy : key;
-    portable[key] = portableValue(body[sent], `${path}.${sent}`);
+    const read = () => portableValue(body[sent], `${path}.${sent}`);
+    if (errors === undefined) {
+      portable[key] = read();
+      continue;
+    }
+    try {
+      portable[key] = read();
+    } catch (error) {
+      if (error instanceof StoreError && error.code !== "remote.unsafe-fidelity") {
+        errors.push(diagnosticOf(error));
+        portable[key] = null;
+        continue;
+      }
+      throw error;
+    }
   }
   if (Object.keys(portable).length === 0) {
-    invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
+    const message = `${path}: must carry the imported record's business fields (legacy id, title, lifecycle, ...)`;
+    if (errors === undefined) invalid(path, "must carry the imported record's business fields (legacy id, title, lifecycle, ...)");
+    errors.push(message);
   }
   return portable;
 }
 
-function transition(value: unknown, path: string): Record<string, unknown> {
+function transition(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, TRANSITION_KEYS);
-  if (!("evidence" in body)) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
-  const imported = boolean(body.imported, `${path}.imported`);
+  allowOnly(body, path, TRANSITION_KEYS, errors);
+  if (!("evidence" in body)) {
+    const message = `${path}.evidence: must be present (the recorded transition evidence)`;
+    if (errors === undefined) invalid(`${path}.evidence`, "must be present (the recorded transition evidence)");
+    errors.push(message);
+  }
+  const imported = collected(errors, () => boolean(body.imported, `${path}.imported`), false);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    fromDisposition: oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`),
-    toDisposition: oneOf(body.toDisposition, ISSUE_DISPOSITIONS, `${path}.toDisposition`),
-    actor: nullableString(body.actor, `${path}.actor`),
-    occurredAt: nullableInstant(body.occurredAt, `${path}.occurredAt`),
-    recordedAt: instant(body.recordedAt, `${path}.recordedAt`),
-    reason: text(body.reason, `${path}.reason`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    fromDisposition: collected(errors, () => oneOf(body.fromDisposition, ISSUE_DISPOSITIONS, `${path}.fromDisposition`), "open"),
+    toDisposition: collected(errors, () => oneOf(body.toDisposition, ISSUE_DISPOSITIONS, `${path}.toDisposition`), "open"),
+    actor: collected(errors, () => nullableString(body.actor, `${path}.actor`), null),
+    occurredAt: collected(errors, () => nullableInstant(body.occurredAt, `${path}.occurredAt`), null),
+    recordedAt: collected(errors, () => instant(body.recordedAt, `${path}.recordedAt`), ""),
+    reason: collected(errors, () => text(body.reason, `${path}.reason`), ""),
     evidence: imported
-      ? importedRecord(body.evidence, `${path}.evidence`)
-      : transitionEvidence(body.evidence, `${path}.evidence`),
-    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+      ? importedRecord(body.evidence, `${path}.evidence`, errors)
+      : transitionEvidence(body.evidence, `${path}.evidence`, errors),
+    issueRevision: collected(errors, () => nonNegativeInteger(body.issueRevision, `${path}.issueRevision`), 0),
     imported,
   };
 }
 
 const RELATION_KEYS = ["relation", "target"] as const;
 
-function relation(value: unknown, path: string): Record<string, unknown> {
+function relation(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, RELATION_KEYS);
+  allowOnly(body, path, RELATION_KEYS, errors);
   return {
-    relation: oneOf(body.relation, ISSUE_RELATIONS, `${path}.relation`),
+    relation: collected(errors, () => oneOf(body.relation, ISSUE_RELATIONS, `${path}.relation`), "related"),
     // note: A dangling target stays as the spellable reference; the read boundary renders it unresolved.
-    target: assertIssueRef(text(body.target, `${path}.target`)),
+    target: collected(errors, () => assertIssueRef(text(body.target, `${path}.target`)), "mstar:issue:00000000-0000-4000-8000-000000000000"),
   };
 }
 
@@ -849,12 +937,14 @@ const PROVENANCE_KEYS = [
  * Only the portable projection is persisted, as `legacyRecord`, and a stored
  * snapshot's `legacyRecord` is accepted again so an export round-trips.
  */
-function provenanceRecord(body: Record<string, unknown>, path: string): Record<string, string | null> | null {
+function provenanceRecord(body: Record<string, unknown>, path: string, errors?: string[]): Record<string, string | null> | null {
   if ("legacyJson" in body && "legacyRecord" in body) {
-    invalid(`${path}.legacyRecord`, "duplicates legacyJson; send one representation");
+    const message = `${path}.legacyRecord: duplicates legacyJson; send one representation`;
+    if (errors === undefined) invalid(`${path}.legacyRecord`, "duplicates legacyJson; send one representation");
+    errors.push(message);
   }
   if ("legacyRecord" in body) {
-    return body.legacyRecord === null ? null : importedRecord(body.legacyRecord, `${path}.legacyRecord`);
+    return body.legacyRecord === null ? null : importedRecord(body.legacyRecord, `${path}.legacyRecord`, errors);
   }
   if (!("legacyJson" in body) || body.legacyJson === null) return null;
   const raw = body.legacyJson;
@@ -869,43 +959,50 @@ function provenanceRecord(body: Record<string, unknown>, path: string): Record<s
   } catch {
     unsafeFidelity(`${path}.legacyJson`, "is not JSON the reviewed representation can read");
   }
-  return importedRecord(parsed, `${path}.legacyJson`);
+  return importedRecord(parsed, `${path}.legacyJson`, errors);
 }
 
-function provenanceLink(value: unknown, path: string): Record<string, unknown> {
+function provenanceLink(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, PROVENANCE_KEYS);
-  const target = portableValue(text(body.target, `${path}.target`), `${path}.target`);
-  if (target === null) invalid(`${path}.target`, "must be a non-empty string");
-  const sourceHash = text(body.sourceHash, `${path}.sourceHash`);
-  if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
+  allowOnly(body, path, PROVENANCE_KEYS, errors);
+  // note: `portableValue` stays outside the collector: its fidelity refusal is its own class.
+  const readTarget = () => {
+    const target = portableValue(text(body.target, `${path}.target`), `${path}.target`);
+    if (target === null) invalid(`${path}.target`, "must be a non-empty string");
+    return target;
+  };
+  const readHash = () => {
+    const sourceHash = text(body.sourceHash, `${path}.sourceHash`);
+    if (!SHA256.test(sourceHash)) invalid(`${path}.sourceHash`, "must be a canonical lowercase SHA-256 digest");
+    return sourceHash;
+  };
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    kind: oneOf(body.kind, provenanceKinds(), `${path}.kind`),
-    target,
-    sourceHash,
-    origin: oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`),
-    legacyProject: portableValue(body.legacyProject, `${path}.legacyProject`),
-    legacyBucket: portableValue(body.legacyBucket, `${path}.legacyBucket`),
-    legacyEntryId: portableValue(body.legacyEntryId, `${path}.legacyEntryId`),
-    legacyRecord: provenanceRecord(body, path),
-    importedAt: nullableInstant(body.importedAt, `${path}.importedAt`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    kind: collected(errors, () => oneOf(body.kind, provenanceKinds(), `${path}.kind`), "plan"),
+    target: collected(errors, readTarget, ""),
+    sourceHash: collected(errors, readHash, ""),
+    origin: collected(errors, () => oneOf(body.origin, ["scoped", "unscoped"] as const, `${path}.origin`), "scoped"),
+    legacyProject: collected(errors, () => portableValue(body.legacyProject, `${path}.legacyProject`), null),
+    legacyBucket: collected(errors, () => portableValue(body.legacyBucket, `${path}.legacyBucket`), null),
+    legacyEntryId: collected(errors, () => portableValue(body.legacyEntryId, `${path}.legacyEntryId`), null),
+    legacyRecord: provenanceRecord(body, path, errors),
+    importedAt: collected(errors, () => nullableInstant(body.importedAt, `${path}.importedAt`), null),
   };
 }
 
 const PROJECT_MOVE_KEYS = ["eventId", "fromProject", "toProject", "actor", "reason", "occurredAt", "issueRevision"] as const;
 
-function projectMove(value: unknown, path: string): Record<string, unknown> {
+function projectMove(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
   const body = record(value, path);
-  allowOnly(body, path, PROJECT_MOVE_KEYS);
+  allowOnly(body, path, PROJECT_MOVE_KEYS, errors);
   return {
-    eventId: eventId(body.eventId, `${path}.eventId`),
-    fromProject: text(body.fromProject, `${path}.fromProject`),
-    toProject: text(body.toProject, `${path}.toProject`),
-    actor: text(body.actor, `${path}.actor`),
-    reason: text(body.reason, `${path}.reason`),
-    occurredAt: instant(body.occurredAt, `${path}.occurredAt`),
-    issueRevision: nonNegativeInteger(body.issueRevision, `${path}.issueRevision`),
+    eventId: collected(errors, () => eventId(body.eventId, `${path}.eventId`), ""),
+    fromProject: collected(errors, () => text(body.fromProject, `${path}.fromProject`), ""),
+    toProject: collected(errors, () => text(body.toProject, `${path}.toProject`), ""),
+    actor: collected(errors, () => text(body.actor, `${path}.actor`), ""),
+    reason: collected(errors, () => text(body.reason, `${path}.reason`), ""),
+    occurredAt: collected(errors, () => instant(body.occurredAt, `${path}.occurredAt`), ""),
+    issueRevision: collected(errors, () => nonNegativeInteger(body.issueRevision, `${path}.issueRevision`), 0),
   };
 }
 
@@ -1627,7 +1724,12 @@ export async function bindRemoteAuthority(context: StoreContext, input: unknown)
       );
     }
   }
-  const staged = await initializeRemoteCacheStore(location);
+  // invariant: A pre-v3 cache is replaced only after the bytes about to go are proven to be the
+  // generation this checkout recorded, so the release never discards another record's cache.
+  const staged = await initializeRemoteCacheStore(
+    location,
+    recorded !== null && recorded.version === 3 ? { storeId: recorded.storeId, epoch: recorded.epoch } : undefined,
+  );
   if (cachePresent && recorded !== null && recorded.version === 3) assertRemoteCacheIdentity(staged, recorded);
   const outcome = await writeRemoteCacheStage(location, ({ db, authority }) => {
     // invariant: The transaction's own lane identity is the stamp that gets published: a lane
@@ -2252,6 +2354,22 @@ function adoptionSubject(adoption: AdoptionDocument, nativeTitle: string, projec
 }
 
 /**
+ * note: The intent a replay answered. A verb that admits no no-change outcome refuses an
+ * established claim instead of mapping it to a success.
+ */
+function replayedOnly(outcome: RemoteIntent | RemoteNoChange, operationId: string): RemoteIntent {
+  if ("noChange" in outcome) {
+    throw new StoreError(
+      "remote.operation-conflict",
+      `Operation ${operationId} records an established no-change write; this verb is a different request and needs a ` +
+        `new operation id. Nothing was enqueued.`,
+      { operationId },
+    );
+  }
+  return outcome;
+}
+
+/**
  * `remote adopt-issue`: validate the strict adoption DTO against the exact observed, unmarked
  * native issue, then freeze it as one durable `issue-adopt` intent. The verb never creates an
  * issue, never marks the native issue, never appends to a cache snapshot, and never performs a
@@ -2273,7 +2391,7 @@ export async function prepareRemoteAdoption(context: StoreContext, request: Remo
     verb: "issue-adopt",
     request: { projectId, issueId, adoption },
   });
-  if (replay !== null) return replay;
+  if (replay !== null) return replayedOnly(replay, operationId);
   // note: The cache is admitted for the same selector and binding the adoption document was
   // validated against, so a rebind in between never mixes two generations.
   const scope = await readWriteScope(context, projectId);
@@ -2356,6 +2474,17 @@ export type RemoteEvent = Readonly<{
 
 /** note: The execution reservation a composite intent also owns; null for an ordinary intent. */
 export type RemoteIntentExecutionKey = Readonly<{
+  executionStoreId: string;
+  executionEpoch: number;
+  operationId: string;
+}>;
+
+/**
+ * note: The composite RESERVATION a provider intent belongs to. It is not persisted: the freeze
+ * honors it only to prove that reservation is still `prepared`, so a decline that committed while
+ * the attempt was already admitted cannot be followed by a durable intent under it.
+ */
+export type RemoteReservationKey = Readonly<{
   executionStoreId: string;
   executionEpoch: number;
   operationId: string;
@@ -2488,27 +2617,30 @@ function writeOrigin(value: unknown, path: string): RemoteWriteOrigin {
  * with the same field allowlists the snapshot applies, minus the derived `head`
  * and the outer duplicate `issueRef`. An empty or partial subject never freezes.
  */
-function frozenIssueSubject(value: unknown, path: string): Record<string, unknown> {
-  const body = record(value, path);
+function frozenIssueSubject(value: unknown, path: string, errors?: string[]): Record<string, unknown> {
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("issueRef" in body) invalid(`${path}.issueRef`, "duplicates the event's reference");
-  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"]);
+  allowOnly(body, path, ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"], errors);
+  // invariant: Each history ENTRY is its own collection boundary: a malformed entry (a null row, a
+  // bad field) names its own diagnostic and the sibling entries after it are still read, so one
+  // refusal answers every history defect of the subject.
   return {
-    fields: mstarFields(body.fields, `${path}.fields`),
-    occurrences: list(body.occurrences, `${path}.occurrences`).map((entry, index) =>
-      frozenOccurrence(entry, `${path}.occurrences[${index}]`),
+    fields: mstarFields(body.fields, `${path}.fields`, errors),
+    occurrences: collected(errors, () => list(body.occurrences, `${path}.occurrences`), []).map((entry, index) =>
+      collected(errors, () => frozenOccurrence(entry, `${path}.occurrences[${index}]`, errors), {}),
     ),
-    transitions: list(body.transitions, `${path}.transitions`).map((entry, index) =>
-      transition(entry, `${path}.transitions[${index}]`),
+    transitions: collected(errors, () => list(body.transitions, `${path}.transitions`), []).map((entry, index) =>
+      collected(errors, () => transition(entry, `${path}.transitions[${index}]`, errors), {}),
     ),
-    relations: list(body.relations, `${path}.relations`).map((entry, index) =>
-      relation(entry, `${path}.relations[${index}]`),
+    relations: collected(errors, () => list(body.relations, `${path}.relations`), []).map((entry, index) =>
+      collected(errors, () => relation(entry, `${path}.relations[${index}]`, errors), {}),
     ),
-    provenance: list(body.provenance, `${path}.provenance`).map((entry, index) =>
-      provenanceLink(entry, `${path}.provenance[${index}]`),
+    provenance: collected(errors, () => list(body.provenance, `${path}.provenance`), []).map((entry, index) =>
+      collected(errors, () => provenanceLink(entry, `${path}.provenance[${index}]`, errors), {}),
     ),
-    projectMoves: list(body.projectMoves, `${path}.projectMoves`).map((entry, index) =>
-      projectMove(entry, `${path}.projectMoves[${index}]`),
+    projectMoves: collected(errors, () => list(body.projectMoves, `${path}.projectMoves`), []).map((entry, index) =>
+      collected(errors, () => projectMove(entry, `${path}.projectMoves[${index}]`, errors), {}),
     ),
   };
 }
@@ -2518,32 +2650,51 @@ function frozenIssueSubject(value: unknown, path: string): Record<string, unknow
  * document - every member present, no derived `head`, no `binding` (the
  * selected transport scope supplies it) and nothing outside the allowlist.
  */
-function frozenProjectSubject(value: unknown, path: string, projectKey: string): Record<string, unknown> {
-  const body = record(value, path);
+function frozenProjectSubject(value: unknown, path: string, projectKey: string, errors?: string[]): Record<string, unknown> {
+  const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
-  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"]);
-  const projectId = text(body.projectId, `${path}.projectId`);
-  if (projectId !== projectKey) invalid(`${path}.projectId`, "must be the event's project");
-  const milestones = list(body.milestones, `${path}.milestones`).map((entry, index) =>
-    milestone(entry, `${path}.milestones[${index}]`),
-  );
-  if (new Set(milestones.map((entry) => entry.milestoneId)).size !== milestones.length) {
-    invalid(`${path}.milestones`, "must not repeat a milestone id");
+  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"], errors);
+  const projectId = collected(errors, () => text(body.projectId, `${path}.projectId`), "");
+  if (projectId !== "" && projectId !== projectKey) {
+    const message = `${path}.projectId: must be the event's project`;
+    if (errors === undefined) invalid(`${path}.projectId`, "must be the event's project");
+    errors.push(message);
   }
-  const catalogEntities = list(body.catalogEntities, `${path}.catalogEntities`).map((entry, index) =>
-    catalogEntity(entry, `${path}.catalogEntities[${index}]`),
+  // invariant: Each collection is its own boundary, and a uniqueness check runs only on the
+  // identities that PARSED: a placeholder row names no id, so it can never fabricate a duplicate
+  // that hides the diagnostic of the row it stands in for.
+  const repeated = (member: string, keys: readonly string[], detail: string): void => {
+    if (new Set(keys).size === keys.length) return;
+    if (errors === undefined) invalid(`${path}.${member}`, detail);
+    errors.push(`${path}.${member}: ${detail}`);
+  };
+  const milestones = collected(errors, () => list(body.milestones, `${path}.milestones`), []).map((entry, index) =>
+    collected(errors, () => milestone(entry, `${path}.milestones[${index}]`), {} as unknown as RemoteMilestone),
   );
-  if (new Set(catalogEntities.map((entry) => `${entry.kind}:${entry.id}`)).size !== catalogEntities.length) {
-    invalid(`${path}.catalogEntities`, "must not repeat a (kind, id) pair");
-  }
+  repeated(
+    "milestones",
+    milestones.map((entry) => entry.milestoneId).filter((id): id is string => typeof id === "string" && id !== ""),
+    "must not repeat a milestone id",
+  );
+  const catalogEntities = collected(errors, () => list(body.catalogEntities, `${path}.catalogEntities`), []).map(
+    (entry, index) =>
+      collected(errors, () => catalogEntity(entry, `${path}.catalogEntities[${index}]`), {} as unknown as RemoteCatalogEntity),
+  );
+  repeated(
+    "catalogEntities",
+    catalogEntities
+      .filter((entry) => typeof entry.kind === "string" && typeof entry.id === "string")
+      .map((entry) => `${entry.kind}:${entry.id}`),
+    "must not repeat a (kind, id) pair",
+  );
   return {
     projectId,
     milestones,
-    roadmap: roadmap(body.roadmap, `${path}.roadmap`),
+    roadmap: collected(errors, () => roadmap(body.roadmap, `${path}.roadmap`), null),
     catalogEntities,
-    catalogLinks: list(body.catalogLinks, `${path}.catalogLinks`).map((entry, index) =>
-      catalogLink(entry, `${path}.catalogLinks[${index}]`),
+    catalogLinks: collected(errors, () => list(body.catalogLinks, `${path}.catalogLinks`), []).map((entry, index) =>
+      collected(errors, () => catalogLink(entry, `${path}.catalogLinks[${index}]`), {} as unknown as RemoteCatalogLink),
     ),
   };
 }
@@ -2582,39 +2733,53 @@ function intentExecutionKey(raw: unknown, operationId: string): RemoteIntentExec
   };
 }
 
-function remoteEvent(raw: unknown, binding: RemoteIntentBinding): RemoteEvent {
-  const body = record(raw, "request.event");
-  allowOnly(body, "request.event", ["version", "repoKey", "projectId", "operationId", "parents", "change"]);
-  if (body.version !== 1) invalid("request.event.version", "must be 1");
-  const projectId = text(body.projectId, "request.event.projectId");
-  if (projectId !== binding.projectKey) invalid("request.event.projectId", "must be the binding's project");
-  const change = record(body.change, "request.event.change");
-  const kind = oneOf(change.kind, REMOTE_CHANGE_KINDS, "request.event.change.kind");
-  const parents = digestHead(body.parents, "request.event.parents");
+function remoteEvent(raw: unknown, binding: RemoteIntentBinding, errors?: string[], path = "request.event"): RemoteEvent {
+  const body = record(raw, path);
+  allowOnly(body, path, ["version", "repoKey", "projectId", "operationId", "parents", "change"], errors);
+  const versionOk = body.version === 1;
+  if (!versionOk) {
+    const message = `${path}.version: must be 1`;
+    if (errors === undefined) invalid(`${path}.version`, "must be 1");
+    errors.push(message);
+  }
+  const repoKey = collected(errors, () => text(body.repoKey, `${path}.repoKey`), "");
+  const projectId = collected(errors, () => text(body.projectId, `${path}.projectId`), "");
+  const operationId = collected(errors, () => linearId(body.operationId, `${path}.operationId`), "");
+  // note: The project check is meaningful only against the caller's own binding; the receipt's
+  // placeholder binding derives no project, so the collected mode skips it.
+  if (errors === undefined && projectId !== binding.projectKey) {
+    invalid(`${path}.projectId`, "must be the binding's project");
+  }
+  const parents = collected(errors, () => digestHead(body.parents, `${path}.parents`), []);
+  const change = record(body.change, `${path}.change`);
+  const kind = oneOf(change.kind, REMOTE_CHANGE_KINDS, `${path}.change.kind`);
   // invariant: `[]` is initial genesis or adoption only: a replacement cites the heads it replaces.
   if (kind === "issue-replace" && parents.length === 0) {
-    invalid("request.event.parents", "a replacement must cite at least one replaced head");
+    if (errors === undefined) invalid(`${path}.parents`, "a replacement must cite at least one replaced head");
+    errors.push(`${path}.parents: a replacement must cite at least one replaced head`);
   }
   let frozen: RemoteEventChange;
   if (kind === "project-replace") {
-    allowOnly(change, "request.event.change", ["kind", "project"]);
-    frozen = { kind, project: frozenProjectSubject(change.project, "request.event.change.project", projectId) };
+    allowOnly(change, `${path}.change`, ["kind", "project"], errors);
+    frozen = { kind, project: frozenProjectSubject(change.project, `${path}.change.project`, projectId, errors) };
   } else {
-    allowOnly(change, "request.event.change", ["kind", "issueRef", "mstar"]);
+    allowOnly(change, `${path}.change`, ["kind", "issueRef", "mstar"], errors);
     frozen = {
       kind,
-      issueRef: assertIssueRef(change.issueRef),
-      mstar: frozenIssueSubject(change.mstar, "request.event.change.mstar"),
+      issueRef: collected(
+        errors,
+        () => {
+          if (typeof change.issueRef !== "string" || !ISSUE_REF_PATTERN.test(change.issueRef)) {
+            invalid(`${path}.change.issueRef`, "must be an 'mstar:issue:<lowercase uuid>' reference");
+          }
+          return change.issueRef as IssueRef;
+        },
+        "",
+      ),
+      mstar: frozenIssueSubject(change.mstar, `${path}.change.mstar`, errors),
     };
   }
-  return {
-    version: 1,
-    repoKey: text(body.repoKey, "request.event.repoKey"),
-    projectId,
-    operationId: linearId(body.operationId, "request.event.operationId"),
-    parents,
-    change: frozen,
-  };
+  return { version: 1, repoKey, projectId, operationId, parents, change: frozen };
 }
 
 /** note: A create addresses no native record; every other change appends to one immutable target. */
@@ -2641,11 +2806,17 @@ function intentTarget(raw: unknown, change: RemoteEventChange, binding: RemoteIn
  *
  * `guard` runs INSIDE the freeze transaction, after an identical replay has answered, so a caller
  * holding an observed revision proves it against the lane the intent is actually written to.
+ *
+ * `reservation` names the composite reservation this intent belongs to. It is proved INSIDE the
+ * same write lane, before the row is written: a decline holds that lane across its own durable
+ * phase, so a reservation declined while this attempt was already admitted refuses here instead of
+ * freezing an intent the decline's replay could never finalize.
  */
 export async function prepareRemoteIntent(
   context: StoreContext,
   request: unknown,
   guard?: (observed: { observationRevision: number }) => void,
+  reservation?: RemoteReservationKey | null,
 ): Promise<RemoteIntent> {
   const body = record(request, "request");
   allowOnly(body, "request", [
@@ -2701,7 +2872,7 @@ export async function prepareRemoteIntent(
       : canonicalJson({ ...frozenRequest, origin, result });
   const executionJson = executionKey === null ? null : canonicalJson(executionKey);
 
-  return withRemoteCacheWrite(context, (handle) => {
+  const insert = (handle: CollaborationStoreHandle): RemoteIntent => {
     const db = handle.db;
     const stored = db
       .prepare(
@@ -2744,7 +2915,7 @@ export async function prepareRemoteIntent(
             `reused only with the identical binding, request and execution key; inspect it with ` +
             `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and submit a new id ` +
             `for a corrected write. Nothing was enqueued.`,
-          { operationId: event.operationId, state: existing.state },
+          { operationId: event.operationId, state: existing.state, durable_intent: true },
         );
       }
       return intentOf(
@@ -2782,7 +2953,38 @@ export async function prepareRemoteIntent(
       createdAt: at,
       updatedAt: at,
     } satisfies RemoteIntent;
+  };
+  if (reservation === undefined || reservation === null) return withRemoteCacheWrite(context, insert);
+  // invariant: A composite's freeze takes the SAME lane the decline holds across its durable
+  // phase, and proves the reservation's phase inside it: a decline that committed while this
+  // attempt was already admitted refuses the freeze instead of leaving a durable intent under a
+  // reservation whose same-id replay only raises the decline.
+  return withRemoteCacheWriteHeld(context, async (handle) => {
+    const declined = await declinedReservationCause(context, reservation);
+    if (declined !== null) throw declinedReservationRefusal(reservation, declined);
+    return insert(handle);
   });
+}
+
+/** note: The freeze's refusal of a reservation that was declined while this attempt was admitted. */
+function declinedReservationRefusal(
+  reservation: RemoteReservationKey,
+  cause: Readonly<{ code: string; message: string; details: Record<string, unknown> | null }>,
+): StoreError {
+  return new StoreError(
+    "collaboration.operation-partial",
+    `The composite reservation ${JSON.stringify(reservation.operationId)} was declined durably before this provider ` +
+      `intent was frozen (${cause.code}: ${cause.message}), so nothing was enqueued and no provider state is claimed. ` +
+      `The next same-id attempt replays that recorded decline; issue the corrected request under a NEW operation id.`,
+    {
+      operation_id: reservation.operationId,
+      phase: "declined",
+      cause: { code: cause.code, message: cause.message, ...(cause.details === null ? {} : { details: cause.details }) },
+      recovery:
+        `Reissue the SAME verb with the SAME --operation id to replay the recorded decline, or issue the corrected ` +
+        `request under a NEW operation id.`,
+    },
+  );
 }
 
 const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
@@ -2792,6 +2994,49 @@ const REMOTE_INTENT_STATES: readonly RemoteIntentState[] = [
   "conflict",
   "abandoned",
 ];
+
+/** note: The outcome of one composite decline the frame decides under the freeze's own lane. */
+export type FreezeDeclineDecision =
+  | { kind: "declined" }
+  | { kind: "durable"; operationIds: readonly string[] }
+  | { kind: "unproven"; error: unknown }
+  | { kind: "unsettled"; error: unknown };
+
+/**
+ * invariant: The composite decline and the provider freeze are ONE pair of decisions over the
+ * remote outbox, so both take the remote-cache write lane and neither leaves the lane while its
+ * decision is undecided:
+ * - a durable intent found here retains the reservation, so a winner that froze before this
+ *   decision is never declined away (the absence check is INSIDE the decline's own lane, not a
+ *   sample taken beside it);
+ * - the durable execution decline is committed WHILE the lane is held, so a freeze that begins
+ *   afterwards meets `prepareRemoteIntent`'s own declined-reservation proof inside the same lane
+ *   and refuses instead of enqueuing.
+ * A lane that cannot be read proves nothing either way (`unproven`): the reservation is retained.
+ */
+export async function declineUnderFreezeLane(
+  context: StoreContext,
+  operationIds: readonly string[],
+  decline: () => Promise<{ settled: true } | { settled: false; error: unknown }>,
+): Promise<FreezeDeclineDecision> {
+  if (operationIds.length === 0) {
+    const settlement = await decline();
+    return settlement.settled ? { kind: "declined" } : { kind: "unsettled", error: settlement.error };
+  }
+  try {
+    return await withRemoteCacheWriteHeld(context, async (handle) => {
+      const durable = operationIds.filter(
+        (operationId) =>
+          handle.db.prepare("select 1 as found from remote_outbox where operation_id = ?").get(operationId) !== undefined,
+      );
+      if (durable.length > 0) return { kind: "durable" as const, operationIds: durable };
+      const settlement = await decline();
+      return settlement.settled ? { kind: "declined" as const } : { kind: "unsettled" as const, error: settlement.error };
+    });
+  } catch (error) {
+    return { kind: "unproven", error };
+  }
+}
 
 /**
  * note: The one confirmed receipt an intent recorded, re-validated through the contract's
@@ -2976,6 +3221,11 @@ export type RemoteIntentRead = Readonly<{
   /** note: The recorded confirmed effect, so the business verb's replay reports it; withheld with the content. */
   confirmed: RemoteConfirmedEffect | null;
   event: RemoteEvent | null;
+  /**
+   * note: The recorded replay identity of a settled no-change claim; `event` is null for it, since a
+   * claim never represents observed history as a provider event. Withheld with the content.
+   */
+  settled: Readonly<{ kind: RemoteEventChange["kind"]; issueRef: IssueRef }> | null;
   target: string | null;
   expectedHeads: readonly string[];
   executionKey: RemoteIntentExecutionKey | null;
@@ -3149,6 +3399,69 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
 }
 
 /**
+ * invariant: The settled no-change claim's closed record. It carries the REPLAY IDENTITY of the
+ * established write — its kind, portable reference, target and complete business request — and the
+ * business answer, never the observed subject: an observation legitimately holds history the
+ * replacement contract refuses (a guessed dedup key), and a claim is not a provider event, so it is
+ * validated by its own shape instead of `storedRequest`'s frozen-event rules.
+ */
+type SettledClaim = Readonly<{
+  binding: RemoteIntentBinding;
+  kind: RemoteEventChange["kind"];
+  issueRef: IssueRef;
+  target: string;
+  executionKey: RemoteIntentExecutionKey | null;
+  origin: RemoteWriteOrigin;
+  answer: unknown;
+}>;
+
+const SETTLED_CLAIM_KEYS = ["settled", "binding", "kind", "issueRef", "target", "origin", "result"] as const;
+
+/** note: The recorded no-change claim of one outbox row, or null when the row holds a frozen request. */
+function settledClaim(row: OutboxIntentRow): SettledClaim | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.requestJson);
+  } catch {
+    throw malformedIntent(row.operationId, "carries no readable frozen request");
+  }
+  if (!isRecord(parsed) || parsed.settled === undefined) return null;
+  try {
+    allowOnly(parsed, "request", SETTLED_CLAIM_KEYS);
+    if (parsed.settled !== 1) invalid("request.settled", "must be 1");
+    const recordedKey = row.executionKeyJson === null ? null : (JSON.parse(row.executionKeyJson) as unknown);
+    const answer = recordedNoChange(plainJson(parsed.result, "request.result"));
+    if (answer === null) invalid("request.result", "must record the no-change answer");
+    return {
+      binding: intentBinding(parsed.binding),
+      kind: oneOf(parsed.kind, REMOTE_CHANGE_KINDS, "request.kind"),
+      issueRef: assertIssueRef(text(parsed.issueRef, "request.issueRef")),
+      target: linearId(parsed.target, "request.target"),
+      executionKey: recordedKey === null ? null : intentExecutionKey(recordedKey, row.operationId),
+      origin: writeOrigin(parsed.origin, "request.origin"),
+      answer: answer.answer,
+    };
+  } catch {
+    throw malformedIntent(row.operationId, "carries a settled claim the contract cannot read");
+  }
+}
+
+/**
+ * invariant: A settled claim was never dispatched, so no lifecycle verb applies to it. Each such
+ * verb names the claim and the read that answers it instead of reporting an unreadable row.
+ */
+function noSettledClaim(row: OutboxIntentRow, attempt: string): void {
+  if (settledClaim(row) === null) return;
+  throw new StoreError(
+    "remote.dispatch-refused",
+    `Operation ${row.operationId} holds a settled no-change claim: the observed authority already carried that write, ` +
+      `so nothing was ever sent and no dispatch, receipt, reconciliation, resolution or abandonment applies to it. ` +
+      `${attempt} A new write needs a new operation id.`,
+    { operationId: row.operationId, settled_no_change: true },
+  );
+}
+
+/**
  * note: The cache's materialized binding must equal the frozen one before any lifecycle act.
  * The writer id is NOT part of that identity: a denial, revocation or expiry clears it in place,
  * so including it would refuse a row that must stay inspectable as metadata. Sending still
@@ -3295,64 +3608,122 @@ function receiptOutcomeOf(raw: unknown, operationId: string): RemoteReceiptOutco
   }
 }
 
+/** note: The outcomes one dispatched attempt's receipt may report, and the subset a reconciliation may. */
+const RECEIPT_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict", "not-sent"] as const;
+const RECONCILE_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict"] as const;
+
 /**
  * invariant: One receipt outcome, exactly as the contract closes it. `confirmed` must name the
  * target's provider identity and the exact event the caller decoded back, so a receipt can
  * never be confused with a reviewer's summary. The frozen binding's scope is required.
+ *
+ * A reconciliation reports what a lookup SAW, so its document has no `not-sent` arm at all: only
+ * the original host's own receipt can prove an attempt was never sent.
+ *
+ * With `errors` supplied, every member is read through `collected`: the caller aggregates the
+ * whole submitted document's structural diagnostics into one refusal, and the placeholder this
+ * mode may return is discarded with those errors.
  */
-function receiptOutcome(raw: unknown, path: string): RemoteReceiptOutcome {
-  const body = record(raw, path);
-  const kind = oneOf(body.kind, ["confirmed", "unconfirmed", "conflict", "not-sent"] as const, `${path}.kind`);
+function receiptOutcome(
+  raw: unknown,
+  path: string,
+  errors?: string[],
+  source: "receipt" | "reconcile" = "receipt",
+): RemoteReceiptOutcome {
+  const kinds = source === "reconcile" ? RECONCILE_OUTCOME_KINDS : RECEIPT_OUTCOME_KINDS;
+  const body = collected(errors, () => record(raw, path), undefined);
+  if (body === undefined) return { kind: "unconfirmed", reason: "no-response" };
+  if (source === "reconcile" && body.kind === "not-sent") {
+    const message =
+      `${path}.kind: a reconciliation reports what a lookup saw, so its document has no not-sent arm; record the ` +
+      `pre-send refusal with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\``;
+    if (errors === undefined) throw new StoreError("remote.input-invalid", `${message}${NOTHING_WRITTEN}`);
+    errors.push(message);
+    return { kind: "unconfirmed", reason: "no-response" };
+  }
+  const kind = typeof body.kind === "string" && (kinds as readonly string[]).includes(body.kind)
+    ? (body.kind as RemoteReceiptOutcome["kind"])
+    : undefined;
+  if (kind === undefined) {
+    const message = `${path}.kind: must be one of ${kinds.join("|")}`;
+    if (errors === undefined) throw new StoreError("remote.input-invalid", `${message}${NOTHING_WRITTEN}`);
+    errors.push(message);
+    return { kind: "unconfirmed", reason: "no-response" };
+  }
   if (kind === "confirmed") {
-    allowOnly(body, path, ["kind", "identity", "recordId", "event"]);
+    allowOnly(body, path, ["kind", "identity", "recordId", "event"], errors);
     return {
       kind,
-      identity: issueIdentity(body.identity, `${path}.identity`),
-      recordId: linearId(body.recordId, `${path}.recordId`),
-      event: frozenEvent(body.event, `${path}.event`),
+      identity: collected(errors, () => issueIdentity(body.identity, `${path}.identity`, errors), {} as ProviderIssueIdentity),
+      recordId: collected(errors, () => linearId(body.recordId, `${path}.recordId`), ""),
+      event: collected(errors, () => frozenEvent(body.event, `${path}.event`, errors), undefined as unknown as RemoteEvent),
     };
   }
   if (kind === "unconfirmed") {
-    allowOnly(body, path, ["kind", "reason"]);
+    allowOnly(body, path, ["kind", "reason"], errors);
     return {
       kind,
-      reason: oneOf(
-        body.reason,
-        ["no-response", "not-found", "ambiguous", "provider-unavailable"] as const,
-        `${path}.reason`,
+      reason: collected(
+        errors,
+        () =>
+          oneOf(
+            body.reason,
+            ["no-response", "not-found", "ambiguous", "provider-unavailable"] as const,
+            `${path}.reason`,
+          ),
+        "no-response",
       ),
     };
   }
   if (kind === "conflict") {
-    allowOnly(body, path, ["kind", "expectedHeads", "observedHeads", "observedRecords"]);
+    allowOnly(body, path, ["kind", "expectedHeads", "observedHeads", "observedRecords"], errors);
     return {
       kind,
-      expectedHeads: digestHead(body.expectedHeads, `${path}.expectedHeads`),
-      observedHeads: digestHead(body.observedHeads, `${path}.observedHeads`),
-      observedRecords: list(body.observedRecords, `${path}.observedRecords`).map((entry, index) => {
-        const record_ = record(entry, `${path}.observedRecords[${index}]`);
-        allowOnly(record_, `${path}.observedRecords[${index}]`, ["identity", "recordId", "event"]);
-        return {
-          identity: issueIdentity(record_.identity, `${path}.observedRecords[${index}].identity`),
-          recordId: linearId(record_.recordId, `${path}.observedRecords[${index}].recordId`),
-          event: frozenEvent(record_.event, `${path}.observedRecords[${index}].event`),
-        };
-      }),
+      expectedHeads: collected(errors, () => digestHead(body.expectedHeads, `${path}.expectedHeads`), []),
+      observedHeads: collected(errors, () => digestHead(body.observedHeads, `${path}.observedHeads`), []),
+      observedRecords: collected(
+        errors,
+        () =>
+          list(body.observedRecords, `${path}.observedRecords`).map((entry, index) => {
+            const recordPath = `${path}.observedRecords[${index}]`;
+            const record_ = collected(errors, () => record(entry, recordPath), {} as Record<string, unknown>);
+            allowOnly(record_, recordPath, ["identity", "recordId", "event"], errors);
+            return {
+              identity: collected(
+                errors,
+                () => issueIdentity(record_.identity, `${recordPath}.identity`, errors),
+                {} as ProviderIssueIdentity,
+              ),
+              recordId: collected(errors, () => linearId(record_.recordId, `${recordPath}.recordId`), ""),
+              event: collected(
+                errors,
+                () => frozenEvent(record_.event, `${recordPath}.event`, errors),
+                undefined as unknown as RemoteEvent,
+              ),
+            };
+          }),
+        [],
+      ),
     };
   }
-  allowOnly(body, path, ["kind", "code"]);
-  return { kind, code: text(body.code, `${path}.code`) };
+  allowOnly(body, path, ["kind", "code"], errors);
+  return { kind, code: collected(errors, () => text(body.code, `${path}.code`), "") };
 }
 
 /**
  * note: A receipt's event is validated against the contract's own event shape with a
  * placeholder binding; the exact equality with the frozen event is the caller's check.
+ * With `errors`, every member defect is collected instead of failing on the first one.
  */
-function frozenEvent(raw: unknown, path: string): RemoteEvent {
-  const body = record(raw, path);
+function frozenEvent(raw: unknown, path: string, errors?: string[]): RemoteEvent {
+  const body = collected(errors, () => record(raw, path), {} as Record<string, unknown>);
+  // note: The placeholder binding only satisfies intentBinding's shape so the event's own members
+  // can all be read and aggregated. Its project key derives from the event's own projectId
+  // unchecked, so the stored-receipt readback (which re-judges nothing) passes the project check,
+  // and the collected mode skips that check for an unreadable projectId.
   const binding = intentBinding({
     generation: 1,
-    projectKey: text(body.projectId, `${path}.projectId`),
+    projectKey: typeof body.projectId === "string" && body.projectId !== "" ? body.projectId : "frozen-event-placeholder",
     selectorCommit: "0".repeat(40),
     provider: "linear",
     workspaceId: "00000000-0000-4000-8000-000000000000",
@@ -3361,7 +3732,7 @@ function frozenEvent(raw: unknown, path: string): RemoteEvent {
     journalIssueId: "00000000-0000-4000-8000-000000000000",
     writerId: null,
   });
-  return remoteEvent(body, binding);
+  return remoteEvent(body, binding, errors, path);
 }
 
 /**
@@ -3529,28 +3900,52 @@ type RemoteReceiptEnvelope = Readonly<{
   attemptId: string;
   requestHash: string;
   observedAt: string;
-  outcome: unknown;
+  outcome: RemoteReceiptOutcome;
 }>;
 
-function receiptEnvelope(raw: unknown): RemoteReceiptEnvelope {
-  const body = record(raw, "receipt");
+/**
+ * invariant: The submission's STRUCTURE is proved before any outbox access, and one refusal
+ * answers every structural defect the document carries - an unknown member at any level, a
+ * missing or unreadable member, an arm this verb's document does not define - so a caller
+ * corrects the whole document instead of discovering one defect per submission.
+ */
+function receiptEnvelope(raw: unknown, source: "receipt" | "reconcile"): RemoteReceiptEnvelope {
+  const command = `store.collaboration.remote.outbox-${source}`;
+  const errors: string[] = [];
+  const body = collected(errors, () => record(raw, "receipt"), {} as Record<string, unknown>);
   allowOnly(body, "receipt", [
     "version", "selectorCommit", "generation", "projectId", "operationId", "attemptId", "requestHash", "observedAt",
     "outcome",
-  ]);
-  if (body.version !== 1) invalid("receipt.version", "must be 1");
-  const selectorCommit = text(body.selectorCommit, "receipt.selectorCommit");
-  if (!GIT_OBJECT_ID.test(selectorCommit)) invalid("receipt.selectorCommit", "must be a Git object id");
+  ], errors);
+  if (body.version !== 1) errors.push("receipt.version: must be 1");
+  const selectorCommit = collected(errors, () => text(body.selectorCommit, "receipt.selectorCommit"), "");
+  if (selectorCommit !== "" && !GIT_OBJECT_ID.test(selectorCommit)) {
+    errors.push("receipt.selectorCommit: must be a Git object id");
+  }
+  const generation = collected(errors, () => positiveInteger(body.generation, "receipt.generation"), 0);
+  const projectId = collected(errors, () => text(body.projectId, "receipt.projectId"), "");
+  const operationId = collected(errors, () => linearId(body.operationId, "receipt.operationId"), "");
+  const attemptId = collected(errors, () => linearId(body.attemptId, "receipt.attemptId"), "");
+  const requestHash = collected(errors, () => digest(body.requestHash, "receipt.requestHash"), "");
+  const observedAt = collected(errors, () => instant(body.observedAt, "receipt.observedAt"), "");
+  const outcome = receiptOutcome(body.outcome, "receipt.outcome", errors, source);
+  if (errors.length > 0) {
+    throw new StoreError(
+      "remote.input-invalid",
+      `${errors.join("; ")}. Nothing was written. Run \`mstar schema --command ${command}\` for this document's ` +
+        `shape, then resubmit the corrected --input document.`,
+    );
+  }
   return {
     version: 1,
     selectorCommit,
-    generation: positiveInteger(body.generation, "receipt.generation"),
-    projectId: text(body.projectId, "receipt.projectId"),
-    operationId: linearId(body.operationId, "receipt.operationId"),
-    attemptId: linearId(body.attemptId, "receipt.attemptId"),
-    requestHash: digest(body.requestHash, "receipt.requestHash"),
-    observedAt: instant(body.observedAt, "receipt.observedAt"),
-    outcome: body.outcome,
+    generation,
+    projectId,
+    operationId,
+    attemptId,
+    requestHash,
+    observedAt,
+    outcome,
   };
 }
 
@@ -3588,12 +3983,13 @@ async function recordReceiptEvidence(
   raw: unknown,
   source: "receipt" | "reconcile",
 ): Promise<RemoteIntentRead> {
-  const envelope = receiptEnvelope(raw);
+  const envelope = receiptEnvelope(raw, source);
   // note: Q1/Q2 recovery runs under the intent's ORIGINAL binding, including a draining
   // generation's pinned previous one; this never prepares or dispatches anything.
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, envelope.operationId);
+    noSettledClaim(row, "A receipt names what one dispatched attempt observed, and this claim was never sent.");
     if (row.generation !== envelope.generation || row.projectKey !== envelope.projectId) {
       throw new StoreError(
         "collaboration.stale-binding",
@@ -3633,19 +4029,9 @@ async function recordReceiptEvidence(
         { operationId: envelope.operationId },
       );
     }
-    const outcome = receiptOutcome(envelope.outcome, "receipt.outcome");
-    if (source === "reconcile" && outcome.kind === "not-sent") {
-      // invariant: Q2: reconciliation proves what a lookup SAW, so it can never prove nothing was
-      // sent; that pre-send refusal is only ever the original host's own receipt.
-      throw new StoreError(
-        "remote.dispatch-refused",
-        `A reconciliation of operation ${envelope.operationId} reports not-sent, but only the original host's own ` +
-          `pre-send refusal can prove an attempt was never sent. Record that refusal with ` +
-          `\`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, or reconcile the ` +
-          `effect the provider actually holds. Nothing was changed.`,
-        { operationId: envelope.operationId },
-      );
-    }
+    // invariant: Q2: the reconciliation's own document has no not-sent arm, so the structural
+    // refusal already answered that submission before this attempt was read.
+    const outcome = envelope.outcome;
     assertReceiptTargets(outcome, stored, envelope.operationId);
     assertConflictEvidence(outcome, stored, envelope.operationId);
     const receiptHash = receiptHashOf(source, envelope, outcome);
@@ -3739,6 +4125,7 @@ function intentRead(
     disclosure,
     confirmed: full ? confirmedEffectOf(db, row.operationId) : null,
     event: full ? stored.request.event : null,
+    settled: null,
     target: full ? stored.request.target : null,
     expectedHeads: full ? stored.request.expectedHeads : [],
     executionKey: full ? (stored.request.executionKey ?? null) : null,
@@ -3746,6 +4133,46 @@ function intentRead(
     result: full ? stored.result : null,
     operator: full ? stored.operator : null,
     reason: full ? stored.reason : null,
+    resolves: row.resolves,
+    resolvedBy: row.resolvedBy,
+    abandonReason: full ? row.abandonReason : null,
+    receipts: full ? receiptRows(db, row.operationId) : [],
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/**
+ * note: `outbox-show` of a settled no-change claim: the same durable row view, with the recorded
+ * replay identity and answer in place of a frozen event the claim never carried.
+ */
+function claimIntentRead(
+  db: StoreDb,
+  row: OutboxIntentRow,
+  claim: SettledClaim,
+  disclosure: "full" | "metadata",
+): RemoteIntentRead {
+  const full = disclosure === "full";
+  return {
+    version: 1,
+    operationId: row.operationId,
+    projectId: row.projectKey,
+    generation: row.generation,
+    state: row.state,
+    attemptId: row.attemptId,
+    requestHash: row.requestHash,
+    binding: claim.binding,
+    disclosure,
+    confirmed: null,
+    event: null,
+    settled: full ? { kind: claim.kind, issueRef: claim.issueRef } : null,
+    target: full ? claim.target : null,
+    expectedHeads: [],
+    executionKey: full ? claim.executionKey : null,
+    origin: full ? claim.origin : null,
+    result: full ? { noChange: claim.answer } : null,
+    operator: null,
+    reason: null,
     resolves: row.resolves,
     resolvedBy: row.resolvedBy,
     abandonReason: full ? row.abandonReason : null,
@@ -3789,23 +4216,23 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
   });
   try {
     const row = intentRow(handle.db, target);
-    const stored = storedRequest(row);
-    assertFrozenBinding(handle.db, stored.request.binding, target);
+    const claim = settledClaim(row);
+    const stored = claim === null ? storedRequest(row) : null;
+    const frozenBinding = claim === null ? stored!.request.binding : claim.binding;
+    assertFrozenBinding(handle.db, frozenBinding, target);
     // invariant: Disclosure follows the pair this open admitted. A checkout that rebound, or an
     // origin that published a successor this checkout has not bound yet, while the lane opened
     // authorized nothing here, however current the row's own check still is: the row stays
     // inspectable, its frozen content does not.
     const admitted =
       row.generation === lane.generation &&
-      stored.request.binding.selectorCommit === lane.selectorCommit &&
+      frozenBinding.selectorCommit === lane.selectorCommit &&
       laneStillRecorded(context, lane) &&
       laneStillPublished(context, lane);
-    return intentRead(
-      handle.db,
-      row,
-      stored,
-      admitted ? readPermission(handle.db, row.generation, row.projectKey) : "metadata",
-    );
+    const disclosure = admitted ? readPermission(handle.db, row.generation, row.projectKey) : "metadata";
+    return claim === null
+      ? intentRead(handle.db, row, stored!, disclosure)
+      : claimIntentRead(handle.db, row, claim, disclosure);
   } finally {
     handle.close();
   }
@@ -4279,6 +4706,7 @@ export async function dispatchRemoteIntent(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, target);
+    noSettledClaim(row, "Only an enqueued intent is dispatched, and this claim was already carried by the observation.");
     const stored = storedRequest(row);
     assertFrozenBinding(db, stored.request.binding, target);
     if (row.generation !== selection.generation || row.projectKey !== stored.request.binding.projectKey) {
@@ -4480,6 +4908,7 @@ export async function prepareRemoteResolution(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const original = intentRow(db, conflicted);
+    noSettledClaim(original, "A reviewed resolution needs a conflicted fork, and a settled claim has no fork.");
     const stored = storedRequest(original);
     assertFrozenBinding(db, stored.request.binding, conflicted);
     assertAdmittedLane(admittedLane(context), original, stored.request.binding, conflicted, "a reviewed resolution");
@@ -4519,6 +4948,14 @@ export async function prepareRemoteResolution(
     if (existing !== undefined) {
       // note: An identical replay returns the same resolution intent; a different one is a new conflicting id.
       const recorded = intentRow(db, operationId);
+      if (settledClaim(recorded) !== null) {
+        throw new StoreError(
+          "remote.operation-conflict",
+          `Operation ${operationId} is already recorded as a settled no-change claim; a resolution is a new, unused ` +
+            `operation id. Nothing was enqueued.`,
+          { operationId },
+        );
+      }
       const recordedRequest = storedRequest(recorded);
       if (
         recorded.resolves === conflicted &&
@@ -4582,6 +5019,10 @@ export async function prepareRemoteResolution(
       );
     }
     assertResolutionHistory(stored.request.event, recorded, event, conflicted);
+    // note: A merge legitimately decides the CURRENT fields (a reviewed resolution of a fork may
+    // keep either branch's disposition), so admission proves the history both branches carry. The
+    // business OUTCOME the original request named is proved later, by the composite that acknowledges
+    // it: a settled repair whose recorded disposition is not the requested one is never acknowledged.
     const requestJson = canonicalJson({
       binding,
       event,
@@ -4633,6 +5074,7 @@ export async function abandonRemoteIntent(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, operationId);
+    noSettledClaim(row, "An abandonment names an unpublished request, and this claim was already settled by the observation.");
     const stored = storedRequest(row);
     assertAdmittedLane(admittedLane(context), row, stored.request.binding, operationId, "an abandonment");
     // note: The retained reason and the row's state share one disclosure decision: a denial or an
@@ -4698,6 +5140,8 @@ type ObservedScope = Readonly<{
   selection: CollaborationSelection;
   binding: RemoteIntentBinding;
   snapshot: RemoteSnapshot;
+  /** note: The observation revision this snapshot was read at; the freeze transaction re-proves it. */
+  observationRevision: number;
 }>;
 
 /** note: The cache's materialized binding of one project, as the outbox freezes it. */
@@ -4807,11 +5251,13 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
         `The stored observation of project ${projectId} is unreadable; nothing was enqueued.`,
       );
     }
+    await remoteWriteScopeGapForTest?.();
     return {
       location,
       selection,
       binding: { ...materializedIntentBinding(scope, projectId), generation: binding.generation },
       snapshot,
+      observationRevision: typeof scope.revision === "number" && Number.isSafeInteger(scope.revision) ? scope.revision : 0,
     };
   } finally {
     handle.close();
@@ -4825,6 +5271,19 @@ type ObservedIssue = Readonly<{
   /** note: The bound project when the caller named none: the write still addresses exactly one. */
   projectId: string;
 }>;
+
+/**
+ * note: The observed issues one remote capture dedupes against, read under the same
+ * complete-and-current scope proof a write freezes under. A capture needs the
+ * authority's established occurrences BEFORE it chooses create versus append, so it
+ * reads this instead of guessing from nothing.
+ */
+export async function readRemoteObservedIssues(
+  context: StoreContext,
+  projectId: string,
+): Promise<readonly RemoteIssue[]> {
+  return (await readWriteScope(context, projectId)).snapshot.issues;
+}
 
 /**
  * note: Resolve the project one addressed issue lives in. A remote write addresses one project; a
@@ -4894,6 +5353,104 @@ export type RemoteObservedSubject = Readonly<{
  */
 export type RemoteNoChange = Readonly<{ noChange: unknown }>;
 
+/**
+ * invariant: The boundary an established answer is proved at, exactly as an insert is: inside
+ * the remote-cache write lane, the lock every freeze takes. The `unchanged` decision read a
+ * SAMPLE, so at the decision boundary this re-reads the outbox row under the operation id — a
+ * concurrent capture that froze it between the replay lookup and this answer is a replay or a
+ * collision, never an established success answered over it — and re-proves the sampled
+ * observation revision, refusing a no-op decided on a superseded base.
+ *
+ * A PROVEN answer is then recorded, not merely reported: the operation id is claimed under the
+ * outbox's own uniqueness boundary with the request identity that established it and the business
+ * result, as a SETTLED CLAIM that is never dispatchable (nothing was sent, and nothing ever will
+ * be). The claim carries its replay identity, never the observed subject: an observation may hold
+ * history the replacement contract refuses, and no provider event is ever represented by it. A
+ * later write under that id therefore meets a durable row instead of freezing a different provider
+ * effect, and an identical request replays the recorded answer.
+ */
+async function recordEstablishedNoOp(
+  context: StoreContext,
+  claim: {
+    operationId: string;
+    binding: RemoteIntentBinding;
+    sampledRevision: number;
+    /** note: The replay identity of the established write: what an identical replay must match. */
+    identity: Readonly<{
+      kind: RemoteEventChange["kind"];
+      issueRef: IssueRef;
+      target: string;
+      executionKey: RemoteIntentExecutionKey | null;
+      origin: RemoteWriteOrigin;
+    }>;
+    result: unknown;
+  },
+): Promise<"durable" | "recorded"> {
+  return withRemoteCacheWrite(context, (handle) => {
+    const row = handle.db
+      .prepare("select 1 as found from remote_outbox where operation_id = ?")
+      .get(claim.operationId) as { found?: number } | undefined;
+    if (row !== undefined) return "durable" as const;
+    const current = observationRevisionOf(handle.db, claim.binding.generation, claim.binding.projectKey);
+    if (current !== claim.sampledRevision) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The observed scope of project ${claim.binding.projectKey} moved under this write's sampled base (observation ` +
+          `revision ${String(claim.sampledRevision)} at read, ${String(current)} at the established answer), so its ` +
+          `no-op decision cannot answer on it. Re-run \`mstar store collaboration remote observe\` and reissue the ` +
+          `SAME verb with the SAME operation id; nothing was enqueued.`,
+        {
+          projectId: claim.binding.projectKey,
+          sampledRevision: claim.sampledRevision,
+          freezeRevision: current,
+          recovery:
+            "Re-run `mstar store collaboration remote observe --harness <abs> --input <file|->` for this project, then reissue the SAME verb with the SAME operation id.",
+        },
+      );
+    }
+    const identity = {
+      settled: 1,
+      binding: claim.binding,
+      kind: claim.identity.kind,
+      issueRef: claim.identity.issueRef,
+      target: claim.identity.target,
+      origin: claim.identity.origin,
+    };
+    const requestHash = createHash("sha256").update(canonicalJson(identity), "utf8").digest("hex");
+    const at = nowRfc3339();
+    handle.db
+      .prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+          "state, created_at, updated_at, abandon_reason) values (?, ?, ?, ?, ?, ?, 'abandoned', ?, ?, ?)",
+      )
+      .run(
+        claim.operationId,
+        claim.binding.generation,
+        claim.binding.projectKey,
+        requestHash,
+        canonicalJson({ ...identity, result: { noChange: claim.result } }),
+        claim.identity.executionKey === null ? null : canonicalJson(claim.identity.executionKey),
+        at,
+        at,
+        NO_CHANGE_REASON,
+      );
+    return "recorded" as const;
+  });
+}
+
+/** note: The retained cause of a recorded no-change claim: no provider effect was ever needed. */
+const NO_CHANGE_REASON =
+  "no-change: the observed authority already carried this request, so no provider effect was needed and nothing was sent";
+
+/**
+ * note: The business answer a SETTLED no-change claim records, or null for an ordinary intent: its
+ * freeze report carries the domain result rather than the intent's own receipt shapes.
+ */
+function recordedNoChange(result: unknown): { answer: unknown } | null {
+  if (!isRecord(result) || Object.keys(result).length !== 1 || !("noChange" in result)) return null;
+  return { answer: result.noChange };
+}
+
 export type RemoteIssueWrite = Readonly<{
   projectId?: string;
   operationId: string;
@@ -4905,6 +5462,12 @@ export type RemoteIssueWrite = Readonly<{
   issueId?: string;
   /** note: The complete normalized subject, derived from the observed one (null for a create/adoption). */
   next(current: Record<string, unknown> | null, observed: RemoteObservedSubject): Record<string, unknown>;
+  /**
+   * note: The occurrence key this write appends or creates, when it carries one: a confirmed
+   * replay's receipt names THAT occurrence's eventId in the confirmed event, so the business
+   * answer points at the recorded occurrence.
+   */
+  occurrenceKey?: string;
   /**
    * note: The replay identity: the business verb and its COMPLETE normalized request. Only the
    * identical request replays; another verb, target or payload under the same operation id refuses.
@@ -4918,8 +5481,16 @@ export type RemoteIssueWrite = Readonly<{
     current: Record<string, unknown> | null,
     observed: RemoteObservedSubject,
   ): unknown | null;
+  /**
+   * note: A caller-observed base proved inside the freeze transaction, exactly as a project
+   * write's guard is: a caller whose `--expect-store` moved under it refuses instead of
+   * silently superseding the newer base.
+   */
+  guard?: (observed: { observationRevision: number }) => void;
   /** note: A composite's execution reservation, so the provider effect settles it. */
   executionKey?: RemoteIntentExecutionKey | null;
+  /** note: The composite reservation this intent belongs to; its durable decline refuses the freeze. */
+  reservation?: RemoteReservationKey | null;
 }>;
 
 /**
@@ -4939,6 +5510,48 @@ function derivedUuid(bytes: Buffer): string {
 }
 
 /**
+ * invariant: The freeze transaction re-proves the observation the write's decisions were made
+ * against: dedupe, gates and no-op answers all read a SAMPLE, and only the revision checked
+ * inside the freeze transaction proves that sample still IS the current observation. A moved
+ * scope refuses instead of freezing decisions about a superseded base.
+ */
+function proveSampledBase(
+  sampledProjectId: string,
+  sampledRevision: number,
+  callerGuard: ((observed: { observationRevision: number }) => void) | undefined,
+): (observed: { observationRevision: number }) => void {
+  return (observed) => {
+    if (observed.observationRevision !== sampledRevision) {
+      throw new StoreError(
+        "collaboration.observation-stale",
+        `The observed scope of project ${sampledProjectId} moved under this write's sampled base (observation ` +
+          `revision ${String(sampledRevision)} at read, ${String(observed.observationRevision)} at freeze), so its ` +
+          `dedupe and gate decisions cannot freeze on it. Re-run \`mstar store collaboration remote observe\` and ` +
+          `reissue the SAME verb with the SAME operation id; nothing was enqueued.`,
+        {
+          projectId: sampledProjectId,
+          sampledRevision,
+          freezeRevision: observed.observationRevision,
+          recovery:
+            "Re-run `mstar store collaboration remote observe --harness <abs> --input <file|->` for this project, then reissue the SAME verb with the SAME operation id.",
+        },
+      );
+    }
+    callerGuard?.(observed);
+  };
+}
+
+/** note: Field-wise identity of one execution reservation; the frozen key is never compared as serialized JSON. */
+function sameExecutionKey(left: RemoteIntentExecutionKey | null, right: RemoteIntentExecutionKey | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.executionStoreId === right.executionStoreId &&
+    left.executionEpoch === right.executionEpoch &&
+    left.operationId === right.operationId
+  );
+}
+
+/**
  * note: The replay of one ordinary write: an operation id that already holds a frozen intent returns
  * THAT intent, so a retried verb never re-derives a different subject (a minted reference, a
  * milestone id, a recorded time) and never rewrites the accepted request. The identity is the
@@ -4954,7 +5567,7 @@ async function replayedIntent(
   issueRef: string | null,
   executionKey: RemoteIntentExecutionKey | null,
   origin: RemoteWriteOrigin,
-): Promise<RemoteIntent | null> {
+): Promise<RemoteIntent | RemoteNoChange | null> {
   let read: RemoteIntentRead;
   try {
     read = await readRemoteIntent(context, operationId);
@@ -4962,7 +5575,7 @@ async function replayedIntent(
     if (error instanceof StoreError && error.code === "remote.intent-not-found") return null;
     throw error;
   }
-  if (read.disclosure !== "full" || read.event === null) {
+  if (read.disclosure !== "full" || (read.event === null && read.settled === null)) {
     throw new StoreError(
       "remote.unavailable",
       `Operation ${operationId} cannot be replayed: the project's current read access is denied or expired, so its frozen ` +
@@ -4978,28 +5591,49 @@ async function replayedIntent(
         `execution key. Inspect it with ` +
         `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\` and submit a new id for ` +
         `the corrected write. Nothing was enqueued.`,
-      { operationId, state: read.state, ...details },
+      // invariant: This refusal READ a durable outbox row, so it proves the failure happened AFTER
+      // a freeze — never a pre-freeze decline fact for a composite frame.
+      { operationId, state: read.state, durable_intent: true, ...details },
     );
   };
   const event = read.event;
+  // invariant: A settled no-change claim carries its own recorded replay identity; it is not a
+  // provider event, so the identity comparison reads whichever shape the row recorded.
+  const settled = read.settled;
   if (read.generation !== selection.generation) {
     return conflict(`was frozen under generation ${String(read.generation)}, not the checked ${String(selection.generation)}`);
   }
   if (projectKey !== null && read.projectId !== projectKey) {
     return conflict(`addresses project ${read.projectId}, not ${projectKey}`);
   }
-  if (event.change.kind !== kind) return conflict(`is already frozen as a ${event.change.kind} intent`);
-  if (issueRef !== null && event.change.kind !== "project-replace" && event.change.issueRef !== issueRef) {
-    return conflict(`addresses portable issue ${event.change.issueRef}, not ${issueRef}`);
+  const frozenKind = settled === null ? event!.change.kind : settled.kind;
+  if (frozenKind !== kind) return conflict(`is already frozen as a ${frozenKind} intent`);
+  const frozenRef =
+    settled !== null ? settled.issueRef : event!.change.kind === "project-replace" ? null : event!.change.issueRef;
+  if (issueRef !== null && frozenRef !== issueRef) {
+    return conflict(`addresses portable issue ${String(frozenRef)}, not ${issueRef}`);
   }
   if (target !== undefined && read.target !== target) {
     return conflict(`addresses provider record ${String(read.target)}, not ${String(target)}`);
   }
-  if (canonicalJson(read.executionKey) !== canonicalJson(executionKey)) {
+  if (!sameExecutionKey(read.executionKey, executionKey)) {
     return conflict("was frozen under another execution reservation");
   }
-  if (read.origin === null || canonicalJson(read.origin) !== canonicalJson(origin)) {
+  if (read.origin === null || read.origin.verb !== origin.verb || !isDeepStrictEqual(read.origin.request, origin.request)) {
     return conflict(`is frozen under the business request ${read.origin === null ? "of no recorded verb" : `"${read.origin.verb}"`}`);
+  }
+  // invariant: A RECORDED settled claim returns its answer, never a pending intent: it was settled
+  // by construction (no attempt, no receipt), and a different request under the id refused above.
+  if (settled !== null) {
+    const recorded = recordedNoChange(read.result);
+    if (recorded === null) {
+      throw new StoreError(
+        "store.corrupt",
+        `Operation ${operationId} holds a settled no-change claim with no recorded answer; nothing was enqueued.`,
+        { operationId },
+      );
+    }
+    return { noChange: recorded.answer };
   }
   return {
     version: 1,
@@ -5046,17 +5680,19 @@ export async function prepareRemoteIssueWrite(
       : issueRefForOperation(operationId));
   const replayTarget =
     addressedIssue === undefined || !UUID.test(addressedIssue) ? undefined : linearId(addressedIssue, "issueId");
+  const replayProjectKey = write?.projectId === undefined ? null : text(write.projectId, "projectId");
   const replay = await replayedIntent(
     context,
     operationId,
     kind,
-    write?.projectId === undefined ? null : text(write.projectId, "projectId"),
+    replayProjectKey,
     replayTarget,
     replayRef,
     executionKey,
     origin,
   );
   if (replay !== null) return replay;
+  await remoteReplayAdmissionGapForTest?.();
   if (kind === "issue-create") {
     const issueRef = declaredRef ?? issueRefForOperation(operationId);
     if (write?.issueId !== undefined && write.issueId !== null) invalid("issueId", "must be absent for a create");
@@ -5085,7 +5721,7 @@ export async function prepareRemoteIssueWrite(
       expectedHeads: [],
       executionKey,
       origin,
-    });
+    }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
   }
   const addressed = text(write?.issueId, "issueId");
   const { scope, native, projectId } = await resolveObservedIssue(context, addressed, write.projectId);
@@ -5116,9 +5752,34 @@ export async function prepareRemoteIssueWrite(
   const observed = { projectId, project: scope.snapshot.project, issues: scope.snapshot.issues };
   const current = native.mstar === null ? null : currentIssueSubject(native.mstar);
   // invariant: A write the observed authority already carries is the domain's own no-op, decided
-  // BEFORE a second event is frozen; a conflicting payload refuses through the same callback.
+  // BEFORE a second event is frozen; a conflicting payload refuses through the same callback. The
+  // answer is replay-first and observation-proven like an insert: the boundary re-check under the
+  // write lane serves a durable same-id operation instead of it, and refuses a no-op whose
+  // sampled base a concurrent effect superseded.
   const established = write.unchanged?.(current, observed) ?? null;
-  if (established !== null) return { noChange: established };
+  if (established !== null) {
+    // note: An adoption or replacement always observes the subject it rewrites, so the satisfied
+    // request has a replay identity; a create never reaches this branch.
+    const proof = await recordEstablishedNoOp(context, {
+      operationId,
+      binding: scope.binding,
+      sampledRevision: scope.observationRevision,
+      identity: { kind, issueRef, target: native.identity.issueId, executionKey, origin },
+      result: established,
+    });
+    if (proof === "durable") {
+      const durable = await replayedIntent(context, operationId, kind, replayProjectKey, replayTarget, replayRef, executionKey, origin);
+      if (durable === null) {
+        throw new StoreError(
+          "store.corrupt",
+          `Operation ${operationId} holds a durable outbox row that no longer replays; nothing was enqueued.`,
+          { operationId },
+        );
+      }
+      return durable;
+    }
+    return { noChange: established };
+  }
   return prepareRemoteIntent(context, {
     binding: scope.binding,
     event: {
@@ -5137,7 +5798,7 @@ export async function prepareRemoteIssueWrite(
     expectedHeads: parents,
     executionKey,
     origin,
-  });
+  }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
 }
 
 /**
@@ -5184,6 +5845,8 @@ export type RemoteProjectWrite = Readonly<{
    */
   result?(current: Record<string, unknown>, subject: Record<string, unknown>): unknown;
   executionKey?: RemoteIntentExecutionKey | null;
+  /** note: The composite reservation this intent belongs to; its durable decline refuses the freeze. */
+  reservation?: RemoteReservationKey | null;
   /** note: A caller-observed base proved inside the freeze transaction; a moved base refuses the write. */
   guard?: (observed: { observationRevision: number }) => void;
 }>;
@@ -5206,7 +5869,7 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     write.executionKey ?? null,
     origin,
   );
-  if (replay !== null) return replay;
+  if (replay !== null) return replayedOnly(replay, operationId);
   const scope = await readWriteScope(context, projectId);
   const parents = scope.snapshot.project.head ?? [];
   const current = {
@@ -5232,7 +5895,7 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
     executionKey: write.executionKey ?? null,
     origin,
     ...(write.result === undefined ? {} : { result: write.result(current, subject) }),
-  }, write.guard);
+  }, write.guard, write.reservation ?? null);
 }
 
 /**

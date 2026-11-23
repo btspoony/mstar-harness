@@ -232,6 +232,20 @@ function dataOf(result: CommandEnvelope): Record<string, unknown> {
   return result.data as Record<string, unknown>;
 }
 
+/** note: Read one member of a published JSON Schema document; every step is checked, nothing is assumed. */
+function atPath(value: unknown, ...keys: string[]): unknown {
+  let cursor: unknown = value;
+  for (const key of keys) {
+    if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
+    cursor = Reflect.get(cursor, key);
+  }
+  return cursor;
+}
+
+function listOf(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 const adoption = {
   version: 1,
   kind: "new",
@@ -627,10 +641,487 @@ describe("remote outbox commands", () => {
     const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
     expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
     expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
+    // invariant: That refusal records nothing: all four domain writes stay durably pending.
     const stillPending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
       harness: fixture.harness,
       project: IDS.projectId,
     }, fixture.repo));
-    expect((stillPending.intents as unknown[]).length).toBe(4);
+    const intents = stillPending.intents;
+    expect(Array.isArray(intents) ? intents.length : -1).toBe(cases.length);
+  });
+
+  test("the advertised catalog correction runs through the command surface with its project", async () => {
+    const fixture = remoteFixture("catalog-correction");
+    await fixture.bind();
+    await fixture.observe(0);
+    const correction = {
+      harness: fixture.harness,
+      kind: "project",
+      id: IDS.projectId,
+      title: "Fixture renamed",
+      expect: 1,
+      operationId: "00000000-0000-4000-8000-0000000000c1",
+      actor: "project-manager",
+    };
+    // invariant: A remote catalog write appends to ONE project journal. The execution
+    // registration's advertised correction therefore carries --project; without it the CLI
+    // forwards no project and the engine refuses before enqueuing anything.
+    expect(await invoke("catalog.update", correction, fixture.repo)).toMatchObject({
+      status: "refused",
+      code: "catalog.invalid-entity",
+    });
+    const corrected = await invoke("catalog.update", { ...correction, project: IDS.projectId }, fixture.repo);
+    expect(corrected).toMatchObject({ status: "refused", code: "remote.effect-pending" });
+    expect(corrected.details).toMatchObject({ operationId: correction.operationId, state: "enqueued" });
+  });
+
+  test("each remote/outbox verb publishes its --input document through the real schema command", async () => {
+    const byId = new Map(getCommandDefinitions().map((entry) => [entry.id, entry]));
+    const publish = async (command: string) => {
+      const schemaCommand = definition("schema");
+      const result = await schemaCommand.execute(schemaCommand.input.parse({ command }), invocation(process.cwd()));
+      if (result.status !== "ok") throw new Error(`schema ${command} refused: ${JSON.stringify(result)}`);
+      const published = atPath(result.data, "descriptor", "payloadSchemas", "inputDocument");
+      return published === undefined ? undefined : (published as Record<string, unknown>);
+    };
+    const withDocument = [
+      "store.collaboration.remote.bind",
+      "store.collaboration.remote.observe",
+      "store.collaboration.remote.adopt-issue",
+      "store.collaboration.remote.outbox-dispatch",
+      "store.collaboration.remote.outbox-receipt",
+      "store.collaboration.remote.outbox-reconcile",
+      "store.collaboration.remote.outbox-resolve",
+    ];
+    for (const id of withDocument) {
+      const json = await publish(id);
+      expect(json, id).toBeDefined();
+      // note: Each document carries its own marker field; the resolution envelope has no
+      // version member and the adoption publishes its arms, so the assertion reads
+      // the published schema instead of assuming one shape.
+      const marker = id.endsWith("adopt-issue") ? "sourceIssue"
+        : id.endsWith("outbox-resolve") ? "operator"
+          : id.endsWith("outbox-dispatch") ? "conflictOperationId"
+            : "version";
+      expect(JSON.stringify(json), id).toContain(marker);
+      // invariant: The option help names the document by the verb's OWN registered id, so an
+      // author can copy the command out of --help and run it.
+      const help = String(byId.get(id)?.cli.options.find((option) => option.key === "input")?.help);
+      expect(help).toContain(`mstar schema --command ${id}`);
+      expect(help).not.toContain("<verb>");
+    }
+    // note: The observation's own strict document: every envelope field is required.
+    const observe = await publish("store.collaboration.remote.observe") as {
+      properties?: Record<string, unknown>;
+    };
+    expect(Object.keys(observe.properties ?? {})).toEqual([
+      "version",
+      "selectorCommit",
+      "generation",
+      "check",
+      "expectRevision",
+      "snapshot",
+    ]);
+    for (const id of ["store.collaboration.remote.status", "store.collaboration.remote.outbox-pending", "store.collaboration.remote.outbox-show", "store.collaboration.remote.outbox-abandon"]) {
+      expect(byId.get(id)?.payloads, id).toBeUndefined();
+      expect(await publish(id), id).toBeUndefined();
+    }
+  });
+
+  test("receipt and reconciliation publish different documents, and the engine enforces the published shape", async () => {
+    const { fixture, permit } = await adoptAndDispatch("published-documents");
+    const RECEIPT = "store.collaboration.remote.outbox-receipt";
+    const RECONCILE = "store.collaboration.remote.outbox-reconcile";
+    const documentOf = (id: string) => {
+      const published = definition(id).payloads?.inputDocument?.schema;
+      if (published === undefined) throw new Error(`missing published document: ${id}`);
+      return published;
+    };
+    const outcomeKinds = (id: string) =>
+      listOf(atPath(documentOf(id).toJSONSchema(), "properties", "outcome", "anyOf"))
+        .map((arm) => atPath(arm, "properties", "kind", "const"));
+
+    // invariant: The two verbs publish DIFFERENT outcome documents: a reconciliation reports what
+    // a lookup saw, so `not-sent` is absent from the document it advertises.
+    expect(outcomeKinds(RECEIPT)).toEqual(["confirmed", "unconfirmed", "conflict", "not-sent"]);
+    expect(outcomeKinds(RECONCILE)).toEqual(["confirmed", "unconfirmed", "conflict"]);
+
+    // invariant: The published event is a closed, typed document: the issue arm carries the six
+    // typed subject members and every history row closes its own fields, so discovery never
+    // advertises a loose map the engine would then reject field by field.
+    const issueChange = listOf(atPath(documentOf(RECEIPT).toJSONSchema(), "properties", "outcome", "anyOf"))
+      .flatMap((arm) => listOf(atPath(arm, "properties", "event", "properties", "change", "anyOf")))
+      .find((arm) => atPath(arm, "properties", "mstar") !== undefined);
+    expect(issueChange).toBeDefined();
+    for (const member of ["fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"]) {
+      expect(atPath(issueChange, "properties", "mstar", "properties", member), member).toBeDefined();
+    }
+    expect(atPath(issueChange, "properties", "mstar", "additionalProperties")).toBe(false);
+    expect(atPath(issueChange, "properties", "mstar", "properties", "occurrences", "items", "additionalProperties")).toBe(false);
+    expect(listOf(atPath(issueChange, "properties", "mstar", "properties", "occurrences", "items", "required"))).toContain("eventId");
+    expect(listOf(atPath(issueChange, "properties", "mstar", "properties", "transitions", "items", "required"))).toContain("evidence");
+    expect(String(atPath(issueChange, "properties", "mstar", "properties", "fields", "properties", "kind", "enum"))).toContain("bug");
+
+    const frozen = permit.frozenRequest.event as RemoteEvent;
+    if (frozen.change.kind === "project-replace") throw new Error("the fixture adoption freezes an issue event");
+    const accepted = receiptOf(permit, {
+      kind: "confirmed",
+      identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+      recordId: "abababab-abab-4bab-8bab-abababababab",
+      event: frozen,
+    });
+    // invariant: A representative accepted document parses against the published contract...
+    expect(documentOf(RECEIPT).safeParse(accepted).success).toBe(true);
+    // note: one document with an extra nested event member does not parse, exactly as the engine refuses it.
+    const nested = {
+      ...accepted,
+      outcome: { ...accepted.outcome, event: { ...frozen, change: { ...frozen.change, unsupportedMember: [] } } },
+    };
+    expect(documentOf(RECEIPT).safeParse(nested).success).toBe(false);
+
+    // invariant: The real engine applies the same split the documents advertise instead of
+    // accepting `not-sent` at this verb and rejecting it later.
+    const notSent = receiptOf(permit, { kind: "not-sent", code: "host-pre-send-refusal" });
+    expect(documentOf(RECEIPT).safeParse(notSent).success).toBe(true);
+    expect(documentOf(RECONCILE).safeParse(notSent).success).toBe(false);
+    const refused = await invoke(RECONCILE, {
+      harness: fixture.harness,
+      input: fixture.path("reconcile-not-sent", notSent),
+    }, fixture.repo);
+    expect(refused).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    expect(String(refused.message)).toContain("outbox-receipt");
+    expect(refused.details?.recovery).toContain("outbox-reconcile");
+  });
+
+  test("one structural refusal answers top-level, unknown and nested defects together", async () => {
+    const fixture = remoteFixture("aggregate-structure");
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-structure", {
+        version: 2,
+        selectorCommit: "not-a-git-object",
+        generation: -1,
+        projectId: 7,
+        operationId: "not-a-uuid",
+        attemptId: "also-not",
+        requestHash: "short",
+        observedAt: "not-a-time",
+        outcome: {
+          kind: "confirmed",
+          recordId: "also-not-a-uuid",
+          event: {},
+          notAnOutcomeMember: true,
+        },
+        notAnEnvelopeMember: "surplus",
+      }),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: ONE refusal answers the whole document - every invalid envelope field, a surplus
+    // top-level member, a surplus outcome member and each nested member the engine cannot read.
+    for (const diagnostic of [
+      "receipt.version",
+      "receipt.selectorCommit",
+      "receipt.generation",
+      "receipt.projectId",
+      "receipt.operationId",
+      "receipt.attemptId",
+      "receipt.requestHash",
+      "receipt.observedAt",
+      "receipt.notAnEnvelopeMember",
+      "receipt.outcome.notAnOutcomeMember",
+      "receipt.outcome.identity",
+      "receipt.outcome.recordId",
+      "receipt.outcome.event",
+    ]) {
+      expect(message).toContain(diagnostic);
+    }
+    // invariant: The refusal names the published document to consult and the correction to resubmit.
+    expect(message).toContain("mstar schema --command store.collaboration.remote.outbox-receipt");
+    expect(message).toContain("resubmit the corrected --input");
+    expect(result.details?.recovery).toContain("outbox-receipt");
+  });
+
+  test("a known-good marked observation passes the published observe document and the runtime", async () => {
+    const fixture = remoteFixture("published-marked-observation");
+    await fixture.bind();
+    const check = {
+      projectId: IDS.projectId,
+      scope: fixture.scope,
+      journalIssueId: IDS.journalIssueId,
+      checkedAt: new Date(Date.now() - 1_000).toISOString(),
+      outcome: {
+        kind: "verified",
+        readerId: "reader-one",
+        writerId: IDS.writerId,
+        capabilities: { fullRead: true, appendOnly: true, exactLookup: true, fieldFidelity: true, privateAudience: true },
+      },
+    };
+    const markedIssueRef = "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const observedAt = new Date(Date.now() - 5_000).toISOString();
+    const document = {
+      version: 1,
+      selectorCommit: fixture.commit,
+      generation: 3,
+      check,
+      expectRevision: 0,
+      snapshot: {
+        asOf: observedAt,
+        coverage: { kind: "complete" },
+        project: {
+          projectId: IDS.projectId,
+          head: ["1".repeat(64)],
+          binding: fixture.scope,
+          milestones: [],
+          roadmap: null,
+          catalogEntities: [
+            { kind: "project", id: IDS.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
+          ],
+          catalogLinks: [],
+        },
+        issues: [
+          {
+            identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+            nativeTitle: "Marked native issue",
+            nativeStatus: "Todo",
+            providerUpdatedAt: observedAt,
+            mstar: {
+              issueRef: markedIssueRef,
+              head: ["2".repeat(64)],
+              fields: {
+                title: "Marked finding",
+                kind: "bug",
+                severity: "high",
+                disposition: "open",
+                impact: "the published schema must accept a marked observation",
+                acceptance: "the engine and the descriptor agree",
+                owner: null,
+                registeredAt: observedAt,
+                closedAt: null,
+                closureNote: null,
+                createdAt: observedAt,
+                updatedAt: observedAt,
+                revision: 1,
+                milestoneId: null,
+              },
+              occurrences: [],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          },
+        ],
+      },
+    };
+    // invariant: The published document accepts the marked observation shape the engine itself
+    // requires — `fields` included — so discovery never refuses a document the runtime accepts.
+    const schema = definition("store.collaboration.remote.observe").payloads?.inputDocument?.schema;
+    expect(schema).toBeDefined();
+    expect(schema!.safeParse(document).success).toBe(true);
+    // invariant: The same document through the real command: accepted end to end.
+    const result = await invoke("store.collaboration.remote.observe", {
+      harness: fixture.harness,
+      input: fixture.path("marked-observe", document),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "ok", exitCode: 0 });
+  });
+
+  test("one refusal aggregates unknown keys and every nested defect of a receipt", async () => {
+    const fixture = remoteFixture("aggregate-nested-defects");
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-nested", {
+        version: 1,
+        selectorCommit: fixture.commit,
+        generation: 3,
+        projectId: IDS.projectId,
+        operationId: "00000000-0000-4000-8000-0000000000d1",
+        attemptId: "00000000-0000-4000-8000-0000000000d2",
+        requestHash: "a".repeat(64),
+        observedAt: new Date().toISOString(),
+        outcome: {
+          kind: "confirmed",
+          identity: { ...fixture.scope, issueId: "not-a-uuid", workspaceId: "not-a-uuid", teamId: "also-not", surplusKey: true },
+          recordId: "00000000-0000-4000-8000-0000000000d3",
+          event: {
+            version: 1,
+            repoKey: 7,
+            projectId: "",
+            operationId: "also-not",
+            parents: "not-a-list",
+            change: { kind: "issue-create", issueRef: "not-a-reference", mstar: {} },
+          },
+        },
+      }),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: ONE refusal answers every structural defect — the unknown identity key, BOTH bad
+    // scope ids, the bad issue id, and each bad event member — instead of one defect per attempt.
+    for (const diagnostic of [
+      "receipt.outcome.identity.surplusKey",
+      "receipt.outcome.identity.workspaceId",
+      "receipt.outcome.identity.teamId",
+      "receipt.outcome.identity.issueId",
+      "receipt.outcome.event.repoKey",
+      "receipt.outcome.event.projectId",
+      "receipt.outcome.event.operationId",
+      "receipt.outcome.event.parents",
+      "receipt.outcome.event.change.issueRef",
+      "receipt.outcome.event.change.mstar",
+    ]) {
+      expect(message).toContain(diagnostic);
+    }
+    expect(message).toContain("mstar schema --command store.collaboration.remote.outbox-receipt");
+  });
+
+  test("one receipt refusal aggregates the subject's field and history defects through the published command", async () => {
+    const fixture = remoteFixture("aggregate-subject-defects");
+    const document = {
+      version: 1,
+      selectorCommit: fixture.commit,
+      generation: 3,
+      projectId: IDS.projectId,
+      operationId: "00000000-0000-4000-8000-0000000000d4",
+      attemptId: "00000000-0000-4000-8000-0000000000d5",
+      requestHash: "b".repeat(64),
+      observedAt: new Date().toISOString(),
+      outcome: {
+        kind: "confirmed",
+        identity: { ...fixture.scope, issueId: IDS.providerIssueId },
+        recordId: "00000000-0000-4000-8000-0000000000d6",
+        event: {
+          version: 1,
+          repoKey: "fixture-repo",
+          projectId: IDS.projectId,
+          operationId: "00000000-0000-4000-8000-0000000000d7",
+          parents: ["c".repeat(64)],
+          change: {
+            kind: "issue-replace",
+            issueRef: "mstar:issue:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            mstar: {
+              fields: {
+                title: 7,
+                kind: "bug",
+                severity: "high",
+                disposition: "open",
+                impact: "i",
+                acceptance: "a",
+                owner: null,
+                registeredAt: null,
+                closedAt: null,
+                closureNote: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                revision: -1,
+                milestoneId: null,
+              },
+              occurrences: [
+                null,
+                {
+                  eventId: "not-a-uuid",
+                  occurrenceKey: "k",
+                  sourceKind: "review",
+                  sourceIdentity: "review:x",
+                  rootCauseKey: "x.cause",
+                  acceptanceKey: "x.acceptance",
+                  location: "l",
+                  observedBehavior: "b",
+                  evidence: [],
+                  discoveredAt: null,
+                  recordedAt: new Date().toISOString(),
+                  imported: false,
+                },
+              ],
+              transitions: [],
+              relations: [],
+              provenance: [],
+              projectMoves: [],
+            },
+          },
+        },
+      },
+    };
+    // invariant: The published document — engine-owned since the convergence — reports all
+    // three defects of the known event arm together, exactly as the runtime refusal does.
+    const schema = definition("store.collaboration.remote.outbox-receipt").payloads?.inputDocument?.schema;
+    expect(schema).toBeDefined();
+    const parsed = schema!.safeParse(document);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      // note: The outcome and its `change` are unions of arms, so zod v4 nests each arm's issues
+      // under the union issue's `errors`; every level is walked for the together-report assertion.
+      const paths: string[] = [];
+      const pending = [...parsed.error.issues];
+      while (pending.length > 0) {
+        const issue = pending.shift() as { path: PropertyKey[]; errors?: unknown };
+        paths.push(issue.path.join("."));
+        if (Array.isArray(issue.errors)) pending.push(...(issue.errors as unknown[]).flat() as { path: PropertyKey[] }[]);
+      }
+      const joined = paths.join("\n");
+      // note: Inside a union arm zod v4 reports the path relative to the union value, so the
+      // subject defects appear under their `mstar.` prefix; the together-report assertion reads
+      // those.
+      for (const defect of [
+        "mstar.fields.title",
+        "mstar.fields.revision",
+        "mstar.occurrences.0",
+        "mstar.occurrences.1.eventId",
+      ]) {
+        expect(joined).toContain(defect);
+      }
+    }
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-subject", document),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: ONE runtime refusal answers the whole known event arm — both bad subject fields
+    // and BOTH malformed history entries, the second after the first — so the caller corrects the
+    // document in one pass instead of discovering one sibling per submission.
+    for (const diagnostic of [
+      "receipt.outcome.event.change.mstar.fields.title",
+      "receipt.outcome.event.change.mstar.fields.revision",
+      "receipt.outcome.event.change.mstar.occurrences[0]: must be an object",
+      "receipt.outcome.event.change.mstar.occurrences[1].eventId",
+    ]) {
+      expect(message).toContain(diagnostic);
+    }
+  });
+
+  test("one receipt refusal lists every invalid envelope field at once", async () => {
+    const fixture = remoteFixture("aggregate-refusal");
+    const result = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("bad-envelope", {
+        version: 2,
+        selectorCommit: "not-a-git-object",
+        generation: -1,
+        projectId: 7,
+        operationId: "not-a-uuid",
+        attemptId: "also-not",
+        requestHash: "short",
+        observedAt: "not-a-time",
+        outcome: { kind: "confirmed" },
+      }),
+    }, fixture.repo);
+    expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
+    const message = String(result.message);
+    // invariant: EVERY invalid envelope field is named by the ONE refusal, so the caller
+    // fixes the whole document per attempt instead of discovering one field per submission.
+    for (const field of [
+      "receipt.version",
+      "receipt.selectorCommit",
+      "receipt.generation",
+      "receipt.projectId",
+      "receipt.operationId",
+      "receipt.attemptId",
+      "receipt.requestHash",
+      "receipt.observedAt",
+    ]) {
+      expect(message).toContain(field);
+    }
   });
 });

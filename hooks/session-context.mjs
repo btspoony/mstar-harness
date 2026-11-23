@@ -17,24 +17,24 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync4, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve5 } from "node:path";
+import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute2, join as join4, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { basename as basename4, dirname as dirname5, join as join6, resolve as resolve6 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
-import { existsSync as existsSync6, readFileSync as readFileSync6, readdirSync as readdirSync2, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname7, join as join9, resolve as resolve10, sep as sep3 } from "node:path";
-import { existsSync as existsSync8, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync9, realpathSync as realpathSync6, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync6, readdirSync as readdirSync2, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname7, join as join8, resolve as resolve10, sep as sep2 } from "node:path";
+import { existsSync as existsSync12, mkdirSync as mkdirSync5, readdirSync as readdirSync8, readFileSync as readFileSync13, realpathSync as realpathSync7, statSync as statSync4, writeFileSync as writeFileSync6 } from "node:fs";
 import { execFileSync as execFileSync5 } from "node:child_process";
-import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute6, join as join12, relative as relative3, resolve as resolve11 } from "node:path";
-import { basename as basename6, isAbsolute as isAbsolute8, join as join14, relative as relative4, resolve as resolve12, sep as sep5 } from "node:path";
+import { basename as basename8, dirname as dirname12, isAbsolute as isAbsolute6, join as join17, relative as relative3, resolve as resolve15 } from "node:path";
+import { basename as basename9, isAbsolute as isAbsolute8, join as join19, relative as relative4, resolve as resolve16, sep as sep7 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { closeSync, existsSync as existsSync14, fstatSync, openSync, readFileSync as readFileSync16, readdirSync as readdirSync10, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute10, join as join20, resolve as resolve17, sep as sep9 } from "node:path";
+import { closeSync, existsSync as existsSync16, fstatSync, openSync, readFileSync as readFileSync17, readdirSync as readdirSync10, statSync as statSync7, unlinkSync as unlinkSync4 } from "node:fs";
+import { dirname as dirname14, isAbsolute as isAbsolute10, join as join22, resolve as resolve18, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync as closeSync2, existsSync as existsSync15, fstatSync as fstatSync2, fsyncSync, linkSync as linkSync2, lstatSync as lstatSync8, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename10, dirname as dirname12, join as join21, resolve as resolve18, sep as sep10 } from "node:path";
+import { closeSync as closeSync2, existsSync as existsSync17, fstatSync as fstatSync2, fsyncSync, linkSync as linkSync2, lstatSync as lstatSync8, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
+import { basename as basename10, dirname as dirname15, join as join23, resolve as resolve19, sep as sep10 } from "node:path";
 function __exportSetter(name, newValue) {
   this[name] = __returnValue.bind(null, newValue);
 }
@@ -3889,7 +3889,7 @@ function spaceThenNonSpace(effects, ok, nok) {
 function readJson(filePath) {
   if (!existsSync3(filePath))
     return {};
-  const content = readFileSync4(filePath, "utf8").trim();
+  const content = readFileSync5(filePath, "utf8").trim();
   if (!content)
     return {};
   try {
@@ -3901,9 +3901,9 @@ function readJson(filePath) {
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
-    const candidate = resolve5(dir, "package.json");
+    const candidate = resolve6(dir, "package.json");
     try {
-      const pkg = JSON.parse(readFileSync4(candidate, "utf8"));
+      const pkg = JSON.parse(readFileSync5(candidate, "utf8"));
       if (pkg.name === "morning-star")
         return candidate;
     } catch {}
@@ -3935,7 +3935,7 @@ function readDeclaredNodeFloor() {
   for (const manifestPath of [...new Set(candidates)]) {
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync4(manifestPath, "utf8"));
+      parsed = JSON.parse(readFileSync5(manifestPath, "utf8"));
     } catch {
       continue;
     }
@@ -3960,14 +3960,11 @@ function readMainWorktree(cwd) {
   if (parsed === null || parsed.branch === null)
     return null;
   try {
-    realpathSync4(parsed.root);
+    realpathSync3(parsed.root);
   } catch {
     return null;
   }
   return { root: parsed.root, branch: parsed.branch };
-}
-function vocabularyMap(values) {
-  return Object.fromEntries(values.map((value) => [value, true]));
 }
 function violation4(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
@@ -4110,22 +4107,22 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
     let realHarnessDir = null;
     try {
-      realHarnessDir = realpathSync5(harnessDir);
+      realHarnessDir = realpathSync4(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join9(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join9(harnessDir, relSnapshot);
+      const relSnapshot = join8(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join8(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
-        physical = realpathSync5(snapshotPath);
+        physical = realpathSync4(snapshotPath);
       } catch {
         violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep2}`)) {
         violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
@@ -4149,10 +4146,13 @@ function validateStatusV2(docOrPath, opts = {}) {
   }
   return { ok: violations.length === 0, violations };
 }
+function vocabularyMap(values) {
+  return Object.fromEntries(values.map((value) => [value, true]));
+}
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = canonicalizeNearestExisting(resolve11(startDir));
+  const start = canonicalizeNearestExisting(resolve15(startDir));
   if (opts.harnessDir !== undefined)
-    return resolve11(start, opts.harnessDir);
+    return resolve15(start, opts.harnessDir);
   if (opts.localProbe === true)
     return localHarnessProbe(start, opts.workspaceRoot);
   const gitStart = nearestExistingAncestor(start);
@@ -4167,32 +4167,32 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   return resolveFixedHarnessDir(main);
 }
 function nearestExistingAncestor(target) {
-  let dir = resolve11(target);
+  let dir = resolve15(target);
   for (;; ) {
-    if (existsSync8(dir))
+    if (existsSync12(dir))
       return dir;
-    const parent = dirname8(dir);
+    const parent = dirname12(dir);
     if (parent === dir)
       return dir;
     dir = parent;
   }
 }
 function resolveFixedHarnessDir(checkout) {
-  const fixed = join12(checkout, ".mstar");
+  const fixed = join17(checkout, ".mstar");
   return isDirectory2(fixed) ? fixed : null;
 }
 function localHarnessProbe(start, workspaceRoot) {
-  const boundary = canonicalizeNearestExisting(resolve11(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
+  const boundary = canonicalizeNearestExisting(resolve15(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
   let dir = start;
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    const fixed = join12(dir, ".mstar");
+    const fixed = join17(dir, ".mstar");
     if (isDirectory2(fixed))
       return fixed;
     if (dir === boundary)
       return null;
-    const parent = dirname8(dir);
+    const parent = dirname12(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -4211,9 +4211,9 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname8(boundary);
+        boundary = dirname12(boundary);
     }
-    return resolve11(boundary);
+    return resolve15(boundary);
   } catch {}
   return startDir;
 }
@@ -4222,27 +4222,27 @@ function isAtOrBelow3(dir, root) {
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
 function canonicalizeNearestExisting(path) {
-  const abs = resolve11(path);
+  const abs = resolve15(path);
   let dir = abs;
   const tail = [];
   for (;; ) {
-    if (existsSync8(dir)) {
+    if (existsSync12(dir)) {
       try {
-        return join12(realpathSync6(dir), ...tail);
+        return join17(realpathSync7(dir), ...tail);
       } catch {
         return abs;
       }
     }
-    const parent = dirname8(dir);
+    const parent = dirname12(dir);
     if (parent === dir)
       return abs;
-    tail.unshift(basename5(dir));
+    tail.unshift(basename8(dir));
     dir = parent;
   }
 }
 function isDirectory2(dir) {
   try {
-    return statSync3(dir).isDirectory();
+    return statSync4(dir).isDirectory();
   } catch {
     return false;
   }
@@ -4584,7 +4584,7 @@ function executionToken(kind, storeId, epoch, key, revision) {
   return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
 }
 function corrupt(detail) {
-  return new StoreError2("store.corrupt", `${detail}; the execution authority cannot be verified`);
+  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
 }
 function readStoreIdentity(db) {
   const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
@@ -4907,15 +4907,15 @@ function errorCode(error) {
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve17(cwd, harnessDir);
-  const start = resolve17(cwd);
+    return resolve18(cwd, harnessDir);
+  const start = resolve18(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync7(join20(dir, ".git"));
+      const marker = statSync7(join22(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { localProbe: true, workspaceRoot: dir });
       linked = marker.isFile();
@@ -4925,9 +4925,9 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.", { cwd: start, marker: join20(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.", { cwd: start, marker: join22(dir, ".git") });
     }
-    const parent = dirname11(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -4963,10 +4963,10 @@ function assertStoreRuntimeSupported(info = detectStoreRuntime()) {
     warnUncheckableNodeFloor();
   const runtimeHome = info.isBun ? "https://bun.sh" : "https://nodejs.org";
   if (info.hasSqlite === false) {
-    throw new StoreError2("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
+    throw new StoreError("store.runtime-unsupported", `The native "node:sqlite" module is not available in this ${kind} ${info.version} runtime. The issue store requires ${kind}${floor === null ? "" : ` >=${floor}`} with native node:sqlite; upgrade the runtime (${runtimeHome}). No fallback runtime or driver is supported.`);
   }
   if (floor !== null && compareVersions(info.version, floor) < 0) {
-    throw new StoreError2("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
+    throw new StoreError("store.runtime-unsupported", `${kind} ${info.version} is below the issue-store floor. The store requires the native "node:sqlite" module on ${kind}${floor === null ? "" : ` >=${floor}`}; found ${kind} ${info.version}. Upgrade the runtime for this entrypoint (${runtimeHome}). No older-runtime fallback exists${info.isBun ? "" : ", and Node 18 compatibility is not a supported contract"}.`);
   }
 }
 async function loadSqliteDriver() {
@@ -4977,26 +4977,26 @@ async function loadSqliteDriver() {
     return mod;
   } catch (error) {
     assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
-    throw new StoreError2("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
+    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
 function storeDbPath(context) {
   if (!context?.harnessDir)
-    throw new StoreError2("store.corrupt", "StoreContext.harnessDir is required");
-  const root = resolve18(context.harnessDir);
-  return join21(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+    throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
+  const root = resolve19(context.harnessDir);
+  return join23(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   const floored = Math.floor(value);
   return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
 function refuseOpenFailure(error, dbPath, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
-  if (error instanceof StoreError2)
+  if (error instanceof StoreError)
     throw error;
   if (isBusyError(error)) {
-    throw new StoreError2("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
+    throw new StoreError("store.busy", `Another writer held the store past the bounded wait (${busyTimeoutMs(timeout)}ms). Retry when the competing writer is done; no write was accepted.`);
   }
-  throw new StoreError2("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
+  throw new StoreError("store.corrupt", `The store at ${dbPath} is unreadable or not a SQLite database: ${error.message}`);
 }
 function isBusyError(error) {
   const err = error;
@@ -5005,7 +5005,7 @@ function isBusyError(error) {
 function busyAware(db, path, timeout) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError2("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -5039,7 +5039,7 @@ async function connect(dbPath, mode, timeout = DEFAULT_BUSY_TIMEOUT_MS, options 
   return openConnection(dbPath, mode, DatabaseSync, timeout, options);
 }
 function sqliteUriPath(dbPath) {
-  return resolve18(dbPath).split(sep10).map(encodeURIComponent).join("/");
+  return resolve19(dbPath).split(sep10).map(encodeURIComponent).join("/");
 }
 function existingOnlyUri(dbPath) {
   return `file:${sqliteUriPath(dbPath)}?mode=rw`;
@@ -5058,7 +5058,7 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   if (stats?.isFile())
     return;
   const observed = stats === undefined ? `it could not be examined (${examineError instanceof Error ? examineError.message : String(examineError)})` : stats.isSymbolicLink() ? "it is a symbolic link" : "it is not a regular file";
-  throw new StoreError2("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
+  throw new StoreError("store.corrupt", `The store path ${dbPath} is not a readable regular store file: ${observed}. A store is read and written only at its own canonical path inside the resolved control root; nothing was read or written.`);
 }
 function isWalFormatDatabase(header, bytes) {
   if (bytes < DATABASE_HEADER_BYTES)
@@ -5080,7 +5080,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync15(`${dbPath}-wal`))
+  if (existsSync17(`${dbPath}-wal`))
     return;
   if (!walShapedStoreFile(dbPath))
     return;
@@ -5122,7 +5122,7 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
   }
   const fail = (message) => {
     db.close();
-    throw new StoreError2("store.corrupt", `${message} (opening ${dbPath})`);
+    throw new StoreError("store.corrupt", `${message} (opening ${dbPath})`);
   };
   try {
     db.exec(`pragma busy_timeout=${timeout}`);
@@ -5156,29 +5156,29 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
   }
   return busyAware(db, dbPath, timeout);
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function parseStoredRecord(text, what) {
   const parsed = typeof text === "string" ? JSON.parse(text) : undefined;
-  if (!isRecord(parsed))
-    throw new StoreError2("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+  if (!isRecord2(parsed))
+    throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
   return parsed;
 }
 function normalizeLegacyCoordination(legacy) {
   const out = {};
   const prepared = legacy.prepared;
-  if (isRecord(prepared)) {
+  if (isRecord2(prepared)) {
     const qaGate = prepared.qa_gate;
     const findings = prepared.findings_cleanup;
     if (typeof prepared.prepared_by === "string" && prepared.prepared_by !== "" && typeof prepared.prepared_at === "string" && prepared.prepared_at !== "" && (qaGate === "mandatory" || qaGate === "pm-acceptance") && (findings === "zero-residual" || findings === "allow-residual")) {
       out.prepared = { qa_gate: qaGate, findings_cleanup: findings, prepared_by: prepared.prepared_by, prepared_at: prepared.prepared_at };
     }
   }
-  if (isRecord(legacy.progress))
+  if (isRecord2(legacy.progress))
     out.progress = legacy.progress;
   const handoff = legacy.handoff;
-  if (isRecord(handoff) && handoff.state === "completed") {
+  if (isRecord2(handoff) && handoff.state === "completed") {
     const qc = handoff.qc;
     const acceptance = handoff.acceptance ?? handoff.qa;
     const integration = handoff.integration;
@@ -5188,12 +5188,12 @@ function normalizeLegacyCoordination(legacy) {
       worktree_path: typeof handoff.worktree_path === "string" && handoff.worktree_path !== "" ? handoff.worktree_path : null,
       review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
       review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
-      qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
-      acceptance: isRecord(acceptance) ? acceptance : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      qc: isRecord2(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
+      acceptance: isRecord2(acceptance) ? acceptance : { gate: "", decision: "", report: { path: "", sha256: "" } },
       completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
       completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : ""
     };
-    if (isRecord(integration)) {
+    if (isRecord2(integration)) {
       mapped.integration = {
         target_branch: typeof integration.target_branch === "string" ? integration.target_branch : "",
         worktree_path: typeof integration.worktree_path === "string" ? integration.worktree_path : "",
@@ -5230,8 +5230,8 @@ function readLeaseCutover(db) {
   const rows = db.prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover").all();
   for (const row of rows) {
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
-    if (!isRecord(raw)) {
-      throw new StoreError2("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
+    if (!isRecord2(raw)) {
+      throw new StoreError("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
     }
     leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
   }
@@ -5252,12 +5252,12 @@ function normalizeExecutionState(db, context) {
     const legacy = parseStoredRecord(row.coordination_json, `${what}.coordination_json`);
     const coordination = normalizeLegacyCoordination(legacy);
     const lease = leaseCutover.get(`${workflowId}/${planId}`);
-    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const metadata = isRecord2(state.metadata) ? state.metadata : {};
     const scope = lease === undefined ? null : reconcileLeaseScope(metadata, lease);
     const nextState = { ...state };
     if (scope !== null)
       nextState.metadata = scope;
-    if (isRecord(coordination.completion) && (!(typeof nextState.status === "string") || nextState.status === "Todo")) {
+    if (isRecord2(coordination.completion) && (!(typeof nextState.status === "string") || nextState.status === "Todo")) {
       nextState.status = "Done";
     }
     delete nextState.coordination;
@@ -5269,7 +5269,7 @@ function normalizeExecutionState(db, context) {
   for (const row of workflows) {
     const workflowId = String(row.workflow_id ?? "");
     const state = parseStoredRecord(row.state_json, `execution_workflows(${workflowId}).state_json`);
-    const coordination = isRecord(state.coordination) ? state.coordination : undefined;
+    const coordination = isRecord2(state.coordination) ? state.coordination : undefined;
     const next = { ...state };
     delete next.coordination;
     delete next.self_amendments;
@@ -5298,8 +5298,8 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
   for (const row of claims) {
     const workflowId = String(row.workflow_id ?? "");
     const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
-    if (!isRecord(raw)) {
-      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+    if (!isRecord2(raw)) {
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
     }
     const claim = raw;
     if (claim.status === "released")
@@ -5312,7 +5312,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       continue;
     const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
     if (planRow === undefined) {
-      throw new StoreError2("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
     }
     if (attestation === undefined) {
       pendingHolders.add(holder);
@@ -5324,7 +5324,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     const claimedInstant = parsedInstant(claim.claimed_at);
     const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant !== null && cutoverInstant !== null && claimedInstant <= attestedInstant && attestedInstant <= cutoverInstant;
     if (!settled) {
-      throw new StoreError2("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
+      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
     }
     const tombstone = {
       ...claim,
@@ -5346,24 +5346,24 @@ function readAppliedMigrations(db, tolerateMissingTable) {
   if (!present?.n) {
     if (tolerateMissingTable)
       return [];
-    throw new StoreError2("store.corrupt", "The store database has no schema_version table");
+    throw new StoreError("store.corrupt", "The store database has no schema_version table");
   }
   let rows;
   try {
     rows = db.prepare("select version, name, checksum from schema_version order by version").all();
   } catch (error) {
-    throw new StoreError2("store.corrupt", `schema_version is unreadable: ${error.message}`);
+    throw new StoreError("store.corrupt", `schema_version is unreadable: ${error.message}`);
   }
   return rows.map((row) => {
     if (typeof row.version !== "number" || !Number.isInteger(row.version) || typeof row.name !== "string" || typeof row.checksum !== "string") {
-      throw new StoreError2("store.corrupt", "schema_version contains a malformed row");
+      throw new StoreError("store.corrupt", "schema_version contains a malformed row");
     }
     return { version: row.version, name: row.name, checksum: row.checksum };
   });
 }
 function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
   if (applied.length === 0) {
-    throw new StoreError2("store.corrupt", "The store database exists but no migrations are recorded");
+    throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
   }
   let max = 0;
   for (let i = 0;i < applied.length; i++) {
@@ -5378,10 +5378,10 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
       for (const migration of migrations)
         if (migration.version > supportedMax)
           supportedMax = migration.version;
-      throw new StoreError2("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
+      throw new StoreError("store.schema-unsupported", `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, and the first unsupported migration is ${row.version}. Upgrade the harness to read this store; nothing was modified.`, { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version });
     }
     if (row.version !== i + 1) {
-      throw new StoreError2("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
+      throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
     }
     max = row.version;
   }
@@ -5390,7 +5390,7 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
 function readStoreMeta(db) {
   const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
   if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new StoreError2("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
+    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
   }
   return {
     storeId: row.store_id,
@@ -5412,11 +5412,11 @@ function readExecutionMeta(db, schemaVersion) {
   const present = presentExecutionTables(db);
   const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
   if (missing.length > 0) {
-    throw new StoreError2("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
+    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
   }
   const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
   if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreError2("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
+    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
   }
   return {
     protocolVersion: row.protocol_version,
@@ -5431,19 +5431,19 @@ function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
 function isTransientReadOpenFailure(error, dbPath) {
-  if (error instanceof StoreError2)
+  if (error instanceof StoreError)
     return false;
   if (!isRawCantOpen(error))
     return false;
-  return existsSync15(dbPath);
+  return existsSync17(dbPath);
 }
 async function openStore(context, mode, options = {}) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
-    throw new StoreError2("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve18(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+  if (!existsSync17(dbPath)) {
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve19(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -5543,7 +5543,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
   if (err)
     throw err[0];
   return res;
-}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, init_catalog, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL, init_issue, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, LINEAR_ID, CANONICAL_SHA256, GIT_OBJECT_ID, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, MilestoneError, OTHER_RETIRED_DISPOSITION_SQL, MILESTONE_TRANSITIONS, init_milestone_store, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, PROVIDER_ISSUE_ID, SEVERITY_RANK, TERMINAL, init_collaboration_remote_read, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_RELATIONS, ISSUE_PROVENANCE_KINDS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS, PROVENANCE_KINDS, TERMINAL2, init_issue, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS2, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS2, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, SOURCE_SCHEMA_FLOOR, LIVE_SESSION_STATES, LEDGER_COLUMNS, init_collaboration_cutover, RCF3339, SHA256, GIT_OBJECT_ID2, CALENDAR_DATE, LINEAR_ID2, UUID, CAPABILITY_KEYS, URL_TOKEN, HOME_PATH, URL_CREDENTIAL_KEY, EMBEDDED_PATH, CREDENTIAL_SHAPE, AUTHORIZATION_HEADER, CREDENTIAL_ASSIGNMENT, NEGATIVE_OUTCOME_CODES, CATALOG_KINDS, CATALOG_RELATIONS, MSTAR_FIELD_KEYS, OCCURRENCE_KEYS, TRANSITION_KEYS, TRANSITION_EVIDENCE_KEYS, IMPORTED_RECORD_FIELDS, IMPORTED_RECORD_KEYS, RELATION_KEYS, PROVENANCE_KEYS, PROJECT_MOVE_KEYS, ADOPTION_CAPTURE_KEYS, ADOPTION_RETAIN_KEYS, REMOTE_CHANGE_KINDS, REMOTE_INTENT_STATES, INTENT_STATES, RECEIPT_OUTCOME_KINDS, RECONCILE_OUTCOME_KINDS, ISSUE_HISTORY_KEYS, init_collaboration_remote, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, CatalogError, init_catalog, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 # Tracked results live under .agents/ and .mstarc declares the layout.
 .mstar/
 `, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
@@ -5556,7 +5556,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
 !.agents/specs/**
 !.agents/adr/
 !.agents/adr/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS2, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError2, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID3, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -6612,7 +6612,168 @@ create table cutover_publications(
   fenced_at text,
   activated_at text
 );
-`, COLLABORATION_SCHEMA, COLLABORATION_TABLES, COLLABORATION_COLUMNS, COLLABORATION_CUTOVER_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, init_collaboration_store, SOURCE_SCHEMA_FLOOR, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, OTHER_RETIRED_DISPOSITION_SQL, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
+`, COLLABORATION_SCHEMA, ISSUE_REF_PATTERN, COLLABORATION_META_V2_SQL = `
+create table collaboration_meta_remote_cache(
+  id integer primary key check (id = 1),
+  repository_key text not null,
+  mode text not null check (mode in ('local','mirror','remote')),
+  store_id text not null,
+  authority_state text not null check (authority_state in ('staged','active')),
+  authority_epoch integer not null check (authority_epoch > 0),
+  revision integer not null check (revision >= 0),
+  catalog_revision integer not null check (catalog_revision >= 0),
+  created_at text not null,
+  activated_at text
+);
+insert into collaboration_meta_remote_cache(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision, created_at, activated_at)
+  select id, repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision, created_at, activated_at
+  from collaboration_meta;
+drop table collaboration_meta;
+alter table collaboration_meta_remote_cache rename to collaboration_meta;
+create table remote_bindings(
+  generation integer not null check (typeof(generation) = 'integer' and generation > 0),
+  project_key text not null,
+  selector_commit text not null,
+  provider text not null check (provider = 'linear'),
+  workspace_id text not null,
+  team_id text not null,
+  provider_project_id text not null,
+  journal_issue_id text not null,
+  writer_id text,
+  verified_at text not null,
+  verification_json text not null,
+  primary key (generation, project_key),
+  unique (generation, provider, workspace_id, provider_project_id)
+);
+create table remote_observations(
+  generation integer not null,
+  project_key text not null,
+  revision integer not null default 0 check (revision >= 0),
+  as_of text,
+  completeness text not null check (completeness in ('complete','partial','unavailable')),
+  code text,
+  snapshot_json text,
+  received_at text not null,
+  primary key (generation, project_key),
+  foreign key (generation, project_key) references remote_bindings(generation, project_key),
+  check (
+    (completeness = 'unavailable' and snapshot_json is null and as_of is null)
+    or (completeness in ('complete','partial') and snapshot_json is not null and as_of is not null)
+  )
+);
+create table remote_issue_identities(
+  generation integer not null,
+  project_key text not null,
+  provider_issue_id text not null,
+  issue_ref text,
+  primary key (generation, project_key, provider_issue_id),
+  foreign key (generation, project_key) references remote_observations(generation, project_key)
+);
+create unique index remote_issue_identities_ref on remote_issue_identities(generation, issue_ref) where issue_ref is not null;
+create unique index remote_issue_identities_provider on remote_issue_identities(generation, provider_issue_id);
+`, ISSUE_COLUMN_LIST, COLLABORATION_ISSUES_V2_STAGE_SQL = `
+create table occurrences_remote_cache_stage as select * from occurrences;
+create table provenance_remote_cache_stage as select * from provenance;
+create table relations_remote_cache_stage as select * from relations;
+create table issue_transitions_remote_cache_stage as select * from issue_transitions;
+create table issue_project_moves_remote_cache_stage as select * from issue_project_moves;
+create table issue_sync_state_remote_cache_stage as select * from issue_sync_state;
+delete from occurrences;
+delete from provenance;
+delete from relations;
+delete from issue_transitions;
+delete from issue_project_moves;
+delete from issue_sync_state;
+create table issues_remote_cache(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded','obsolete')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique,
+  issue_ref text not null unique,
+  milestone_id text references project_milestones(milestone_id)
+);
+`, COLLABORATION_ISSUES_V2_RESTORE_SQL = `
+drop table issues;
+alter table issues_remote_cache rename to issues;
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+insert into occurrences select * from occurrences_remote_cache_stage;
+insert into provenance select * from provenance_remote_cache_stage;
+insert into relations select * from relations_remote_cache_stage;
+insert into issue_transitions select * from issue_transitions_remote_cache_stage;
+insert into issue_project_moves select * from issue_project_moves_remote_cache_stage;
+insert into issue_sync_state select * from issue_sync_state_remote_cache_stage;
+drop table occurrences_remote_cache_stage;
+drop table provenance_remote_cache_stage;
+drop table relations_remote_cache_stage;
+drop table issue_transitions_remote_cache_stage;
+drop table issue_project_moves_remote_cache_stage;
+drop table issue_sync_state_remote_cache_stage;
+`, COLLABORATION_REMOTE_SCHEMA, COLLABORATION_OUTBOX_V3_SQL = `
+create table remote_outbox(
+  operation_id text not null primary key,
+  generation integer not null check (typeof(generation) = 'integer' and generation > 0),
+  project_key text not null,
+  request_hash text not null,
+  request_json text not null,
+  execution_key_json text,
+  state text not null check (state in ('enqueued','unconfirmed','confirmed','conflict','abandoned')),
+  attempt_id text unique,
+  created_at text not null,
+  updated_at text not null,
+  abandon_reason text,
+  resolves text references remote_outbox(operation_id),
+  resolved_by text references remote_outbox(operation_id),
+  foreign key (generation, project_key) references remote_bindings(generation, project_key)
+);
+create index remote_outbox_pending on remote_outbox(generation, project_key, state, created_at, operation_id);
+create table remote_outbox_receipts(
+  operation_id text not null,
+  receipt_hash text not null,
+  source text not null check (source in ('receipt','reconcile')),
+  outcome text not null check (outcome in ('confirmed','unconfirmed','conflict','not-sent')),
+  evidence_json text not null,
+  recorded_at text not null,
+  primary key (operation_id, receipt_hash),
+  foreign key (operation_id) references remote_outbox(operation_id)
+);
+`, COLLABORATION_OUTBOX_SCHEMA, COLLABORATION_MIGRATIONS, COLLABORATION_REMOTE_TABLES, COLLABORATION_OUTBOX_TABLES, COLLABORATION_TABLES, COLLABORATION_COLUMNS, COLLABORATION_V2_COLUMNS, COLLABORATION_OUTBOX_COLUMNS, COLLABORATION_CURRENT_COLUMNS, COLLABORATION_KEY_LAYOUT_V2, COLLABORATION_KEY_LAYOUT_OUTBOX, COLLABORATION_KEY_LAYOUT, COLLABORATION_V2_TABLES, COLLABORATION_V1_TABLES, COLLABORATION_CUTOVER_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, SELECTOR_COMMIT, init_collaboration_store, RoadmapError, init_roadmap_store, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -6653,6 +6814,9 @@ var init_engine = __esm(() => {
     SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
     DEFAULT_PORT = { "https:": "443", "http:": "80", "ssh:": "22" };
     SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
+    LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
+    GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
     RESERVED_AUTHORITY_BASENAMES = {
       "collaboration.db": true,
       "collaboration.db-wal": true,
@@ -6677,57 +6841,108 @@ var init_engine = __esm(() => {
     GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
     HASH_RE = /^sha256:[0-9a-f]{64}$/;
   });
-  init_catalog = __esm2(() => {
+  init_audit = __esm2(() => {
     init_path();
-    init_git_probe();
+    AUDIT_PRIORITIES = ["P1", "P2", "P3"];
+    AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
+    AUDIT_RISKS = ["LOW", "MED", "HIGH"];
+    AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
+    AUDIT_CATEGORIES = [
+      "bug",
+      "security",
+      "perf",
+      "tests",
+      "tech-debt",
+      "migration",
+      "dx",
+      "docs",
+      "direction"
+    ];
+    WHOLE_MATCH_PATTERNS = [
+      { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
+      { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+      { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+      { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+      { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+      { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
+      { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
+      { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
+    ];
+    VALUE_PATTERNS = [
+      {
+        typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
+        re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
+      }
+    ];
+    NEVER_COMMIT_FILENAMES = [
+      { type: "env-file", re: /^\.env/i },
+      { type: "private-key-file", re: /\.(?:pem|key)$/i },
+      { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
+      { type: "credentials-json", re: /^credentials\.json$/i },
+      { type: "service-account-json", re: /^service-account\.json$/i },
+      { type: "git-credentials", re: /^\.?git-credentials$/i }
+    ];
+    CI_IAC_LEAK_SHAPES = [
+      {
+        kind: "actions-plaintext-env",
+        description: "GitHub Actions env assignment with plaintext literal",
+        re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
+      },
+      {
+        kind: "actions-secret-echo",
+        description: "echo of a GitHub Actions secrets context value",
+        re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
+      },
+      {
+        kind: "dockerfile-credential-env",
+        description: "Dockerfile ENV/ARG with credential-looking name",
+        re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
+      },
+      {
+        kind: "terraform-hardcoded-password",
+        description: "Terraform hardcoded password attribute",
+        re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
+      }
+    ];
+    SAFE_PLACEHOLDER_SHAPES = [
+      /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
+      /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
+      /os\.environ(?:\.get)?\(?\s*["']/g
+    ];
+    SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
+    ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
+    LOCKFILE_NAMES = [
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "bun.lock",
+      "bun.lockb",
+      "Cargo.lock",
+      "poetry.lock",
+      "uv.lock",
+      "Gemfile.lock",
+      "composer.lock"
+    ];
+    AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
+    AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+    DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
+    LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  });
+  init_milestone_store = __esm2(() => {
+    init_collaboration_identity();
     init_collaboration_store();
-    init_store_db();
-    ENTITY_KINDS = {
-      project: true,
-      iteration: true,
-      plan: true,
-      document: true
-    };
-    ROOT_KINDS = {
-      repository: true,
-      harness: true,
-      plans: true,
-      iterations: true,
-      specs: true,
-      knowledge: true,
-      projects: true
-    };
-    DOCUMENT_KINDS = {
-      spec: true,
-      knowledge: true,
-      guide: true,
-      compass: true,
-      plan: true,
-      roadmap: true,
-      review: true,
-      other: true
-    };
-    LIFECYCLES = {
-      active: true,
-      archived: true,
-      superseded: true
-    };
-    RELATIONS = {
-      "belongs-to": true,
-      documents: true,
-      "spec-ref": true,
-      "knowledge-ref": true,
-      "derived-from": true,
-      supersedes: true
-    };
-    CatalogError = class CatalogError extends Error {
+    init_collaboration_remote_read();
+    init_issue();
+    MilestoneError = class MilestoneError extends Error {
       code;
       constructor(code, message) {
         super(`[${code}] ${message}`);
-        this.name = "CatalogError";
+        this.name = "MilestoneError";
         this.code = code;
       }
     };
+    OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved").map((value) => `'${value}'`).join(",");
+    MILESTONE_TRANSITIONS = { planned: ["planned", "active", "dropped"], active: ["active", "planned", "delivered", "dropped"], delivered: ["delivered", "active"], dropped: ["dropped", "active"] };
   });
   init_development = __esm2(() => {
     init_dist();
@@ -10035,101 +10250,85 @@ var init_engine = __esm(() => {
     ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
     ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
   });
-  init_audit = __esm2(() => {
+  init_persist_payload_schemas = __esm2(() => {
+    WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
+      version: { required: true, type: "number", description: "Root artifact version." },
+      schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
+      id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
+      type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
+      status: { required: true, type: "string", description: "Current lifecycle status." },
+      started_at: { required: true, type: "string", description: "Workflow start timestamp." },
+      updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
+      plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." }
+    };
+    STATUS_V2_PAYLOAD_SCHEMA = {
+      version: { required: true, type: "number", description: "Root schema version; must be 2." },
+      updated_at: { required: true, type: "string", description: "Last status-register update date." },
+      workflows: { required: true, type: "array", description: "Active workflow entries." }
+    };
+  });
+  init_status = __esm2(() => {
+    init_core();
     init_path();
-    AUDIT_PRIORITIES = ["P1", "P2", "P3"];
-    AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
-    AUDIT_RISKS = ["LOW", "MED", "HIGH"];
-    AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
-    AUDIT_CATEGORIES = [
-      "bug",
-      "security",
-      "perf",
-      "tests",
-      "tech-debt",
-      "migration",
-      "dx",
-      "docs",
-      "direction"
-    ];
-    WHOLE_MATCH_PATTERNS = [
-      { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
-      { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-      { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
-      { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
-      { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
-      { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-      { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
-      { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
-    ];
-    VALUE_PATTERNS = [
-      {
-        typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
-        re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
-      }
-    ];
-    NEVER_COMMIT_FILENAMES = [
-      { type: "env-file", re: /^\.env/i },
-      { type: "private-key-file", re: /\.(?:pem|key)$/i },
-      { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
-      { type: "credentials-json", re: /^credentials\.json$/i },
-      { type: "service-account-json", re: /^service-account\.json$/i },
-      { type: "git-credentials", re: /^\.?git-credentials$/i }
-    ];
-    CI_IAC_LEAK_SHAPES = [
-      {
-        kind: "actions-plaintext-env",
-        description: "GitHub Actions env assignment with plaintext literal",
-        re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
-      },
-      {
-        kind: "actions-secret-echo",
-        description: "echo of a GitHub Actions secrets context value",
-        re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
-      },
-      {
-        kind: "dockerfile-credential-env",
-        description: "Dockerfile ENV/ARG with credential-looking name",
-        re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
-      },
-      {
-        kind: "terraform-hardcoded-password",
-        description: "Terraform hardcoded password attribute",
-        re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
-      }
-    ];
-    SAFE_PLACEHOLDER_SHAPES = [
-      /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
-      /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
-      /os\.environ(?:\.get)?\(?\s*["']/g
-    ];
-    SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
-    ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
-    LOCKFILE_NAMES = [
-      "package-lock.json",
-      "pnpm-lock.yaml",
-      "yarn.lock",
-      "bun.lock",
-      "bun.lockb",
-      "Cargo.lock",
-      "poetry.lock",
-      "uv.lock",
-      "Gemfile.lock",
-      "composer.lock"
-    ];
-    AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
-    AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
-    DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
-    LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    init_coordination_write();
+    init_dispatch();
+    init_issue();
+    init_mstarc();
+    init_workflow();
+    init_persist_payload_schemas();
+    DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
+    RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
+    validateStatus = validateStatusV2;
+  });
+  init_iteration = __esm2(() => {
+    init_catalog();
+    init_store_db();
+    init_collaboration_store();
+    init_status();
+    init_workflow();
+    COMPASS_STATUSES = ["active", "locked", "completed"];
+    DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+    COMPLETENESS_ROOTS = ["iterations", "plans", "knowledge", "specs", "projects"];
+    GAP_CODE = {
+      iteration: "catalog.discovery.missing-iteration",
+      plan: "catalog.discovery.missing-plan",
+      project: "catalog.discovery.missing-project",
+      document: "catalog.discovery.missing-document"
+    };
+  });
+  init_roadmap_content = __esm2(() => {
+    init_dev15();
+    init_mdast_util_gfm();
+    init_micromark_extension_gfm();
+    init_iteration();
+    ROADMAP_STATUSES = ["active", "paused", "completed"];
+    DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
+  });
+  init_collaboration_remote_read = __esm2(() => {
+    init_collaboration_store();
+    init_collaboration_identity();
+    init_collaboration_remote();
+    init_issue();
+    init_milestone_store();
+    init_roadmap_store();
+    init_store_db();
+    init_roadmap_content();
+    PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
+    TERMINAL = new Set(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
   });
   init_issue = __esm2(() => {
     init_audit();
     init_collaboration_store();
+    init_collaboration_identity();
     init_store_db();
     ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
     ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
     TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
     ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
+    ISSUE_RELATIONS = ["related", "blocks", "duplicate-of", "superseded-by"];
+    ISSUE_PROVENANCE_KINDS = ["plan", "iteration", "pr", "report"];
     ISSUE_PAYLOAD_SCHEMAS = {
       CaptureInput: {
         projectId: { required: true, type: "string", description: "Project identifier" },
@@ -10257,78 +10456,358 @@ var init_engine = __esm(() => {
     DISPOSITIONS = vocabularyMap(ISSUE_DISPOSITIONS);
     ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
     ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
-    RELATIONS2 = {
-      related: true,
-      blocks: true,
-      "duplicate-of": true,
-      "superseded-by": true
-    };
-    PROVENANCE_KINDS = {
-      plan: true,
-      iteration: true,
-      pr: true,
-      report: true
-    };
-    TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
+    RELATIONS = vocabularyMap(ISSUE_RELATIONS);
+    PROVENANCE_KINDS = vocabularyMap(ISSUE_PROVENANCE_KINDS);
+    TERMINAL2 = vocabularyMap(TERMINAL_DISPOSITIONS);
   });
-  init_persist_payload_schemas = __esm2(() => {
-    WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
-      version: { required: true, type: "number", description: "Root artifact version." },
-      schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
-      id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
-      type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
-      status: { required: true, type: "string", description: "Current lifecycle status." },
-      started_at: { required: true, type: "string", description: "Workflow start timestamp." },
-      updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
-      plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." }
-    };
-    STATUS_V2_PAYLOAD_SCHEMA = {
-      version: { required: true, type: "number", description: "Root schema version; must be 2." },
-      updated_at: { required: true, type: "string", description: "Last status-register update date." },
-      workflows: { required: true, type: "array", description: "Active workflow entries." }
-    };
-  });
-  init_status = __esm2(() => {
-    init_core();
-    init_path();
-    init_coordination_write();
-    init_dispatch();
-    init_issue();
-    init_mstarc();
-    init_workflow();
-    init_persist_payload_schemas();
-    DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-    PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
-    RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
-    validateStatus = validateStatusV2;
-  });
-  init_iteration = __esm2(() => {
+  init_catalog_import = __esm2(() => {
     init_catalog();
-    init_store_db();
-    init_collaboration_store();
-    init_status();
-    init_workflow();
-    COMPASS_STATUSES = ["active", "locked", "completed"];
-    DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
-    COMPLETENESS_ROOTS = ["iterations", "plans", "knowledge", "specs", "projects"];
-    GAP_CODE = {
-      iteration: "catalog.discovery.missing-iteration",
-      plan: "catalog.discovery.missing-plan",
-      project: "catalog.discovery.missing-project",
-      document: "catalog.discovery.missing-document"
+    init_iteration();
+    ENTITY_KINDS = {
+      project: true,
+      iteration: true,
+      plan: true,
+      document: true
+    };
+    ROOT_KINDS = {
+      repository: true,
+      harness: true,
+      plans: true,
+      iterations: true,
+      specs: true,
+      knowledge: true,
+      projects: true
+    };
+    DOCUMENT_KINDS = {
+      spec: true,
+      knowledge: true,
+      guide: true,
+      compass: true,
+      plan: true,
+      roadmap: true,
+      review: true,
+      other: true
+    };
+    LIFECYCLES = { active: true, archived: true, superseded: true };
+    RELATIONS2 = {
+      "belongs-to": true,
+      documents: true,
+      "spec-ref": true,
+      "knowledge-ref": true,
+      "derived-from": true,
+      supersedes: true
+    };
+    ORDINARY_FILES = { "readme.md": true, "install.md": true, "index.md": true };
+    CatalogImportError = class CatalogImportError extends Error {
+      code;
+      partial;
+      constructor(code, message, partial = null) {
+        super(`[${code}] ${message}`);
+        this.name = "CatalogImportError";
+        this.code = code;
+        this.partial = partial;
+      }
     };
   });
-  init_roadmap_content = __esm2(() => {
-    init_dev15();
-    init_mdast_util_gfm();
-    init_micromark_extension_gfm();
-    init_iteration();
-    ROADMAP_STATUSES = ["active", "paused", "completed"];
-    DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
+  init_activation_provisioning = __esm2(() => {
+    init_core();
+  });
+  init_store_migrate = __esm2(() => {
+    init_catalog_import();
+    init_catalog();
+    init_collaboration_identity();
+    init_collaboration_store();
+    init_store_db();
+    init_issue();
+    init_status();
+    StoreMigrationError = class StoreMigrationError extends Error {
+      code;
+      constructor(code, message) {
+        super(`[${code}] ${message}`);
+        this.name = "StoreMigrationError";
+        this.code = code;
+      }
+    };
+    MIGRATION_VOCABULARY = {
+      lifecycle: {
+        open: "open",
+        resolved: "resolved",
+        waived: "waived",
+        "wont-fix": "waived",
+        superseded: "superseded",
+        duplicate: "duplicate"
+      },
+      severity: {
+        critical: "critical",
+        high: "high",
+        medium: "medium",
+        low: "low",
+        warning: "low",
+        nit: "nit"
+      },
+      kind: LEGACY_ISSUE_KIND
+    };
+    LEGACY_REQUIRED_FIELDS = [
+      "id",
+      "title",
+      "severity",
+      "source",
+      "scope",
+      "decision",
+      "owner",
+      "target",
+      "tracking"
+    ];
+    HISTORY_ONLY_ABSENT_FIELDS = ["tracking", "target"];
+  });
+  init_store_activation = __esm2(() => {
+    init_catalog();
+    init_collaboration_identity();
+    init_collaboration_store();
+    init_catalog_import();
+    init_core();
+    init_activation_provisioning();
+    init_store_migrate();
+    init_store_db();
+    StoreActivationError = class StoreActivationError extends Error {
+      code;
+      constructor(code, message) {
+        super(`[${code}] ${message}`);
+        this.name = "StoreActivationError";
+        this.code = code;
+      }
+    };
+    EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+    DECLINE_KEYS = ["at", "code", "details", "message"];
+    EFFECT_KEYS = ["acknowledgedAt", "receipt"];
+    CONSUMER_KINDS = { cli: true, "host-plugin": true, hook: true, coordinator: true };
+    DISPOSITIONS2 = {
+      reloaded: true,
+      upgraded: true,
+      "excluded:not-this-control-root": true,
+      "excluded:no-store-access": true,
+      "excluded:superseded-binary": true
+    };
+    SESSION_STATES = { stopped: true, reloaded: true };
+    CUTOVER_HANDLE_KINDS = {
+      process: true,
+      session: true,
+      host: true,
+      consumer: true
+    };
+  });
+  init_collaboration_cutover = __esm2(() => {
+    init_collaboration_identity();
+    init_collaboration_store();
+    init_store_db();
+    init_core();
+    init_store_activation();
+    SOURCE_SCHEMA_FLOOR = MIGRATIONS[MIGRATIONS.length - 2].version;
+    LIVE_SESSION_STATES = { active: true, suspended: true };
+    LEDGER_COLUMNS = ["operation_id", "request_hash", "result_json", "committed_at"];
+  });
+  init_collaboration_remote = __esm2(() => {
+    init_collaboration_store();
+    init_issue();
+    init_collaboration_identity();
+    init_collaboration_cutover();
+    init_store_db();
+    RCF3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+    SHA256 = /^[0-9a-f]{64}$/;
+    GIT_OBJECT_ID2 = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+    CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    LINEAR_ID2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    UUID = LINEAR_ID2;
+    CAPABILITY_KEYS = ["fullRead", "appendOnly", "exactLookup", "fieldFidelity", "privateAudience"];
+    URL_TOKEN = /https?:\/\/[^\s"'`<>()[\]{}]+/gi;
+    HOME_PATH = /\/(?:Users|home|root|Volumes)\//i;
+    URL_CREDENTIAL_KEY = /(?:^|[_-])(?:authorization|token|secret|password|passwd|passphrase|credential|api[_-]?key|apikey|access[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key)$/i;
+    EMBEDDED_PATH = /(?:^|[^\w])\/(?!\/)\S|\b[A-Za-z]:[\\/]|\\\\|~\/|file:\/\//i;
+    CREDENTIAL_SHAPE = /\bBearer\s+[A-Za-z0-9._~+\/=-]{4,}|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{12,})/i;
+    AUTHORIZATION_HEADER = /\bauthorization\b\s*[:=]\s*\S/i;
+    CREDENTIAL_ASSIGNMENT = /\b(?:token|secret|password|passwd|passphrase|credential|api[_\s-]?key|access[_\s-]?token|client[_\s-]?secret|secret[_\s-]?key|private[_\s-]?key)\b\s*[:=]\s*/gi;
+    NEGATIVE_OUTCOME_CODES = {
+      unavailable: "remote.unavailable",
+      "scope-mismatch": "remote.scope-mismatch",
+      denied: "remote.denied",
+      revoked: "remote.revoked",
+      "unsafe-fidelity": "remote.unsafe-fidelity"
+    };
+    CATALOG_KINDS = ["project", "iteration", "plan", "document"];
+    CATALOG_RELATIONS = [
+      "belongs-to",
+      "documents",
+      "spec-ref",
+      "knowledge-ref",
+      "derived-from",
+      "supersedes"
+    ];
+    MSTAR_FIELD_KEYS = [
+      "title",
+      "kind",
+      "severity",
+      "disposition",
+      "impact",
+      "acceptance",
+      "owner",
+      "registeredAt",
+      "closedAt",
+      "closureNote",
+      "createdAt",
+      "updatedAt",
+      "revision",
+      "milestoneId"
+    ];
+    OCCURRENCE_KEYS = [
+      "eventId",
+      "occurrenceKey",
+      "sourceKind",
+      "sourceIdentity",
+      "rootCauseKey",
+      "acceptanceKey",
+      "location",
+      "observedBehavior",
+      "evidence",
+      "discoveredAt",
+      "recordedAt",
+      "imported"
+    ];
+    TRANSITION_KEYS = [
+      "eventId",
+      "fromDisposition",
+      "toDisposition",
+      "actor",
+      "occurredAt",
+      "recordedAt",
+      "reason",
+      "evidence",
+      "issueRevision",
+      "imported"
+    ];
+    TRANSITION_EVIDENCE_KEYS = ["reason", "scope", "references", "canonicalIssueId", "alignmentRef"];
+    IMPORTED_RECORD_FIELDS = [
+      ["legacyId", "id"],
+      ["title", "title"],
+      ["severity", "severity"],
+      ["source", "source"],
+      ["scope", "scope"],
+      ["decision", "decision"],
+      ["owner", "owner"],
+      ["target", "target"],
+      ["tracking", "tracking"],
+      ["detailDoc", "detail_doc"],
+      ["lifecycle", "lifecycle"],
+      ["closedAt", "closed_at"],
+      ["closureNote", "closure_note"],
+      ["closureEvidence", "closure_evidence"],
+      ["supersededBy", "superseded_by"],
+      ["sourcePlan", "source_plan"],
+      ["registeredAt", "registered_at"]
+    ];
+    IMPORTED_RECORD_KEYS = new Set(IMPORTED_RECORD_FIELDS.flatMap(([portable, legacy]) => [portable, legacy]));
+    RELATION_KEYS = ["relation", "target"];
+    PROVENANCE_KEYS = [
+      "eventId",
+      "kind",
+      "target",
+      "sourceHash",
+      "origin",
+      "legacyProject",
+      "legacyBucket",
+      "legacyEntryId",
+      "legacyRecord",
+      "legacyJson",
+      "importedAt"
+    ];
+    PROJECT_MOVE_KEYS = ["eventId", "fromProject", "toProject", "actor", "reason", "occurredAt", "issueRevision"];
+    ADOPTION_CAPTURE_KEYS = [
+      "kind",
+      "severity",
+      "impact",
+      "acceptance",
+      "owner",
+      "sourceIdentity",
+      "rootCauseKey",
+      "acceptanceKey",
+      "occurrenceKey",
+      "sourceKind",
+      "location",
+      "observedBehavior",
+      "evidence",
+      "discoveredAt"
+    ];
+    ADOPTION_RETAIN_KEYS = ["issueRef", "fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"];
+    REMOTE_CHANGE_KINDS = ["issue-create", "issue-adopt", "issue-replace", "project-replace"];
+    REMOTE_INTENT_STATES = [
+      "enqueued",
+      "unconfirmed",
+      "confirmed",
+      "conflict",
+      "abandoned"
+    ];
+    INTENT_STATES = ["enqueued", "unconfirmed", "confirmed", "conflict", "abandoned"];
+    RECEIPT_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict", "not-sent"];
+    RECONCILE_OUTCOME_KINDS = ["confirmed", "unconfirmed", "conflict"];
+    ISSUE_HISTORY_KEYS = ["occurrences", "transitions", "relations", "provenance", "projectMoves"];
+  });
+  init_catalog = __esm2(() => {
+    init_path();
+    init_git_probe();
+    init_collaboration_store();
+    init_collaboration_identity();
+    init_store_db();
+    ENTITY_KINDS2 = {
+      project: true,
+      iteration: true,
+      plan: true,
+      document: true
+    };
+    ROOT_KINDS2 = {
+      repository: true,
+      harness: true,
+      plans: true,
+      iterations: true,
+      specs: true,
+      knowledge: true,
+      projects: true
+    };
+    DOCUMENT_KINDS2 = {
+      spec: true,
+      knowledge: true,
+      guide: true,
+      compass: true,
+      plan: true,
+      roadmap: true,
+      review: true,
+      other: true
+    };
+    LIFECYCLES2 = {
+      active: true,
+      archived: true,
+      superseded: true
+    };
+    RELATIONS3 = {
+      "belongs-to": true,
+      documents: true,
+      "spec-ref": true,
+      "knowledge-ref": true,
+      "derived-from": true,
+      supersedes: true
+    };
+    CatalogError = class CatalogError extends Error {
+      code;
+      constructor(code, message) {
+        super(`[${code}] ${message}`);
+        this.name = "CatalogError";
+        this.code = code;
+      }
+    };
   });
   init_project = __esm2(() => {
     init_roadmap_content();
     init_coordination_write();
+    init_store_db();
+    init_collaboration_identity();
     init_collaboration_store();
     init_status();
     DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
@@ -10466,142 +10945,6 @@ var init_engine = __esm(() => {
       "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
     };
   });
-  init_catalog_import = __esm2(() => {
-    init_catalog();
-    init_iteration();
-    ENTITY_KINDS2 = {
-      project: true,
-      iteration: true,
-      plan: true,
-      document: true
-    };
-    ROOT_KINDS2 = {
-      repository: true,
-      harness: true,
-      plans: true,
-      iterations: true,
-      specs: true,
-      knowledge: true,
-      projects: true
-    };
-    DOCUMENT_KINDS2 = {
-      spec: true,
-      knowledge: true,
-      guide: true,
-      compass: true,
-      plan: true,
-      roadmap: true,
-      review: true,
-      other: true
-    };
-    LIFECYCLES2 = { active: true, archived: true, superseded: true };
-    RELATIONS3 = {
-      "belongs-to": true,
-      documents: true,
-      "spec-ref": true,
-      "knowledge-ref": true,
-      "derived-from": true,
-      supersedes: true
-    };
-    ORDINARY_FILES = { "readme.md": true, "install.md": true, "index.md": true };
-    CatalogImportError = class CatalogImportError extends Error {
-      code;
-      partial;
-      constructor(code, message, partial = null) {
-        super(`[${code}] ${message}`);
-        this.name = "CatalogImportError";
-        this.code = code;
-        this.partial = partial;
-      }
-    };
-  });
-  init_activation_provisioning = __esm2(() => {
-    init_core();
-  });
-  init_store_migrate = __esm2(() => {
-    init_catalog_import();
-    init_catalog();
-    init_collaboration_identity();
-    init_collaboration_store();
-    init_store_db();
-    init_issue();
-    init_status();
-    StoreMigrationError = class StoreMigrationError extends Error {
-      code;
-      constructor(code, message) {
-        super(`[${code}] ${message}`);
-        this.name = "StoreMigrationError";
-        this.code = code;
-      }
-    };
-    MIGRATION_VOCABULARY = {
-      lifecycle: {
-        open: "open",
-        resolved: "resolved",
-        waived: "waived",
-        "wont-fix": "waived",
-        superseded: "superseded",
-        duplicate: "duplicate"
-      },
-      severity: {
-        critical: "critical",
-        high: "high",
-        medium: "medium",
-        low: "low",
-        warning: "low",
-        nit: "nit"
-      },
-      kind: LEGACY_ISSUE_KIND
-    };
-    LEGACY_REQUIRED_FIELDS = [
-      "id",
-      "title",
-      "severity",
-      "source",
-      "scope",
-      "decision",
-      "owner",
-      "target",
-      "tracking"
-    ];
-    HISTORY_ONLY_ABSENT_FIELDS = ["tracking", "target"];
-  });
-  init_store_activation = __esm2(() => {
-    init_catalog();
-    init_collaboration_identity();
-    init_collaboration_store();
-    init_catalog_import();
-    init_core();
-    init_activation_provisioning();
-    init_store_migrate();
-    init_store_db();
-    StoreActivationError = class StoreActivationError extends Error {
-      code;
-      constructor(code, message) {
-        super(`[${code}] ${message}`);
-        this.name = "StoreActivationError";
-        this.code = code;
-      }
-    };
-    EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
-    DECLINE_KEYS = ["at", "code", "details", "message"];
-    EFFECT_KEYS = ["acknowledgedAt", "receipt"];
-    CONSUMER_KINDS = { cli: true, "host-plugin": true, hook: true, coordinator: true };
-    DISPOSITIONS2 = {
-      reloaded: true,
-      upgraded: true,
-      "excluded:not-this-control-root": true,
-      "excluded:no-store-access": true,
-      "excluded:superseded-binary": true
-    };
-    SESSION_STATES = { stopped: true, reloaded: true };
-    CUTOVER_HANDLE_KINDS = {
-      process: true,
-      session: true,
-      host: true,
-      consumer: true
-    };
-  });
   init_execution_store = __esm2(() => {
     init_coordination();
     init_coordination_write();
@@ -10734,7 +11077,7 @@ var init_engine = __esm(() => {
     };
     FROZEN_ROW_FIELDS = ["id", "plan_id", "title", "file"];
     FROZEN_METADATA_FIELDS = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
-    GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+    GIT_OBJECT_ID3 = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
     UNFINISHED_GIT_OPERATIONS = [
       ["MERGE_HEAD", "merge"],
       ["CHERRY_PICK_HEAD", "cherry-pick"],
@@ -10748,7 +11091,7 @@ var init_engine = __esm(() => {
   init_store_db = __esm2(() => {
     init_coordination();
     init_core();
-    StoreError2 = class StoreError2 extends Error {
+    StoreError = class StoreError extends Error {
       code;
       details;
       constructor(code, message, details) {
@@ -10832,6 +11175,31 @@ var init_engine = __esm(() => {
     init_collaboration_identity();
     init_store_db();
     COLLABORATION_SCHEMA = { version: 1, name: "collaboration-core", sql: COLLABORATION_SCHEMA_SQL };
+    ISSUE_REF_PATTERN = /^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    ISSUE_COLUMN_LIST = "id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, " + "closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id";
+    COLLABORATION_REMOTE_SCHEMA = {
+      version: 2,
+      name: "collaboration-remote-cache",
+      sql: `${COLLABORATION_META_V2_SQL}
+${COLLABORATION_ISSUES_V2_STAGE_SQL}
+${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
+    };
+    COLLABORATION_OUTBOX_SCHEMA = {
+      version: 3,
+      name: "collaboration-remote-outbox",
+      sql: COLLABORATION_OUTBOX_V3_SQL
+    };
+    COLLABORATION_MIGRATIONS = [
+      COLLABORATION_SCHEMA,
+      COLLABORATION_REMOTE_SCHEMA,
+      COLLABORATION_OUTBOX_SCHEMA
+    ];
+    COLLABORATION_REMOTE_TABLES = [
+      "remote_bindings",
+      "remote_issue_identities",
+      "remote_observations"
+    ];
+    COLLABORATION_OUTBOX_TABLES = ["remote_outbox", "remote_outbox_receipts"];
     COLLABORATION_TABLES = [
       "catalog_entities",
       "catalog_links",
@@ -10850,6 +11218,11 @@ var init_engine = __esm(() => {
       "project_roadmaps",
       "provenance",
       "relations",
+      "remote_bindings",
+      "remote_issue_identities",
+      "remote_observations",
+      "remote_outbox",
+      "remote_outbox_receipts",
       "schema_version",
       "sync_cursor",
       "sync_runs"
@@ -11028,6 +11401,170 @@ var init_engine = __esm(() => {
       sync_cursor: ["binding_id", "direction", "cursor", "updated_at"],
       sync_runs: ["binding_id", "direction", "run_id", "holder_pid", "holder_host", "started_at", "reason"]
     };
+    COLLABORATION_V2_COLUMNS = {
+      ...COLLABORATION_COLUMNS,
+      issues: [...COLLABORATION_COLUMNS.issues, "issue_ref"],
+      remote_bindings: [
+        "generation",
+        "project_key",
+        "selector_commit",
+        "provider",
+        "workspace_id",
+        "team_id",
+        "provider_project_id",
+        "journal_issue_id",
+        "writer_id",
+        "verified_at",
+        "verification_json"
+      ],
+      remote_issue_identities: ["generation", "project_key", "provider_issue_id", "issue_ref"],
+      remote_observations: [
+        "generation",
+        "project_key",
+        "revision",
+        "as_of",
+        "completeness",
+        "code",
+        "snapshot_json",
+        "received_at"
+      ]
+    };
+    COLLABORATION_OUTBOX_COLUMNS = {
+      remote_outbox: [
+        "operation_id",
+        "generation",
+        "project_key",
+        "request_hash",
+        "request_json",
+        "execution_key_json",
+        "state",
+        "attempt_id",
+        "created_at",
+        "updated_at",
+        "abandon_reason",
+        "resolves",
+        "resolved_by"
+      ],
+      remote_outbox_receipts: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"]
+    };
+    COLLABORATION_CURRENT_COLUMNS = {
+      ...COLLABORATION_V2_COLUMNS,
+      ...COLLABORATION_OUTBOX_COLUMNS
+    };
+    COLLABORATION_KEY_LAYOUT_V2 = [
+      {
+        table: "collaboration_meta",
+        notNull: [],
+        foreignKeys: [],
+        uniqueIndexes: [],
+        checks: ["check (mode in ('local','mirror','remote'))"]
+      },
+      {
+        table: "issues",
+        notNull: ["issue_ref"],
+        foreignKeys: [[["milestone_id", "project_milestones", "milestone_id"]]],
+        uniqueIndexes: [{ columns: ["issue_ref"], where: null }],
+        checks: []
+      },
+      {
+        table: "remote_bindings",
+        notNull: [
+          "generation",
+          "project_key",
+          "selector_commit",
+          "provider",
+          "workspace_id",
+          "team_id",
+          "provider_project_id",
+          "journal_issue_id",
+          "verified_at",
+          "verification_json"
+        ],
+        primaryKey: ["generation", "project_key"],
+        foreignKeys: [],
+        uniqueIndexes: [{ columns: ["generation", "provider", "workspace_id", "provider_project_id"], where: null }],
+        checks: ["check (typeof(generation) = 'integer' and generation > 0)", "check (provider = 'linear')"]
+      },
+      {
+        table: "remote_observations",
+        notNull: ["generation", "project_key", "revision", "completeness", "received_at"],
+        primaryKey: ["generation", "project_key"],
+        foreignKeys: [
+          [
+            ["generation", "remote_bindings", "generation"],
+            ["project_key", "remote_bindings", "project_key"]
+          ]
+        ],
+        uniqueIndexes: [],
+        checks: [
+          "check (revision >= 0)",
+          "check (completeness in ('complete','partial','unavailable'))",
+          "check ( (completeness = 'unavailable' and snapshot_json is null and as_of is null) or " + "(completeness in ('complete','partial') and snapshot_json is not null and as_of is not null) )"
+        ]
+      },
+      {
+        table: "remote_issue_identities",
+        notNull: ["generation", "project_key", "provider_issue_id"],
+        primaryKey: ["generation", "project_key", "provider_issue_id"],
+        foreignKeys: [
+          [
+            ["generation", "remote_observations", "generation"],
+            ["project_key", "remote_observations", "project_key"]
+          ]
+        ],
+        uniqueIndexes: [
+          { columns: ["generation", "issue_ref"], where: "where issue_ref is not null" },
+          { columns: ["generation", "provider_issue_id"], where: null }
+        ],
+        checks: []
+      }
+    ];
+    COLLABORATION_KEY_LAYOUT_OUTBOX = [
+      {
+        table: "remote_outbox",
+        notNull: [
+          "operation_id",
+          "generation",
+          "project_key",
+          "request_hash",
+          "request_json",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        primaryKey: ["operation_id"],
+        foreignKeys: [
+          [
+            ["generation", "remote_bindings", "generation"],
+            ["project_key", "remote_bindings", "project_key"]
+          ],
+          [["resolved_by", "remote_outbox", "operation_id"]],
+          [["resolves", "remote_outbox", "operation_id"]]
+        ],
+        uniqueIndexes: [{ columns: ["attempt_id"], where: null }],
+        checks: [
+          "check (typeof(generation) = 'integer' and generation > 0)",
+          "check (state in ('enqueued','unconfirmed','confirmed','conflict','abandoned'))"
+        ]
+      },
+      {
+        table: "remote_outbox_receipts",
+        notNull: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
+        primaryKey: ["operation_id", "receipt_hash"],
+        foreignKeys: [[["operation_id", "remote_outbox", "operation_id"]]],
+        uniqueIndexes: [],
+        checks: [
+          "check (source in ('receipt','reconcile'))",
+          "check (outcome in ('confirmed','unconfirmed','conflict','not-sent'))"
+        ]
+      }
+    ];
+    COLLABORATION_KEY_LAYOUT = [
+      ...COLLABORATION_KEY_LAYOUT_V2,
+      ...COLLABORATION_KEY_LAYOUT_OUTBOX
+    ];
+    COLLABORATION_V2_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_OUTBOX_TABLES.includes(table));
+    COLLABORATION_V1_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table));
     COLLABORATION_CUTOVER_TABLES = [
       "catalog_entities",
       "catalog_links",
@@ -11059,20 +11596,32 @@ var init_engine = __esm(() => {
       SAVEPOINT: true,
       RELEASE: true
     };
+    SELECTOR_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   });
-  init_collaboration_store();
-  init_roadmap_content();
+  init_roadmap_store = __esm2(() => {
+    init_collaboration_store();
+    init_collaboration_identity();
+    init_collaboration_remote_read();
+    init_store_db();
+    init_roadmap_content();
+    RoadmapError = class RoadmapError extends Error {
+      code;
+      constructor(code, message) {
+        super(`[${code}] ${message}`);
+        this.name = "RoadmapError";
+        this.code = code;
+      }
+    };
+  });
+  init_roadmap_store();
   init_roadmap_content();
   init_core();
   init_mstarc();
   init_collaboration_identity();
   init_collaboration_store();
-  init_collaboration_identity();
-  init_collaboration_store();
-  init_store_db();
-  init_core();
-  init_store_activation();
-  SOURCE_SCHEMA_FLOOR = MIGRATIONS[MIGRATIONS.length - 2].version;
+  init_collaboration_remote();
+  init_collaboration_remote_read();
+  init_collaboration_cutover();
   init_path();
   init_path_check();
   init_plan_path();
@@ -11213,10 +11762,13 @@ var init_engine = __esm(() => {
   init_execution_store();
   init_catalog();
   init_collaboration_store();
+  init_collaboration_remote();
+  init_collaboration_identity();
   init_coordination_write();
   init_execution_store();
   init_store_db();
   init_collaboration_store();
+  init_collaboration_identity();
   init_store_activation();
   init_coordination();
   init_coordination_write();
@@ -11241,15 +11793,17 @@ var init_engine = __esm(() => {
   init_issue();
   init_path();
   init_collaboration_store();
+  init_collaboration_identity();
+  init_collaboration_remote();
   init_dispatch();
   init_project();
   init_coordination_write();
   init_execution_store();
   init_issue();
+  init_milestone_store();
   init_collaboration_store();
-  init_issue();
-  OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved").map((value) => `'${value}'`).join(",");
-  init_collaboration_store();
+  init_collaboration_remote_read();
+  init_collaboration_identity();
   init_store_db();
   init_collaboration_store();
   init_catalog();
@@ -11258,6 +11812,7 @@ var init_engine = __esm(() => {
   init_execution_store();
   init_status();
   init_workflow();
+  init_roadmap_store();
   init_store_db();
   init_execution_store();
   init_workflow();
@@ -11295,6 +11850,8 @@ var init_engine = __esm(() => {
   init_catalog_registration();
   init_catalog();
   init_collaboration_store();
+  init_collaboration_identity();
+  init_collaboration_remote();
   init_catalog_registration();
   init_coordination_write();
   init_coordination();
@@ -11323,6 +11880,7 @@ var init_engine = __esm(() => {
   MARKER_KEY_ORDER = [...MARKER_KEYS].sort();
   DROPPED_KEYS = ["bytes", "lines", "records", "historical", "unrecognized"];
   DROPPED_KEY_ORDER = [...DROPPED_KEYS].sort();
+  init_milestone_store();
   init_coordination_write();
   init_core();
   init_execution_store();

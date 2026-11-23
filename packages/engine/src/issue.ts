@@ -1078,8 +1078,10 @@ export function captureIssueOn(
  * note: The recorded business result of a confirmed remote issue write. The provider effect IS the
  * business outcome: the issue is the confirmed record, the revision is the frozen subject's own,
  * and a remote write owns no local collaboration revision (exactly as a remote composite does not).
+ * With `occurrenceKey`, the receipt names the eventId of THAT occurrence in the CONFIRMED event —
+ * the recorded occurrence, not a guessed one.
  */
-function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
+function confirmedIssueReceipt(intent: RemoteIntent, occurrenceKey?: string): IssueReceipt {
   const confirmed = intent.confirmed;
   if (confirmed === null) {
     throw new StoreError(
@@ -1088,11 +1090,18 @@ function confirmedIssueReceipt(intent: RemoteIntent): IssueReceipt {
     );
   }
   const change = confirmed.event.change;
+  const occurrence =
+    occurrenceKey === undefined || change.kind === "project-replace"
+      ? undefined
+      : ((change.mstar.occurrences as ReadonlyArray<Record<string, unknown>>) ?? []).find(
+          (row) => row.occurrenceKey === occurrenceKey,
+        );
   return {
     issueId: confirmed.identity.issueId,
     revision: change.kind === "project-replace" ? 0 : Number((change.mstar.fields as Record<string, unknown>).revision ?? 0),
     storeRevision: 0,
     created: change.kind === "issue-create",
+    ...(occurrence !== undefined && typeof occurrence.eventId === "string" ? { occurrenceId: occurrence.eventId } : {}),
   };
 }
 
@@ -1110,7 +1119,7 @@ async function queueRemoteIssueWrite(context: StoreContext, write: RemoteIssueWr
   // note: A write the observed authority already carries is the domain's own no-change outcome:
   // nothing was frozen, and the established receipt stands.
   if ("noChange" in outcome) return outcome.noChange as IssueReceipt;
-  if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome);
+  if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome, write.occurrenceKey);
   throw pendingRemoteEffect(outcome);
 }
 
@@ -1183,6 +1192,44 @@ function assertObservedRelation(observed: RemoteObservedSubject, issueId: string
   if (observedIssue(observed, other) === undefined) {
     throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
   }
+}
+
+/**
+ * note: The canonical gate of a duplicate/superseded closure against the OBSERVED project: the
+ * target must be observed there, carry a portable reference the frozen relation can name, and
+ * must not be the closing issue itself - whether either is named by provider id or by portable
+ * reference. Returns that reference; `null` for a disposition with no canonical target. Shared by
+ * the ordinary remote closure and the plan-scoped residual-close composite.
+ */
+export function resolveObservedCanonicalTarget(
+  observed: RemoteObservedSubject,
+  issueId: string,
+  disposition: TerminalDisposition,
+  evidence: ClosureEvidence,
+): string | null {
+  if (disposition !== "duplicate" && disposition !== "superseded") return null;
+  const canonical = evidence.canonicalIssueId!;
+  // note: The closing subject is resolved once, so both of its aliases name the same issue whether
+  // the caller addressed it by its provider id or by its portable reference.
+  const self = observedIssue(observed, issueId);
+  if (
+    self !== undefined &&
+    (canonical === self.identity.issueId || (self.mstar !== null && canonical === self.mstar.issueRef))
+  ) {
+    throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
+  }
+  const target = observedIssue(observed, canonical);
+  if (target === undefined) {
+    throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
+  }
+  if (target.mstar === null) {
+    throw new IssueError(
+      "issue.invalid-disposition",
+      `Canonical issue ${canonical} is observed in project ${observed.projectId} without a portable reference, so a ` +
+        `duplicate/superseded relation cannot name it. Adopt that issue first, then retry with its mstar:issue reference.`,
+    );
+  }
+  return target.mstar.issueRef;
 }
 
 /** note: The capture's own provenance row: the reviewed business record, never a raw payload. */
@@ -1362,15 +1409,197 @@ export async function captureIssue(
   requireCaptureSeat(mutation.actor);
   assertCaptureRequest(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
+    return captureIssueRemote(context, input, mutation);
+  }
+  return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
+}
+
+/**
+ * note: The remote branch of one capture: dedupe against the observed authority FIRST,
+ * exactly as the local body answers its own tables. The same occurrence key returns the
+ * established receipt, the same identity appends one occurrence through issue-replace,
+ * and only a genuinely new identity freezes a create — so a recurring finding never
+ * duplicates the provider record. A frozen intent under this operation id still answers
+ * first (the replay identity is the writer's own), like the local operation ledger.
+ */
+async function captureIssueRemote(
+  context: StoreContext,
+  input: CaptureInput,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  const cols = occurrenceColumns(input);
+  // note: Dynamic like every collaboration-remote import in this module: that boundary
+  // statically imports this module's vocabularies, so a static import here would close
+  // the cycle before they initialize.
+  const { readRemoteIntent, readRemoteObservedIssues } = await import("./collaboration-remote.js");
+  const origin = { verb: "captureIssue", request: { input, actor: mutation.actor } } as const;
+  const identityOf = (row: Record<string, unknown>): boolean =>
+    row.sourceIdentity === cols.sourceIdentity && row.rootCauseKey === cols.rootCauseKey && row.acceptanceKey === cols.acceptanceKey;
+  const appendToIssue = (issueRef: string): Promise<IssueReceipt> => {
+    const at = nowRfc3339();
     return queueRemoteIssueWrite(context, {
       projectId: input.projectId,
       operationId: mutation.operationId,
-      kind: "issue-create",
-      next: () => genesisIssueSubject(input, nowRfc3339()),
-      origin: { verb: "captureIssue", request: { input, actor: mutation.actor } },
+      kind: "issue-replace",
+      issueId: issueRef,
+      occurrenceKey: cols.occurrenceKey,
+      next: (current, observed) => {
+        const subject = current!;
+        // note: The same identity check the replacement path always runs: the authority
+        // is re-read at freeze time, so a moved occurrence never merges silently.
+        const authority = (observedIssue(observed, issueRef)?.mstar?.occurrences ?? []) as readonly Record<string, unknown>[];
+        if (
+          authority.length > 0 &&
+          (authority[0]!.sourceIdentity !== cols.sourceIdentity ||
+            authority[0]!.rootCauseKey !== cols.rootCauseKey ||
+            authority[0]!.acceptanceKey !== cols.acceptanceKey)
+        ) {
+          throw new IssueError(
+            "issue.ambiguous-identity",
+            "The occurrence's source/root-cause/acceptance identity does not match this issue; refusing a guessed merge",
+          );
+        }
+        return {
+          ...subject,
+          fields: patchedFields(subject, {}, at),
+          occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
+        };
+      },
+      // invariant: The freeze-time subject answers the established occurrence, exactly as the
+      // local body answers its own tables: an occurrence that arrived between the dedupe read and
+      // this freeze is answered, never appended a second time. The scan is PROJECT-WIDE: a key
+      // another subject carries is that subject's established occurrence (or a conflict), never
+      // a second append behind a target-only scan.
+      unchanged: (_current, observed) => {
+        for (const issue of observed.issues) {
+          const mstar = issue.mstar;
+          if (mstar === null) continue;
+          const sameKey = mstar.occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
+          if (sameKey === undefined) continue;
+          // note: The genesis occurrence defines the issue's identity, exactly as the local
+          // identity_key column does: a key that belongs to another identity is never merged.
+          const genesis = mstar.occurrences[0];
+          if (
+            genesis === undefined ||
+            genesis.sourceIdentity !== cols.sourceIdentity ||
+            genesis.rootCauseKey !== cols.rootCauseKey ||
+            genesis.acceptanceKey !== cols.acceptanceKey
+          ) {
+            throw new IssueError(
+              "issue.ambiguous-identity",
+              "occurrence_key already belongs to a different identity; refusing a guessed merge",
+            );
+          }
+          if (!frozenOccurrenceMatches(sameKey, cols, input.evidence)) {
+            throw new IssueError(
+              "issue.occurrence-conflict",
+              "occurrence_key was reused with a different observation; the original occurrence is retained.",
+            );
+          }
+          return {
+            issueId: issue.identity.issueId,
+            ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
+            revision: Number((mstar.fields as Record<string, unknown>).revision ?? 0),
+            storeRevision: 0,
+            created: false,
+          } satisfies IssueReceipt;
+        }
+        return null;
+      },
+      origin,
     });
+  };
+  const createIssue = (): Promise<IssueReceipt> =>
+    queueRemoteIssueWrite(context, {
+      projectId: input.projectId,
+      operationId: mutation.operationId,
+      kind: "issue-create",
+      occurrenceKey: cols.occurrenceKey,
+      next: (_current, observed) => {
+        // invariant: The freeze-time snapshot decides the create: an identity the authority
+        // already carries is never created twice, whatever the older dedupe read sampled.
+        const movedRef = observed.issues.find(
+          (issue) => issue.mstar !== null && issue.mstar.occurrences.some(identityOf),
+        )?.mstar?.issueRef;
+        if (movedRef !== undefined) {
+          throw new StoreError(
+            "remote.scope-mismatch",
+            `The observed authority already carries this identity on ${movedRef}; the observation moved under ` +
+              `the capture's read. Refresh it with \`remote observe\` and retry \u2014 the capture then answers append or the ` +
+              `established receipt. Nothing was enqueued.`,
+            { issueRef: movedRef },
+          );
+        }
+        // invariant: The occurrence key is project-wide, not identity-local: a create whose key
+        // another subject already carries would mint a second occurrence for one key.
+        const keyRef = observed.issues.find(
+          (issue) => issue.mstar !== null && issue.mstar.occurrences.some((row) => row.occurrenceKey === cols.occurrenceKey),
+        )?.mstar?.issueRef;
+        if (keyRef !== undefined) {
+          throw new StoreError(
+            "remote.scope-mismatch",
+            `The observed authority already carries this occurrence key on ${keyRef}; the observation moved under ` +
+              `the capture's read. Refresh it with \`remote observe\` and retry \u2014 the capture then answers the ` +
+              `established receipt or refuses the conflict. Nothing was enqueued.`,
+            { issueRef: keyRef, occurrenceKey: cols.occurrenceKey },
+          );
+        }
+        return genesisIssueSubject(input, nowRfc3339());
+      },
+      origin,
+    });
+  try {
+    const frozen = await readRemoteIntent(context, mutation.operationId);
+    // invariant: The writer's own replay identity answers FIRST, exactly as the local body checks
+    // its operation ledger before its tables: an existing entry under this operation id is
+    // answered (or refused) through the replay gate, never bypassed by an observed no-op. A
+    // metadata-only disclosure still names the row, so it refuses instead of guessing from state.
+    if (frozen.disclosure !== "full" || (frozen.event === null && frozen.settled === null)) {
+      throw new StoreError(
+        "remote.unavailable",
+        `Operation ${mutation.operationId} cannot be replayed: the project's current read access is denied or expired, so its frozen ` +
+          `request stays withheld. Reverify the scope with \`remote observe\` and retry; nothing was enqueued.`,
+        { operationId: mutation.operationId, state: frozen.state },
+      );
+    }
+    // note: A settled no-change claim records the replay identity a frozen event would carry, so the
+    // capture routes on it the same way; its own replayed answer is the receipt.
+    if (frozen.settled !== null) {
+      return frozen.settled.kind === "issue-create" ? createIssue() : appendToIssue(frozen.settled.issueRef);
+    }
+    const change = frozen.event!.change;
+    // note: A capture never freezes a project-replace; re-asking through the create
+    // path lets the replay check answer that collision with its recorded refusal.
+    return change.kind === "issue-create" || change.kind === "project-replace"
+      ? createIssue()
+      : appendToIssue(change.issueRef);
+  } catch (error) {
+    if (!(error instanceof StoreError && error.code === "remote.intent-not-found")) throw error;
   }
-  return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
+  const issues = await readRemoteObservedIssues(context, input.projectId);
+  // note: The project-wide OCCURRENCE KEY routes before the identity: a key that already exists
+  // on ANY subject is that subject's occurrence, so the append's freeze-time unchanged answer
+  // (inside the replay boundary) decides established/conflict — never an early no-op answer that
+  // a durable intent could bypass.
+  for (const issue of issues) {
+    const mstar = issue.mstar;
+    if (mstar === null) continue;
+    if (mstar.occurrences.some((row) => row.occurrenceKey === cols.occurrenceKey)) {
+      return appendToIssue(mstar.issueRef);
+    }
+  }
+  for (const issue of issues) {
+    const mstar = issue.mstar;
+    if (mstar === null) continue;
+    const sameIdentity = mstar.occurrences.some(
+      (row) =>
+        row.sourceIdentity === cols.sourceIdentity &&
+        row.rootCauseKey === cols.rootCauseKey &&
+        row.acceptanceKey === cols.acceptanceKey,
+    );
+    if (sameIdentity) return appendToIssue(mstar.issueRef);
+  }
+  return createIssue();
 }
 
 export async function appendOccurrence(
@@ -1387,6 +1616,7 @@ export async function appendOccurrence(
       operationId: mutation.operationId,
       kind: "issue-replace",
       issueId,
+      occurrenceKey: cols.occurrenceKey,
       next: (current, observed) => {
         const subject = current!;
         const fields = subject.fields as Record<string, unknown>;
@@ -2096,17 +2326,85 @@ function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
 }
 
 function assertMultiPlanAcceptance(db: StoreDb, issueId: string, evidence: ClosureEvidence): void {
-  const plans = linkedPlanTargets(db, issueId);
+  assertObservedMultiPlanAcceptance(linkedPlanTargets(db, issueId), evidence);
+}
+
+/**
+ * note: The multi-plan acceptance gate over a subject's OWN plan links, so a remote
+ * closure answers it against the observed project exactly as the local body answers
+ * the provenance table. A finding linked to two or more plans stays open until the
+ * references cover every link (or the closure declares the whole scope).
+ */
+export function assertObservedMultiPlanAcceptance(plans: readonly string[], evidence: ClosureEvidence): void {
   if (plans.length < 2) return;
   const refs: Record<string, true> = {};
   for (const ref of evidence.references ?? []) refs[ref] = true;
   const coversAll = evidence.scope === "all" || plans.every((plan) => refs[plan]);
   if (!coversAll) {
-    throw new IssueError(
+    throw refusalWithDetails(
       "issue.invalid-disposition",
       "A multi-plan obligation stays open until its whole acceptance is verified; one linked plan is not enough.",
+      {
+        linked_plans: [...plans],
+        recovery:
+          `Supply closure-evidence references covering every linked plan (${plans.join(", ")}), or declare the whole ` +
+          `acceptance with "scope": "all" in the original verb's evidence file, then reissue; nothing was enqueued.`,
+      },
     );
   }
+}
+
+/**
+ * note: The deliberate-reopen route one terminal-state refusal names. It is shared so every
+ * refusal that must point at reopening states the same registered inputs, and it never presents
+ * reopening as the default next step.
+ */
+export function terminalReopenRoute(showId: string): string {
+  return (
+    `Inspect the issue with \`mstar issue show --id ${showId}\`. Reopening a terminal issue is a deliberate ` +
+    `change, never a default step: read the registered inputs with \`mstar issue reopen --help\` or ` +
+    `\`mstar schema IssueReopen\`; the reason is that JSON payload's field, supplied with --payload or --file ` +
+    `alongside --actor project-manager and the issue's current revision as --expect.`
+  );
+}
+
+/**
+ * note: The terminal-state transition refusal with its usable next steps, shared by the local
+ * closure body and both remote paths. The inspect command is valid for the ADDRESSED alias: a
+ * provider UUID needs `--project` in remote mode, a stable reference does not. Reopening a
+ * terminal issue is never the default suggestion — the recovery states the deliberate inputs a
+ * reopen requires instead of pointing at reopen as the next step.
+ */
+export function terminalTransitionRefusal(
+  observedDisposition: string,
+  disposition: TerminalDisposition,
+  address: { issueId: string; projectId?: string } = { issueId: "<id>" },
+): IssueError {
+  const showId =
+    ISSUE_REF_PATTERN.test(address.issueId) || address.projectId === undefined
+      ? address.issueId
+      : `${address.issueId} --project ${address.projectId}`;
+  return refusalWithDetails(
+    "issue.invalid-disposition",
+    `Only open\u2192terminal is accepted; ${observedDisposition} cannot transition to ${disposition}`,
+    {
+      observed_disposition: observedDisposition,
+      requested_disposition: disposition,
+      recovery: terminalReopenRoute(showId),
+    },
+  );
+}
+
+/**
+ * note: The observed subject's plan links, as the local `provenance` table records them
+ * (`kind='plan'`, origin `scoped`, deduplicated and ordered like `linkedPlanTargets`).
+ */
+export function observedPlanTargets(subject: Record<string, unknown>): string[] {
+  const provenance = (subject.provenance ?? []) as readonly Record<string, unknown>[];
+  const targets = provenance
+    .filter((row) => row.kind === "plan" && row.origin === "scoped")
+    .map((row) => String(row.target));
+  return [...new Set(targets)].sort();
 }
 
 export function triageIssueOn(
@@ -2257,10 +2555,7 @@ export function closeIssueOn(
   requireExpectedRevision(mutation, issue.revision);
 
   if (issue.disposition !== "open") {
-    throw new IssueError(
-      "issue.invalid-disposition",
-      `Only open\u2192terminal is accepted; ${issue.disposition} cannot transition to ${disposition}`,
-    );
+    throw terminalTransitionRefusal(issue.disposition, disposition);
   }
 
   if (disposition === "duplicate" || disposition === "superseded") {
@@ -2377,21 +2672,19 @@ export async function closeIssue(
         const fields = subject.fields as Record<string, unknown>;
         requireExpectedRevision(mutation, Number(fields.revision));
         if (fields.disposition !== "open") {
-          throw new IssueError(
-            "issue.invalid-disposition",
-            `Only open\u2192terminal is accepted; ${String(fields.disposition)} cannot transition to ${disposition}`,
-          );
+          throw terminalTransitionRefusal(String(fields.disposition), disposition, { issueId, projectId: observed.projectId });
         }
-        if (disposition === "duplicate" || disposition === "superseded") {
-          const canonical = evidence.canonicalIssueId!;
-          const native = observedIssue(observed, issueId);
-          const self = canonical === issueId || canonical === native?.mstar?.issueRef;
-          if (self) throw new IssueError("issue.invalid-disposition", "canonical issue cannot be the closing issue itself");
-          if (observedIssue(observed, canonical) === undefined) {
-            throw new IssueError("issue.not-found", `Canonical issue ${canonical} is not observed in project ${observed.projectId}`);
-          }
+        const canonicalRef = resolveObservedCanonicalTarget(observed, issueId, disposition, evidence);
+        if (disposition === "resolved") {
+          assertObservedMultiPlanAcceptance(observedPlanTargets(subject), evidence);
         }
-        return closedRemoteSubject(subject, disposition, evidence, mutation.actor, at);
+        return closedRemoteSubject(
+          subject,
+          disposition,
+          canonicalRef === null ? evidence : { ...evidence, canonicalIssueId: canonicalRef },
+          mutation.actor,
+          at,
+        );
       },
       origin: {
         verb: "closeIssue",
@@ -2700,6 +2993,26 @@ export async function assignIssueMilestone(
           }
         }
         return { ...subject, fields: patchedFields(subject, { milestoneId: input.milestoneId }, at) };
+      },
+      // note: The observed base is the store revision in remote mode too, exactly as the local
+      // `withWrite` branch compares it: a stale `--expect-store` refuses before anything freezes.
+      guard: ({ observationRevision }) => {
+        if (observationRevision === mutation.expectedStoreRevision) return;
+        const stale = new IssueError(
+          "milestone.revision-conflict",
+          `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the observed store revision ` +
+            `${observationRevision}; nothing was enqueued.`,
+        );
+        // note: A remote write's base IS the observation revision, so the recovery names the command
+        // that reads it instead of the local store's own listing.
+        stale.details = {
+          observationRevision,
+          recovery:
+            `Read this project's current observation revision with \`mstar store collaboration remote status ` +
+            `--harness <abs> --project ${projectId}\`, pass that revision in --expect-store, and rerun the same write ` +
+            `under a fresh --operation; nothing was enqueued by this attempt.`,
+        };
+        throw stale;
       },
       origin: {
         verb: "assignIssueMilestone",

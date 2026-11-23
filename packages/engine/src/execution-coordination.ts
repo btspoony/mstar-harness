@@ -109,13 +109,17 @@ import {
   assertClosureAuthority,
   assertIssueLinkedToPlanOn,
   assertIssueStoreActive,
+  assertObservedMultiPlanAcceptance,
   assertTerminalDisposition,
   captureIssueOn,
   closeIssueOn,
   closedRemoteSubject,
   issueWriteSeat,
   linkIssueScopedOn,
+  observedPlanTargets,
   residualGenesisSubject,
+  resolveObservedCanonicalTarget,
+  terminalTransitionRefusal,
   IssueError,
   type CaptureInput,
   type ComposedTransactionRevision,
@@ -1247,6 +1251,8 @@ type ResidualComposite = {
   apply(handle: CollaborationStoreHandle): string;
   /** note: The remote half: freeze (or replay) the provider intents from the same admitted payload. */
   remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[]>;
+  /** note: The remote ids the frame's decline decision re-reads at the freeze/decline boundary. */
+  remoteIds?(intent: CompositeIntent): readonly string[];
 };
 
 /**
@@ -1383,6 +1389,7 @@ async function runResidualComposite(
   return runCollaborationComposite<ExecutionReceipt<ExecutionPlanView>>(context, prepared.intent, {
     apply: composite.apply,
     ...(composite.remote === undefined ? {} : { remote: composite.remote }),
+    ...(composite.remoteIds === undefined ? {} : { remoteIds: composite.remoteIds }),
     finalize: (tx, receipt) =>
       finalizeResidualComposite(tx, resolved, prepared.intent, prepared.reservedRevision, requestHash, composite.kind, receipt),
   });
@@ -1560,6 +1567,7 @@ export async function residualAddExecutionPlan(
               operationId,
               kind: "issue-create",
               executionKey: { ...intent.key, operationId },
+              reservation: intent.key,
               next: () => residualGenesisSubject(input, planId, at),
               origin: { verb: "residual-add", request: { planId, input } },
             }),
@@ -1567,12 +1575,18 @@ export async function residualAddExecutionPlan(
           intents.push(frozen);
         }
       } catch (error) {
-        throw remoteCompositePreparationPartial(intent, intents, error);
+        // invariant: Only a failure BEHIND a durable component is preparation-partial: at entry
+        // zero nothing is frozen, so the raw refusal reaches the frame, which declines a
+        // deterministic one (a corrected retry proceeds under a new id) and retains the
+        // reservation with same-id recovery otherwise.
+        if (intents.length > 0) throw remoteCompositePreparationPartial(intent, intents, error);
+        throw error;
       }
       // note: Each entry is its own immutable intent; the composite is confirmed only when every
       // one of them is, and the frame reports every durable one it has to wait for.
       return intents;
     },
+    remoteIds: (intent) => derived.map((_, index) => remoteCompositeEntryOperationId(intent.key, index)),
   });
 }
 
@@ -1651,7 +1665,8 @@ export async function residualCloseExecutionPlan(
           kind: "issue-replace",
           issueId: operation.issueId,
           executionKey: { ...intent.key, operationId: remoteCompositeOperationId(intent.key) },
-          next: (current) => {
+          reservation: intent.key,
+          next: (current, observed) => {
             const subject = current as Record<string, unknown>;
             const fields = subject.fields as Record<string, unknown>;
             const linked = (subject.provenance as Array<Record<string, unknown>>).some(
@@ -1671,7 +1686,35 @@ export async function residualCloseExecutionPlan(
                   `${operation.expectedIssueRevision}; nothing was enqueued.`,
               );
             }
-            return closedRemoteSubject(subject, operation.disposition, operation.evidence, actor, at);
+            // note: The same open-state and multi-plan gates the local closure body runs:
+            // a terminal issue never closes again (so no transition ever records a
+            // `fromDisposition: "open"` that never happened), and a multi-plan obligation
+            // answers its whole acceptance against the observed subject's own links.
+            if (fields.disposition !== "open") {
+              throw terminalTransitionRefusal(String(fields.disposition), operation.disposition, {
+                issueId: operation.issueId,
+                projectId: observed.projectId,
+              });
+            }
+            // note: The same canonical gate the ordinary closure body runs: a duplicate/superseded
+            // target must be observed here, must not be the closing issue itself, and is stored by
+            // its portable reference.
+            const canonicalRef = resolveObservedCanonicalTarget(
+              observed,
+              operation.issueId,
+              operation.disposition,
+              operation.evidence,
+            );
+            if (operation.disposition === "resolved") {
+              assertObservedMultiPlanAcceptance(observedPlanTargets(subject), operation.evidence);
+            }
+            return closedRemoteSubject(
+              subject,
+              operation.disposition,
+              canonicalRef === null ? operation.evidence : { ...operation.evidence, canonicalIssueId: canonicalRef },
+              actor,
+              at,
+            );
           },
           origin: {
             verb: "residual-close",
@@ -1687,6 +1730,7 @@ export async function residualCloseExecutionPlan(
         }),
       );
     },
+    remoteIds: (intent) => [remoteCompositeOperationId(intent.key)],
   });
 }
 
