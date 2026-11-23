@@ -17,7 +17,7 @@
  * `mutateExecutionPlan`.
  */
 import { dirname, isAbsolute } from "node:path";
-import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
+import { assertCatalogExecutionCommittedOn, readPendingRegistration } from "./catalog-registration.js";
 import {
   CoordinationError,
   assertExactKeys,
@@ -830,6 +830,10 @@ export async function prepareExecutionPlan(
   // selection, never a cross-file atomic claim. A missing/staged catalog keeps
   // the row's prior pin untouched below.
   const catalogFacts = await readCatalogFacts(controlHarnessRoot(context), resolved.read.planId);
+  // note: The journal lives on whichever file owns `catalog_operations`; after the
+  // reviewed cutover that is the collaboration lane, so it is resolved before
+  // the execution transaction and handed to the gate as a fact.
+  const pending = await readPendingRegistration(context, resolved.read.workflowId);
   return withExecutionPlanOperation<ExecutionPlanView>(
     context,
     resolved,
@@ -847,8 +851,8 @@ export async function prepareExecutionPlan(
         validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
       }
     },
-    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts),
-    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts),
+    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts, pending),
+    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts, pending),
   );
 }
 
@@ -869,6 +873,7 @@ function alreadyPrepared(
   tx: ExecutionTransaction,
   read: ResolvedPlanRead,
   catalogFacts: CatalogFacts,
+  pending: { operationId: string; phase: "prepared" | "execution-written" } | null,
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
@@ -951,6 +956,7 @@ function writePreparedConfig(
   tx: ExecutionTransaction,
   at: string,
   catalogFacts: CatalogFacts,
+  pending: { operationId: string; phase: "prepared" | "execution-written" } | null,
 ): ExecutionRead<ExecutionPlanView> {
   const { planId, workflowId } = read;
   const plan = witness.view.plan as PlanRow;
@@ -960,7 +966,7 @@ function writePreparedConfig(
     : canonicalTarget(inputs.config.worktreePath);
   const nextBranch = inputs.config.workingBranch ??
     (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
-  assertCatalogExecutionCommittedOn(tx.db, workflowId);
+  assertCatalogExecutionCommittedOn(tx.db, workflowId, pending);
   const sealed = readExecutionSealedInput(tx, workflowId, planId);
   // note: The catalog side is the collaboration lane's; the binding is the execution
   // lane's own row. Neither is read through the other's connection.
