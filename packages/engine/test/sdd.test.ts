@@ -63,12 +63,13 @@ const ambientEnvValues = new Map<string, string | undefined>(
   AMBIENT_ENV_KEYS.map((key) => [key, process.env[key]]),
 );
 
-// Env pinning : `sddWorkspace` reads MSTAR_CONTROL_ROOT and
-// MSTAR_HARNESS_DIR ahead of probing, and taskBrief/reviewPackage read
-// SDD_DIR — an ambient shell export would redirect fixture resolution and
-// fail these tests spuriously (or worse, resolve against the developer's
-// real control worktree). Pin all three to undefined before every test and
-// restore the ambient values once at the end of the suite.
+// why: an ambient MSTAR_CONTROL_ROOT / SDD_DIR export would redirect fixture
+// resolution and fail these tests spuriously (or worse, resolve against the
+// developer's real control worktree), so pin all three to undefined before
+// every test and restore the ambient values once at the end of the suite.
+// `sddWorkspace` reads only MSTAR_CONTROL_ROOT as its root selector
+// (MSTAR_HARNESS_DIR is retired and ignored); taskBrief/reviewPackage read
+// SDD_DIR.
 beforeEach(() => {
   for (const key of AMBIENT_ENV_KEYS) delete process.env[key];
 });
