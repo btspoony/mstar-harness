@@ -4,24 +4,24 @@
 
 ## Layer
 
-- A layer is a coherent, task-reviewed integration range with exactly one accountable plan; not every commit is a layer, and a plan's last layer carries its tracked compound output. Per-plan integration/Done proof and compound are unchanged.
+- A layer is a coherent, task-reviewed integration range with exactly one accountable plan; not every commit is a layer, and a plan's last layer carries its tracked compound output. Per-plan integration/Done proof and compound are unchanged. The accountable scope of a close layer is the iteration's corpus promotion: an oversized close delta is split by the plan that owns each corpus document, with that plan as the accountable scope, and the documents no plan owns form a last close layer whose accountable scope is the iteration close.
 - Layer refs live in their own namespace, `iteration-stack/<iteration-id>/sNN`, never as a child of `branch.integration` — Git cannot hold a branch and a nested branch of the same name.
 
 ## Sizing
 
 - Aim for about 300 changed lines per layer and measure a candidate with `mstar pr-review size --base <previous layer> --head <layer>`; do not publish a range where `adviseSplit` is true (more than 1,000 changed lines).
-- Recover by splitting the unpublished range at a coherent reviewed boundary and measuring again; when one task cannot be split safely, revise the plan and its acceptance boundaries with the owner before publishing.
+- Recover by splitting the unpublished range at a coherent reviewed boundary and measuring again; when one task cannot be split safely and its plan is not yet `Done`, revise the plan and its acceptance boundaries with the owner before publishing; once that plan is `Done`, ask the owner for a written size exception, record it in that layer's `PR stack` row and publish the range as one layer.
 - Never absorb a base-versus-target delta silently: reconcile the anchors or scope the prerequisite work explicitly.
 
 ## Opening
 
-- Push the layer ref first, then open the PR. The first open layer targets `branch.target`, every other PR targets its live predecessor, and `branch.integration` is never a PR head.
+- Push the layer ref first, then open the PR. The first open layer targets `branch.target` after any merged prefix, every other PR targets its live predecessor, and `branch.integration` is never a PR head.
 - The PR body is `mstar-roles/references/project-manager/pr-description.md` plus the stack position: iteration id, layer order, predecessor PR, accountable plan.
 - An open layer is review input, not completion: plan QC, PM Acceptance, row `Done` and compound are unchanged, and nothing merges before its accountable plan is Done.
 
 ## Tracking
 
-- Start one PR tracker when a plan's first review-ready layer opens, and feed that plan's later PRs to the same tracker. It observes checks, triages review and returns actionable findings with evidence, and it has no nested dispatch, no workflow credentials, no writes to integration or chain records, no merge, no owner-approval collection and no waiver authority; fixes go through the owning implementer in an isolated fix checkout, with one pusher per PR head.
+- Start one PR tracker when a plan's first review-ready layer opens, and feed that plan's later PRs to the same tracker. It observes checks, triages review and returns actionable findings with evidence, and it has no nested dispatch, no workflow credentials, no writes to integration or chain records, no merge, no owner-approval collection and no waiver authority; fixes go through the owning implementer in an isolated fix checkout, with one pusher per PR head. Two results come back. **Settled**: per PR, the readiness evidence — head, checks, review verdict and every finding at its merge class. **Blocked**: the specific blocker and its recovery. The coordinator takes over at its next checkpoint: a carrier failure (the tracker is gone or cannot observe) means the coordinator observes those PRs itself and grants the tracker nothing; a real dependency or an owner decision goes to its owner or becomes a recorded issue and never stops independent work.
 - Prefer a native background task where the host offers one; a terminal-agent carrier is optional and capability-gated, follows the shape of the existing optional-capability reference `mstar-pr-loop/references/terminal-agent-channel.md` without inheriting its authority, and is never a requirement. With no background carrier, the coordinator interleaves observations at the existing rescheduling checkpoints.
 - The coordinator keeps dispatching every independent ready development item; only real dependencies and stack order serialize work. `mstar iteration push-cadence` is evaluated per PR.
 
@@ -43,8 +43,10 @@
 
 ## Whole-chain proof and close
 
-- After iteration close, seal the expected list and the final accepted content, and open a final PR only for a nonempty close delta.
-- Close needs evidence for every entry and proof that the final accepted content is on `branch.target`: the chain top is an ancestor of the target ref, plus per-PR merge evidence. An interrupted or partly merged iteration stays open and discloses its landed prefix, and the `delivered` projection waits for whole-chain proof.
+- After iteration close, seal the expected list and the final accepted content, and open a final PR only for a nonempty close delta; that layer runs `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」,「Merge-ready checklist」and「Merge authorization」, then lands here (「Landing」) until the whole chain is merged.
+- Proof: every entry carries its evidence and the final accepted content is on `branch.target` — the chain top is an ancestor of the target ref, plus per-PR merge evidence — and no merged layer's change was removed afterwards: for each merged layer, compare the layer's merge commit with the target ref over the paths that layer touched; a removal of the layer's own lines is a revert, so the chain is not proved and the lost change is landed again as a new layer before close.
+- A proof that stops on a partly merged chain returns to「Landing」for the layers still open, discloses the landed prefix and enters no close-out.
+- The proof ends with the delivery projection — the `delivered` marker, the roadmap row and the milestone rollup — written through `mstar-project-governance` at `mstar-roles/references/project-manager/workflow-close.md`「Projection reconciliation」; until then the roadmap row stays at its pre-delivery state.
 - The engine verifies no iteration merge today (GitHub #819), so this proof is the coordinator's recorded duty.
 
 ## Cleanup
@@ -53,4 +55,4 @@
 
 ## Rollout
 
-- Never reinterpret an already-open aggregate PR as a stack.
+- An iteration whose aggregate PR — head `branch.integration`, never a layer ref — is already open finishes under the contract that opened it: that one PR runs `mstar-roles/references/project-manager/pr-delivery.md` merge-ready, authorization and merge, no layer refs are created, and its whole-chain proof is that PR merged with its content on `branch.target`; never reinterpret it as a stack.
