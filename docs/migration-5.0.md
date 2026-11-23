@@ -1,6 +1,6 @@
 # Migrating to Morning Star 5.0
 
-This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, a worked cutover from real receipts, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from the refusals these flows return. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/proposed/architecture/2026-11-21-collaboration-state-authority.md).
+This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, a worked cutover with synthetic receipts, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from the refusals these flows return. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/proposed/architecture/2026-11-21-collaboration-state-authority.md).
 
 Everything below is a command an operator runs. No step needs source knowledge, and no step requires editing a database by hand.
 
@@ -47,7 +47,7 @@ On a combined store this advances the execution schema to this build's version a
 
 If a retired held claim requires the operator's full stop document, the upgrade refuses `store.upgrade-attestation-missing`; build that document with `mstar schema --command store.upgrade`, then rerun `mstar store upgrade --harness <abs> --operator <name> --attestation <abs-json>`.
 
-A lane recorded at a version this build does not admit refuses `collaboration.upgrade-required` on an ordinary read, write, or `store init`. For a `local` or `mirror` lane the recovery is this same verb; for a `remote` lane it is the reviewed bind (see [Remote binding](#remote-binding-and-first-observation)), because a cache is derived observation state and is never upgraded in place.
+A lane recorded at an older version than this build admits refuses `collaboration.upgrade-required` on an ordinary read, write, or `store init`; one written by a newer build refuses `store.schema-unsupported` instead. For a `local` or `mirror` lane the recovery is this same verb; for a `remote` lane it is the reviewed bind (see [Remote binding](#remote-binding-and-first-observation)), because a cache is derived observation state and is never upgraded in place. A newer lane has no recovery here but the matching newer build (see [Rebind and rebind refusal](#rebind-and-rebind-refusal)).
 
 ### Rung 2 — reviewed plan
 
@@ -154,7 +154,7 @@ A bound checkout admits only the generation it recorded: a different repository 
 
 ## A worked cutover
 
-The receipts below are from this repository's own cutover, with the row counts reduced to the tables worth checking. They are not a second cutover and not a template to replay: each document is what the corresponding rung returned, so you can compare your own run against a known shape.
+The receipts below follow the shape of this repository's own cutover, with every identifier, digest and timestamp replaced by a synthetic placeholder of the same form and the row counts made illustrative. The real receipts are the PM acceptance record for that cutover and are not tracked here. They are not a second cutover and not a template to replay: each document is what the corresponding rung returned, so you can compare your own run against a known shape.
 
 **Rung 1 refused with `collaboration.cutover-required` after advancing the execution schema.** That refusal is the expected progress marker, not a failure: the collaboration rows still belonged to `store.db`, and no cutover verb had run yet.
 
@@ -163,18 +163,18 @@ The receipts below are from this repository's own cutover, with the row counts r
 ```json
 {
   "version": 1,
-  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "manifestId": "1f2e3d4c5b6a79880a1b2c3d4e5f6071",
   "source": {
-    "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921",
-    "epoch": 3,
+    "storeId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "epoch": 2,
     "schemaVersion": 21,
-    "revision": 8642,
-    "catalogRevision": 439
+    "revision": 1204,
+    "catalogRevision": 57
   },
   "repoKey": "github.com/btspoony/mstar-harness",
   "mode": "local",
-  "sourceDigest": "80fd42e656b28e0aafeb312de628d1cd8aaa7f0378144e5a9d2d93d91fc9ada2",
-  "counts": { "issues": 1165, "occurrences": 1540, "relations": 16, "project_milestones": 5, "project_roadmaps": 3 },
+  "sourceDigest": "5c0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
+  "counts": { "issues": 96, "occurrences": 128, "relations": 4, "project_milestones": 2, "project_roadmaps": 1 },
   "blockers": []
 }
 ```
@@ -183,11 +183,11 @@ The receipts below are from this repository's own cutover, with the row counts r
 
 ```json
 {
-  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "manifestId": "1f2e3d4c5b6a79880a1b2c3d4e5f6071",
   "phase": "verified",
-  "source": { "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921", "epoch": 3, "schemaVersion": 21, "revision": 8642, "catalogRevision": 439 },
-  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "9e565811-d869-416f-8f8e-2728701d818e", "epoch": 1 },
-  "verifiedAt": "2026-11-23T08:37:58.661Z",
+  "source": { "storeId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "epoch": 2, "schemaVersion": 21, "revision": 1204, "catalogRevision": 57 },
+  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a", "epoch": 1 },
+  "verifiedAt": "2026-01-15T10:00:00.000Z",
   "replayed": false
 }
 ```
@@ -196,13 +196,13 @@ The receipts below are from this repository's own cutover, with the row counts r
 
 ```json
 {
-  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "manifestId": "1f2e3d4c5b6a79880a1b2c3d4e5f6071",
   "phase": "active",
-  "source": { "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921", "epoch": 3, "schemaVersion": 21, "revision": 8642, "catalogRevision": 439 },
-  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "9e565811-d869-416f-8f8e-2728701d818e", "epoch": 1 },
-  "verifiedAt": "2026-11-23T08:37:58.661Z",
-  "fencedAt": "2026-11-23T08:38:41.185Z",
-  "activatedAt": "2026-11-23T08:38:41.246Z",
+  "source": { "storeId": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "epoch": 2, "schemaVersion": 21, "revision": 1204, "catalogRevision": 57 },
+  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a", "epoch": 1 },
+  "verifiedAt": "2026-01-15T10:00:00.000Z",
+  "fencedAt": "2026-01-15T10:00:42.185Z",
+  "activatedAt": "2026-01-15T10:00:42.246Z",
   "replayed": false
 }
 ```
@@ -282,7 +282,7 @@ These are the refusal shapes, all `collaboration.stale-binding`, and each one na
 - the lane under the canonical path is another store id or epoch — a bind never retires another generation;
 - a `local`/`mirror` predecessor lane exists but the selector does not supersede it with a fenced, pending-free cutover.
 
-A lane recorded at a version this build does not admit refuses `collaboration.upgrade-required` in every mode: an older `local`/`mirror` predecessor is upgraded with `store upgrade`, while an older remote cache is never upgraded in place — the reviewed `bind` replaces it.
+A lane recorded at a version **older** than this build admits refuses `collaboration.upgrade-required` in every mode: an older `local`/`mirror` predecessor is upgraded with `store upgrade`, while an older remote cache is never upgraded in place — the reviewed `bind` replaces a pre-outbox cache. The newer direction is different: a store or cache written by a build newer than this one refuses `store.schema-unsupported`, and the reviewed `bind` does not replace it. The only recovery there is the matching newer build; no verb on this page migrates a newer lane down.
 
 ## Backup and restore
 
@@ -324,10 +324,10 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 | `collaboration.mode-unavailable` | The verb is a local-domain entry in a `remote` checkout, or a restore in `remote` mode. | Use the remote boundary (`remote status|bind|observe`) or the reviewed bind; local rows never stand in for provider authority. |
 | `collaboration.not-initialized` | No collaboration database at the resolved path. | `mstar store init --harness <abs>` for a fresh scope, `mstar store upgrade --harness <abs> --operator <name>` for file-era state, or `store collaboration restore` from a verified pair. |
 | `collaboration.not-active` | The lane is `staged`, not published. | Run `store collaboration activate` for its reviewed activation; adoption also refuses a staged authority. |
-| `collaboration.upgrade-required` | The lane is older or newer than this build admits. | `mstar store upgrade --operator <name>` for a local/mirror lane; the reviewed `remote bind` for a remote cache. |
+| `collaboration.upgrade-required` | The lane is older than this build admits. | `mstar store upgrade --operator <name>` for a local/mirror lane; the reviewed `remote bind` for a pre-outbox remote cache. |
 | `collaboration.unreadable` | The file is present but invalid, corrupt, inaccessible, or another store's. | Re-resolve with `mstar path resolve`; repair access or restore a verified pair into an absent target rather than editing bytes. |
 | `collaboration.stale-binding` | The recorded binding, the lane metadata, or the checked selector disagrees with the resolved scope. | Re-resolve, correct the origin or mode, and either `store collaboration adopt --expect-store <store-id>` or complete the reviewed `remote bind`. A bound checkout is never retargeted by editing its mode. |
-| `store.schema-unsupported` | The store's schema is newer than this build reads — the normal state for a released 4.8.x build after the fence. | Install the 5.0 build and rerun; nothing was modified. |
+| `store.schema-unsupported` | The store or cache's schema is newer than this build reads — the normal state for a released 4.8.x build after the fence, and for any lane a newer build wrote. | Install the build that wrote it and rerun; nothing was modified, and a reviewed `bind` never replaces a newer cache. |
 | `store.upgrade-attestation-missing` | A retired held claim needs an explicit stop document. | Build it with `mstar schema --command store.upgrade` and rerun with `--attestation`. |
 | `store.report-not-published` | The operation completed, but the `--out` report was not published — most often because a file already exists at that path, since reports are create-only. | The operation's own result stands; nothing was lost. Re-run only to obtain a file, with a fresh `--out` path, and check that `manifestFile`/`receiptFile` is non-null. Never apply a manifest that was already sitting at the path. |
 | `store.runtime-unsupported` | The running runtime does not provide native `node:sqlite` (Node.js below 24.18.0, or another runtime). | Rerun with Node.js >= 24.18.0 on `PATH`; retrying on the same runtime reproduces the refusal, and nothing was modified. |
