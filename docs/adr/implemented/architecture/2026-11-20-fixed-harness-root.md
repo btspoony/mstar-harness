@@ -60,12 +60,12 @@ The harness root is one fixed location, derived from Git only:
   callers that already hold the derived value; `HarnessRootRetiredError`
   carries the refusal of a mismatched scaffold root.
 - A CLI launch outside any Git work tree is the one case with nothing to
-  derive from. There `--harness` is the only accepted input and must name an
-  existing `<dir>/.mstar`; it is used as given, with no equality check. With no
-  `--harness`, the command refuses and names the two recoveries: run from
-  inside the repository, or pass `--harness <absolute .mstar>`. The
-  environment variable is not a fallback for this case — that is what makes
-  an inherited value able to root the wrong repository.
+  derive from. The SDD workspace resolver accepts an explicit control root
+  there: the `mstar sdd workspace PLAN_ID CONTROL_ROOT` second argument or
+  `MSTAR_CONTROL_ROOT` must name the main repository root, and a linked or
+  foreign checkout is refused. No environment fallback roots the process from
+  an inherited value — that is what keeps an inherited value from rooting the
+  wrong repository.
 - The MCP server carries no root of its own. It is one long-lived service, so
   neither its launch cwd, a connection-level pin, nor the environment names a
   repository. Every call that touches process state supplies `harness` naming
@@ -134,8 +134,10 @@ proposal is a property a reader can check at HEAD:
   scaffold`) is how a fresh one comes into existence.
 - `MSTAR_HARNESS_DIR` never selects a root: setting it to a worktree or an
   out-of-repo directory leaves the Git-derived `<main>/.mstar` in force.
-- A command launched outside any Git work tree runs when `--harness` names an
-  existing `.mstar`, and refuses with both recoveries when it does not.
+- A command launched outside any Git work tree resolves through the explicit
+  control root — the `sdd workspace` second argument (`CONTROL_ROOT`) or
+  `MSTAR_CONTROL_ROOT` naming the main repository root — and refuses when it
+  names a linked or foreign checkout.
 - An MCP call that omits `harness` is refused, and one naming a linked
   worktree's `.mstar` is refused with the Git-derived control root in the
   message; no MCP launch form (`--harness`, environment) changes either

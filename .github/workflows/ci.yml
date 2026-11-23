@@ -1121,8 +1121,11 @@ jobs:
             # be885a003) moved newly-shaped prose out of this corpus and measured
             # 12,826 under packages/ with the command below, so that floor follows
             # the cleanup to 12,800; scripts/ stays 800 (measured 818).
+            # 2026-11-23: the ADR-promotion edit classified its touched prose
+            # (resolver/sdd doc blocks) and re-measured 12,798 under packages/,
+            # so that floor follows to 12,790; scripts/ stays 800 (measured 818).
             case "$root" in
-              packages) floor=12800 ;;
+              packages) floor=12790 ;;
               scripts) floor=800 ;;
             esac
             echo "unclassified comment corpus ($root): ${count:-0} (floor $floor)"

@@ -17,8 +17,9 @@ import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
  * and the `.agents/` fallback are retired and ignored — a declaration or a
  * legacy-only checkout resolves the fixed root or nothing, never a second
  * root; an explicit `opts.harnessDir` is an assertion that must equal the
- * fixed root and is refused (`HarnessRootRetiredError` from `path.ts`)
- * otherwise.
+ * fixed root — `path.ts` refuses a mismatched assertion with
+ * `HarnessRootRetiredError`, while `sddWorkspace`'s own mismatch check
+ * throws `SddScriptError` (see `sddWorkspace` below).
  *
  * SDD execution context (spec A3, issue #428 ACTIVE port):
  * `SddExecutionContext` / `resolveSddExecutionContext` / `checkSddAction`

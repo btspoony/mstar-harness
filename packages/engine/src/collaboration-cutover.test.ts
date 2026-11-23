@@ -1229,7 +1229,7 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     // lock (and therefore can never both acquire).
     writeFileSync(
       recoveryPath,
-      `${JSON.stringify({ pid: process.pid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "recovering" })}\n`,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: `rec-${process.pid}-overing` })}\n`,
     );
     try {
       const busy = await refusalOf(() => planCollaborationCutover(source.context));
