@@ -1,11 +1,11 @@
 # Workflow close after a verified merge
 
-> Responsibility: close a registered workflow after its delivery merge is verified — terminal write, root unregister, projection reconciliation, then an explicit cleanup handoff. Both callers load this file: the iteration route (`mstar-iteration` SKILL.md「Phase route map」Phase 6) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier.
+> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file: the iteration route (`mstar-iteration` SKILL.md「Phase route map」Phase 6) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
 
 | Route | Entry fact |
 |---|---|
 | Standalone development | Its own PR is merged, and close consults the local Git association proof. |
-| Report-only | QC and PM Acceptance under the registered completion policy, with no merge. |
+| Report-only | QC and PM Acceptance under the registered completion policy, with no PR and no merge. |
 | Iteration | Every delivery PR is merged and the accepted content is on `branch.target`, verified by the primary coordinator because the engine verifies no iteration merge today (#819). |
 
 ## Entry
@@ -47,7 +47,7 @@ Align the local narrative surface to the ACTIVE DB terminal state and the store 
 3. store project roadmap content and issue rollup; the project register is migration history only and is not updated
 
 - **Never** forge a `Done` row and **never** close an open residual to match. Reconciliation invents no Done/closed, closes no entry to align, and does not relax the `zero-residual` rule; under `allow-residual`, a registered and disclosed non-blocking open R# **stays open** and does not "close along with" the lifecycle end (a real remaining finding blocks `zero-residual` delivery instead of being silently closed).
-- **Never** slip new tracked product or documentation commits into close — a newly found product fix opens its own authorized workflow.
+- **Never** slip new tracked product or documentation commits into the close (any step) — a newly found product fix opens its own authorized workflow.
 
 ## Cleanup handoff
 
@@ -64,9 +64,9 @@ The close-state gate checks **local state only** (valid terminal shape + no dang
 
 ## Standalone plans and abandonment
 
-- The semantic authority for a standalone plan's delivery lifecycle (register → delivery tail → proved merge → terminal close) is the frozen contract `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; this file fixes the close side only (same close command; the local gate verifies no remote merged evidence).
-- A `type: plan` standalone lifecycle closes with the **same** completed-close command after its PR merges (no second verb, no `--outcome` / `--force`).
-- An abandoned lifecycle **must not** silently run completed close: an already terminal (`failed` / `stopped`) lifecycle keeps its state and the CLI reports the actual status; completed close belongs only to a proved-merge completion.
+- The semantic authority for a standalone plan's delivery lifecycle (register → delivery tail or a registered report-only completion policy → proved merge where the route merges → terminal close) is the frozen contract `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; this file fixes the close side only (same close command; the local gate verifies no remote merged evidence).
+- A `type: plan` standalone lifecycle closes with the **same** completed-close command — after its PR merges for a development plan, or under its registered completion policy with no merge for a report-only plan (no second verb, no `--outcome` / `--force`).
+- An abandoned lifecycle **must not** silently run completed close: an already terminal (`failed` / `stopped`) lifecycle keeps its state and the CLI reports the actual status; completed close belongs only to a satisfied route completion — a proved merge where the route merges, or the registered completion policy where it does not.
 
 ## Evidence
 
