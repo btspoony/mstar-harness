@@ -1,5 +1,5 @@
 /**
- * catalog-registration-remote — the catalog journal of a REMOTE checkout.
+ * note: catalog-registration-remote — the catalog journal of a REMOTE checkout.
  *
  * A remote checkout's collaboration authority is the provider, so its journal
  * lives in the private cache the reviewed `remote bind` created, and the
