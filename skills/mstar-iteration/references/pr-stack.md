@@ -15,7 +15,7 @@
 
 ## Opening
 
-- Push the layer ref first, then open the PR. The first open layer targets `branch.target` after any merged prefix, and every other PR targets its live predecessor.
+- Push the layer ref first, then open the PR. The first open layer targets `branch.target`, every other PR targets its live predecessor, and `branch.integration` is never a PR head.
 - The PR body is `mstar-roles/references/project-manager/pr-description.md` plus the stack position: iteration id, layer order, predecessor PR, accountable plan.
 - An open layer is review input, not completion: plan QC, PM Acceptance, row `Done` and compound are unchanged, and nothing merges before its accountable plan is Done.
 
@@ -49,7 +49,7 @@
 
 ## Cleanup
 
-- The cleanup CLI does not own stack refs (GitHub #821). Before deleting any layer ref, local or remote, reconcile the actual ref and its head exactly with the ref and head witnessed in the compass `PR stack` table — a moved ref no longer matches and is not deleted — and confirm no open PR uses it as base or head. A local ref is deleted only as an ancestor of the target ref (`git branch -d`, never `-D`); a remote ref only after its PR shows merged. Any condition that fails stops the deletion and reports the residue; no force.
+- The cleanup CLI does not own stack refs (GitHub #821). Stack refs are cleaned only after terminal close: before deleting any layer ref, local or remote, reconcile the actual ref and its head exactly with the ref and head witnessed in the compass `PR stack` table — a moved ref no longer matches and is not deleted — and confirm no open PR uses it as base or head. A local ref is deleted only as an ancestor of the target ref (`git branch -d`, never `-D`); a remote ref only after its PR shows merged. Any condition that fails stops the deletion and reports the residue; no force.
 
 ## Rollout
 
