@@ -2458,12 +2458,12 @@ export function heldCollaborationSourceTables(db: StoreDb): string[] {
  * The open mirror runs a COMBINED store still holds, in listing order.
  *
  * Migration 18 created `sync_runs` for the one-way mirror, which the released
- * 4.8.x build owns and settles in the combined store. Migration 20 (the cutover
- * fence) is the last schema that build admits, so an upgrade past it strands
- * every open run: the settling build refuses the newer store as
- * `store.schema-unsupported`, and this build's mirror lane refuses a combined
- * store outright. The upgrade paths therefore read this list before the schema
- * advance instead of discovering the loss afterwards.
+ * 4.8.x build owns and settles in the combined store. Migration 19 is the last
+ * schema that build admits; migration 20 (the cutover fence) is the one it
+ * refuses as `store.schema-unsupported`, so an upgrade past 19 strands every
+ * open run: the settling build refuses the newer store, and this build's mirror
+ * lane refuses a combined store outright. The upgrade paths therefore read this
+ * list before the schema advance instead of discovering the loss afterwards.
  */
 export function openMirrorRuns(db: StoreDb): Array<{
   bindingId: string;

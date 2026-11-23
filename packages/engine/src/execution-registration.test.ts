@@ -39,6 +39,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1492,6 +1493,52 @@ describe("execution-registration", () => {
     } finally {
       setRegistrationJournalGapForTest(undefined);
     }
+  });
+
+  test("execution-registration-closes-the-split-lane-when-the-witness-stamp-refuses", async () => {
+    const fixture = await activeFixture("stamp-refusal-lane");
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lanePath = resolveCollaborationLocation(fixture.context).dbPath;
+    // invariant: The verdict lane is a WRITE admission while the split journal's own lane is a
+    // READ one, so a checkout that records no binding opens the journal lane and then refuses at
+    // the stamp. The lane opened for the journal must be released by that refusal.
+    rmSync(join(fixture.harnessRoot, "collaboration-binding.json"));
+
+    // note: Count the lane connections this call opens and the ones it closes, through the real
+    // driver: `busyAware` closes the raw connection, so a `close` spy on the prototype sees it.
+    const driver = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (...args: unknown[]) => object };
+    const realDatabaseSync = driver.DatabaseSync;
+    const laneHandles: object[] = [];
+    const closedHandles: object[] = [];
+    // note: `node:sqlite` ships no type for the driver prototype this spy must reach; the shape
+    // here is the one member the spy replaces.
+    const driverPrototype: { close(this: object): void } = DatabaseSync.prototype;
+    const realClose = driverPrototype.close;
+    const constructorSpy = spyOn(driver, "DatabaseSync").mockImplementation(((...args: unknown[]) => {
+      const handle = new realDatabaseSync(...args);
+      if (args[0] === lanePath) laneHandles.push(handle);
+      return handle;
+    }) as never);
+    const closeSpy = spyOn(driverPrototype, "close").mockImplementation(function (this: object) {
+      closedHandles.push(this);
+      return realClose.call(this);
+    });
+    try {
+      const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-stamp-refusal"));
+      expect(refusal.code).toBe("collaboration.stale-binding");
+    } finally {
+      constructorSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+    // why: A stamp refusal happens AFTER the journal lane is opened, so every connection this
+    // call took on the lane must be closed; a leaked one keeps the store file's handle alive.
+    expect(laneHandles.length).toBeGreaterThan(0);
+    for (const handle of laneHandles) expect(closedHandles).toContain(handle);
   });
 
 });

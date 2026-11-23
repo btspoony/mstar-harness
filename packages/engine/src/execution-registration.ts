@@ -369,129 +369,132 @@ export async function commitExecutionRegistration(
   // (after the root-token CAS) instead of a stale pre-read. The lane and the execution store are
   // separate databases and cannot be serialized together — see `SplitJournal` for that residual.
   const splitJournal = await openSplitJournal(context);
-  // note: A regression plants a journal row here — after the owner verdict, before the
-  // transaction takes its lock — to prove the verdict is re-read at the transaction position.
-  registrationJournalGapForTest?.();
-
   // invariant: The witness preflight: a registration publishes the reviewed delta into the
   // repository's collaboration lane, so that lane must be the ACTIVE one this
-  // operation freezes as its target.
-  const target = await collaborationStamp(context);
-  const prepared = await withSplitJournal(splitJournal, () => withExecutionTransaction(context, (tx) => {
-    // why: Only the CURRENT epoch's committed receipt replays, so an authority that
-    // changed generation under this call is re-resolved instead of being served
-    // (or written to) under a generation that no longer exists.
-    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId: identity.operationId,
-      requestHash,
-      legacyRequestHash,
-      workflowId: identity.workflow.workflowId,
-      planId: null,
-      token: { kind: "root", key: [] },
-    });
-    if (replayed !== null) return { kind: "replay" as const, receipt: replayed };
+  // operation freezes as its target. It resolves INSIDE the lane guard: a lane that
+  // refuses here (a staged authority) must not strand the connection the split
+  // owner already holds.
+  const prepared = await withSplitJournal(splitJournal, async () => {
+    const target = await collaborationStamp(context);
+    // note: A regression plants a journal row here — after the owner verdict, before the
+    // transaction takes its lock — to prove the verdict is re-read at the transaction position.
+    registrationJournalGapForTest?.();
+    return await withExecutionTransaction(context, (tx) => {
+      // why: Only the CURRENT epoch's committed receipt replays, so an authority that
+      // changed generation under this call is re-resolved instead of being served
+      // (or written to) under a generation that no longer exists.
+      const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: identity.operationId,
+        requestHash,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] },
+      });
+      if (replayed !== null) return { kind: "replay" as const, receipt: replayed };
 
-    // §3.1 only a NEW registration normalizes the pointers (canonical stored
-    // form, containment) and proves the reviewed documents: the committed
-    // attempt already proved them, so its receipt replays even when they have
-    // since been removed, edited or left behind as a dangling alias (I-000868,
-    // PR #578).
-    const plan = resolveCatalogExecutionPlan(context, request);
-    const operationId = plan.request.operationId;
-    // The entry/snapshot pair the review describes: the identity anchors, the
-    // new/unbound/unleased requirement and the plan rows' own seals are the C3
-    // creation gates, reused verbatim.
-    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-    if (remote) {
-      // invariant: A plan row's catalog pin names a LOCAL catalog store identity; a remote
-      // registration has no such store, so a pinned row is refused before anything is reserved.
-      const pinned = creation.plans.filter((entry) => entry.pin !== null);
-      if (pinned.length > 0) {
-        throw new StoreError(
-          "collaboration.mode-unavailable",
-          `Plan ${pinned.map((entry) => entry.planId).join(", ")} carries a catalog pin from a local catalog store, which a ` +
-            `remote registration cannot satisfy. Re-register these plans against the provider project, or drop the pin. ` +
-            `Nothing was reserved.`,
+      // why: §3.1 only a NEW registration normalizes the pointers (canonical stored
+      // form, containment) and proves the reviewed documents: the committed
+      // attempt already proved them, so its receipt replays even when they have
+      // since been removed, edited or left behind as a dangling alias (I-000868,
+      // PR #578).
+      const plan = resolveCatalogExecutionPlan(context, request);
+      const operationId = plan.request.operationId;
+      // why: The entry/snapshot pair the review describes: the identity anchors, the
+      // new/unbound/unleased requirement and the plan rows' own seals are the C3
+      // creation gates, reused verbatim.
+      const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
+      if (remote) {
+        // invariant: A plan row's catalog pin names a LOCAL catalog store identity; a remote
+        // registration has no such store, so a pinned row is refused before anything is reserved.
+        const pinned = creation.plans.filter((entry) => entry.pin !== null);
+        if (pinned.length > 0) {
+          throw new StoreError(
+            "collaboration.mode-unavailable",
+            `Plan ${pinned.map((entry) => entry.planId).join(", ")} carries a catalog pin from a local catalog store, which a ` +
+              `remote registration cannot satisfy. Re-register these plans against the provider project, or drop the pin. ` +
+              `Nothing was reserved.`,
+          );
+        }
+      }
+      assertRegisteredCompassDocument(plan.request.workflow);
+      assertRegisteredPlanDocuments(plan.request.workflow);
+
+      // invariant: §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
+      assertExecutionToken(request.expected, {
+        kind: "root",
+        storeId: tx.storeId,
+        epoch: tx.epoch,
+        key: [],
+        revision: tx.execution.revision,
+      });
+
+      // invariant: The pending journal is decided HERE, after the root-token CAS, so a stale
+      // token keeps reporting its conflict instead of the journal verdict. The verdict is read at
+      // this position for both owners: a split owner's held lane is queried now, so a row
+      // committed after the owner was resolved still refuses.
+      const pending = pendingRegistrationInTransaction(splitJournal, tx.db, plan.workflowId);
+      if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
+
+      // Create-only admission: a workflow identity another lifecycle already
+      // holds is a deterministic conflict, so it is refused BEFORE the catalog
+      // delta publishes. `writeExecutionCreation` remains the authoritative check
+      // at finalization; admitting it here is what keeps a duplicate from
+      // publishing an effect and then reporting an unresumable partial. The
+      // wording is kept identical to that guard deliberately.
+      // simplify: a second copy of the create-only guard, not yet composable
+      // because execution-store keeps `assertWorkflowIdentityIsNew` private.
+      // upgrade: export `assertWorkflowIdentityIsNew` from execution-store and
+      // compose the guard, or when a third copy would be required.
+      const existing = tx.db
+        .prepare("select revision from execution_workflows where workflow_id = ?")
+        .get(plan.workflowId) as { revision?: unknown } | undefined;
+      if (existing !== undefined) {
+        throw new ExecutionError(
+          "execution.not-empty",
+          `execution_workflows already holds workflow ${plan.workflowId} (revision ${String(existing.revision)}). A workflow ` +
+            `identity is create-only: re-creating it never restores registry membership, resets revisions or rewrites its ` +
+            `rows. Nothing was created.`,
         );
       }
-    }
-    assertRegisteredCompassDocument(plan.request.workflow);
-    assertRegisteredPlanDocuments(plan.request.workflow);
 
-    // §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
-    assertExecutionToken(request.expected, {
-      kind: "root",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [],
-      revision: tx.execution.revision,
-    });
-
-    // invariant: The pending journal is decided HERE, after the root-token CAS, so a stale
-    // token keeps reporting its conflict instead of the journal verdict. The verdict is read at
-    // this position for both owners: a split owner's held lane is queried now, so a row
-    // committed after the owner was resolved still refuses.
-    const pending = pendingRegistrationInTransaction(splitJournal, tx.db, plan.workflowId);
-    if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
-
-    // Create-only admission: a workflow identity another lifecycle already
-    // holds is a deterministic conflict, so it is refused BEFORE the catalog
-    // delta publishes. `writeExecutionCreation` remains the authoritative check
-    // at finalization; admitting it here is what keeps a duplicate from
-    // publishing an effect and then reporting an unresumable partial. The
-    // wording is kept identical to that guard deliberately.
-    // simplify: a second copy of the create-only guard, not yet composable
-    // because execution-store keeps `assertWorkflowIdentityIsNew` private.
-    // upgrade: export `assertWorkflowIdentityIsNew` from execution-store and
-    // compose the guard, or when a third copy would be required.
-    const existing = tx.db
-      .prepare("select revision from execution_workflows where workflow_id = ?")
-      .get(plan.workflowId) as { revision?: unknown } | undefined;
-    if (existing !== undefined) {
-      throw new ExecutionError(
-        "execution.not-empty",
-        `execution_workflows already holds workflow ${plan.workflowId} (revision ${String(existing.revision)}). A workflow ` +
-          `identity is create-only: re-creating it never restores registry membership, resets revisions or rewrites its ` +
-          `rows. Nothing was created.`,
-      );
-    }
-
-    const key: CompositeKey = { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId };
-    // why: The reviewed catalog expectation is a transport constraint, not business
-    // intent: a resumed reservation keeps the value its FIRST attempt admitted,
-    // so an interruption that already published the delta still resumes under
-    // the revision the delta was reviewed against.
-    const expectedCatalogRevision = frozenCatalogExpectation(tx, key) ?? plan.request.expectedCatalogRevision;
-    const intent: CompositeIntent = {
-      key,
-      kind: "execution-register",
-      requestHash,
-      target,
-      scope: { workflowId: plan.workflowId, planId: null },
-      actor: plan.request.actor,
-      expectedExecution: executionRootTokenOf(tx),
-      // invariant: The frozen payload IS the resume identity: the reviewed workflow, its
-      // delta and the catalog revision they were reviewed against. A changed
-      // document or expectation cannot reinterpret a pending registration.
-      frozenPayload: stableJson({
-        operationId,
+      const key: CompositeKey = { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId };
+      // why: The reviewed catalog expectation is a transport constraint, not business
+      // intent: a resumed reservation keeps the value its FIRST attempt admitted,
+      // so an interruption that already published the delta still resumes under
+      // the revision the delta was reviewed against.
+      const expectedCatalogRevision = frozenCatalogExpectation(tx, key) ?? plan.request.expectedCatalogRevision;
+      const intent: CompositeIntent = {
+        key,
+        kind: "execution-register",
+        requestHash,
+        target,
+        scope: { workflowId: plan.workflowId, planId: null },
         actor: plan.request.actor,
-        workflow: plan.request.workflow,
-        delta: plan.request.delta,
+        expectedExecution: executionRootTokenOf(tx),
+        // invariant: The frozen payload IS the resume identity: the reviewed workflow, its
+        // delta and the catalog revision they were reviewed against. A changed
+        // document or expectation cannot reinterpret a pending registration.
+        frozenPayload: stableJson({
+          operationId,
+          actor: plan.request.actor,
+          workflow: plan.request.workflow,
+          delta: plan.request.delta,
+          expectedCatalogRevision,
+        }),
+      };
+      // note: The reservation spends none of the execution facts: the creation is
+      // create-only and commits at finalization.
+      const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
+      return {
+        kind: "reserved" as const,
+        intent: { ...intent, requestHash: reservation.requestHash },
+        plan,
+        creation,
         expectedCatalogRevision,
-      }),
-    };
-    // note: The reservation spends none of the execution facts: the creation is
-    // create-only and commits at finalization.
-    const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
-    return {
-      kind: "reserved" as const,
-      intent: { ...intent, requestHash: reservation.requestHash },
-      plan,
-      creation,
-      expectedCatalogRevision,
-    };
-  }));
+      };
+    });
+  });
   if (prepared.kind === "replay") {
     return noteOutstandingAcknowledgement(
       prepared.receipt.data,
