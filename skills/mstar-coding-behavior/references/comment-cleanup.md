@@ -40,7 +40,7 @@ The corpus is advisory, the change is not: `mstar lint <file> --diff-base <ref>`
 
 ## Measurement
 
-Before the pass, record the whole-tree bound gate on the same checkout. This repository measures with its two canonical commands — `mstar lint packages --type code` and `mstar lint scripts --type code` — reading the `unclassified comments: <n>` count each prints on stderr; after the pass, run the same two commands again. Another project measures its own configured code roots, or the selected target (`mstar lint <dir> --type code`). A scope the linter cannot count is reported `unmeasured` with the reason instead of a fabricated figure, and the close-out never requires a number it cannot read.
+Before the pass, record the whole-tree count on the same checkout. This repository measures with its two canonical commands — `mstar lint packages --type code` and `mstar lint scripts --type code` — reading the `unclassified comments: <n>` count each prints on stderr; after the pass, run the same two commands again. Another project measures its own configured code roots, or the selected target (`mstar lint <dir> --type code`). The figure is a report of what the pass moved, not a gate: CI asserts no corpus count. A scope the linter cannot count is reported `unmeasured` with the reason instead of a fabricated figure, and the close-out never requires a number it cannot read.
 
 The walked roots are the whole measurable surface: the gate reads code files selected by extension, hash-dialect `.py`/`.sh`/`.rb` included, so a Markdown document or a code file outside them never appears in the count and stays a review-only finding. `mstar lint` takes one target, so a narrower batch is measured per file or per directory — `mstar lint <file> --diff-base <ref>` for the ratchet, `mstar lint <dir> --type code` for a subtree.
 
@@ -48,16 +48,16 @@ The per-root difference between the two runs is the `unclassified-comment net ch
 
 Never estimate the saving from the diff size or from a sample of files — the counter is the measurement, and a claimed number that was not read off a run is a defect in the report.
 
-This repository's CI holds a per-root floor (the values live in `.github/workflows/ci.yml`); the floor detects a detector or collector regression, not a cleanup target. A genuine cleanup that pushes a root below its floor lowers that floor in the same change and records the new baseline in `comments.md` § Gate steps and range; otherwise CI reports the cleanup as a collapse.
+This repository's CI holds no corpus count at all: the changed-lines ratchet is the gate, and a detector or collector regression is caught by `packages/cli/test/lint-cli.test.ts` rather than by a floor, which cannot tell a regression from a genuine cleanup. A cleanup therefore lowers no threshold — the measured net change is its report, not a gate (`comments.md` § Gate steps and range).
 
 ## Why no blanket ban
 
 A repo-wide ban on comments also deletes what this repository depends on: the `see` pointer that keeps one rule in one place, the bounded `simplify:`/`shortcut:` marker that records a ceiling, and the `@generated` warning that prevents an edit.
 
-The equivalent already ships — the bound gate fails an unbounded marker anywhere in the corpus, and the ratchet fails an unclassified comment on any changed line — so this pass adds no lint rule and needs none.
+The equivalent already ships — the ratchet fails an unclassified comment on any changed line, and a whole-tree `mstar lint <dir> --type code` run fails an unbounded marker anywhere in the corpus — so this pass adds no lint rule and needs none.
 
 ## Non-goals
 
 - Rewording or reflowing a comment until it passes the gate while the false, stale or excusing content stays; that converts a finding into a survivor.
 - Touching another repository's comment policy, or the vocabulary and shapes `comments.md` owns; this pass consumes both.
-- Changing the gate thresholds or the ratchet's range, or lowering a per-root floor other than when a genuine cleanup has pushed a root below it.
+- Changing the gate thresholds or the ratchet's range.
