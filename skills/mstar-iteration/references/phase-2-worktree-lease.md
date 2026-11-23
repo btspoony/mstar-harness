@@ -108,15 +108,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
    switches branch, and carries no docs or unrelated user changes into the
    integration worktree (Phase-1 bounded exception → `phase-1-prepare.md`
    §1.6).
-   **Every Phase 2 entry — first execute and resume alike, including the first
-   entry after an auto-continued Phase 1 (which has already pushed the branch)
-   — never repeats this push**: verify the checkout instead (branch =
-   `spec_integration_branch`, clean tree, remote tip already equal to the live
-   integration HEAD), do **not** push again here, and do **not** repeat the
-   `phase-1-lock` anchor below — its binding is terminal by then (repeat-call
-   semantics and refusal codes → active host reference). On the Phase 1 route the
-   anchor instead requires that pushed remote tip to equal the live integration
-   HEAD, so it must not be executed before this step's push.
+   **Every Phase 2 entry — first execute and resume alike, including the first entry after an auto-continued Phase 1 (which has already pushed the branch) — never repeats this push**: verify the checkout instead (branch = `spec_integration_branch`, clean tree, remote tip already equal to the live integration HEAD), do **not** repeat that push here, and do **not** repeat the `phase-1-lock` anchor below — its binding is terminal by then (repeat-call semantics and refusal codes → active host reference). On the Phase 1 route the anchor instead requires that pushed remote tip to equal the live integration HEAD, so it must not be executed before this step's push. When the remote lags and the local integration HEAD already contains the remote tip, perform that one fast-forward push at this gate and re-read: the precondition is restored, not waived. When the two have diverged, **STOP** and reconcile with the remote, never force. Neither case repeats Phase 1's `-u` push, and the recorded local integration merge proof is unchanged.
 
 The coordinator refreshes the authoritative control-root workflow view before a plan mutation or integration action. Public verbs re-read state and merge exclusion in the DB transaction and check scope CAS. No row claim/release/transfer step is introduced.
 
@@ -164,6 +156,8 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，把确认的 finding 作为普通 fix 派发给所属 implementer（每 PR head 一个 pusher），并在下一次 integration 更新时按既有 reason 安排传播检查点——不新增第六个 reason，也不把 tracker 报告当成已接受的工作 → `mstar-iteration/references/pr-stack.md`「Tracking」「Propagation」。
 
+**Integration ref sync**：每次 coordinator 串行写入 `branch.integration`（per-plan merge 与 compound 之后、propagation merge 之后），都在该 checkpoint 结束前把它 fast-forward push 到 upstream，使 Phase 2 entry 的 checkout 前置（remote tip = live integration HEAD）继续成立；**无 force**，non-fast-forward 被拒即 **STOP**，先与 remote 对账，再做任何后续 integration 写入或 layer 发布。该同步独立于 layer 发布、不受 size check 门控：`adviseSplit` 只停该 layer PR，从不停 integration ref。
+
 **决策步骤**（每次 checkpoint 按序执行）：
 
 1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。
@@ -206,7 +200,7 @@ PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，
    - **Completion witness:** the merge completion proves is a real two-parent merge whose second parent is the QC-reviewed source SHA and whose `integration.result_sha` is that resulting merge commit; when earlier batches were already integrated, plan the final batch so this merge still exists, and never record an already-integrated no-op as the merge.
 6. **Per-plan compound:** after `Done`, run the compound disposition (Q1–Q8; `created` / `updated` / reasoned `skipped`) in the integration worktree and record the outcome in the plan's authored `## Review Gate Summary` — the engine completion payload is already written and is not amended. Commit the tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md` changes to `branch.integration` **only when the capture changed tracked files**; a reasoned `skipped` with no tracked change is satisfied by the recorded outcome and creates no empty commit. Never defer the disposition to iteration-close, and never start the next row before this step finishes.
 7. **Publish the layer**（`mstar-iteration/references/pr-stack.md`「Layer」「Sizing」「Opening」「Tracking」）：命名本 commit 所在的 integration range，在其 HEAD 上建 `iteration-stack/<iteration-id>/sNN`，用 `mstar pr-review size --base <predecessor> --head <layer>` 量测（`adviseSplit` → 停，先拆分再发布），push layer ref 后对它开 PR——首个 open layer 的 base 是 `branch.target`，其余是 live predecessor；写 compass `PR stack` 行，本 plan 首个 layer 发布时启动其 PR tracker。量测或发布未完成 → 停在该 layer，不推进它的下一层；其它 plan 的独立 ready 工作照常派发（推迟发布，不推迟实现）。`branch.integration` 从不作 PR head。
-   - 与 layer ref 一起 fast-forward push `branch.integration` 到其 upstream（**无 force**），使每次 Phase 2 entry 的 resume gate 前置（remote tip = live integration HEAD）继续成立；non-fast-forward 被拒即 **STOP**，先与 remote 对账再发布任何东西。本地 integration 合并证明不变。
+   - 这里只 push layer ref；`branch.integration` 的 upstream 同步独立于发布 → § Rescheduling checkpoint「Integration ref sync」。
 8. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
 9. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
 
