@@ -32,6 +32,7 @@ import {
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
   setCompleteWitnessGapForTest,
+  setPrepareJournalGapForTest,
   withExecutionPlanAuthority,
   deliveryRouteOf,
   type ExecutionPlanCall,
@@ -747,6 +748,37 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(footprint(context)).toEqual({ ...before, operations: before.operations as number });
     expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
     expect(rows(context, "select * from catalog_operations where operation_id = 'op-pending'")).toEqual(pendingBefore);
+  });
+
+  test("a combined journal row committed after the split read still refuses the prepare", async () => {
+    const fixture = await seededWorkflow("prepare-pending-combined-gap");
+    const { context, planTokens } = fixture;
+    const before = footprint(context);
+    let seamRan = false;
+    // invariant: The combined owner's journal is the execution store's own table, so it is
+    // read INSIDE the prepare transaction. A row landing in the gap between the split read
+    // and that lock must still refuse — a pre-read-only verdict would miss it.
+    setPrepareJournalGapForTest(() => {
+      seamRan = true;
+      withRaw(context, (db) => {
+        db.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+            "values ('op-gap', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+        ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planCall(fixture, OWN_PLAN, "prepare-gap", planTokens[OWN_PLAN]!, { kind: "prepare" }),
+      );
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-gap");
+      expect(refusal.message).toContain("root-visible");
+      expect(footprint(context)).toEqual(before);
+    } finally {
+      setPrepareJournalGapForTest(undefined);
+    }
   });
 
   test("a pending journal refuses an identical prepare under a new operation id, while a committed retry still replays", async () => {
