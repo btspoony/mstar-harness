@@ -282,7 +282,7 @@ These are the refusal shapes, all `collaboration.stale-binding`, and each one na
 - the lane under the canonical path is another store id or epoch — a bind never retires another generation;
 - a `local`/`mirror` predecessor lane exists but the selector does not supersede it with a fenced, pending-free cutover.
 
-A `local`/`mirror` lane below the current collaboration schema refuses `collaboration.upgrade-required`; a remote cache never does, because `bind` replaces it.
+A lane recorded at a version this build does not admit refuses `collaboration.upgrade-required` in every mode: an older `local`/`mirror` predecessor is upgraded with `store upgrade`, while an older remote cache is never upgraded in place — the reviewed `bind` replaces it.
 
 ## Backup and restore
 

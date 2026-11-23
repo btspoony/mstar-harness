@@ -74,7 +74,7 @@ An append is interoperable only through this convention; reading a native issue 
 | `remote.input-invalid` | The document failed its schema | Correct the named field and resubmit to the verb that reads that document |
 | `remote.unsafe-fidelity` | The provider cannot preserve required meaning | Refuse remote mode for that project; do not drop fields |
 | `collaboration.stale-binding` | This checkout resolves another collaboration mode, the selector moved and the binding is draining, or the intent belongs to another generation | Confirm the mode; for a remote checkout `remote status` then a reviewed `bind`; a draining generation is recovered, never resent |
-| `collaboration.not-initialized` / `collaboration.upgrade-required` | This checkout's collaboration lane is absent or older | `mstar store upgrade --operator <name> --harness "$HARNESS"`, then `bind` |
+| `collaboration.not-initialized` / `collaboration.upgrade-required` | This checkout's collaboration lane is absent, or recorded at a version this build does not admit | `remote`: the reviewed `remote bind`, whose verified batch replaces an older cache — `store init` and `store upgrade` never repair a remote cache. `local`/`mirror`: `store init` for an absent lane, `mstar store upgrade --operator <name> --harness "$HARNESS"` for an older one |
 
 ### Dispatch recovery
 
