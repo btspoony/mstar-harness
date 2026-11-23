@@ -22,7 +22,8 @@ import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js"
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, readStoreAuthority, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
-import { withCollaborationWrite } from "./collaboration-store.js";
+import { openCollaborationStore, openRemoteCache, withCollaborationWrite } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
   assertDeliveryRegistrationCoherence,
@@ -741,6 +742,33 @@ function executionOwnsJournal(db: StoreDb): boolean {
 }
 
 /**
+ * One journal read on the file that owns the journal, under READ-ONLY admission:
+ * a verdict is never a mutation, so it takes no write lock. `executionDb` stays
+ * open (read-only) for the facts execution still owns.
+ */
+async function withJournalRead<T>(
+  context: StoreContext,
+  fn: (db: StoreDb, executionDb: StoreDb) => T,
+): Promise<T> {
+  const execution = await openStore(context, "read");
+  try {
+    if (executionOwnsJournal(execution.db)) return fn(execution.db, execution.db);
+    // note: A remote checkout's journal owner is its private cache; the local lane
+    // refuses a remote selection outright, so it must not be the read's target.
+    const handle = resolveCollaborationLocation(context).mode === "remote"
+      ? await openRemoteCache(context, "read")
+      : await openCollaborationStore(context, "read");
+    try {
+      return fn(handle.db, execution.db);
+    } finally {
+      handle.close();
+    }
+  } finally {
+    execution.close();
+  }
+}
+
+/**
  * The pending journal row for one workflow on whichever file owns it. Async
  * because the lane owner is opened through its own admission; a caller outside
  * an execution transaction resolves it before entering one (the journal is a
@@ -750,13 +778,7 @@ export async function readPendingRegistration(
   context: StoreContext,
   workflowId: string,
 ): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null> {
-  const execution = await openStore(context, "read");
-  try {
-    if (executionOwnsJournal(execution.db)) return pendingRegistrationOf(execution.db, workflowId);
-  } finally {
-    execution.close();
-  }
-  return await withCollaborationWrite(context, (handle) => pendingRegistrationOf(handle.db, workflowId));
+  return await withJournalRead(context, (db) => pendingRegistrationOf(db, workflowId));
 }
 
 /**
@@ -1023,7 +1045,14 @@ export async function abortCatalogExecution(
 
 /** The current store/catalog revisions: what a caller records as the expectation. */
 export async function readCatalogRevisions(context: StoreContext): Promise<CatalogRevisions> {
-  return await withJournalWrite(context, (_db, _generation, executionDb) => readJournalVersions(executionDb));
+  // note: The shared revisions live on the JOURNAL OWNER's meta singleton — the lane's
+  // `collaboration_meta` after the fence — never on the execution store the fence left behind.
+  return await withJournalRead(context, (db, executionDb) => {
+    // note: The staged-store refusal stays on the execution handle, exactly as before;
+    // only the revision SOURCE moved to the journal owner.
+    assertStoreActive(executionDb);
+    return readJournalVersions(db);
+  });
 }
 
 
@@ -1199,7 +1228,7 @@ export async function purgeCatalogRegistration(
       throw new CatalogRegistrationError("catalog.purge-not-found", `failed registration record disappeared for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the current operation id`);
     }
     if (row.phase !== "aborted") {
-      const current = readJournalVersions(executionDb).catalogRevision;
+      const current = readJournalVersions(db).catalogRevision;
       if (current !== input.expectedCatalogRevision) {
         throw new CatalogError("catalog.revision-conflict", `expected catalog revision ${input.expectedCatalogRevision}; current revision is ${current}; retry purge-registration with this current value`);
       }

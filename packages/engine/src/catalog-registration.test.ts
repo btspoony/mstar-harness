@@ -10,11 +10,14 @@ import * as storeDb from "./store-db.js";
 import { getCatalog } from "./catalog.js";
 import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { bindRemoteAuthority } from "./collaboration-remote.js";
+import { createRemoteScope } from "./remote-scope.fixture.js";
 import {
   abortCatalogExecution,
   listPendingCatalogRegistrations,
   purgeCatalogRegistration,
   readCatalogRevisions,
+  readPendingRegistration,
 } from "./catalog-registration.js";
 import { registerShippedCatalogExecution } from "./execution-registration.js";
 import { bindExecutionSession, readExecutionState, type ExecutionContext } from "./execution-store.js";
@@ -293,6 +296,121 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     }
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect((await getCatalog(context, { kind: "plan", id: planId })).entity.title).toBe("Post-cutover plan");
+  });
+
+  test("a fenced catalog journal answers and compares the lane revision, not the stale execution one", async () => {
+    const { harnessDir, context } = await fixture("post-fence-revisions");
+    const location = resolveCollaborationLocation(context);
+    const workflowId = "wf-post-fence-revisions";
+    const operationId = "op-post-fence-revisions";
+    const snapshotPath = join(harnessDir, "workflows", workflowId, "snapshot.json");
+    mkdirSync(join(harnessDir, "workflows", workflowId), { recursive: true });
+    const snapshot = `{"identity":"${workflowId}"}\n`;
+    writeFileSync(snapshotPath, snapshot);
+    const digest = createHash("sha256").update(snapshot).digest("hex");
+
+    // why: The post-fence shape: the lane owns the journal and its counters, while the fenced
+    // execution store keeps ADVANCING its own — and now meaningless — revision pair.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+      fenced.prepare("update store_meta set revision = 41, catalog_revision = 99 where id = 1").run();
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(location.dbPath);
+    try {
+      lane.exec(
+        "create table if not exists catalog_operations(operation_id text primary key, request_hash text not null, " +
+          "phase text not null check (phase in ('prepared','execution-written','committed','aborted')), " +
+          "catalog_delta_json text not null, before_versions_json text not null, after_versions_json text not null, " +
+          "result_json text, created_at text not null, updated_at text not null)",
+      );
+      lane.prepare("update collaboration_meta set revision = 7, catalog_revision = 5 where id = 1").run();
+      lane.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, ?, 'prepared', ?, '{}', ?, null, ?, ?)",
+      ).run(
+        operationId,
+        "post-fence-hash",
+        JSON.stringify({ workflow: { workflowId, harnessDir, snapshotPath }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 5 }),
+        JSON.stringify({ failure: { workflow_id: workflowId, snapshot_path: snapshotPath, snapshot_content_sha256: digest, reviewed_identity: "legacy-identity" } }),
+        "2026-11-23",
+        "2026-11-23",
+      );
+    } finally {
+      lane.close();
+    }
+
+    // invariant: The reported revisions are the OWNER's, never the fenced store's.
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 7, catalogRevision: 5 });
+
+    // invariant: A stale execution revision can neither refuse the lane's correct one...
+    await expect(purgeCatalogRegistration(context, {
+      workflowId, operationId, expectedCatalogRevision: 99, actor: "project-manager",
+    })).rejects.toMatchObject({ code: "catalog.revision-conflict", message: expect.stringContaining("current revision is 5") });
+    // ...nor approve the settlement: the lane revision is what the CAS compares.
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId, operationId, expectedCatalogRevision: 5, actor: "project-manager",
+    });
+    expect(receipt).toMatchObject({ workflowId, sourceBytesRetained: true });
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 8, catalogRevision: 5 });
+
+    // note: The settlement advanced the lane's counter only; the fenced pair is untouched.
+    const untouched = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      expect(untouched.prepare("select revision, catalog_revision from store_meta where id = 1").get())
+        .toEqual({ revision: 41, catalog_revision: 99 });
+    } finally {
+      untouched.close();
+    }
+    expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
+  });
+
+  test("a remote checkout's empty journal reads as none without taking a write lock", async () => {
+    root = mkdtempSync(join(tmpdir(), "catalog-registration-remote-journal-"));
+    const scope = createRemoteScope(root, "remote-journal-read");
+    const context = scope.context();
+    const commit = scope.publish();
+    await bindRemoteAuthority(context, scope.batch(commit));
+    await initializeStore(context).then((handle) => handle.close());
+    // why: The fenced shape a remote checkout lands in — the cache owns the journal, and the
+    // execution store no longer carries the table at all.
+    const fenced = new DatabaseSync(join(scope.harness, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+
+    expect(await readPendingRegistration(context, "wf-remote-journal")).toBeNull();
+
+    // invariant: The verdict takes no write lock: a competing RESERVED writer cannot refuse a read.
+    const location = resolveCollaborationLocation(context);
+    const holder = new DatabaseSync(location.dbPath);
+    try {
+      holder.exec("begin immediate");
+      expect(await readPendingRegistration(context, "wf-remote-journal")).toBeNull();
+    } finally {
+      holder.exec("rollback");
+      holder.close();
+    }
+
+    // invariant: A genuinely pending journal on the cache is still reported.
+    const writer = new DatabaseSync(location.dbPath);
+    try {
+      writer.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, ?, 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run(
+        "remote-pending",
+        "remote-hash",
+        JSON.stringify({ workflow: { workflowId: "wf-remote-journal" }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 0 }),
+        "2026-11-23",
+        "2026-11-23",
+      );
+    } finally {
+      writer.close();
+    }
+    expect(await readPendingRegistration(context, "wf-remote-journal")).toEqual({ operationId: "remote-pending", phase: "prepared" });
   });
 
   test("reconcile refuses registered active work but abort retains unregistered leases and permits disposition retry", async () => {
