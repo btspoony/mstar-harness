@@ -1,6 +1,6 @@
 # Migrating to Morning Star 5.0
 
-This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from each refusal class. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/proposed/architecture/2026-11-21-collaboration-state-authority.md).
+This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, a worked cutover from real receipts, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from the refusals these flows return. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/proposed/architecture/2026-11-21-collaboration-state-authority.md).
 
 Everything below is a command an operator runs. No step needs source knowledge, and no step requires editing a database by hand.
 
@@ -18,7 +18,7 @@ Everything below is a command an operator runs. No step needs source knowledge, 
 
 ## Before you start
 
-Run every command with an absolute `--harness <abs>` naming this checkout's harness directory — the directory that holds `store.db`, normally `<repository>/.mstar`. It is the operation target, never discovered from the working directory.
+Every verb below that takes a target names it explicitly: pass an absolute `--harness <abs>` for this checkout's harness directory — the directory that holds `store.db`, normally `<repository>/.mstar`. It is the operation target, never discovered from the working directory. Two verbs in this page take no target: `mstar path resolve` discovers its scope from the directory it starts in, and `mstar schema --command <verb>` is a discovery verb that prints the shape of one document.
 
 - Node.js >= 24.18.0 must be the runtime (the CLI needs native `node:sqlite`).
 - Read access to the canonical Git origin is required: identity, mode, and — in `remote` mode — the protected selector ref `refs/heads/mstar-collaboration-authority` are resolved from the live remote.
@@ -55,7 +55,9 @@ A lane recorded at a version this build does not admit refuses `collaboration.up
 mstar store collaboration plan --harness <abs> --out <abs-manifest>
 ```
 
-The verb inspects the combined source read-only and writes a manifest: `version`, `manifestId` (a digest of the body), the frozen source generation (`storeId`, `epoch`, `schemaVersion`, `revision`, `catalogRevision`), `repoKey`, `mode`, `sourceDigest`, per-table row counts, and `blockers`. It creates nothing else. The same document is printed in the envelope as `data` and written to `manifestFile`.
+The verb inspects the combined source read-only and writes a manifest: `version`, `manifestId` (a digest of the body), the frozen source generation (`storeId`, `epoch`, `schemaVersion`, `revision`, `catalogRevision`), `repoKey`, `mode`, `sourceDigest`, per-table row counts, and `blockers`. It creates nothing else. The same document is printed in the envelope as `data`, and with `--out` it is also written to the path named by `data.manifestFile`.
+
+Exit 0 covers two different outcomes, so read the envelope before you trust a file. `--out` is create-only: an existing file is never overwritten, and the operation itself still succeeds. In that case the envelope carries the fresh manifest as `data` with `manifestFile: null` and `reportError.code: "store.report-not-published"`; an older manifest stays untouched at the path you named, and applying it would apply the old review. Use a fresh `--out` path for every plan, and before reviewing or applying, open the written file and confirm its `manifestId` equals the envelope's `data.manifestId`. When `manifestFile` is null, nothing was written — never fall back to a file that happens to be at the path. Tracked as open issue `I-001234`.
 
 Review the manifest as the record of what will move. `blockers` is not advisory, and it is frozen into the manifest: an open mirror run or an unsettled catalog journal entry appears there, and `apply` and `activate` refuse that manifest with `collaboration.cutover-not-quiescent` before they read the source's current state — so clearing the blocker does not make the reviewed manifest usable. Settle each named blocker with its own verb, then run `mstar store collaboration plan --harness <abs> --out <abs-manifest-2>` again and review the new manifest; the recovered route is always a fresh plan.
 
@@ -126,7 +128,9 @@ Field rules that the validator enforces, so a refused document is diagnosable wi
 - `stoppedSessions` entries use `state` `stopped` or `reloaded`, and each named session must exist in the source; a live source session the document does not stop refuses.
 - `cutover` is required for this verb. Its `repoKey`, `mode`, `controlRoot`, `sourceStoreId`, `sourceEpoch`, and `schemaVersion` must match the manifest and the running checkout exactly. `stoppedHandles` must name at least one handle of kind `process`, `session`, `host`, or `consumer`, and `allHandlesStopped` must be the literal `true` — the fence has no OS-level handle inventory, so this sentence is the operator's own statement.
 
-In one source transaction under SQLite write exclusion, `activate` re-reads the snapshot and blockers, takes or verifies the retained pre-fence image, commits the fence row, advances the source schema, drops the moved collaboration tables, and publishes the target. The receipt moves `verified` → `source-fenced` → `active`. A crash before the fence leaves a restageable attempt; a crash after it is finished by re-running the same `activate`, which reuses the persisted fence and commits only the missing publication.
+`activate` is two durable steps, not one transaction. First, in one source transaction under SQLite write exclusion, it re-reads the snapshot and blockers, takes or verifies the retained pre-fence image, commits the fence row in the execution store, advances the source schema, and drops the moved collaboration tables. The target publication follows as its own step. A crash between them therefore leaves a durable intermediate state: the source is fenced and no target is active. The receipt moves `verified` → `source-fenced` → `active`.
+
+A crash before the fence leaves a restageable attempt. A crash after a committed fence is finished by re-running the same `activate`, which reuses the persisted fence and commits only the missing publication. There is no rollback to infer from the receipt: once the fence commits, the source no longer owns the collaboration rows, and the verified pre-fence image is the only copy of them. `collaboration.cutover-unconfirmed` means the fence outcome itself could not be proven — inspect the persisted fence record, the retained image, and the source's schema and tables; never retry blindly and never treat the source as unchanged.
 
 An attestation that is structurally unusable — wrong version, missing field, contradictory current consumers, a cutover block naming another root or generation, or a source session left live that the document does not stop — refuses `store.attestation-invalid` before a byte is written. An attestation that is well-formed but attests an incomplete installation barrier — no consumer, no current coordinator, a consumer below the runtime floor, or a disposition other than `reloaded`/`upgraded`/an explicit exclusion — refuses `store.activation-blocked` and leaves the combined source as the sole authority.
 
@@ -148,9 +152,66 @@ mstar store collaboration adopt --harness <abs> --expect-store <store-id>
 
 A bound checkout admits only the generation it recorded: a different repository key, mode, store id, or epoch refuses `collaboration.stale-binding` for reads and writes alike, so a replacement generation at the same key and mode is adopted deliberately rather than read by drift. Editing `.mstarc` or the origin never re-points a bound checkout.
 
+## A worked cutover
+
+The receipts below are from this repository's own cutover, with the row counts reduced to the tables worth checking. They are not a second cutover and not a template to replay: each document is what the corresponding rung returned, so you can compare your own run against a known shape.
+
+**Rung 1 refused with `collaboration.cutover-required` after advancing the execution schema.** That refusal is the expected progress marker, not a failure: the collaboration rows still belonged to `store.db`, and no cutover verb had run yet.
+
+**The first plan was blocked, and the recovery was a fresh plan.** The first manifest named an unsettled catalog journal entry in `blockers` (`collaboration.cutover-not-quiescent`). Settling that blocker did not make the manifest usable, because `blockers` is frozen into the reviewed document; the next command was a new `plan` to a new `--out` path, not a re-run of `apply`. The reviewed result was:
+
+```json
+{
+  "version": 1,
+  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "source": {
+    "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921",
+    "epoch": 3,
+    "schemaVersion": 21,
+    "revision": 8642,
+    "catalogRevision": 439
+  },
+  "repoKey": "github.com/btspoony/mstar-harness",
+  "mode": "local",
+  "sourceDigest": "80fd42e656b28e0aafeb312de628d1cd8aaa7f0378144e5a9d2d93d91fc9ada2",
+  "counts": { "issues": 1165, "occurrences": 1540, "relations": 16, "project_milestones": 5, "project_roadmaps": 3 },
+  "blockers": []
+}
+```
+
+**`apply` returned `phase: "verified"`**, naming the same manifest and a target generation that did not exist before this cutover:
+
+```json
+{
+  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "phase": "verified",
+  "source": { "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921", "epoch": 3, "schemaVersion": 21, "revision": 8642, "catalogRevision": 439 },
+  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "9e565811-d869-416f-8f8e-2728701d818e", "epoch": 1 },
+  "verifiedAt": "2026-11-23T08:37:58.661Z",
+  "replayed": false
+}
+```
+
+**`activate` then returned `phase: "active"`** for the same manifest and target. `fencedAt` is 42 seconds after `verifiedAt`, and `activatedAt` follows `fencedAt` by a fraction of a second — the two durable steps, in order, on one run:
+
+```json
+{
+  "manifestId": "9a95dd20ac6bb2d61313a1fd72046ad0",
+  "phase": "active",
+  "source": { "storeId": "b432d20a-70fd-4992-981b-bfa61bf8b921", "epoch": 3, "schemaVersion": 21, "revision": 8642, "catalogRevision": 439 },
+  "target": { "repoKey": "github.com/btspoony/mstar-harness", "mode": "local", "storeId": "9e565811-d869-416f-8f8e-2728701d818e", "epoch": 1 },
+  "verifiedAt": "2026-11-23T08:37:58.661Z",
+  "fencedAt": "2026-11-23T08:38:41.185Z",
+  "activatedAt": "2026-11-23T08:38:41.246Z",
+  "replayed": false
+}
+```
+
+Read the three documents as one story. The `manifestId` is identical in all three, so the document that was reviewed is the one that was staged and published. The source generation (`storeId`, `epoch`, `schemaVersion`, `revision`, `catalogRevision`) is identical in all three, so nothing moved underneath the fence. The target is one new store id at epoch 1, created by this cutover. `replayed: false` on both receipts records that each half wrote its own record; `replayed: true` means the verb reused the record already held for that same manifest digest — a resumed activation, or a repeated `apply` of an identical manifest — and the reused `verifiedAt` is the original one, not the time of the second run.
+
 ## Remote binding and first observation
 
-`remote` mode selects the provider project set named by the protected Git selector, and this checkout's database becomes a verified observation cache plus an intent ledger — never authority. This section covers binding during a migration; the host lane's day-to-day procedure belongs to the remote collaboration guidance shipped with the release.
+`remote` mode selects the provider project set named by the protected Git selector, and this checkout's database becomes a verified observation cache plus an intent ledger — never authority. This section covers binding during a migration; the day-to-day procedure, the outbox verbs, and the refusal map belong to the remote collaboration guidance ([skills/mstar-remote-collaboration/SKILL.md](../skills/mstar-remote-collaboration/SKILL.md), with `references/host-lane.md` § Refusal recovery).
 
 Declare it in the control checkout's `.mstarc`:
 
@@ -165,7 +226,7 @@ Then:
 mstar store collaboration remote status --harness <abs>
 ```
 
-`status` reports the checked selector commit, generation, and phase, this checkout's binding state (`bound` or `unbound`), and per-project scope, revision, completeness, `asOf`, and freshness. It reads and creates nothing and prints no provider content. A selector that cannot be checked at the origin refuses `remote.selector-unavailable` — a failed lookup is never read as absence.
+`status` reports the checked selector commit, generation, and phase, this checkout's binding state (`bound` or `unbound`), and per-project scope, revision, completeness, `asOf`, and freshness. It creates and changes nothing and prints no provider content, but it is not read-free: it checks the live selector ref and reads this checkout's binding and cache metadata, and fetches nothing from the provider. A selector that cannot be checked at the origin refuses `remote.selector-unavailable` — a failed lookup is never read as absence. Restoring read access is the recovery for an unreadable origin, not for an unpublished one: if the origin carries no selector ref at all, creating or advancing `refs/heads/mstar-collaboration-authority` is an authorized host action outside this migration, and `bind` refuses until a readable selector exists.
 
 Verify each selected project through the host's approved Linear tools — exact workspace, team, project, and the required capabilities — then submit the reviewed batch:
 
@@ -196,17 +257,10 @@ mstar store collaboration remote adopt-issue --harness <abs> --project <local-pr
 
 Use the exact observed unmarked provider UUID, never a display id or title. Exit 0 returns `state: "enqueued"` — one durable intent, not an adoption and not provider success. An already marked issue, or a reference already bound to another provider issue, refuses `remote.scope-mismatch`.
 
-Remote writes are durable intents, and the CLI performs no provider call:
+Remote writes are durable intents, and the CLI performs no provider call. The outbox verbs (`outbox-pending`, `outbox-show`, `outbox-dispatch`, `outbox-receipt`, `outbox-reconcile`, `outbox-resolve`, `outbox-abandon`), their flags, and their state machine are owned elsewhere: the [remote collaboration guidance](../skills/mstar-remote-collaboration/SKILL.md) for the procedure and `mstar schema --command store.collaboration.remote.<verb>` for each input document. Read the shape there rather than a copy here. Two qualifications matter during a migration:
 
-| Verb | What it does |
-| --- | --- |
-| `mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>` | Lists this binding's `enqueued` intents as summaries. Not permits. |
-| `mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>` | Discloses one intent's binding, state, attempt, request hash, and frozen request. Unknown ids refuse `remote.intent-not-found`. |
-| `mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>` | Issues the ONE send permit for the oldest enqueue and marks the intent `unconfirmed` before any provider call. A replay returns state only. A reviewed resolution also needs its fork observation through `--input`. |
-| `mstar store collaboration remote outbox-receipt --harness <abs> --input <abs-json>` | Records what the dispatched attempt observed (`confirmed`, `unconfirmed`, `conflict`, `not-sent`). Exit 0 records evidence; only `confirmed` proves the effect. |
-| `mstar store collaboration remote outbox-reconcile --harness <abs> --input <abs-json>` | Records read-only recovery evidence under the intent's original binding. Never issues a permit. |
-| `mstar store collaboration remote outbox-resolve --harness <abs> --operation <uuid> --input <abs-json>` | Freezes a reviewed replacement under a new operation id with the freshly observed complete fork heads. |
-| `mstar store collaboration remote outbox-abandon --harness <abs> --operation <uuid> --reason <text>` | Abandons an intent before dispatch, or after a recorded pre-send `not-sent`. Never an ambiguous-effect recovery. |
+- **No durable intent, no write.** A write is reported only after its intent is committed to the outbox. When the intent cannot be persisted — no bound lane, or a cache whose outbox tables are absent or incomplete — the verb refuses (`collaboration.stale-binding` for the unbound lane, `collaboration.unreadable` for the damaged cache), creates no table and no intent, and issues no send permit, so nothing reaches the provider. Repair the scope and the binding (`mstar path resolve`, then `remote bind` or `adopt`) and submit the write again; never retry the same write into a different lane.
+- **`outbox-show` discloses metadata once access is stale.** It returns the frozen request only while the addressed project's verified access check is current; afterwards it reports the intent with `disclosure: "metadata"`. A withheld request is therefore not evidence that the intent was lost — re-verify and re-observe that project before concluding anything about the attempt.
 
 Ordinary business verbs in a remote checkout freeze their normalized event and refuse `remote.effect-pending` with the operation id, state, and confirmed components; a composite reports `collaboration.operation-partial` while its provider half is unconfirmed. Replaying the identical business verb under the same operation id returns its recorded result once the intent is `confirmed`. `issue-sync` refuses a remote checkout.
 
@@ -260,7 +314,7 @@ The attestation for a restore is the same document without the `cutover` block: 
 
 ## Recovering from each refusal class
 
-Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and a `Recovery:` line. Exit 2 is usage: the document or flag was malformed and nothing was mutated.
+Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and a `Recovery:` line. Exit 2 is usage: the document or flag was malformed and nothing was mutated. The rows below cover the refusals this page's own flows return, not every code the build can emit: the host lane's full map is `references/host-lane.md` § Refusal recovery in the [remote collaboration guidance](../skills/mstar-remote-collaboration/SKILL.md), and the tracked contract is the [collaboration authority spec](specs/architecture/collaboration-authority.md).
 
 | Code | Meaning | Recovery |
 | --- | --- | --- |
@@ -275,8 +329,10 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 | `collaboration.stale-binding` | The recorded binding, the lane metadata, or the checked selector disagrees with the resolved scope. | Re-resolve, correct the origin or mode, and either `store collaboration adopt --expect-store <store-id>` or complete the reviewed `remote bind`. A bound checkout is never retargeted by editing its mode. |
 | `store.schema-unsupported` | The store's schema is newer than this build reads — the normal state for a released 4.8.x build after the fence. | Install the 5.0 build and rerun; nothing was modified. |
 | `store.upgrade-attestation-missing` | A retired held claim needs an explicit stop document. | Build it with `mstar schema --command store.upgrade` and rerun with `--attestation`. |
-| `store.attestation-invalid` | The attestation document cannot be used: wrong version, missing or ill-typed field, undeclared field, two current consumers, a non-coordinator current consumer, a build/version or cutover-block disagreement. | Fix the document as named; no byte was written. Build through `mstar schema --command store.collaboration.activate`. |
-| `store.activation-blocked` | The document is well-formed but the barrier is incomplete: no attested consumer, a consumer below the Node floor, a live session, or a running/unattested disposition. | Stop and reload the named consumers and sessions, then resubmit. The previous authority remains sole authority. |
+| `store.report-not-published` | The operation completed, but the `--out` report was not published — most often because a file already exists at that path, since reports are create-only. | The operation's own result stands; nothing was lost. Re-run only to obtain a file, with a fresh `--out` path, and check that `manifestFile`/`receiptFile` is non-null. Never apply a manifest that was already sitting at the path. |
+| `store.runtime-unsupported` | The running runtime does not provide native `node:sqlite` (Node.js below 24.18.0, or another runtime). | Rerun with Node.js >= 24.18.0 on `PATH`; retrying on the same runtime reproduces the refusal, and nothing was modified. |
+| `store.attestation-invalid` | The attestation document cannot be used: wrong version, missing or ill-typed field, undeclared field, two current consumers, a non-coordinator current consumer, a build/version or cutover-block disagreement, or a live source session the document does not stop. | Fix the document as named; no byte was written. Build through `mstar schema --command store.collaboration.activate`. |
+| `store.activation-blocked` | The document is well-formed but the barrier is incomplete: no attested consumer, no current coordinator, a consumer below the Node floor, a consumer whose disposition is not `reloaded`/`upgraded`/an explicit exclusion, or a session the document itself declares as running or queued. | Stop and reload the named consumers, and declare each stopped session as `stopped` or `reloaded`. An omitted live session is a document error (`store.attestation-invalid`), not this code. The previous authority remains sole authority. |
 | `collaboration.cutover-required` | A combined store still owns collaboration rows. | Rung 1 (`store upgrade`) then `plan`, `apply`, `activate`. |
 | `collaboration.cutover-not-quiescent` | Open mirror work or an unsettled catalog journal entry is frozen into the reviewed manifest. | Settle each named blocker with its own verb, then `mstar store collaboration plan` again and review the new manifest — `apply`/`activate` refuse the old one before reading current state. |
 | `collaboration.cutover-conflict` | Another activation owns the target, the manifest was already fenced or restaged, a manifest is not this build's plan output, or the local cutover lock is held or malformed. | Preserve both sides; finish or recover the owning activation, confirm no cutover process runs on the host named by the lock, or re-plan with a correct manifest. |
@@ -286,7 +342,7 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 | `collaboration.observation-incomplete` | The admitted snapshot does not cover the required scope, or a verified check carried no snapshot. | Complete the provider traversal and re-observe. |
 | `collaboration.observation-stale` | The access check or traversal start is outside the 60-second window, or dated in the future. | Recheck access with the host and re-observe from a fresh traversal. |
 | `collaboration.backup-incomplete` | The pair is not one verified snapshot window: a manifest exists at `--out`, images lack a pair claim, a generation moved during the copy, the authority is not active, or the supplied receipt is not the manifest. | Settle open work, confirm the collaboration authority is `ACTIVE`, then take a new pair with `store backup --out` naming a new path. A combined (pre-cutover) store has no pair to take — use the recovery point described in [Backup and restore](#backup-and-restore). |
-| `remote.selector-unavailable` | The origin could not be asked, or published no readable selector. | Restore Git access to the canonical origin and the protected ref, then re-check `remote status`. |
+| `remote.selector-unavailable` | The origin could not be asked, or published no readable selector. | Restore Git access to the canonical origin and to the protected selector ref, then re-check `remote status` and continue with `bind`/`observe`. Read access alone does not create a ref the origin never published; that requires the authorized selector publication described above. |
 | `remote.unavailable` | No usable admitted observation for the required scope. | Establish the reviewed bind if missing, traverse the bound scope, and submit `remote observe`. |
 | `remote.scope-mismatch` | A verified scope disagrees with the binding, a check is missing or duplicated, or an adoption targets a marked issue or an already-bound reference. | Correct the scope, or use the exact observed unmarked identity and an unbound reference; never title-match. |
 | `remote.denied` / `remote.revoked` | A negative host check reports denied or revoked access. | Restore authorized access, re-verify the selected scope, and re-observe. |
@@ -296,12 +352,12 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 | `remote.intent-not-found` | Unknown operation id. | Read `outbox-pending` and address the id it names; never invent one. |
 | `remote.dispatch-refused` | The intent is not dispatchable in its recorded state. | Read it with `outbox-show`; supply a reviewed resolution's fork observation, reconcile an uncertain send, or re-observe a moved base. Never reuse a dispatched id. |
 | `remote.operation-conflict` | The operation id already holds a different request, kind, or generation. | Inspect with `outbox-show`; for a conflicted fork prepare the replacement with `outbox-resolve`. |
-| `remote.effect-abandoned` | The provider intent was abandoned, so a composite can never complete as admitted. | The confirmed components are durable and never re-sent; recover only the incomplete work under the same operation id. |
-| `remote.effect-mismatch` | The confirmed provider effect does not carry the disposition the frozen request asked for. | Correct the request and reissue deliberately; no execution binding was or will be recorded from that effect. |
+| `remote.effect-abandoned` | The provider intent was abandoned, so a composite can never complete as admitted. | The reservation is declined, not paused: confirmed components are durable and never re-sent. Correct the named cause and reissue the write under a NEW operation id; if some components confirmed, the new request carries only the entries that did not settle. |
+| `remote.effect-mismatch` | The confirmed provider effect does not carry the disposition the frozen request asked for, so no execution binding was recorded from it. | Re-observe the project, then reissue the same verb under a NEW operation id against the current revision; the settled effect is never re-sent. A terminal disposition must be reopened deliberately before a new closure is admissible. |
 
 ## Limits you must plan around
 
-**Cross-authority project moves are not in 5.0.** Moving an issue between projects whose authorities differ — the staged move, interruption recovery before membership switches, and `IssueRef`/history preservation across authorities — is unproven and not implemented. `moveIssue` refuses a `remote` checkout with `collaboration.mode-unavailable`, and no verb stages or completes a cross-authority move. This is tracked as open issue `I-001235`; a relation whose target cannot be resolved across authorities remains visible as unresolved, never absent.
+**Cross-authority project moves and relations are not in 5.0.** Moving an issue between projects whose authorities differ — the staged move, interruption recovery before membership switches, and `IssueRef`/history preservation across authorities — is unproven and not implemented. `moveIssue` refuses a `remote` checkout with `collaboration.mode-unavailable`, and no verb stages or completes a cross-authority move, so nothing on this page depends on one. Cross-authority relation resolution is likewise absent: the ADR requires that a relation whose target cannot be resolved across authorities stay visible as unresolved rather than absent, but that behaviour is a requirement for the deferred iteration, not an observable you can rely on in this build. Only the refusal boundary is asserted — the observed issue, selector, and binding are unchanged and no intent is recorded — and this is tracked as open issue `I-001235`.
 
 **Live provider behaviour is unverified.** The remote lane, the private cache, the outbox, and the sandbox handoff are proven against a controlled host fixture — two sandboxes with separate `HOME` and workspace, a local bare Git origin, and in-process provider state. Live Linear permissions, field-fidelity and privacy limits, exact event round-tripping, Git server protection of the selector ref, and operational sender exclusion remain unverified until a separately authorized release or operational acceptance. Do not treat this page as a claim about a specific workspace.
 
