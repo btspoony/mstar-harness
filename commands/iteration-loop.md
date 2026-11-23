@@ -22,7 +22,7 @@ The whole lifecycle with an **autonomous** direction lock: this command's explic
 1. **Phase 1 — autonomous start** → execute **`mstar-iteration/references/phase-1-prepare.md`** §1.1–§1.6 with `Direction lock mode: autonomous` (ranking, branch resolve, prototype disposition → **`references/autonomous-direction-lock.md`**). Retain a prototype (HTML, Markdown or JSON) with format rationale and autonomous disposition; never fabricate user approval. **Do not read `skills/grill-me/SKILL.md`** for this entry.
    Host Plan-mode permissions still apply — use the active host bridge's supported resume. Print the §1.6 Phase 1 completion checklist: clear the pre-integration items before the §2.3 integration step and mark the integration item after the branch push; loop session todo `phase-1-autonomous-start` closes when the compass is locked and the integration branch is pushed.
 2. **No credible candidate and no `direction`** → STOP and escalate; never invent a direction or default the branch policy.
-3. **Phase 2→6** → continue through **`iteration-drive`** exactly (same route map, gates, phase headers and report). Continuous execution and STOP rules → **`mstar-iteration` §2.6** plus **`command-shared-invariants.md`**.
+3. **Phase 2 → Phase 3 → PR delivery → Workflow Close Out** → continue through **`iteration-drive`** exactly (same route map, gates, headers and report: `## Phase N` for Phase 2/3, `## PR delivery`, `## Merge-ready checklist`, `## Workflow Close Out`). Continuous execution and STOP rules → **`mstar-iteration` §2.6** plus **`command-shared-invariants.md`**.
 
 ## Report
 
