@@ -13,14 +13,13 @@
  * leaves) so it closes no ESM cycle back through `store.ts`.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   CoordinationError,
   assertExactKeys,
   isNonEmptyString,
   isPlainObject,
 } from "./coordination-write.js";
-import { resolveWorkflowDir } from "./path.js";
 
 /** The workflow-wide coordinator envelope persisted by the engine. */
 export type CoordinationSession = {
@@ -31,23 +30,7 @@ export type CoordinationSession = {
   harness_root: string;
 };
 
-const SESSION_DIR = "sessions";
 const ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "harness_root"] as const;
-
-/** Canonical workflow coordinator envelope path. */
-export function sessionFilePath(
-  harnessRoot: string,
-  workflowId: string,
-  role: CoordinationSession["role"],
-  sessionId: string,
-): string {
-  return join(
-    resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }),
-    workflowId,
-    SESSION_DIR,
-    `${role}-${sessionId}.json`,
-  );
-}
 
 /** Read and validate a session envelope (throws `coordination.session-*`). */
 export function readSessionEnvelope(sessionPath: string): CoordinationSession {

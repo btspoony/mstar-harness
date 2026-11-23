@@ -83,17 +83,6 @@ export function assertPlanAddress(_seat: CoordinationSeat, planId: unknown): str
   return planId;
 }
 
-export function requireRowStatus(row: PlanRow, expected: string, planId: string, what: string, _opts: { still?: boolean } = {}): void {
-  const actual = rowStatusOf(row);
-  if (actual !== expected) {
-    throw new CoordinationError(
-      "coordination.plan-status",
-      "The requested operation requires the plan to be in its allowed status. Inspect workflow and plan state with mstar status validate.",
-      { plan_id: planId, expected, actual, operation: what },
-    );
-  }
-}
-
 export function requireProgressStatus(row: PlanRow, target: PlanProgress["status"], planId: string): void {
   const current = rowStatusOf(row);
   if (!PROGRESS_TRANSITIONS[current]?.includes(target)) {

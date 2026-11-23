@@ -46,9 +46,8 @@ snapshot plus its session envelope. Nothing bridged the two namespaces.
 3. **One identity, one role record.** The role set collapsed to `coordinator`
    alone (store migration 9 retired every `plan-pm` execution session into row
    metadata), so the second-record collision this rule bought is now historical.
-   The shape still holds wherever a role-scoped path is derived —
-   `sessionFilePath()` builds `<role>-<sessionId>.json` — and readers must resolve
-   the path recorded on the envelope rather than re-deriving a name.
+   Envelope files keep the role-scoped `<role>-<sessionId>.json` name, and readers
+   must resolve the path recorded on the envelope rather than re-deriving a name.
 4. **Fail loudly on a missing association.** Refuse an unusable identity with
    an additive code *before* any write, and keep every pre-existing refusal
    code and message byte-identical; a missing association is a refusal, never
