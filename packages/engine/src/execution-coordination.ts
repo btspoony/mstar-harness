@@ -848,12 +848,12 @@ export async function prepareExecutionPlan(
   // The lane and the execution store are separate databases, so this read cannot be serialized
   // with the lane's writes — see `SplitJournal` for that bounded residual.
   const splitJournal = await openSplitJournal(context);
-  // note: A regression plants a journal row here — after the owner verdict, before the
-  // transaction takes its lock — to prove the verdict is re-read at the transaction position
-  // for BOTH owners: the combined row is the transaction's own, the split row its held lane's.
-  prepareJournalGapForTest?.();
-  return withSplitJournal(splitJournal, () =>
-    withExecutionPlanOperation<ExecutionPlanView>(
+  return withSplitJournal(splitJournal, async () => {
+    // note: A regression plants a journal row here — after the owner verdict, before the
+    // transaction takes its lock — to prove the verdict is re-read at the transaction position
+    // for BOTH owners: the combined row is the transaction's own, the split row its held lane's.
+    prepareJournalGapForTest?.();
+    return await withExecutionPlanOperation<ExecutionPlanView>(
       context,
       resolved,
       requestHash,
@@ -872,8 +872,8 @@ export async function prepareExecutionPlan(
       },
       (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts, splitJournal),
       (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts, splitJournal),
-    ),
-  );
+    );
+  });
 }
 
 /**
