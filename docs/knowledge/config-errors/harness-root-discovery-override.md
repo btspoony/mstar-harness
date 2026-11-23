@@ -17,7 +17,7 @@ tags: [harness-root, path-resolution, sdd-workspace, worktree, fail-closed, over
 
 # Harness-root discovery override
 
-> **Superseded (2026-11-20):** the explicit override this record introduced is retired. The harness root is fixed at `<git main worktree root>/.mstar/`; see `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The fail-closed linked-worktree ordering below remains in force.
+> **Superseded (2026-11-20):** the explicit override this record introduced is retired. The harness root is fixed at `<git main worktree root>/.mstar/`; see `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`. The fail-closed linked-worktree ordering below remains in force.
 
 ## Problem
 

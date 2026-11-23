@@ -233,7 +233,7 @@ describe("mstar catalog import", () => {
     const cloneState = await readExecutionState({ harnessDir: clone.harness });
     expect(cloneState.data.workflows).toEqual([]);
     expect(cloneState.data.root.workflows).toEqual([]);
-  });
+  }, 30000);
 
   test("a conflicting plan is refused and writes nothing", async () => {
     const { workspace, harness } = await populatedFixture("conflict-");

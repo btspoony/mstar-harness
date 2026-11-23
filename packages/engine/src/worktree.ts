@@ -127,14 +127,13 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
 const TRACKED_CHANGE_LIMIT = 20;
 
 /**
- * True when `root` declares a Morning Star harness, decided by the same
- * `{HARNESS_DIR}` resolution chain every other reader uses (`.mstarc`
- * `harness_dir` → `.mstar/` → `.agents/` → `.plans/` / `plans/`) rather than a
- * hand-rolled pair of names. `localProbe` + a `root` boundary keep the question
- * about that checkout alone (no main-worktree substitution, no upward walk past
- * it), and `ignoreEnvOverride` is retained for callers but the environment no
- * longer selects a root: `MSTAR_HARNESS_DIR` is retired and a repository that
- * declares nothing resolves no harness from it.
+ * True when `root` is a checkout that carries the fixed harness root, decided
+ * by the same `{HARNESS_DIR}` resolver every other reader uses (`<root>/.mstar`)
+ * rather than a hand-rolled name check. `localProbe` + a `root` boundary keep
+ * the question about that checkout alone (no main-worktree substitution, no
+ * upward walk past it); `MSTAR_HARNESS_DIR`, a `.mstarc` `harness_dir` and the
+ * retired `.agents/` / `.plans/` / `plans/` candidates select nothing, so a
+ * repository that declares nothing resolves no harness from them.
  */
 export function hasHarnessRoot(root: string): boolean {
   return resolveHarnessDir(root, { localProbe: true, workspaceRoot: root }) !== null;

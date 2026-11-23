@@ -8,7 +8,7 @@
  * Spec source: `skills/mstar-conventions/SKILL.md` § 路径符号 (SSOT),
  * § {SPECS_DIR} 解析（找到非空目录即停）and § Git 跟踪策略 /
  * § Plan-Writing Path Gate, plus ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`. The
  * harness root is one fixed location; `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `.plans/` / `plans/`
  * candidates are retired in the same release and silently ignored — no

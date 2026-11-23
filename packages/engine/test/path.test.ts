@@ -4,10 +4,11 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - `{HARNESS_DIR}` fixed-root resolution (ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`):
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`):
  * `<git main worktree>/.mstar` only — `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the `.agents/`/`.plans/`/`plans/` candidates
- * are retired and refused with a named recovery; `opts.harnessDir` is a
+ * are retired and ignored (unknown `.mstarc` keys, never adopted as a
+ * root); `opts.harnessDir` is a
  * caller-held assertion returned verbatim.
  * - `{SPECS_DIR}` resolution (first non-empty candidate wins, empty-dir-as-
  * absent, default-create `<repoRoot>/.agents/specs/` when all absent; legacy

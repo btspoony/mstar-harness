@@ -391,14 +391,14 @@ describe("collaboration identity", () => {
   });
 
   test("an invalid mode never echoes the submitted value", () => {
-    const secret = "synthetic-secret-9f3a";
+    const invalidMode = "synthetic-invalid-9f3a";
     const result = refusal(() =>
-      resolveAt(makeRepo("https://github.com/acme/widgets.git", `[collaboration]\nmode=${secret}\n`)),
+      resolveAt(makeRepo("https://github.com/acme/widgets.git", `[collaboration]\nmode=${invalidMode}\n`)),
     );
     expect(result.code).toBe("collaboration.mode-invalid");
     expect(result.message).toContain("mode");
     expect(result.message).toContain("mode=local");
-    expect(result.message).not.toContain(secret);
+    expect(result.message).not.toContain(invalidMode);
   });
 
   test("resolution is side-effect free", () => {

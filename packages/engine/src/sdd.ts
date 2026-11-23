@@ -13,11 +13,13 @@ import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
  * scripts were removed in slice 5.
  *
  * Harness root: fixed at `<main worktree>/.mstar/` (ADR
- * 2026-11-20-fixed-harness-root). `.mstarc` `harness_dir`,
- * `MSTAR_HARNESS_DIR` and the `.agents/` fallback are retired — a retired
- * declaration or a legacy-only checkout refuses via
- * `HarnessRootRetiredError` from `path.ts`, and an explicit
- * `opts.harnessDir` is an assertion that must equal the fixed root.
+ * 2026-11-20-fixed-harness-root). `.mstarc` `harness_dir`, `MSTAR_HARNESS_DIR`
+ * and the `.agents/` fallback are retired and ignored — a declaration or a
+ * legacy-only checkout resolves the fixed root or nothing, never a second
+ * root; an explicit `opts.harnessDir` is an assertion that must equal the
+ * fixed root — `path.ts` refuses a mismatched assertion with
+ * `HarnessRootRetiredError`, while `sddWorkspace`'s own mismatch check
+ * throws `SddScriptError` (see `sddWorkspace` below).
  *
  * SDD execution context (spec A3, issue #428 ACTIVE port):
  * `SddExecutionContext` / `resolveSddExecutionContext` / `checkSddAction`
