@@ -794,6 +794,42 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     }
   });
 
+  test("a SPLIT journal row committed after the owner read still refuses the prepare", async () => {
+    const fixture = await seededWorkflow("prepare-pending-split-gap");
+    const { context, planTokens } = fixture;
+    // why: The post-cutover shape — the collaboration lane owns `catalog_operations`, so the
+    // verdict is a split read and the execution store no longer carries the table.
+    withRaw(context, (db) => {
+      db.exec("drop table catalog_operations");
+    });
+    const before = footprint(context);
+    let seamRan = false;
+    // invariant: A split owner's lane is held OPEN across the prepare transaction and re-read at
+    // its position. A row landing between the owner verdict and that lock must still refuse —
+    // the pre-read-only verdict this replaces would have missed it.
+    setPrepareJournalGapForTest(() => {
+      seamRan = true;
+      withRawCollaboration(context, (db) => {
+        db.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+            "values ('op-split-gap', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+        ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planCall(fixture, OWN_PLAN, "prepare-split-gap", planTokens[OWN_PLAN]!, { kind: "prepare" }),
+      );
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-split-gap");
+      expect(refusal.message).toContain("root-visible");
+      expect(footprint(context)).toEqual(before);
+    } finally {
+      setPrepareJournalGapForTest(undefined);
+    }
+  });
+
   test("a pending journal refuses an identical prepare under a new operation id, while a committed retry still replays", async () => {
     const fixture = await seededWorkflow("prepare-pending-satisfied");
     const { context } = fixture;

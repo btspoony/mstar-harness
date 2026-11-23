@@ -773,8 +773,11 @@ test("store.upgrade refuses an open mirror run before the schema leaves the rele
     expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-sync-run-open", exitCode: 1 });
     if (refused.status === "ok" || refused.status === "usage") throw new Error("expected the run-open refusal");
     expect(refused.message).toContain("run-open");
-    // invariant: The recovery names the released build's own settlement verb, never this build's.
-    expect(recoveryOf(refused)).toContain("mstar issue-sync apply --project <project-id> --results <file|->");
+    // invariant: The recovery names the released build's own settlement verb, never this build's,
+    // and both commands carry the SAME absolute harness: a run reached from another checkout
+    // settles that checkout's store and leaves this control root's run open.
+    expect(recoveryOf(refused)).toContain("mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|->");
+    expect(recoveryOf(refused)).toContain("mstar store upgrade --harness <same-control-root> --operator <name>");
     // invariant: The refusal left the store at the last schema the 4.8.x build admits, with the
     // run row intact, so that build can still settle it.
     const after = await openStore({ harnessDir: harness }, "read");

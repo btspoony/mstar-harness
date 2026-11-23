@@ -1,5 +1,5 @@
 /**
- * execution-registration.ts — the ACTIVE registration route: the ONE verb that
+ * why: execution-registration.ts — the ACTIVE registration route: the ONE verb that
  * publishes a reviewed catalog delta together with the execution lifecycle it
  * registers, on the DB authority (primary spec §7).
  *
@@ -18,7 +18,7 @@
  * - records no journal phases. A transaction either commits the lifecycle and
  *   catalog delta together or leaves no partial ACTIVE registration;
  * - NEVER adopts legacy journal work. A `prepared` / `execution-written` row
- *   refuses through `pendingRegistrationOf` + `refusePendingRegistration`;
+ *   refuses through `pendingRegistrationInTransaction` + `refusePendingRegistration`;
  *   recovery is explicit `catalog reconcile --abort` or identity-checked
  *   `catalog purge-registration`, never file-effect adoption;
  * - is idempotent by operation id SEMANTICALLY: a retry of the same reviewed
@@ -65,10 +65,11 @@ import {
   bindingInputOf,
   canonicalRegistrationIdentity,
   normalizeIterationPlanPaths,
-  pendingRegistrationOf,
-  readSplitPendingRegistration,
+  openSplitJournal,
+  pendingRegistrationInTransaction,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
+  withSplitJournal,
   workflowEntryOf,
   writeBinding,
   type CatalogExecutionCatalogDelta,
@@ -76,6 +77,7 @@ import {
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
   type CatalogExecutionWorkflow,
+  type SplitJournal,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
 import { readCatalogPlanSelection } from "./coordination.js";
@@ -254,6 +256,12 @@ function priorReleaseDelta(workflow: CatalogExecutionWorkflow): CatalogExecution
   };
 }
 
+/** note: Test-only hook observing the split-read→transaction gap of a DB registration. */
+let registrationJournalGapForTest: (() => void) | undefined;
+export function setRegistrationJournalGapForTest(callback: (() => void) | undefined): void {
+  registrationJournalGapForTest = callback;
+}
+
 /**
  * §7 register one execution lifecycle together with its reviewed catalog delta,
  * atomically, on an ACTIVE execution authority.
@@ -356,18 +364,20 @@ export async function commitExecutionRegistration(
     );
   }
   // invariant: A legacy operation still in flight must be settled explicitly before this
-  // registration can commit; it never adopts legacy journal state. A SPLIT owner (the
-  // lane, after the reviewed cutover) is READ here — it is not under this
-  // transaction's lock, so it cannot be read inside it — while the refusal itself is
-  // decided inside the transaction, after the root-token CAS. A combined source
-  // answers `undefined` and reads its journal in that original in-transaction position.
-  const splitPending = await readSplitPendingRegistration(context, request.workflow.workflowId);
+  // registration can commit; it never adopts legacy journal state. A SPLIT owner's lane stays
+  // OPEN across the transaction below, so its verdict is read at the transaction's own position
+  // (after the root-token CAS) instead of a stale pre-read. The lane and the execution store are
+  // separate databases and cannot be serialized together — see `SplitJournal` for that residual.
+  const splitJournal = await openSplitJournal(context);
+  // note: A regression plants a journal row here — after the owner verdict, before the
+  // transaction takes its lock — to prove the verdict is re-read at the transaction position.
+  registrationJournalGapForTest?.();
 
   // invariant: The witness preflight: a registration publishes the reviewed delta into the
   // repository's collaboration lane, so that lane must be the ACTIVE one this
   // operation freezes as its target.
   const target = await collaborationStamp(context);
-  const prepared = await withExecutionTransaction(context, (tx) => {
+  const prepared = await withSplitJournal(splitJournal, () => withExecutionTransaction(context, (tx) => {
     // why: Only the CURRENT epoch's committed receipt replays, so an authority that
     // changed generation under this call is re-resolved instead of being served
     // (or written to) under a generation that no longer exists.
@@ -418,10 +428,10 @@ export async function commitExecutionRegistration(
     });
 
     // invariant: The pending journal is decided HERE, after the root-token CAS, so a stale
-    // token keeps reporting its conflict instead of the journal verdict — the ordering a
-    // combined source has always had. A split owner's row was READ before the
-    // transaction (it is not under this lock); a combined source's row is read here.
-    const pending = splitPending === undefined ? pendingRegistrationOf(tx.db, plan.workflowId) : splitPending;
+    // token keeps reporting its conflict instead of the journal verdict. The verdict is read at
+    // this position for both owners: a split owner's held lane is queried now, so a row
+    // committed after the owner was resolved still refuses.
+    const pending = pendingRegistrationInTransaction(splitJournal, tx.db, plan.workflowId);
     if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
 
     // Create-only admission: a workflow identity another lifecycle already
@@ -481,7 +491,7 @@ export async function commitExecutionRegistration(
       creation,
       expectedCatalogRevision,
     };
-  });
+  }));
   if (prepared.kind === "replay") {
     return noteOutstandingAcknowledgement(
       prepared.receipt.data,
