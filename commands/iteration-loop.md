@@ -7,7 +7,7 @@ input: "[direction] [scale]"
 
 # Iteration Loop
 
-The whole lifecycle with an **autonomous** direction lock: this command's explicit autonomous opt-in replaces the interactive direction dialogue. Sibling entries: `/iteration-start` locks interactively and `/iteration-drive` resumes a locked iteration. **Done = Phase 6 post-merge close.**
+The whole lifecycle with an **autonomous** direction lock: this command's explicit autonomous opt-in replaces the interactive direction dialogue. Sibling entries: `/iteration-start` locks interactively and `/iteration-drive` resumes a locked iteration. **Done = Workflow Close Out.**
 
 ## Args
 
@@ -26,4 +26,4 @@ The whole lifecycle with an **autonomous** direction lock: this command's explic
 
 ## Report
 
-The Phase 6 close report: iteration id, locked direction and scale, plans completed, compound summary, PR link, merge-ready and post-merge close evidence.
+The Workflow Close Out report: iteration id, locked direction and scale, plans completed, compound summary, PR link, merge-ready and post-merge close evidence.
