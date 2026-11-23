@@ -484,6 +484,45 @@ values ('op-pending', 'op-hash', 'prepared', '{}', '{}', '{}', '2026-11-21T00:00
     expect(existsSync(locationAt(repo).dbPath)).toBe(false);
   });
 
+  test("a settled aborted catalog journal is not pending work", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-journal-settled.git");
+    const source = await seedSource(repo);
+    const seed = await openStore(source.context, "write");
+    try {
+      // why: `aborted` is a SETTLED terminal phase (its source bytes are retained and no
+      // execution rows are written), so it must not be read as an in-flight registration.
+      seed.db.exec(`
+insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, created_at, updated_at)
+values ('op-aborted', 'aborted-hash', 'aborted', '{}', '{}', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, created_at, updated_at)
+values ('op-prepared', 'prepared-hash', 'prepared', '{}', '{}', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+`);
+    } finally {
+      seed.close();
+    }
+
+    const manifest = await planCollaborationCutover(source.context);
+    const subjects = manifest.blockers.map((blocker) => blocker.subject);
+    // note: Exactly the genuinely pending row blocks; the settled aborted row does not.
+    expect(subjects.filter((subject) => subject.includes("catalog operation"))).toHaveLength(1);
+    expect(subjects.some((subject) => subject.includes("op-prepared"))).toBe(true);
+    expect(subjects.some((subject) => subject.includes("op-aborted"))).toBe(false);
+    // note: The subject still names the phase it reports.
+    expect(subjects.find((subject) => subject.includes("op-prepared"))).toContain("prepared");
+
+    // invariant: With only the settled aborted row left, the cutover proceeds — the
+    // source's own committed journal row already demonstrates the settled side.
+    const settled = await openStore(source.context, "write");
+    try {
+      settled.db.exec("delete from catalog_operations where operation_id = 'op-prepared'");
+    } finally {
+      settled.close();
+    }
+    const replanned = await planCollaborationCutover(source.context);
+    expect(replanned.blockers).toEqual([]);
+    expect((await applyCollaborationCutover(source.context, replanned)).phase).toBe("verified");
+  });
+
   test("a repeated identical apply reuses the verified receipt and copies once", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-repeat.git");
     const source = await seedSource(repo);
