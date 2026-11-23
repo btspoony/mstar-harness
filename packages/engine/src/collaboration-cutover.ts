@@ -669,8 +669,8 @@ function isRecoveryRecord(record: Record<string, unknown>): boolean {
  * logic documents a supported HISTORICAL shape written before `inputDigest`
  * existed: such a receipt still proves the source bytes but not the conversion
  * input, so it must be recognized as an execution record rather than blocking
- * the cutover. `skipped`/`dispositions` are likewise accepted when absent, and
- * validated when present.
+ * the cutover. `importedIds`, `skipped` and `dispositions` are likewise accepted
+ * when absent, and validated when present.
  */
 function isExecutionImportResult(record: Record<string, unknown>): boolean {
   const optionalStrings = (value: unknown): boolean =>
@@ -678,8 +678,7 @@ function isExecutionImportResult(record: Record<string, unknown>): boolean {
   return (
     (record.verdict === "upgraded" || record.verdict === "nothing-to-import") &&
     isCount(record.imported) &&
-    Array.isArray(record.importedIds) &&
-    record.importedIds.every((id) => typeof id === "string") &&
+    optionalStrings(record.importedIds) &&
     (record.skipped === undefined || Array.isArray(record.skipped)) &&
     optionalStrings(record.dispositions) &&
     isText(record.sourceDigest) &&

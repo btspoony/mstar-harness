@@ -1420,6 +1420,53 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(replanned.manifestId).toBe(manifest.manifestId);
   });
 
+  test("a pre-importedIds execution upgrade receipt is owned rather than blocking the cutover", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-receipts-historical-import.git");
+    const source = await seedSource(repo);
+    const location = locationAt(repo);
+    const legacyId = "postmerge-pr405-schema9-upgrade-20261007";
+
+    // why: A released importer wrote this receipt before `importedIds` and `inputDigest`
+    // existed: it proves the source bytes but not the conversion input, so it must be
+    // recognized as execution-owned instead of refusing the reviewed cutover.
+    const injected = await openStore(source.context, "write");
+    try {
+      injected.db
+        .prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)")
+        .run(
+          legacyId,
+          "historical-request-hash",
+          JSON.stringify({
+            verdict: "upgraded",
+            imported: 0,
+            skipped: [],
+            dispositions: [],
+            sourceDigest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          }),
+          "2026-10-07T00:00:00.000Z",
+        );
+    } finally {
+      injected.close();
+    }
+
+    const manifest = await planCollaborationCutover(source.context);
+    expect(manifest.blockers).toEqual([]);
+    // note: The receipt is execution-owned, so only the seeded collaboration receipts move.
+    expect(manifest.counts.store_operations).toBe(3);
+
+    await applyCollaborationCutover(source.context, manifest);
+    expect(
+      (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
+    ).toBe("active");
+
+    // invariant: The execution-owned receipt stayed on the source's own ledger; it is not part
+    // of the moved collaboration population on the target.
+    const staged = await cutoverState(location);
+    expect(staged.receipts.map((row) => row.operation_id)).not.toContain(legacyId);
+    expect(staged.receipts.map((row) => row.operation_id)).toContain("issue-op-legacy");
+    expect(staged.authority.state).toBe("active");
+  });
+
   test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
     const source = seedSchema20Source(repo);
