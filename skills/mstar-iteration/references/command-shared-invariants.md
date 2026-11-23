@@ -17,7 +17,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 | Product-code edits, test authoring or QC execution (Phase 2) | Dispatch implementer/QC specialists; only bounded PM acceptance checks are direct → `mstar-roles/references/project-manager/acceptance.md` |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `mstar-host/references/parallel-dispatch.md` § Hard rules） |
-| 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
+| 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`mstar-roles/references/project-manager/workflow-close.md`） |
 | Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-doc-corpus`**。
@@ -50,7 +50,7 @@ The primary coordinator projects the entire selected iteration into the table be
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
 | `phase-4-create-pr` | Phase 3 完成后 | PR 已创建并记录 URL/number |
 | `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 merge-ready：§5.2 第 1–5 项全 `[x]`（第 7 项是 merge 前置、第 8 项 merged 后才可勾，均不属于本 todo） |
-| `phase-6-post-merge-close` | §5.2 第 7 项（§5.3 授权）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
+| `phase-6-post-merge-close` | §5.2 第 7 项（§5.3 授权）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 workflow close 完成：Terminal write → Unregister → Projection reconciliation → Cleanup handoff（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 

@@ -37,9 +37,9 @@
  *   not indexed by this check.
  * - Phase 6 post-merge close local-state gate (valid terminal snapshot
  *   shape + no leftover lease + root status.json entry unregistered;
- *   invalid/unreadable root is NOT proof of root absence):
- *   `mstar-iteration/references/phase-6-post-merge-close.md` §6.4 +
- *   Evidence. Pure and additive over the Phase 2–5 `evaluatePhaseGate`
+ *   invalid/unreadable root is NOT proof of root absence): the
+ *   project-manager role's `workflow-close.md`「Cleanup handoff」+
+ *   「Evidence」. Pure and additive over the Phase 2–5 `evaluatePhaseGate`
  *   contract.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";

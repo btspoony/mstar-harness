@@ -124,7 +124,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ### 5.2 Phase 5 exit checklist（merge-ready → enter Phase 6）
 
-打印 **`## Phase 5 exit checklist`**；**第 1–5 项全 `[x]` = merge-ready**（第 6 项是 merge-ready 的 todo 勾选动作，其条件即第 1–5 项），第 7 项（**Merge authorization**）是 merge 与进入 Phase 6 的独立前置（§5.3），第 8 项为 transition marker（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（Phase 6 进入前置），不得作为 merge-ready 的定义或 `phase-5-pr-merge-ready` todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；此后唯一出口是 **Phase 6**（PR merged 后执行 `references/phase-6-post-merge-close.md` §6.1–§6.4）——本 checklist **不是**「迭代交付完成」：
+打印 **`## Phase 5 exit checklist`**；**第 1–5 项全 `[x]` = merge-ready**（第 6 项是 merge-ready 的 todo 勾选动作，其条件即第 1–5 项），第 7 项（**Merge authorization**）是 merge 与进入 Phase 6 的独立前置（§5.3），第 8 项为 transition marker（merged 后才可勾）。**整表全 `[x]` 只在 merge 之后成立**（Phase 6 进入前置），不得作为 merge-ready 的定义或 `phase-5-pr-merge-ready` todo 的关闭条件（否则要求先 merge，`owner-gated` 下自相矛盾）；此后唯一出口是 **Phase 6**（PR merged 后执行 `mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff）——本 checklist **不是**「迭代交付完成」：
 
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
@@ -133,7 +133,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
 - [ ] **Merge authorization** — satisfied per §5.3, and §5.3a passed (no unresolved thread, or each named and confirmed twice)
-- [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`references/phase-6-post-merge-close.md` §6.1–§6.4）
+- [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`mstar-roles/references/project-manager/workflow-close.md`）
 
 ### 5.3 Merge authorization（HARD）
 

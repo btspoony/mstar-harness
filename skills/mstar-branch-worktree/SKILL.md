@@ -240,7 +240,7 @@ Before QC dispatch and PM Acceptance, record implementation-aligned `Review cwd 
 
 ## Worktree / branch cleanup（merge 后回收）
 
-Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`; Phase-6 close → `mstar-iteration/references/phase-6-post-merge-close.md` §6.4. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
+Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`; Phase-6 close → `mstar-roles/references/project-manager/workflow-close.md`「Cleanup handoff」. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
 
 ## Workflow
 
