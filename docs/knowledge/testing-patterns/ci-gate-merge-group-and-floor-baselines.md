@@ -78,16 +78,20 @@ env:
     fi
 ```
 
-### Advisory baseline
+### Corpus baseline (retired)
 
-Before — the retired step asserted equality against a number copied into the workflow:
+Before — the retired step asserted a per-root lower bound against numbers copied into the workflow:
 
 ```bash
-count="$(mstar lint packages scripts --type code | ... )"
-[ "$count" -eq 12790 ] || exit 1
+if ! node packages/cli/dist/mstar-harness.js lint packages --type code 2> "$RUNNER_TEMP/packages.err"; then
+  cat "$RUNNER_TEMP/packages.err" >&2; exit 1
+fi
+count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/packages.err" | grep -o '[0-9]*$')"
+[ "$count" -ge 12790 ] || { echo "packages corpus collapsed to $count (floor 12790)"; exit 1; }
+# scripts/ repeated the same step against a floor of 800
 ```
 
-Retired — a floor below a recorded measurement replaced equality and still moved with every genuine cleanup; the reasoning and the rejected alternatives are in the [retirement record](../../adr/implemented/process/2026-11-23-comment-corpus-floor-retired.md).
+Retired — the floor still moved with every genuine cleanup, because a cleanup and a detector regression produce the same drop, so each deletion needed a workflow edit to lower it. (An earlier form had asserted equality against a copied count.) The reasoning and the rejected alternatives are in the [retirement record](../../adr/implemented/process/2026-11-23-comment-corpus-floor-retired.md).
 
 After — CI asserts no corpus count. The ratchet is the only comment gate:
 
@@ -95,7 +99,7 @@ After — CI asserts no corpus count. The ratchet is the only comment gate:
 # selects the changed code files, then ratchets each against the merge base
 bash scripts/comment-gate-select.sh "$merge" > "$RUNNER_TEMP/comment-changed.bin"
 export MSTAR_COMMENT_BASE="$merge"
-xargs -0 -r -n 1 sh -c 'mstar lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh \
+xargs -0 -r -n 1 -P 8 sh -c 'node packages/cli/dist/mstar-harness.js lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh \
   < "$RUNNER_TEMP/comment-changed.bin"
 ```
 
