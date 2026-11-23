@@ -21,7 +21,7 @@
  * `skills/mstar-sdd/references/sticky-implementer-session.md` +
  * SKILL.md red flag "Resume implementer without host_agent_id".
  * - Harness root: fixed at `<main worktree>/.mstar` (ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`);
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`);
  * `MSTAR_HARNESS_DIR` is ignored by the engine and `opts.harnessDir`
  * must equal the fixed root.
  */

@@ -1,6 +1,6 @@
 # ADR: Fixed harness root — `.mstar/` under the main worktree, no configurable path
 
-Status: proposed — one release, 4.8, removes every retired selector; no warning-only phase
+Status: implemented — the harness root is `<git main worktree root>/.mstar/` and nothing else can move it; every retired selector (`harness_dir`, `MSTAR_HARNESS_DIR`, the legacy candidate chain) is parsed or ignored rather than honored.
 Date: 2026-11-20
 
 ## Problem
@@ -24,39 +24,41 @@ The observed failure: a PM session started in a linked worktree looks for
 nothing, and asks the operator where the main worktree is. Process state is
 split or unreadable until someone supplies the absolute control path by hand.
 
-## Proposal
+## Decision
 
-The harness root becomes one fixed location, derived from Git only:
+The harness root is one fixed location, derived from Git only:
 
 ```
 <git main worktree root>/.mstar/
 ```
 
-- No `.mstarc` key, environment variable or CLI option may move it, and no
+- No `.mstarc` key, environment variable or CLI option moves it, and no
   candidate chain decides it. `readMainWorktree` is the only input; the
-  directory name is fixed to `.mstar`.
-- **One release, 4.8.** Every retired selector stops selecting in the release
-  that states this decision. There is no warning-only phase and no
-  major-version gate: this project treats a minor as able to carry the contract
-  change, and the release notes mark it breaking.
+  directory name is fixed to `.mstar`. `resolveFixedHarnessDir` joins that
+  name to the checkout and answers `null` when the directory is absent.
+- The change landed as one release, 4.8. Every retired selector stopped
+  selecting in the release that states this decision. There is no
+  warning-only phase and no major-version gate: this project treats a minor as
+  able to carry the contract change, and the release notes mark it breaking.
 - `harness_dir` is retired as a *selector*, not as a parse error. A `.mstarc`
   that declares it still parses, and the value is ignored: the root is always
   `<git main worktree>/.mstar`. A checkout that declares it needs no edit; the
   line is inert, and deleting it is housekeeping, never a required recovery.
-- Legacy harness candidates (`.agents/`, `.plans/`, `plans/`) are retired in
-  the same release. The resolver no longer probes them and never adopts them.
-  A repository that has only one of them is not an error: it simply has no
-  `.mstar`, so it resolves no harness until `mstar harness scaffold` creates
-  the fixed root (an existing store then needs `mstar store upgrade`).
-- `MSTAR_HARNESS_DIR` is retired in the same release. Setting it no longer
-  selects a root: the value is ignored, with no error and no recovery command
-  to run. `unset MSTAR_HARNESS_DIR` remains ordinary shell hygiene for an
-  inherited value, not a prerequisite for the fixed root to work.
+- Legacy harness candidates (`.agents/`, `.plans/`, `plans/`) are retired.
+  The resolver no longer probes them and never adopts them. A repository that
+  has only one of them is not an error: it simply has no `.mstar`, so it
+  resolves no harness until `mstar harness scaffold` creates the fixed root
+  (an existing store then needs `mstar store upgrade`).
+- `MSTAR_HARNESS_DIR` is retired. Setting it no longer selects a root: the
+  value is ignored, with no error and no recovery command to run. `unset
+  MSTAR_HARNESS_DIR` remains ordinary shell hygiene for an inherited value, not
+  a prerequisite for the fixed root to work.
 - `opts.harnessDir` and the CLI `--harness` flag keep only a transport role:
   they must resolve to the same path as `<main>/.mstar`, and any other value is
   refused with the actual and expected paths. They can no longer choose a
   different root. The engine option stays as an internal assertion surface for
-  callers that already hold the derived value.
+  callers that already hold the derived value; `HarnessRootRetiredError`
+  carries the refusal of a mismatched scaffold root.
 - A CLI launch outside any Git work tree is the one case with nothing to
   derive from. There `--harness` is the only accepted input and must name an
   existing `<dir>/.mstar`; it is used as given, with no equality check. With no
@@ -77,7 +79,7 @@ The harness root becomes one fixed location, derived from Git only:
   the corpus defaults (`.agents/knowledge`, `.agents/specs`, `.agents/adr`)
   and the sub-directory keys (`plan_dir`, `sdd_dir`, `iteration_dir`,
   `workflow_dir`, `project_dir`, `review_dir`) are unchanged.
-- Scaffold stops writing `harness_dir`; a `.mstarc` it creates carries only
+- Scaffold does not write `harness_dir`; a `.mstarc` it creates carries only
   the keys whose values differ from the defaults.
 - The PM role's default load path states the rule: before reading or writing
   process state, resolve `controlHarnessDir` with `mstar path resolve`; a
@@ -117,58 +119,55 @@ upgrade` — both named as the path forward, never as a repair for an error.
   exactly the ambiguity being removed. A deployment that needs it keeps a
   separate repository root instead.
 
-## Acceptance criteria
+## Consequences
+
+The fixed root is now stated behavior, and each acceptance criterion of the
+proposal is a property a reader can check at HEAD:
 
 - Inside a linked worktree, `mstar path resolve` reports `harnessDir` equal to
-  `<main>/.mstar`, `linkedWorktree: true`, and no command creates a `.mstar/`
-  under the worktree.
+  `<main>/.mstar` and `linkedWorktree: true`, and no command creates a
+  `.mstar/` under the worktree.
 - A `.mstarc` carrying `harness_dir` is accepted and its value ignored: the
-  command still resolves `<main>/.mstar`, and no recovery edit is required.
-- A repository whose only harness is `.agents/` (or `.plans/` / `plans/`) is
-  not an error: it resolves no harness root, and naming the fixed root
-  (`mstar harness scaffold`) is how a fresh one comes into existence.
+  command still resolves `<main>/.mstar`, so no recovery edit is required.
+- A repository whose only harness is `.agents/` (or `.plans/` / `plans/`)
+  resolves no harness root, and naming the fixed root (`mstar harness
+  scaffold`) is how a fresh one comes into existence.
 - `MSTAR_HARNESS_DIR` never selects a root: setting it to a worktree or an
-  out-of-repo directory leaves the Git-derived `<main>/.mstar` in force, with
-  no error and no required `unset`.
+  out-of-repo directory leaves the Git-derived `<main>/.mstar` in force.
 - A command launched outside any Git work tree runs when `--harness` names an
-  existing `.mstar`, and refuses with both recoveries when it does not; the
-  same launch with `MSTAR_HARNESS_DIR` set is unaffected (the value is ignored).
-- An MCP call that omits `harness` is refused, and an MCP call naming a linked
+  existing `.mstar`, and refuses with both recoveries when it does not.
+- An MCP call that omits `harness` is refused, and one naming a linked
   worktree's `.mstar` is refused with the Git-derived control root in the
-  message. No MCP launch form (`--harness`, environment) changes either
+  message; no MCP launch form (`--harness`, environment) changes either
   outcome.
 - `mstar harness scaffold` in a new repository writes a `.mstarc` without
   `harness_dir`.
-- The PM required-reading path contains the control-root-first rule and links
+- The PM required-reading path carries the control-root-first rule and links
   to `mstar-use-cli/references/preconditions.md`.
-- `bun run validation:drift` passes, and the affected engine, CLI and host
-  suites cover the worktree, legacy-layout, explicit-selector and scaffold
-  cases.
 
-## Risks
+The costs the decision accepts:
 
-- **Existing repositories break on the 4.8 upgrade.** The release notes mark
+- **Existing repositories change on the 4.8 upgrade.** The release notes mark
   the change breaking, a previously configured root stops taking effect
   without an error, and no store is moved automatically.
 - **Out-of-checkout and shared-state harness layouts disappear.** This is the
   decision's cost; the migration is to keep the harness inside the main
   worktree.
-- **MCP deployments that pinned the connection must inject per call.** After
-  retirement the root reaches the server only through the call's `harness`
-  field, so a host integration must fill it from the session cwd. The refusal
-  names that replacement; forgetting it fails the call rather than rooting the
+- **MCP deployments that pinned the connection must inject per call.** The
+  root reaches the server only through the call's `harness` field, so a host
+  integration fills it from the session cwd. The refusal names that
+  replacement; forgetting it fails the call rather than rooting the
   connection somewhere unexpected.
 - **Downstream hosts resolve roots themselves.** `dsh` has its own
-  `HarnessResolver` surface and must adopt the same rule in the same release,
-  or the hosts diverge.
+  `HarnessResolver` surface and must apply the same rule, or the hosts
+  diverge.
 - **There is no fallback phase.** A repository that relied on a retired
   selector quietly resolves the fixed root instead. Because retirement is
   silent by design, the release notes carry the only upgrade signal: an
   operator who expected `harness_dir` / `MSTAR_HARNESS_DIR` to move the root
-  must learn it from the notes, not from a command failure.
+  learns it from the notes, not from a command failure.
 - **A silent ignore can hide a real intent.** Ignoring `harness_dir` means a
   checkout that genuinely needed a second root resolves nothing instead of
   reporting a conflict; the visible symptom is a missing store (`store.db` not
   found), not a path error. `mstar path resolve` is where an operator confirms
   which root a checkout actually has.
-
