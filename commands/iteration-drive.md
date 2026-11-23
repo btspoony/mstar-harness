@@ -1,6 +1,6 @@
 ---
 name: iteration-drive
-description: "Drive or resume the selected locked iteration through Phase 2→6 — autonomous execute → iteration-close → PR → merge-ready loop → post-merge close. Takes no arguments."
+description: "Drive or resume the selected locked iteration through Phase 2 and Phase 3, then the named chain — autonomous execute → iteration-close → PR delivery → merge-ready → Workflow Close Out. Takes no arguments."
 agent: project-manager
 input: "[no args]"
 ---

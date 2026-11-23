@@ -1,6 +1,6 @@
 ---
 name: iteration-loop
-description: "Run a whole iteration Phase 1→6 autonomously — code-first direction lock with a retained prototype, then execute → close → PR → merge-ready → post-merge close. Optional direction hint and scale S|M|L|XL; explicit autonomous opt-in, no grill-me, no routine confirmation."
+description: "Run a whole iteration from Phase 1 through Phase 3 and on to Workflow Close Out autonomously — code-first direction lock with a retained prototype, then execute → close → PR delivery → merge-ready → Workflow Close Out. Optional direction hint and scale S|M|L|XL; explicit autonomous opt-in, no grill-me, no routine confirmation."
 agent: project-manager
 input: "[direction] [scale]"
 ---
