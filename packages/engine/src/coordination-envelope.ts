@@ -11,6 +11,8 @@
  *
  * It imports only `node:*` and `./coordination-write.js` (all
  * leaves) so it closes no ESM cycle back through `store.ts`.
+ *
+ * see docs/knowledge/architecture-patterns/host-engine-identity-association.md
  */
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
