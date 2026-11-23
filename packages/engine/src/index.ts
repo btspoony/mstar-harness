@@ -778,7 +778,7 @@ export {
   writeDshSessionBinding,
 } from "./host-state-store.js";
 export { rowValidationRoute } from "./workflow.js";
-export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
+export { advanceSchemaWithGeneratedAttestation, upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Coordinator-only execution authority: version tokens, registration,
 // current coordinator binding and required workflow/plan reads.
 export type {

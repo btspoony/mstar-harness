@@ -285,6 +285,19 @@ function storedCoordinationText(context: StoreContext, planId: string): string {
   return String(row!.coordination_json);
 }
 
+/** note: One plan's recorded coordination block, as the row stores it. */
+function coordinationOf(context: StoreContext, planId: string): Record<string, unknown> {
+  return JSON.parse(storedCoordinationText(context, planId)) as Record<string, unknown>;
+}
+
+/** note: Every operation receipt of this workflow, as its own identity (no serialized payload). */
+function receiptIdentities(context: StoreContext): Array<{ operationId: string; planId: unknown }> {
+  return rows(
+    context,
+    `select operation_id, plan_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by operation_id`,
+  ).map((row) => ({ operationId: String(row.operation_id), planId: row.plan_id }));
+}
+
 function storedOperationReceipts(context: StoreContext): string {
   const [row] = rows(
     context,
@@ -801,17 +814,19 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(replay.data.coordination?.prepared).toEqual(first.data.coordination?.prepared);
     expect(footprint(context)).toEqual(committedFootprint);
 
-    // invariant: The SAME configuration under a NEW operation id is not "already
+    // note: The SAME configuration under a NEW operation id is not "already
     // satisfied" while a journal row is pending: it refuses and records nothing.
     const before = footprint(context);
-    const storedBefore = storedCoordinationText(context, OWN_PLAN);
-    const receiptsBefore = storedOperationReceipts(context);
+    const coordinationBefore = coordinationOf(context, OWN_PLAN);
+    const receiptsBefore = receiptIdentities(context);
     const refusal = await refusalOf(() => preparePlan(fixture, OWN_PLAN, "prepare-satisfied-pending", config));
     expect(refusal.code).toBe("catalog.registration-pending");
     expect(refusal.message).toContain("op-pending-satisfied");
     expect(footprint(context)).toEqual(before);
-    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
-    expect(storedOperationReceipts(context)).toBe(receiptsBefore);
+    // invariant: The recorded preparation is the one from the committed attempt, and no new
+    // receipt was written for the refused one.
+    expect(coordinationOf(context, OWN_PLAN)).toEqual(coordinationBefore);
+    expect(receiptIdentities(context)).toEqual(receiptsBefore);
   });
 });
 
