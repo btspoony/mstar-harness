@@ -8,7 +8,7 @@ export type RoadmapFrontmatter = {
   project_id: string;
   title: string;
   status: "active" | "paused" | "completed";
-  /** Absent when the roadmap records no usable date: the export's own importable form. */
+  /** why: Absent when the roadmap records no usable date: the export's own importable form. */
   created_at?: string;
   milestones?: string[] | null;
   residuals_ref?: string | null;

@@ -1924,7 +1924,7 @@ describe("collaboration registration replay", () => {
 
 
 /* ------------------------------------------------------------------------ *
- * §7 the REMOTE registration route: the shipped wrapper resolves its authority
+ * note: §7 the REMOTE registration route: the shipped wrapper resolves its authority
  * from the checkout's private cache and the composite freezes one outbox intent
  * ------------------------------------------------------------------------ */
 
@@ -1973,7 +1973,7 @@ type RemoteFixture = Readonly<{
 }>;
 
 /**
- * A remote-bound checkout whose cache holds one complete observation: the reviewed
+ * note: A remote-bound checkout whose cache holds one complete observation: the reviewed
  * bind, the observed project scope, and an ACTIVE (empty) execution authority.
  */
 async function remoteFixture(label: string): Promise<RemoteFixture> {

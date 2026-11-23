@@ -1,5 +1,5 @@
 /**
- * The engine-owned structural definitions of the strict JSON documents the remote/outbox
+ * why: The engine-owned structural definitions of the strict JSON documents the remote/outbox
  * `--input` flags carry. This module is the ONE owner of those published shapes: the frozen
  * event, its project/issue subject and every history row are typed members built from the
  * same engine vocabularies the runtime parsers enforce, so discovery can never publish a
@@ -63,7 +63,7 @@ const scopeCheck = z.object({
   outcome: scopeOutcome,
 }).strict();
 
-/** `fields`: exactly the contract's domain fields, from the issue module's own vocabularies. */
+/** note: `fields`: exactly the contract's domain fields, from the issue module's own vocabularies. */
 const mstarSubjectFields = z.object({
   title: z.string(),
   kind: z.enum(ISSUE_KINDS),

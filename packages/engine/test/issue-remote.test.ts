@@ -1,5 +1,5 @@
 /**
- * issue-remote.test.ts — the remote issue-write gates the local lanes already answer.
+ * note: issue-remote.test.ts — the remote issue-write gates the local lanes already answer.
  *
  * Run with `bun test packages/engine/test/issue-remote.test.ts`.
  *
@@ -168,7 +168,7 @@ function withSecondPlanLink(snapshot: RemoteSnapshot): RemoteSnapshot {
 }
 
 /**
- * A second MARKED observed issue beside the fixture's own, so a duplicate/superseded
+ * why: A second MARKED observed issue beside the fixture's own, so a duplicate/superseded
  * closure has a canonical target that carries a portable reference the frozen relation
  * can name.
  */
@@ -201,7 +201,7 @@ function withCanonicalTarget(snapshot: RemoteSnapshot): RemoteSnapshot {
 }
 
 /**
- * The fixture's provider-only issue carrying the capture's occurrence as its genesis subject,
+ * why: The fixture's provider-only issue carrying the capture's occurrence as its genesis subject,
  * exactly as a re-observation would install it between a capture's dedupe read and its freeze:
  * the identity the old snapshot did not carry is now marked on the authority.
  */
@@ -260,7 +260,7 @@ function withAdoptedOccurrence(snapshot: RemoteSnapshot, overrides: Partial<Capt
 }
 
 /**
- * The observed marked issue carrying ONE more occurrence, exactly as a re-observation would
+ * note: The observed marked issue carrying ONE more occurrence, exactly as a re-observation would
  * install it between a capture's dedupe read and its freeze: the same identity triple, the given
  * occurrence key, and content that matches the capture input built from the same overrides.
  */
@@ -300,7 +300,7 @@ function withExtraOccurrence(snapshot: RemoteSnapshot, overrides: Partial<Captur
 }
 
 /**
- * The plan provenance one composite's own scope check reads: the residual-close
+ * note: The plan provenance one composite's own scope check reads: the residual-close
  * remote half refuses an issue whose observed subject names no link to THIS plan,
  * so the fixture subjects name the link before any gate below it can answer.
  */
@@ -337,7 +337,7 @@ function withResidualPlanLinks(snapshot: RemoteSnapshot): RemoteSnapshot {
 }
 
 /**
- * One bound checkout whose cache holds one complete observation. `mutate` adjusts the
+ * note: One bound checkout whose cache holds one complete observation. `mutate` adjusts the
  * observed subject before ingest (a terminal disposition, extra plan links), the same
  * way the Host Agent's snapshot would differ.
  */
@@ -395,7 +395,7 @@ type RemotePlanFixture = RemoteFixture & {
 };
 
 /**
- * One remote-bound checkout that also holds an ACTIVE execution workflow and plan row,
+ * note: One remote-bound checkout that also holds an ACTIVE execution workflow and plan row,
  * so the residual-close composite can run its remote half against the observed subject.
  */
 async function remotePlanFixture(
@@ -478,7 +478,7 @@ function residualCloseRequest(
 }
 
 // ---------------------------------------------------------------------------
-// remote capture dedupe
+// note: remote capture dedupe
 // ---------------------------------------------------------------------------
 
 test("a recurring remote capture returns the established occurrence without a second create", async () => {
@@ -814,7 +814,7 @@ test("a different payload under an established operation id refuses instead of r
 });
 
 // ---------------------------------------------------------------------------
-// remote close gates
+// note: remote close gates
 // ---------------------------------------------------------------------------
 
 test("a remote closure refuses an already-terminal issue", async () => {
@@ -1114,7 +1114,7 @@ test("a plan-scoped remote residual-close enforces the canonical gate", async ()
 });
 
 // ---------------------------------------------------------------------------
-// remote milestone assignment store revision
+// note: remote milestone assignment store revision
 // ---------------------------------------------------------------------------
 
 test("a remote milestone assignment refuses on a stale store revision", async () => {
