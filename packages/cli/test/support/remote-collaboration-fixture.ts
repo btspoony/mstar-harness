@@ -466,8 +466,8 @@ export class RemoteCollaborationFixture {
   /**
    * note: The provider holds a COMPETING record for one dispatched attempt instead of the frozen
    * effect: one other event per observed fork head, each addressing the same record in the same
-   * scope under its own operation id. Recording it is the host's evidence of a fork, never a
-   * second send.
+   * scope under its own operation id. They are persisted in provider state, so a later traversal
+   * re-renders the competing subject the host must review rather than the event it sent.
    */
   conflict(permit: OutboxPermit): OutboxReceiptDocument {
     this.providerCalls.push({ kind: "send", operationId: permit.operationId });
@@ -502,6 +502,15 @@ export class RemoteCollaborationFixture {
         head: remoteEventHead(event),
       };
     });
+    for (const observed of observedRecords) {
+      this.effects.push({
+        operationId: permit.operationId,
+        attemptId: permit.attemptId,
+        recordId: observed.recordId,
+        identity: observed.identity,
+        event: observed.event,
+      });
+    }
     return {
       version: 1,
       selectorCommit: permit.binding.selectorCommit,
@@ -518,6 +527,35 @@ export class RemoteCollaborationFixture {
         observedRecords: observedRecords.map(({ head: _head, ...entry }) => entry),
       },
     };
+  }
+
+  /**
+   * note: The provider's own history for one attempt: exactly one record, a duplicate it applied
+   * twice, or none yet. It is provider state, never a host send, so `providerCalls` does not grow
+   * and a lookup reports `not-found`, `ambiguous` or `confirmed` from the cardinality alone.
+   */
+  setAttemptHistory(permit: OutboxPermit, records: number): void {
+    for (let index = this.effects.length - 1; index >= 0; index -= 1) {
+      const effect = this.effects[index]!;
+      if (effect.operationId === permit.operationId && effect.attemptId === permit.attemptId) {
+        this.effects.splice(index, 1);
+      }
+    }
+    for (let index = 0; index < records; index += 1) {
+      this.effects.push({
+        operationId: permit.operationId,
+        attemptId: permit.attemptId,
+        recordId: randomUUID(),
+        identity: {
+          provider: "linear",
+          workspaceId: permit.binding.workspaceId,
+          teamId: permit.binding.teamId,
+          projectId: permit.binding.projectId,
+          issueId: permit.frozenRequest.target ?? randomUUID(),
+        },
+        event: permit.frozenRequest.event as RemoteEvent,
+      });
+    }
   }
 
   /** note: The confirmed issue record the provider holds for one operation; `null` once discarded. */

@@ -37,6 +37,8 @@ const MILESTONE_ID = "milestone-roundtrip";
 
 const ADOPT_OPERATION = "44444444-4444-4444-8444-444444444441";
 const REFUSED_OPERATION = "44444444-4444-4444-8444-444444444442";
+const REFUSED_TITLE_OPERATION = "44444444-4444-4444-8444-444444444446";
+const REFUSED_PROJECT_OPERATION = "44444444-4444-4444-8444-444444444447";
 const MARKED_OPERATION = "44444444-4444-4444-8444-444444444443";
 const LOST_OPERATION = "44444444-4444-4444-8444-444444444444";
 const CONFLICT_OPERATION = "44444444-4444-4444-8444-444444444445";
@@ -351,18 +353,18 @@ describe("remote host round trip", () => {
     expect(missing.exitCode).toBe(2);
     expect(missing.code).toBe("command.invalid-input");
 
-    // note: A syntactically valid capture that tries to supply the title or the project refuses at
-    // the adoption boundary: neither is the caller's to state.
-    const callerSupplied = adopt(sandbox, REFUSED_OPERATION, FIXTURE_ISSUE_ID, {
-      ...adoptionDocument(REFUSED_OPERATION),
-      capture: {
-        ...(adoptionDocument(REFUSED_OPERATION).capture as Record<string, unknown>),
-        title: "Caller supplied title",
-        projectId: "caller-supplied-project",
-      },
-    });
-    expect(callerSupplied.exitCode).toBe(1);
-    expect(callerSupplied.code).toBe("remote.input-invalid");
+    // note: Each caller-supplied field is its own case over the SAME strict baseline, so either one
+    // being wrongly accepted fails on its own instead of hiding behind the other's refusal.
+    const strayField = (operation: string, field: string): Record<string, unknown> => {
+      const document = adoptionDocument(operation);
+      return { ...document, capture: { ...(document.capture as Record<string, unknown>), [field]: "caller-supplied" } };
+    };
+    const callerTitle = adopt(sandbox, REFUSED_TITLE_OPERATION, FIXTURE_ISSUE_ID, strayField(REFUSED_TITLE_OPERATION, "title"));
+    expect(callerTitle.exitCode).toBe(1);
+    expect(callerTitle.code).toBe("remote.input-invalid");
+    const callerProject = adopt(sandbox, REFUSED_PROJECT_OPERATION, FIXTURE_ISSUE_ID, strayField(REFUSED_PROJECT_OPERATION, "projectId"));
+    expect(callerProject.exitCode).toBe(1);
+    expect(callerProject.code).toBe("remote.input-invalid");
 
     // note: A marked issue of the same title refuses: adoption addresses only an unmarked identity,
     // and a title match is never an adoption.
@@ -370,8 +372,18 @@ describe("remote host round trip", () => {
     expect(markedAdoption.exitCode).toBe(1);
     expect(markedAdoption.code).toBe("remote.scope-mismatch");
 
+    // invariant: Every refusal recorded nothing: no intent, no count change, and the unmarked UUID
+    // is still visible with no reference, no MStar disposition and no provider send.
     expect(cli([...REMOTE, "outbox-pending", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]).data).toMatchObject({ intents: [] });
-    expect(cli(["issue", "list", "--harness", sandbox.harness]).data).toMatchObject({ total: 1 });
+    const afterRefusals = cli(["issue", "list", "--harness", sandbox.harness]);
+    expect(afterRefusals.data).toMatchObject({ total: 1 });
+    expect(afterRefusals.data.providerIssues).toMatchObject([
+      { issueRef: null, title: SHARED_TITLE, identity: { issueId: FIXTURE_ISSUE_ID } },
+    ]);
+    const stillNative = cli(["issue", "show", "--id", FIXTURE_ISSUE_ID, "--project", REMOTE_PROJECT.localProjectId, "--harness", sandbox.harness]);
+    expect(stillNative.exitCode).toBe(0);
+    expect(stillNative.data).toMatchObject({ kind: "provider-only", issueRef: null });
+    expect(stillNative.data.disposition).toBeUndefined();
     expect(fixture.providerCalls).toEqual([]);
 
     // note: The exact unmarked provider UUID freezes ONE durable intent — not an adoption.
@@ -453,7 +465,7 @@ describe("remote host round trip", () => {
     expect(cli(["issue", "list", "--harness", sandbox.harness]).data).toMatchObject({ total: 2 });
   }, 120_000);
 
-  test("a lost response is settled by unique lookup evidence and never retried", () => {
+  test("a lost response stays unconfirmed on missing or ambiguous lookup evidence and confirms only on a unique match", () => {
     const fixture = host("lost-response");
     const sandbox = prepareHost(fixture);
     expect(observeAt(fixture, sandbox, 0).exitCode).toBe(0);
@@ -480,19 +492,52 @@ describe("remote host round trip", () => {
 
     const shown = sandbox.runJson([...REMOTE, "outbox-show", "--harness", sandbox.harness, "--operation", LOST_OPERATION]);
     expect(shown.data).toMatchObject({ state: "unconfirmed", attemptId: permit.attemptId });
-    const unique = fixture.lookup(shown.data as unknown as OutboxIntent);
-    expect(unique.outcome).toMatchObject({ kind: "confirmed" });
-    const reconciled = sandbox.runJson([...REMOTE, "outbox-reconcile", "--harness", sandbox.harness, "--input", sandbox.writeJson("reconcile", unique)]);
-    expect(reconciled.exitCode).toBe(0);
-    expect(reconciled.data.state).toBe("confirmed");
+    const intent = shown.data as unknown as OutboxIntent;
 
+    // note: Each lookup is its own submission; a distinct observation instant keeps each one its
+    // own evidence row instead of replaying the previous one.
+    let tick = Date.now();
+    const settle = (document: unknown): SandboxCommand =>
+      sandbox.runJson([
+        ...REMOTE, "outbox-reconcile", "--harness", sandbox.harness,
+        "--input", sandbox.writeJson("reconcile", { ...(document as Record<string, unknown>), observedAt: new Date((tick += 2_000)).toISOString() }),
+      ]);
+
+    // note: The provider holds nothing for the attempt yet: an absent record is not a confirmation.
+    fixture.setAttemptHistory(permit, 0);
+    const missing = fixture.lookup(intent);
+    expect(missing.outcome).toMatchObject({ kind: "unconfirmed", reason: "not-found" });
+    const stillUncertain = settle(missing);
+    expect(stillUncertain.exitCode).toBe(0);
+    expect(stillUncertain.data).toMatchObject({ state: "unconfirmed", confirmed: null });
+    expect(dispatch(sandbox, LOST_OPERATION).data).toMatchObject({ kind: "state", state: "unconfirmed" });
+
+    // invariant: A record the provider applied twice is ambiguous, never the effect — and the
+    // ambiguity comes from provider-side history, not from a second host send.
+    fixture.setAttemptHistory(permit, 2);
+    const ambiguous = fixture.lookup(intent);
+    expect(ambiguous.outcome).toMatchObject({ kind: "unconfirmed", reason: "ambiguous" });
+    const ambiguousSettlement = settle(ambiguous);
+    expect(ambiguousSettlement.exitCode).toBe(0);
+    expect(ambiguousSettlement.data).toMatchObject({ state: "unconfirmed", confirmed: null });
+    expect(dispatch(sandbox, LOST_OPERATION).data).toMatchObject({ kind: "state", state: "unconfirmed" });
+
+    // invariant: Only a unique exact match advances the attempt to confirmed.
+    fixture.setAttemptHistory(permit, 1);
+    const unique = fixture.lookup(intent);
+    expect(unique.outcome).toMatchObject({ kind: "confirmed" });
+    const settled = settle(unique);
+    expect(settled.exitCode).toBe(0);
+    expect(settled.data.state).toBe("confirmed");
+
+    // invariant: One host send and three read-only lookups — no retry, so no duplicate create.
     expect(fixture.providerCalls).toEqual([
       { kind: "send", operationId: LOST_OPERATION },
       { kind: "lookup", operationId: LOST_OPERATION },
+      { kind: "lookup", operationId: LOST_OPERATION },
+      { kind: "lookup", operationId: LOST_OPERATION },
     ]);
 
-    // invariant: One landed effect, so the refreshed traversal holds one adopted finding and two
-    // findings in total — a duplicate create would show a third or a repeated reference.
     const refreshed = observeAt(fixture, sandbox, revisionOf(sandbox));
     expect(refreshed.exitCode).toBe(0);
     const listed = sandbox.runJson(["issue", "list", "--harness", sandbox.harness]);
@@ -556,6 +601,36 @@ describe("remote host round trip", () => {
     expect(invalidated.data.total).toBeUndefined();
     const shown = sandbox.runJson([...REMOTE, "outbox-show", "--harness", sandbox.harness, "--operation", CONFLICT_OPERATION]);
     expect(shown.data).toMatchObject({ state: "conflict" });
+
+    // invariant: The competing record is PROVIDER state, not a receipt echo: it survives the whole
+    // conflict handling, so the next traversal still renders the subject the host never sent.
+    const competingOutcome = competing.outcome as { observedHeads: readonly string[] };
+    const held = fixture.confirmedIssue(CONFLICT_OPERATION);
+    expect(held).not.toBeNull();
+    expect(competingOutcome.observedHeads).toContain(held!.head[0]);
+    expect(held!.subject).toMatchObject({ fields: { revision: 2, disposition: "open", title: SHARED_TITLE } });
+
+    const refreshed = observeAt(fixture, sandbox, revisionOf(sandbox));
+    expect(refreshed.exitCode).toBe(0);
+    expect(refreshed.data).toMatchObject({ completeness: "complete" });
+
+    // note: A fresh provider traversal still renders the competing subject, so the record lives in
+    // provider state rather than in the receipt the host recorded.
+    const traversal = fixture.observe(REMOTE_PROJECT, 0).snapshot as { issues: Array<Record<string, unknown>> };
+    const carried = traversal.issues.find((issue) => (issue.identity as { issueId: string }).issueId === FIXTURE_ISSUE_ID);
+    expect(carried?.mstar).toMatchObject({
+      issueRef: held!.issueRef,
+      head: held!.head,
+      fields: { title: SHARED_TITLE, disposition: "open", revision: 2 },
+    });
+
+    // invariant: The fork is unresolved, so the read still refuses rather than answering the frozen
+    // adoption's subject — and it refuses with the fork's own cause, never a count.
+    const rendered = sandbox.runJson(["issue", "show", "--id", held!.issueRef, "--harness", sandbox.harness]);
+    expect(rendered.exitCode).toBe(1);
+    expect(rendered.code).toBe("remote.unavailable");
+    expect(rendered.data.total).toBeUndefined();
+    expect(sandbox.runJson(["issue", "list", "--harness", sandbox.harness]).code).toBe("remote.unavailable");
   }, 120_000);
 
   test("a stale observation base refuses and leaves the admitted cache in place", () => {
