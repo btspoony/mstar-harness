@@ -1551,10 +1551,10 @@ async function captureIssueRemote(
   try {
     const frozen = await readRemoteIntent(context, mutation.operationId);
     // invariant: The writer's own replay identity answers FIRST, exactly as the local body checks
-    // its operation ledger before its tables: an existing frozen entry under this operation id is
+    // its operation ledger before its tables: an existing entry under this operation id is
     // answered (or refused) through the replay gate, never bypassed by an observed no-op. A
     // metadata-only disclosure still names the row, so it refuses instead of guessing from state.
-    if (frozen.disclosure !== "full" || frozen.event === null) {
+    if (frozen.disclosure !== "full" || (frozen.event === null && frozen.settled === null)) {
       throw new StoreError(
         "remote.unavailable",
         `Operation ${mutation.operationId} cannot be replayed: the project's current read access is denied or expired, so its frozen ` +
@@ -1562,7 +1562,12 @@ async function captureIssueRemote(
         { operationId: mutation.operationId, state: frozen.state },
       );
     }
-    const change = frozen.event.change;
+    // note: A settled no-change claim records the replay identity a frozen event would carry, so the
+    // capture routes on it the same way; its own replayed answer is the receipt.
+    if (frozen.settled !== null) {
+      return frozen.settled.kind === "issue-create" ? createIssue() : appendToIssue(frozen.settled.issueRef);
+    }
+    const change = frozen.event!.change;
     // note: A capture never freezes a project-replace; re-asking through the create
     // path lets the replay check answer that collision with its recorded refusal.
     return change.kind === "issue-create" || change.kind === "project-replace"
@@ -2350,6 +2355,20 @@ export function assertObservedMultiPlanAcceptance(plans: readonly string[], evid
 }
 
 /**
+ * note: The deliberate-reopen route one terminal-state refusal names. It is shared so every
+ * refusal that must point at reopening states the same registered inputs, and it never presents
+ * reopening as the default next step.
+ */
+export function terminalReopenRoute(showId: string): string {
+  return (
+    `Inspect the issue with \`mstar issue show --id ${showId}\`. Reopening a terminal issue is a deliberate ` +
+    `change, never a default step: read the registered inputs with \`mstar issue reopen --help\` or ` +
+    `\`mstar schema IssueReopen\`; the reason is that JSON payload's field, supplied with --payload or --file ` +
+    `alongside --actor project-manager and the issue's current revision as --expect.`
+  );
+}
+
+/**
  * note: The terminal-state transition refusal with its usable next steps, shared by the local
  * closure body and both remote paths. The inspect command is valid for the ADDRESSED alias: a
  * provider UUID needs `--project` in remote mode, a stable reference does not. Reopening a
@@ -2371,11 +2390,7 @@ export function terminalTransitionRefusal(
     {
       observed_disposition: observedDisposition,
       requested_disposition: disposition,
-      recovery:
-        `Inspect the issue with \`mstar issue show --id ${showId}\`. Reopening a terminal issue is a deliberate ` +
-        `change, never a default step: read the registered inputs with \`mstar issue reopen --help\` or ` +
-        `\`mstar schema IssueReopen\`; the reason is that JSON payload's field, supplied with --payload or --file ` +
-        `alongside --actor project-manager and the issue's current revision as --expect.`,
+      recovery: terminalReopenRoute(showId),
     },
   );
 }

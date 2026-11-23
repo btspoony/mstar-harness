@@ -577,7 +577,7 @@ export async function commitExecutionRegistration(
             nextEntities.push(desired);
           }
           const known = new Set(nextEntities.map((row) => `${String(row.kind)}:${String(row.id)}`));
-          const nextLinks = [...(current.catalogLinks as Array<Record<string, unknown>>)];
+          let nextLinks = [...(current.catalogLinks as Array<Record<string, unknown>>)];
           for (const link of plan.request.delta.links ?? []) {
             for (const endpoint of [link.from, link.to]) {
               if (!known.has(`${endpoint.kind}:${endpoint.id}`)) {
@@ -589,11 +589,11 @@ export async function commitExecutionRegistration(
             }
             const desired = portableCatalogLink(link);
             // invariant: A reviewed relation is ONE edge of the journal: its identity is its endpoints
-            // and relation, and its ordinal is content. A journal already carrying that relation is
-            // settled by replacing the row (the reviewed ordinal wins), never by a second parallel edge.
-            const existing = nextLinks.findIndex((row) => samePortableLinkEndpoints(row, desired));
-            if (existing === -1) nextLinks.push(desired);
-            else nextLinks[existing] = desired;
+            // and relation, and its ordinal is content. EVERY row the journal carries for that identity
+            // is replaced by that one reviewed edge (the reviewed ordinal wins), so a journal that
+            // already duplicated the membership settles as one edge instead of publishing a second
+            // parallel one the finalization would decline.
+            nextLinks = [...nextLinks.filter((row) => !samePortableLinkEndpoints(row, desired)), desired];
           }
           return { ...current, catalogEntities: nextEntities, catalogLinks: nextLinks };
         },

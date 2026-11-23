@@ -2569,6 +2569,95 @@ describe("remotely bound shipped registration", () => {
     ]);
   }, 30_000);
 
+  test("a journal that already duplicated the reviewed membership settles as ONE edge and finalizes", async () => {
+    const fixture = await remoteFixture("remote-register-link-parallel");
+    const iterationId = "20260921-remote-link-parallel";
+    const planId = "20260921-link-parallel-plan";
+    const options = remoteIterationWorkflow(fixture.context, {
+      iterationId,
+      rows: [{ planId, title: "Twice-linked plan" }],
+    });
+    const context = registrationContext(fixture, iterationId);
+    // note: An earlier settlement left TWO parallel rows for the same relation, at ordinals 0 and 2.
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    await ingestRemoteObservation(
+      fixture.context,
+      submission(
+        fixture.commit,
+        check,
+        {
+          ...base,
+          project: {
+            ...base.project,
+            catalogLinks: [
+              { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
+              { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 2 },
+            ],
+          },
+        },
+        observedRevision(fixture.context),
+      ),
+    );
+    const pending = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: { kind: "iteration", workflowId: iterationId, options },
+      operationId: "op-remote-link-parallel",
+      expected: fixture.token,
+    }).catch((error: unknown) => error);
+    const providerIntent = frozenProviderIntent(pending);
+    const row = outboxRows(fixture.context).find((entry) => entry.operation_id === providerIntent);
+    const frozen = JSON.parse(String(row?.request_json)) as {
+      event: { change: { project: { catalogLinks: Array<Record<string, unknown>> } } };
+    };
+    // invariant: BOTH duplicated rows are replaced by the ONE reviewed edge (the reviewed ordinal
+    // wins), so the finalization's one-edge-per-relation proof can pass instead of declining forever.
+    expect(
+      frozen.event.change.project.catalogLinks.filter(
+        (link) =>
+          link.fromKind === "plan" &&
+          link.fromId === planId &&
+          link.relation === "belongs-to" &&
+          link.toKind === "iteration" &&
+          link.toId === iterationId,
+      ),
+    ).toEqual([
+      { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
+    ]);
+    await confirmFrozenIntent(fixture.context, providerIntent);
+    const committed = await readRemoteIntent(fixture.context, providerIntent);
+    if (committed.event === null || committed.event.change.kind !== "project-replace") {
+      throw new Error("fixture: the confirmed intent discloses no journal");
+    }
+    expect(
+      (committed.event.change.project.catalogLinks as Array<Record<string, unknown>>).filter(
+        (link) =>
+          link.fromKind === "plan" &&
+          link.fromId === planId &&
+          link.relation === "belongs-to" &&
+          link.toKind === "iteration" &&
+          link.toId === iterationId,
+      ),
+    ).toEqual([
+      { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
+    ]);
+    // invariant: The registration finalizes: exactly one edge per reviewed relation is the proof the
+    // execution binding is written from.
+    expect(
+      await registerShippedCatalogExecution(context, {
+        actor: "project-manager",
+        workflow: { kind: "iteration", workflowId: iterationId, options },
+        operationId: "op-remote-link-parallel",
+        expected: fixture.token,
+      }),
+    ).toMatchObject({ operationId: "op-remote-link-parallel", workflowId: iterationId });
+    expect(await bindingOf(fixture.context, iterationId)).toMatchObject({
+      catalog_kind: "iteration",
+      catalog_id: iterationId,
+      catalog_revision: 0,
+    });
+  }, 30_000);
+
   test("a same-target correction after a partial settlement adopts the settled rows and publishes the omission", async () => {
     const fixture = await remoteFixture("remote-register-partial-correction");
     const iterationId = "20260921-remote-partial-correction";

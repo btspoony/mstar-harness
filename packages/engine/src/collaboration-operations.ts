@@ -49,6 +49,7 @@ import {
   type ExecutionTransaction,
 } from "./execution-store.js";
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb } from "./store-db.js";
+import { TERMINAL_DISPOSITIONS, terminalReopenRoute } from "./issue.js";
 
 export type CompositeKind = "residual-add" | "residual-close" | "execution-register" | "execution-import";
 
@@ -1212,12 +1213,27 @@ function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "
   const expected = (frozen.change.mstar.fields as Record<string, unknown>).disposition;
   const actual = (confirmed.event.change.mstar.fields as Record<string, unknown>).disposition;
   if (expected === actual) return null;
-  const recovery =
-    `Inspect the settled replacement with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
-    `${repair.operationId}\`, re-observe the project with \`mstar store collaboration remote observe --harness <abs> ` +
-    `--input <file|->\`, then reissue this SAME verb under a NEW operation id: the fork is already merged, so the fresh ` +
-    `intent freezes against the merged head and publishes the reviewed disposition while the settled replacement is ` +
-    `never re-sent.`;
+  // invariant: The recovery is disposition-specific, because only one of the two settlements leaves a
+  // retried closure runnable. An OPEN settlement keeps the issue closable, so the retry is admitted
+  // once the operator has the CURRENT revision. A TERMINAL settlement is the decision that now
+  // stands: closure requires `open`, so the retry is unreachable until the issue is deliberately
+  // reopened, and only the reopened revision makes a new closure admissible.
+  const showId = frozen.change.issueRef;
+  const terminal =
+    typeof actual === "string" && (TERMINAL_DISPOSITIONS as readonly string[]).includes(actual);
+  const recovery = terminal
+    ? `Inspect the settled replacement with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${repair.operationId}\`. The confirmed terminal decision ${JSON.stringify(actual)} stands: a closure is admitted ` +
+      `only from an open issue, so this request is never retried over it. ${terminalReopenRoute(showId)} Then ` +
+      `re-observe the project with \`mstar store collaboration remote observe --harness <abs> --input <file|->\` and ` +
+      `reissue this SAME verb under a NEW operation id with the reopened issue's revision: the settled replacement is ` +
+      `never re-sent.`
+    : `Inspect the settled replacement with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${repair.operationId}\` and the issue with \`mstar issue show --id ${showId}\` for its current revision, ` +
+      `re-observe the project with \`mstar store collaboration remote observe --harness <abs> --input <file|->\`, then ` +
+      `reissue this SAME verb under a NEW operation id with that CURRENT revision: the fork is already merged, so the ` +
+      `fresh intent freezes against the merged head and publishes the reviewed disposition while the settled ` +
+      `replacement is never re-sent.`;
   return new StoreError(
     "remote.effect-mismatch",
     `The confirmed provider effect ${repair.operationId} (record ${confirmed.recordId}) replaced ` +

@@ -3221,6 +3221,11 @@ export type RemoteIntentRead = Readonly<{
   /** note: The recorded confirmed effect, so the business verb's replay reports it; withheld with the content. */
   confirmed: RemoteConfirmedEffect | null;
   event: RemoteEvent | null;
+  /**
+   * note: The recorded replay identity of a settled no-change claim; `event` is null for it, since a
+   * claim never represents observed history as a provider event. Withheld with the content.
+   */
+  settled: Readonly<{ kind: RemoteEventChange["kind"]; issueRef: IssueRef }> | null;
   target: string | null;
   expectedHeads: readonly string[];
   executionKey: RemoteIntentExecutionKey | null;
@@ -3391,6 +3396,69 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
   } catch {
     throw malformedIntent(row.operationId, "carries a frozen request the contract cannot read");
   }
+}
+
+/**
+ * invariant: The settled no-change claim's closed record. It carries the REPLAY IDENTITY of the
+ * established write — its kind, portable reference, target and complete business request — and the
+ * business answer, never the observed subject: an observation legitimately holds history the
+ * replacement contract refuses (a guessed dedup key), and a claim is not a provider event, so it is
+ * validated by its own shape instead of `storedRequest`'s frozen-event rules.
+ */
+type SettledClaim = Readonly<{
+  binding: RemoteIntentBinding;
+  kind: RemoteEventChange["kind"];
+  issueRef: IssueRef;
+  target: string;
+  executionKey: RemoteIntentExecutionKey | null;
+  origin: RemoteWriteOrigin;
+  answer: unknown;
+}>;
+
+const SETTLED_CLAIM_KEYS = ["settled", "binding", "kind", "issueRef", "target", "origin", "result"] as const;
+
+/** note: The recorded no-change claim of one outbox row, or null when the row holds a frozen request. */
+function settledClaim(row: OutboxIntentRow): SettledClaim | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.requestJson);
+  } catch {
+    throw malformedIntent(row.operationId, "carries no readable frozen request");
+  }
+  if (!isRecord(parsed) || parsed.settled === undefined) return null;
+  try {
+    allowOnly(parsed, "request", SETTLED_CLAIM_KEYS);
+    if (parsed.settled !== 1) invalid("request.settled", "must be 1");
+    const recordedKey = row.executionKeyJson === null ? null : (JSON.parse(row.executionKeyJson) as unknown);
+    const answer = recordedNoChange(plainJson(parsed.result, "request.result"));
+    if (answer === null) invalid("request.result", "must record the no-change answer");
+    return {
+      binding: intentBinding(parsed.binding),
+      kind: oneOf(parsed.kind, REMOTE_CHANGE_KINDS, "request.kind"),
+      issueRef: assertIssueRef(text(parsed.issueRef, "request.issueRef")),
+      target: linearId(parsed.target, "request.target"),
+      executionKey: recordedKey === null ? null : intentExecutionKey(recordedKey, row.operationId),
+      origin: writeOrigin(parsed.origin, "request.origin"),
+      answer: answer.answer,
+    };
+  } catch {
+    throw malformedIntent(row.operationId, "carries a settled claim the contract cannot read");
+  }
+}
+
+/**
+ * invariant: A settled claim was never dispatched, so no lifecycle verb applies to it. Each such
+ * verb names the claim and the read that answers it instead of reporting an unreadable row.
+ */
+function noSettledClaim(row: OutboxIntentRow, attempt: string): void {
+  if (settledClaim(row) === null) return;
+  throw new StoreError(
+    "remote.dispatch-refused",
+    `Operation ${row.operationId} holds a settled no-change claim: the observed authority already carried that write, ` +
+      `so nothing was ever sent and no dispatch, receipt, reconciliation, resolution or abandonment applies to it. ` +
+      `${attempt} A new write needs a new operation id.`,
+    { operationId: row.operationId, settled_no_change: true },
+  );
 }
 
 /**
@@ -3921,6 +3989,7 @@ async function recordReceiptEvidence(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, envelope.operationId);
+    noSettledClaim(row, "A receipt names what one dispatched attempt observed, and this claim was never sent.");
     if (row.generation !== envelope.generation || row.projectKey !== envelope.projectId) {
       throw new StoreError(
         "collaboration.stale-binding",
@@ -4056,6 +4125,7 @@ function intentRead(
     disclosure,
     confirmed: full ? confirmedEffectOf(db, row.operationId) : null,
     event: full ? stored.request.event : null,
+    settled: null,
     target: full ? stored.request.target : null,
     expectedHeads: full ? stored.request.expectedHeads : [],
     executionKey: full ? (stored.request.executionKey ?? null) : null,
@@ -4063,6 +4133,46 @@ function intentRead(
     result: full ? stored.result : null,
     operator: full ? stored.operator : null,
     reason: full ? stored.reason : null,
+    resolves: row.resolves,
+    resolvedBy: row.resolvedBy,
+    abandonReason: full ? row.abandonReason : null,
+    receipts: full ? receiptRows(db, row.operationId) : [],
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/**
+ * note: `outbox-show` of a settled no-change claim: the same durable row view, with the recorded
+ * replay identity and answer in place of a frozen event the claim never carried.
+ */
+function claimIntentRead(
+  db: StoreDb,
+  row: OutboxIntentRow,
+  claim: SettledClaim,
+  disclosure: "full" | "metadata",
+): RemoteIntentRead {
+  const full = disclosure === "full";
+  return {
+    version: 1,
+    operationId: row.operationId,
+    projectId: row.projectKey,
+    generation: row.generation,
+    state: row.state,
+    attemptId: row.attemptId,
+    requestHash: row.requestHash,
+    binding: claim.binding,
+    disclosure,
+    confirmed: null,
+    event: null,
+    settled: full ? { kind: claim.kind, issueRef: claim.issueRef } : null,
+    target: full ? claim.target : null,
+    expectedHeads: [],
+    executionKey: full ? claim.executionKey : null,
+    origin: full ? claim.origin : null,
+    result: full ? { noChange: claim.answer } : null,
+    operator: null,
+    reason: null,
     resolves: row.resolves,
     resolvedBy: row.resolvedBy,
     abandonReason: full ? row.abandonReason : null,
@@ -4106,23 +4216,23 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
   });
   try {
     const row = intentRow(handle.db, target);
-    const stored = storedRequest(row);
-    assertFrozenBinding(handle.db, stored.request.binding, target);
+    const claim = settledClaim(row);
+    const stored = claim === null ? storedRequest(row) : null;
+    const frozenBinding = claim === null ? stored!.request.binding : claim.binding;
+    assertFrozenBinding(handle.db, frozenBinding, target);
     // invariant: Disclosure follows the pair this open admitted. A checkout that rebound, or an
     // origin that published a successor this checkout has not bound yet, while the lane opened
     // authorized nothing here, however current the row's own check still is: the row stays
     // inspectable, its frozen content does not.
     const admitted =
       row.generation === lane.generation &&
-      stored.request.binding.selectorCommit === lane.selectorCommit &&
+      frozenBinding.selectorCommit === lane.selectorCommit &&
       laneStillRecorded(context, lane) &&
       laneStillPublished(context, lane);
-    return intentRead(
-      handle.db,
-      row,
-      stored,
-      admitted ? readPermission(handle.db, row.generation, row.projectKey) : "metadata",
-    );
+    const disclosure = admitted ? readPermission(handle.db, row.generation, row.projectKey) : "metadata";
+    return claim === null
+      ? intentRead(handle.db, row, stored!, disclosure)
+      : claimIntentRead(handle.db, row, claim, disclosure);
   } finally {
     handle.close();
   }
@@ -4596,6 +4706,7 @@ export async function dispatchRemoteIntent(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, target);
+    noSettledClaim(row, "Only an enqueued intent is dispatched, and this claim was already carried by the observation.");
     const stored = storedRequest(row);
     assertFrozenBinding(db, stored.request.binding, target);
     if (row.generation !== selection.generation || row.projectKey !== stored.request.binding.projectKey) {
@@ -4797,6 +4908,7 @@ export async function prepareRemoteResolution(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const original = intentRow(db, conflicted);
+    noSettledClaim(original, "A reviewed resolution needs a conflicted fork, and a settled claim has no fork.");
     const stored = storedRequest(original);
     assertFrozenBinding(db, stored.request.binding, conflicted);
     assertAdmittedLane(admittedLane(context), original, stored.request.binding, conflicted, "a reviewed resolution");
@@ -4836,6 +4948,14 @@ export async function prepareRemoteResolution(
     if (existing !== undefined) {
       // note: An identical replay returns the same resolution intent; a different one is a new conflicting id.
       const recorded = intentRow(db, operationId);
+      if (settledClaim(recorded) !== null) {
+        throw new StoreError(
+          "remote.operation-conflict",
+          `Operation ${operationId} is already recorded as a settled no-change claim; a resolution is a new, unused ` +
+            `operation id. Nothing was enqueued.`,
+          { operationId },
+        );
+      }
       const recordedRequest = storedRequest(recorded);
       if (
         recorded.resolves === conflicted &&
@@ -4954,6 +5074,7 @@ export async function abandonRemoteIntent(
   return withRemoteCacheWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, operationId);
+    noSettledClaim(row, "An abandonment names an unpublished request, and this claim was already settled by the observation.");
     const stored = storedRequest(row);
     assertAdmittedLane(admittedLane(context), row, stored.request.binding, operationId, "an abandonment");
     // note: The retained reason and the row's state share one disclosure decision: a denial or an
@@ -5242,9 +5363,11 @@ export type RemoteNoChange = Readonly<{ noChange: unknown }>;
  *
  * A PROVEN answer is then recorded, not merely reported: the operation id is claimed under the
  * outbox's own uniqueness boundary with the request identity that established it and the business
- * result, as an intent that is already settled and NEVER dispatchable (nothing was sent, and
- * nothing ever will be). A later write under that id therefore meets a durable row instead of
- * freezing a different provider effect, and an identical request replays the recorded answer.
+ * result, as a SETTLED CLAIM that is never dispatchable (nothing was sent, and nothing ever will
+ * be). The claim carries its replay identity, never the observed subject: an observation may hold
+ * history the replacement contract refuses, and no provider event is ever represented by it. A
+ * later write under that id therefore meets a durable row instead of freezing a different provider
+ * effect, and an identical request replays the recorded answer.
  */
 async function recordEstablishedNoOp(
   context: StoreContext,
@@ -5252,13 +5375,14 @@ async function recordEstablishedNoOp(
     operationId: string;
     binding: RemoteIntentBinding;
     sampledRevision: number;
-    /** note: The frozen-request identity of the write this observation satisfied; null when unrepresentable. */
-    request: Readonly<{
-      event: RemoteEvent;
+    /** note: The replay identity of the established write: what an identical replay must match. */
+    identity: Readonly<{
+      kind: RemoteEventChange["kind"];
+      issueRef: IssueRef;
       target: string;
       executionKey: RemoteIntentExecutionKey | null;
       origin: RemoteWriteOrigin;
-    }> | null;
+    }>;
     result: unknown;
   },
 ): Promise<"durable" | "recorded"> {
@@ -5284,14 +5408,15 @@ async function recordEstablishedNoOp(
         },
       );
     }
-    if (claim.request === null) return "recorded" as const;
-    const frozen = {
+    const identity = {
+      settled: 1,
       binding: claim.binding,
-      event: claim.request.event,
-      target: claim.request.target,
-      expectedHeads: claim.request.event.parents,
+      kind: claim.identity.kind,
+      issueRef: claim.identity.issueRef,
+      target: claim.identity.target,
+      origin: claim.identity.origin,
     };
-    const requestHash = createHash("sha256").update(canonicalJson(frozen), "utf8").digest("hex");
+    const requestHash = createHash("sha256").update(canonicalJson(identity), "utf8").digest("hex");
     const at = nowRfc3339();
     handle.db
       .prepare(
@@ -5303,8 +5428,8 @@ async function recordEstablishedNoOp(
         claim.binding.generation,
         claim.binding.projectKey,
         requestHash,
-        canonicalJson({ ...frozen, origin: claim.request.origin, result: { noChange: claim.result } }),
-        claim.request.executionKey === null ? null : canonicalJson(claim.request.executionKey),
+        canonicalJson({ ...identity, result: { noChange: claim.result } }),
+        claim.identity.executionKey === null ? null : canonicalJson(claim.identity.executionKey),
         at,
         at,
         NO_CHANGE_REASON,
@@ -5450,7 +5575,7 @@ async function replayedIntent(
     if (error instanceof StoreError && error.code === "remote.intent-not-found") return null;
     throw error;
   }
-  if (read.disclosure !== "full" || read.event === null) {
+  if (read.disclosure !== "full" || (read.event === null && read.settled === null)) {
     throw new StoreError(
       "remote.unavailable",
       `Operation ${operationId} cannot be replayed: the project's current read access is denied or expired, so its frozen ` +
@@ -5472,15 +5597,21 @@ async function replayedIntent(
     );
   };
   const event = read.event;
+  // invariant: A settled no-change claim carries its own recorded replay identity; it is not a
+  // provider event, so the identity comparison reads whichever shape the row recorded.
+  const settled = read.settled;
   if (read.generation !== selection.generation) {
     return conflict(`was frozen under generation ${String(read.generation)}, not the checked ${String(selection.generation)}`);
   }
   if (projectKey !== null && read.projectId !== projectKey) {
     return conflict(`addresses project ${read.projectId}, not ${projectKey}`);
   }
-  if (event.change.kind !== kind) return conflict(`is already frozen as a ${event.change.kind} intent`);
-  if (issueRef !== null && event.change.kind !== "project-replace" && event.change.issueRef !== issueRef) {
-    return conflict(`addresses portable issue ${event.change.issueRef}, not ${issueRef}`);
+  const frozenKind = settled === null ? event!.change.kind : settled.kind;
+  if (frozenKind !== kind) return conflict(`is already frozen as a ${frozenKind} intent`);
+  const frozenRef =
+    settled !== null ? settled.issueRef : event!.change.kind === "project-replace" ? null : event!.change.issueRef;
+  if (issueRef !== null && frozenRef !== issueRef) {
+    return conflict(`addresses portable issue ${String(frozenRef)}, not ${issueRef}`);
   }
   if (target !== undefined && read.target !== target) {
     return conflict(`addresses provider record ${String(read.target)}, not ${String(target)}`);
@@ -5491,12 +5622,18 @@ async function replayedIntent(
   if (read.origin === null || read.origin.verb !== origin.verb || !isDeepStrictEqual(read.origin.request, origin.request)) {
     return conflict(`is frozen under the business request ${read.origin === null ? "of no recorded verb" : `"${read.origin.verb}"`}`);
   }
-  // invariant: An established answer that was RECORDED under this id returns that answer, never a
-  // pending intent: the claim is settled by construction (no attempt, no receipt), and a different
-  // request under the id refused above.
-  const settledNoChange = recordedNoChange(read.result);
-  if (read.state === "abandoned" && read.receipts.length === 0 && settledNoChange !== null) {
-    return { noChange: settledNoChange.answer };
+  // invariant: A RECORDED settled claim returns its answer, never a pending intent: it was settled
+  // by construction (no attempt, no receipt), and a different request under the id refused above.
+  if (settled !== null) {
+    const recorded = recordedNoChange(read.result);
+    if (recorded === null) {
+      throw new StoreError(
+        "store.corrupt",
+        `Operation ${operationId} holds a settled no-change claim with no recorded answer; nothing was enqueued.`,
+        { operationId },
+      );
+    }
+    return { noChange: recorded.answer };
   }
   return {
     version: 1,
@@ -5622,31 +5759,12 @@ export async function prepareRemoteIssueWrite(
   const established = write.unchanged?.(current, observed) ?? null;
   if (established !== null) {
     // note: An adoption or replacement always observes the subject it rewrites, so the satisfied
-    // request is representable; a create never reaches this branch. The recorded claim carries the
-    // observed subject as the request the authority already holds.
+    // request has a replay identity; a create never reaches this branch.
     const proof = await recordEstablishedNoOp(context, {
       operationId,
       binding: scope.binding,
       sampledRevision: scope.observationRevision,
-      request:
-        // shortcut: A replacement whose observed subject carries no event head has no representable
-        // frozen request, so its no-change answer stays unrecorded; upgrade when a head-less
-        // replacement becomes a real remote write path.
-        current === null || parents.length === 0
-          ? null
-          : {
-              event: {
-                version: 1,
-                repoKey: scope.location.repoKey,
-                projectId,
-                operationId,
-                parents,
-                change: { kind, issueRef, mstar: current },
-              },
-              target: native.identity.issueId,
-              executionKey,
-              origin,
-            },
+      identity: { kind, issueRef, target: native.identity.issueId, executionKey, origin },
       result: established,
     });
     if (proof === "durable") {

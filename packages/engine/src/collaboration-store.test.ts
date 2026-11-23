@@ -6353,9 +6353,125 @@ describe("remote composite flows", () => {
       requested_disposition: "resolved",
       confirmed_disposition: "open",
     });
-    expect(String(detailsOf(declined).recovery)).toContain(`outbox-show --harness <abs> --operation ${resolutionId}`);
-    expect(String(detailsOf(declined).recovery)).toContain("NEW operation id");
+    // invariant: The open settlement leaves the issue closable, so the recovery is RUNNABLE: the
+    // operator reads the current revision and retries with it under a new operation id.
+    const openRecovery = String(detailsOf(declined).recovery);
+    expect(openRecovery).toContain(`outbox-show --harness <abs> --operation ${resolutionId}`);
+    expect(openRecovery).toContain(`mstar issue show --id ${FORGED_ISSUE_REF}`);
+    expect(openRecovery).toContain("CURRENT revision");
+    expect(openRecovery).toContain("NEW operation id");
+    expect(openRecovery).not.toContain("mstar issue reopen");
     expect(await intentPhases(cache.context, "residual-remote-close-reopened")).toEqual(["declined"]);
+  }, 30_000);
+
+  test("a settled repair that confirms another terminal decision points at the deliberate reopen route", async () => {
+    const cache = await outboxCache("composite-repair-terminal");
+    const workflow = await remoteExecutionWorkflow(cache);
+    setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
+    await ingestRemoteObservation(
+      cache.context,
+      observation(positiveCheck(), {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: linkedSnapshot(workflow.planId),
+      }),
+    );
+    const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
+    const request = {
+      planId: workflow.planId,
+      operationId: "residual-remote-close-terminal",
+      operation: {
+        kind: "residual-close" as const,
+        issueId: MSTAR_ISSUE,
+        disposition: "resolved" as const,
+        evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
+        expectedIssueRevision: 1,
+      },
+      expected: workflow.planToken,
+      session: workflow.session,
+    };
+    const queued = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(queued.code).toBe("collaboration.operation-partial");
+    const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-remote-close-terminal"));
+    const intent = await readRemoteIntent(cache.context, outboxId);
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, outboxId));
+    const frozen = recordedEvent(cache.dbPath, outboxId);
+    if (frozen.change.kind !== "issue-replace") throw new Error("fixture: the closure froze no issue replacement");
+    const competing = ["00000000-0000-4000-8000-000000000d01", "00000000-0000-4000-8000-000000000d02"].map(
+      (operationId, index) => ({
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: index === 0 ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1" : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        event: { ...frozen, operationId, parents: ["9".repeat(64)] },
+      }),
+    );
+    const heads = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, outboxId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: competing,
+      }),
+    );
+    // note: The reviewed replacement keeps both branches' history, and its merged subject closes the
+    // issue as DUPLICATE instead of the RESOLVED the closure asked for.
+    const resolutionId = "00000000-0000-4000-8000-000000000d03";
+    const fields = frozen.change.mstar.fields as Record<string, unknown>;
+    await prepareRemoteResolution(cache.context, outboxId, {
+      operationId: resolutionId,
+      operator: "operator-one",
+      reason: "the duplicate branch won the merge",
+      event: {
+        ...frozen,
+        operationId: resolutionId,
+        parents: heads,
+        change: { ...frozen.change, mstar: { ...frozen.change.mstar, fields: { ...fields, disposition: "duplicate" } } },
+      },
+    });
+    const repairAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, outboxId, heads)),
+    );
+    const repairHash = outboxRows(cache.dbPath).find((row) => row.operation_id === resolutionId)!.request_hash;
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, resolutionId, repairAttempt, repairHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+        event: recordedEvent(cache.dbPath, resolutionId),
+      }),
+    );
+
+    // invariant: The settlement recorded ANOTHER TERMINAL decision. Retrying the closure over it can
+    // never succeed (a closure is admitted only from an open issue), so the recovery states that the
+    // confirmed decision stands and names the only route that makes a further closure admissible: the
+    // deliberate reopen, then a re-observation and a retry with the reopened revision.
+    const declined = await refusalOf(() => residualCloseExecutionPlan(execution, request));
+    expect(declined.code).toBe("remote.effect-mismatch");
+    expect(declined.message).toContain(resolutionId);
+    expect(detailsOf(declined)).toMatchObject({
+      phase: "declined",
+      operation_id: "residual-remote-close-terminal",
+      settled_operations: [resolutionId],
+      confirmed_components: [`provider:${resolutionId}`],
+      requested_disposition: "resolved",
+      confirmed_disposition: "duplicate",
+    });
+    const terminalRecovery = String(detailsOf(declined).recovery);
+    expect(terminalRecovery).toContain(`outbox-show --harness <abs> --operation ${resolutionId}`);
+    expect(terminalRecovery).toContain(`mstar issue show --id ${FORGED_ISSUE_REF}`);
+    expect(terminalRecovery).toContain("stands");
+    expect(terminalRecovery).toContain("mstar issue reopen --help");
+    expect(terminalRecovery).toContain("mstar schema IssueReopen");
+    expect(terminalRecovery).toContain("re-observe the project");
+    expect(terminalRecovery).toContain("NEW operation id");
+    // invariant: The unreachable advice is gone: a terminal settlement never points at retrying the
+    // closure over the merged decision.
+    expect(terminalRecovery).not.toContain("CURRENT revision");
+    expect(terminalRecovery).not.toContain("publishes the reviewed disposition");
+    expect(await intentPhases(cache.context, "residual-remote-close-terminal")).toEqual(["declined"]);
   }, 30_000);
 
   test("a mixed settlement declines with its confirmed components named and recovers only the missing work", async () => {
@@ -7981,6 +8097,104 @@ describe("remote outbox re-review", () => {
       ),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
     expect(outboxRows(cache.dbPath).map((row) => row.state)).toEqual(["abandoned", "enqueued"]);
+  });
+
+  test("a recorded no-change claim stays readable over history the replacement contract refuses", async () => {
+    const cache = await outboxCache("outbox-occurrence-claim-legacy");
+    const actor = "project-manager";
+    const observedOccurrence = {
+      sourceIdentity: "review:fixture",
+      rootCauseKey: "remote.observation",
+      acceptanceKey: "remote.observation.stored",
+      occurrenceKey: "occurrence-one",
+      sourceKind: "review",
+      location: "packages/engine/src/collaboration-remote.ts",
+      observedBehavior: "The store refused a complete scope.",
+      evidence: ["review-fixture"],
+      discoveredAt: "2026-11-20T00:00:00.000Z",
+    };
+    // note: The observed history also carries an imported occurrence whose dedup key was never
+    // resolved. It is provider evidence an observation serves, but it is never replacement content:
+    // freezing it would persist a dedup the issue domain refuses.
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const native = base.issues[0]!;
+    if (native.mstar === null) throw new Error("fixture: the snapshot carries no MStar subject");
+    const unresolved = {
+      ...native.mstar.occurrences[0]!,
+      eventId: "55555555-5555-4555-8555-555555555555",
+      occurrenceKey: "occurrence-legacy",
+      rootCauseKey: "unknown",
+      acceptanceKey: "unknown",
+      imported: true,
+    };
+    await ingestRemoteObservation(
+      cache.context,
+      observation(check, {
+        selectorCommit: cache.commit,
+        generation: 3,
+        expectRevision: 1,
+        snapshot: {
+          ...base,
+          issues: [
+            { ...native, mstar: { ...native.mstar, occurrences: [unresolved, ...native.mstar.occurrences] } },
+            base.issues[1]!,
+          ],
+        },
+      }),
+    );
+    const operationId = "00000000-0000-4000-8000-000000000781";
+    const mutation = { operationId, actor, expectedRevision: 1 };
+    const receipt = {
+      issueId: MSTAR_ISSUE,
+      occurrenceId: "11111111-1111-4111-8111-111111111111",
+      revision: 1,
+      storeRevision: 0,
+      created: false,
+    };
+    expect(await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, mutation)).toEqual(receipt);
+    // invariant: The claim records the replay identity and the receipt, never the observed subject
+    // as a provider event: the history it carries is not replacement content.
+    const [claimed] = outboxRows(cache.dbPath);
+    const claim = JSON.parse(String(claimed?.request_json)) as Record<string, unknown>;
+    expect(claim).not.toHaveProperty("event");
+    expect(claim).toMatchObject({
+      settled: 1,
+      kind: "issue-replace",
+      issueRef: FORGED_ISSUE_REF,
+      target: MSTAR_ISSUE,
+      result: { noChange: receipt },
+    });
+    // invariant: The SAME request under the SAME id replays the recorded receipt, and a different
+    // payload under that id still refuses.
+    expect(await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, mutation)).toEqual(receipt);
+    await expect(
+      appendOccurrence(
+        cache.context,
+        FORGED_ISSUE_REF,
+        { ...observedOccurrence, observedBehavior: "another reading" },
+        mutation,
+      ),
+    ).rejects.toMatchObject({ code: "remote.operation-conflict" });
+    // invariant: Inspection and the pending list stay readable: the claim is a durable abandoned row
+    // with its identity disclosed, never an unreadable frozen request.
+    expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
+      state: "abandoned",
+      disclosure: "full",
+      event: null,
+      settled: { kind: "issue-replace", issueRef: FORGED_ISSUE_REF },
+      target: MSTAR_ISSUE,
+      result: { noChange: receipt },
+      receipts: [],
+    });
+    expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).intents).toEqual([]);
+    // invariant: A claim was never dispatched, so no lifecycle verb acts on it: each names the claim
+    // instead of reporting the row unreadable.
+    await expect(dispatchRemoteIntent(cache.context, operationId)).rejects.toMatchObject({ code: "remote.dispatch-refused" });
+    await expect(abandonRemoteIntent(cache.context, { operationId, reason: "retire the claim" })).rejects.toMatchObject({
+      code: "remote.dispatch-refused",
+    });
+    expect(outboxRows(cache.dbPath)).toHaveLength(1);
   });
 
   test("a multi-entry residual-add reports every durable component and resumes", async () => {
