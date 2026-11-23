@@ -65,7 +65,7 @@ import {
   bindingInputOf,
   canonicalRegistrationIdentity,
   normalizeIterationPlanPaths,
-  pendingRegistrationOf,
+  readPendingRegistration,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
   workflowEntryOf,
@@ -354,6 +354,14 @@ export async function commitExecutionRegistration(
         "registration per project. Nothing was reserved.",
     );
   }
+  // invariant: A legacy operation still in flight must be settled explicitly before this
+  // registration can commit; it never adopts legacy journal state. The journal is
+  // resolved from whichever file OWNS it, outside any transaction: after the
+  // reviewed cutover the collaboration lane holds `catalog_operations`, so the
+  // execution connection below cannot read it.
+  const pending = await readPendingRegistration(context, request.workflow.workflowId);
+  if (pending !== null) refusePendingRegistration(request.workflow.workflowId, pending);
+
   // invariant: The witness preflight: a registration publishes the reviewed delta into the
   // repository's collaboration lane, so that lane must be the ACTIVE one this
   // operation freezes as its target.
@@ -407,11 +415,6 @@ export async function commitExecutionRegistration(
       key: [],
       revision: tx.execution.revision,
     });
-
-    // invariant: A legacy operation still in flight must be settled explicitly before this
-    // registration can commit; it never adopts legacy journal state.
-    const pending = pendingRegistrationOf(tx.db, plan.workflowId);
-    if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
 
     // Create-only admission: a workflow identity another lifecycle already
     // holds is a deterministic conflict, so it is refused BEFORE the catalog

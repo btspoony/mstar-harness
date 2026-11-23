@@ -484,6 +484,45 @@ values ('op-pending', 'op-hash', 'prepared', '{}', '{}', '{}', '2026-11-21T00:00
     expect(existsSync(locationAt(repo).dbPath)).toBe(false);
   });
 
+  test("a settled aborted catalog journal is not pending work", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-journal-settled.git");
+    const source = await seedSource(repo);
+    const seed = await openStore(source.context, "write");
+    try {
+      // why: `aborted` is a SETTLED terminal phase (its source bytes are retained and no
+      // execution rows are written), so it must not be read as an in-flight registration.
+      seed.db.exec(`
+insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, created_at, updated_at)
+values ('op-aborted', 'aborted-hash', 'aborted', '{}', '{}', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, created_at, updated_at)
+values ('op-prepared', 'prepared-hash', 'prepared', '{}', '{}', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+`);
+    } finally {
+      seed.close();
+    }
+
+    const manifest = await planCollaborationCutover(source.context);
+    const subjects = manifest.blockers.map((blocker) => blocker.subject);
+    // note: Exactly the genuinely pending row blocks; the settled aborted row does not.
+    expect(subjects.filter((subject) => subject.includes("catalog operation"))).toHaveLength(1);
+    expect(subjects.some((subject) => subject.includes("op-prepared"))).toBe(true);
+    expect(subjects.some((subject) => subject.includes("op-aborted"))).toBe(false);
+    // note: The subject still names the phase it reports.
+    expect(subjects.find((subject) => subject.includes("op-prepared"))).toContain("prepared");
+
+    // invariant: With only the settled aborted row left, the cutover proceeds — the
+    // source's own committed journal row already demonstrates the settled side.
+    const settled = await openStore(source.context, "write");
+    try {
+      settled.db.exec("delete from catalog_operations where operation_id = 'op-prepared'");
+    } finally {
+      settled.close();
+    }
+    const replanned = await planCollaborationCutover(source.context);
+    expect(replanned.blockers).toEqual([]);
+    expect((await applyCollaborationCutover(source.context, replanned)).phase).toBe("verified");
+  });
+
   test("a repeated identical apply reuses the verified receipt and copies once", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-repeat.git");
     const source = await seedSource(repo);
@@ -1418,6 +1457,53 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     const replanned = await planCollaborationCutover(source.context);
     expect(replanned.counts.store_operations).toBe(3);
     expect(replanned.manifestId).toBe(manifest.manifestId);
+  });
+
+  test("a pre-importedIds execution upgrade receipt is owned rather than blocking the cutover", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-receipts-historical-import.git");
+    const source = await seedSource(repo);
+    const location = locationAt(repo);
+    const legacyId = "postmerge-pr405-schema9-upgrade-20261007";
+
+    // why: A released importer wrote this receipt before `importedIds` and `inputDigest`
+    // existed: it proves the source bytes but not the conversion input, so it must be
+    // recognized as execution-owned instead of refusing the reviewed cutover.
+    const injected = await openStore(source.context, "write");
+    try {
+      injected.db
+        .prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)")
+        .run(
+          legacyId,
+          "historical-request-hash",
+          JSON.stringify({
+            verdict: "upgraded",
+            imported: 0,
+            skipped: [],
+            dispositions: [],
+            sourceDigest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          }),
+          "2026-10-07T00:00:00.000Z",
+        );
+    } finally {
+      injected.close();
+    }
+
+    const manifest = await planCollaborationCutover(source.context);
+    expect(manifest.blockers).toEqual([]);
+    // note: The receipt is execution-owned, so only the seeded collaboration receipts move.
+    expect(manifest.counts.store_operations).toBe(3);
+
+    await applyCollaborationCutover(source.context, manifest);
+    expect(
+      (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
+    ).toBe("active");
+
+    // invariant: The execution-owned receipt stayed on the source's own ledger; it is not part
+    // of the moved collaboration population on the target.
+    const staged = await cutoverState(location);
+    expect(staged.receipts.map((row) => row.operation_id)).not.toContain(legacyId);
+    expect(staged.receipts.map((row) => row.operation_id)).toContain("issue-op-legacy");
+    expect(staged.authority.state).toBe("active");
   });
 
   test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {

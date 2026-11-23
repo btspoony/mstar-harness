@@ -2443,7 +2443,7 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
             "collaboration.cutover-required",
             `The combined store at ${storeDbPath(context)} still owns collaboration rows (${held.join(", ")}); it is not a ` +
               `fresh scope. Move that authority with the reviewed cutover: mstar store collaboration plan, apply, then ` +
-              `activate. Nothing was created or changed.`,
+              `activate. No collaboration authority was created or changed.`,
           );
         }
       }

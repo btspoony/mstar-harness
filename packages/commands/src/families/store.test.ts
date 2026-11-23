@@ -661,3 +661,61 @@ test("store.init names the executable adopt recovery for a replacement checkout 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("store.upgrade advances a combined source's execution schema before directing to the cutover", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-combined-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    // note: A combined source: its own rows ARE the issue/catalog authority.
+    const initialized = await initializeStore({ harnessDir: harness, checkoutRoot: root });
+    initialized.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+          "identity_key) values ('I-000001', '_default', 'Combined source finding', 'bug', 'high', 'open', 'i', 'a', ?, ?, 'combined-key')",
+      )
+      .run("2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    initialized.close();
+
+    // invariant: A released build records only the schema it knows, so rewinding the ledger to
+    // the version before the fence migration reproduces a genuinely released combined store.
+    const fenceVersion = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version;
+    const releasedSchema = fenceVersion - 1;
+    const rewind = new DatabaseSync(join(harness, "store.db"));
+    try {
+      rewind.prepare("delete from schema_version where version >= ?").run(fenceVersion);
+      // why: Both later migrations ADD objects, so dropping them keeps their re-application a
+      // real migration rather than a no-op: the fence ledger and the composite reservation table.
+      rewind.exec("drop table collaboration_cutover; drop table execution_collaboration_intents;");
+    } finally {
+      rewind.close();
+    }
+
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = () => definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
+
+    // note: The collaboration authority is still the cutover's to move.
+    expect(await upgrade()).toMatchObject({ status: "refused", code: "collaboration.cutover-required", exitCode: 1 });
+
+    // invariant: The execution schema reached this build, so the cutover's source floor and the
+    // terminal lifecycle write are both reachable from the store the refusal left behind.
+    const store = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(store.schemaVersion).toBe(MIGRATIONS[MIGRATIONS.length - 1]!.version);
+    } finally {
+      store.close();
+    }
+    const planned = await executeCommand("store.collaboration.plan", { harness }, invocation(root));
+    expect(planned.status, planned.status !== "ok" ? JSON.stringify(planned) : "").toBe("ok");
+    if (planned.status === "ok" && planned.data !== null && typeof planned.data === "object" && "source" in planned.data) {
+      const source: unknown = planned.data.source;
+      // note: The reviewed source is the advanced store, at this build's schema.
+      expect(source !== null && typeof source === "object" && "schemaVersion" in source ? source.schemaVersion : undefined)
+        .toBe(MIGRATIONS[MIGRATIONS.length - 1]!.version);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

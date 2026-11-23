@@ -22,6 +22,7 @@ import {
   restoreCollaborationBackup,
   retireStoreSources,
   upgradeExistingCollaborationStore,
+  upgradeStore,
   upgradeStoreMinimal,
   bindRemoteAuthority,
   ingestRemoteObservation,
@@ -380,7 +381,18 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         // can report any imported state. A combined source with collaboration
         // rows refuses with the cutover route, and the import itself refuses a
         // staged lane.
-        await ensureCollaborationAuthority(context);
+        try {
+          await ensureCollaborationAuthority(context);
+        } catch (error) {
+          // invariant: A combined source must reach this build's schema here, because the
+          // reviewed cutover's source floor is the last schema a released build writes: the
+          // refusal above otherwise leaves `store collaboration plan` and the terminal
+          // lifecycle write unreachable. Only EXECUTION advances; collaboration rows are the
+          // cutover's to move.
+          if (!(error instanceof StoreError) || error.code !== "collaboration.cutover-required") throw error;
+          await upgradeStore(context, { attestation, operator });
+          throw error;
+        }
         const upgraded = await upgradeStoreMinimal({
           context,
           operator,

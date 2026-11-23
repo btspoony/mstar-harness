@@ -20,7 +20,7 @@ import { registerShippedCatalogExecution } from "./execution-registration.js";
 import { bindExecutionSession, readExecutionState, type ExecutionContext } from "./execution-store.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /**
@@ -241,6 +241,58 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect(readFileSync(snapshotPath, "utf8")).toBe(edited);
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+  });
+
+  test("a fenced source registers into the lane that now owns the catalog journal", async () => {
+    const { harnessDir, context, execution } = await fixture("post-cutover");
+    const location = resolveCollaborationLocation(context);
+    const planId = "20261009-post-cutover-plan";
+    const workflow = planWorkflow(harnessDir, "wf-post-cutover", planId, "Post-cutover plan");
+
+    // why: This is the post-cutover shape: the collaboration lane owns the
+    // catalog journal while the fenced execution store no longer carries it.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(location.dbPath);
+    try {
+      lane.exec(
+        "create table if not exists catalog_operations(operation_id text primary key, request_hash text not null, " +
+          "phase text not null check (phase in ('prepared','execution-written','committed','aborted')), " +
+          "catalog_delta_json text not null, before_versions_json text not null, after_versions_json text not null, " +
+          "result_json text, created_at text not null, updated_at text not null)",
+      );
+    } finally {
+      lane.close();
+    }
+
+    const receipt = await registerShippedCatalogExecution(execution, {
+      actor: "project-manager",
+      workflow,
+      operationId: "op-post-cutover",
+    });
+    expect(receipt).toMatchObject({ operationId: "op-post-cutover", workflowId: "wf-post-cutover", recovered: false });
+
+    // invariant: The journal row lands on the lane, committed; the execution store no
+    // longer carries the table at all.
+    const laneRows = new DatabaseSync(location.dbPath);
+    try {
+      expect(laneRows.prepare("select operation_id, phase from catalog_operations order by operation_id").all())
+        .toMatchObject([{ phase: "committed" }]);
+    } finally {
+      laneRows.close();
+    }
+    const executionStore = await openStore(context, "read");
+    try {
+      expect(tableNamesOn(executionStore.db).has("catalog_operations")).toBe(false);
+    } finally {
+      executionStore.close();
+    }
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect((await getCatalog(context, { kind: "plan", id: planId })).entity.title).toBe("Post-cutover plan");
   });
 
   test("reconcile refuses registered active work but abort retains unregistered leases and permits disposition retry", async () => {
