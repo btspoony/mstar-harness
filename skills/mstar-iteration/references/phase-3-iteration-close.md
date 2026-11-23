@@ -49,12 +49,11 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 - **ADR 提升**：判据是 `mstar-doc-corpus/references/adr.md` § When a record is required，不以「是否跨迭代」收窄；各 plan 已在 `ADR:` 行记录（durable summary）的不重复写，只核对 freshness 与 supersession（`Supersedes:` / `Superseded-by:`），未记录的在此补写到 `{ADR_DIR}/implemented/<class>/` 并完成 catalog 登记。无则记 `N/A`。
 - **记录面**：§3.4 填充 compass `## Corpus Promotion Summary`（specs/ADR 篇数、跳过及原因、各 plan compound disposition 指针）；每篇新 doc 完成 catalog 登记。**若无提升，仍须写明 `无 spec/ADR 提升` 及原因**，不得静默。
 
-## 3.3 更新 roadmap
+## 3.3 记录 roadmap 投影候选
 
-1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：current iteration 标记为 **`delivered`**（或等价明确措辞），next iteration 记下即将开始的内容、触发条件和 owner。compass 是执行叙事，不是项目 roadmap 内容权威。
-2. 对该 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` **读** store 当前正文及 project/roadmap revisions，再按 **`mstar-project-governance`** 的唯一读写/校验规则复核独立候选并完成 revision-guarded roadmap replacement；已知项目无记录时明确记录 absence，不走文件 fallback。
-3. Roadmap replacement 后，先用 `mstar milestone list --project <id>` 读取项目目标，再按 built verb help 将匹配 milestone 的 ID 传给 `mstar milestone status`，读取关联 issue 证据。对本迭代范围对应的 milestone，通过 `mstar milestone update` 使用观察到的 store revision 显式更新状态；标记 `delivered` 前须满足 **`mstar-project-governance`「Milestone」** 的交付前提，绝不隐式关闭 issue。在 compass `## Roadmap Position` 记录 milestone ID、状态更新及关联 issue 证据；无匹配 milestone 时记 `N/A`，不得以迭代交付节点代替项目 milestone。写入规则与选项仍归 **`mstar-project-governance`** / built verb help。
-4. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
+1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：记录本迭代的交付投影候选（roadmap 正文候选、匹配 milestone 的状态候选及其关联 issue 证据）与 next iteration 即将开始的内容、触发条件和 owner；**不**在此写 `delivered`。compass 是执行叙事，不是项目 roadmap 内容权威。
+2. **交付投影只在整链证明之后写一次**：`delivered` 标记、store 项目 roadmap 正文与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先 `mstar roadmap show --project <id>` 读 store 当前正文与 project/roadmap revisions，再按 governance 规则做 revision-guarded replacement；先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 roadmap 行保持其 pre-delivery 状态；已知项目无记录时明确记录 absence，不走文件 fallback。
+3. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
 At close, review the local ignored per-edit attribution record for this iteration against delivered edits and plan-QC references (`mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution). Record actual correction time for a missed row and disclose the unobserved prior edit; unknown model remains `unknown`. Do not paste real runtime provenance into tracked artifacts or turn this review into a machine completeness check.
 
@@ -68,12 +67,11 @@ At close, review the local ignored per-edit attribution record for this iteratio
 
 **Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
 
-PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；随后把该 close commit 作为整链的最后一层发布（有 tracked 变更时；无 diff 则封存预期清单，不开空 PR），再做整链证明 → `mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」，最后 workflow close → `mstar-roles/references/project-manager/workflow-close.md`：
+PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`。close commit 之后：有 tracked 变更 → 按下方建 layer ref 与 close-delta layer PR，并走 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `mstar-iteration/references/pr-stack.md`「Landing」，直到整链合并；无 tracked 变更 → 建 ref、不开 PR，封存预期清单。随后整链证明 → `mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」（链未合并完则按该节回到「Landing」，不进入 close-out），最后 Workflow Close Out → `mstar-roles/references/project-manager/workflow-close.md`：
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 specs/ADR promotion 完成；package specs 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 specs/ADR 均完成 store catalog 登记（或记明无提升原因）；各 plan compound disposition 已记录
-- [ ] §3.3 `## Roadmap Position` current iteration 已标 `delivered`；项目 roadmap 的 store 替换已以观察到的版本完成；STRATEGY 已按需更新
-- [ ] §3.3 已读取项目 milestone list/status；匹配 milestone 已按观察到的 store revision 显式更新并记录证据，`delivered` 满足治理规则的交付前提且未隐式关闭 issue；无匹配项已记 `N/A`
+- [ ] §3.3 `## Roadmap Position` 已记录投影候选与 next iteration；STRATEGY 已按需更新；**未**写 `delivered`、**未**替换 roadmap 正文、**未**更新 milestone 汇总 —— 交付投影（`delivered`、roadmap 行、milestone 汇总）留到整链证明之后的 **Workflow Close Out**「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Corpus Promotion Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] 整链的 target 是记录在案的 `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`
@@ -96,6 +94,8 @@ git commit -m "chore(iteration): close <iteration-id> — specs/ADR promotion"  
 
 Staging 说明：`{SPECS_DIR}` 与 `{ADR_DIR}` 为解析后的实际语料目录（候选链见 `mstar-conventions`）；本轮更新过才加入。per-plan knowledge compound 的 tracked 写入已在各 plan `Done` 后提交到 integration 分支，本 commit 不重复提交。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
 
-commit 存在时按其值建 `iteration-stack/<iteration-id>/sNN` 并发布：先按 `mstar-iteration/references/pr-stack.md`「Sizing」量测，`adviseSplit` → 停；再由它的单一 pusher push 该 layer ref，并以 live predecessor 为 base 开 close-delta layer PR（`branch.integration` 不作 PR head）。无 tracked 变更时不建 ref、不开 PR，封存预期清单供整链证明使用。
+commit 存在时按其值建 `iteration-stack/<iteration-id>/sNN` 并发布：先按 `mstar-iteration/references/pr-stack.md`「Sizing」量测，并按「Layer」确定每层 accountable scope（close 层见该节的 close 范围与拆分规则，封存预期清单前完成），`adviseSplit` → 停；再由它的单一 pusher push 该 layer ref，并以 live predecessor 为 base 开 close-delta layer PR（`branch.integration` 不作 PR head），随后按 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `pr-stack.md`「Landing」推进到整链合并。无 tracked 变更时不建 ref、不开 PR，封存预期清单供整链证明使用。
 
 close-delta layer 的 base 是它的 live predecessor，只有首个 open layer 才是当前权威 workflow `branch.target`；target 缺失时停止并按受守卫入口处理，不默认 `main`。
+
+close commit 之后**无论 close delta 是否发布**，都由 coordinator 按 `phase-2-worktree-lease.md` § Rescheduling checkpoint「Integration ref sync」把 `branch.integration` fast-forward 同步到 upstream（**无 force**；non-fast-forward 即 **STOP**，先与 remote 对账）；该同步独立于 layer 发布，不受 size check 门控。

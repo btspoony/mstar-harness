@@ -158,6 +158,8 @@ PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，
 
 **Integration ref sync**：每次 coordinator 串行写入 `branch.integration`（per-plan merge 与 compound 之后、propagation merge 之后），都在该 checkpoint 结束前把它 fast-forward push 到 upstream，使 Phase 2 entry 的 checkout 前置（remote tip = live integration HEAD）继续成立；**无 force**，non-fast-forward 被拒即 **STOP**，先与 remote 对账，再做任何后续 integration 写入或 layer 发布。该同步独立于 layer 发布、不受 size check 门控：`adviseSplit` 只停该 layer PR，从不停 integration ref。
 
+**Layer publication**：task-reviewed integration range（含为某个 dependent task 先合入的 earlier batch）可在其 plan 完成前即按 `pr-stack.md`「Layer」「Opening」发布为 layer；landing 仍等该 accountable plan 的 `Done`。发布被停住（size stop、interruption）的 layer，无论其 plan 行状态如何，都在本 checkpoint 对 compass `PR stack` 记录做对账，并在停止条件解除后发布；发布延迟从不延迟独立实现的派发。
+
 **决策步骤**（每次 checkpoint 按序执行）：
 
 1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。

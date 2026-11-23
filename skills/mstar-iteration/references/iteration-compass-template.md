@@ -162,13 +162,13 @@ Notes:
 | `pr_merge_policy` | Yes | Phase 1 at direction lock: exactly `reviewed-auto`, `reviewed-bot` or `owner-gated`, confirmed with the user and never defaulted. PR delivery dispatches its review path on it (`reviewed-auto` = local `mstar-pr-loop`; `reviewed-bot` = monitor the attached bot's own review, never start a local loop); Workflow Close Out requires the merge authorization it names (`mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」). |
 | `plans` (frontmatter) | Recommended | Phase 1 (initial), Phase 2 (add new) |
 | `## Plans` table | Yes | Phase 2 (sync status), Phase 3 (final) |
-| `## PR stack` | Yes (iteration delivery) | Phase 5: one row per layer from the first review-ready layer on; the primary coordinator alone writes it → `mstar-iteration/references/pr-stack.md` |
+| `## PR stack` | Yes (iteration delivery) | Layer publication: one row per layer from the first review-ready layer on; the primary coordinator alone writes it → `mstar-iteration/references/pr-stack.md` |
 | `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
 | `## Acceptance Criteria` | Yes | Phase 1 |
 | `## Non-Goals` | Yes | Phase 1; each entry carries its rationale |
 | `## Decisions` | Yes | Phase 1 draft (appended in Phase 2); settled items with rationale and source |
 | `## Open Questions` | Yes (`None` allowed) | Phase 1 draft; owners must be PM or selected editing roles; row disposition before lock → `phase-1-prepare.md` §1.3 |
-| `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
+| `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（记录投影候选）；`delivered` 投影在整链证明之后由 Workflow Close Out 的 Projection reconciliation 写入 |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
 | `## Prototype baseline` | Yes | Phase 1 §1.3, from §1.2.5; retained path/revision and truthful confirmation/autonomous disposition |
 | Iteration package (`prototypes/`, optional `guides/` / `specs/`) | Yes (prototype) | Prototype before formal authoring; README is optional prose, not a required index |
