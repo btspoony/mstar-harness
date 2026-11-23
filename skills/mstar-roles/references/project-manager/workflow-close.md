@@ -58,7 +58,7 @@ Physical cleanup (integration worktree / local branch / remote branch deletion) 
 - Cleanup/close never releases an exclusion to force eligibility. Direct complete owns release for its verified attempt; a remaining foreign or in-flight claim stays protected and must be resolved through its owning authority. Never hand-edit state or revive a transfer sequence.
 - A squash-merged branch (its tip is not an ancestor of base) → STOP → residue; **never** `git branch -D`.
 
-The close-state gate checks **local state only** (valid terminal shape + no dangling lease + root entry unregistered + `type: plan` delivery evidence); it does **not** verify remote merged evidence and does **not** check whether physical cleanup happened.
+The close-state gate checks **local state only** (valid terminal shape + no dangling lease + root entry unregistered; for a completed `type: plan` workflow, every owned row Done); it does **not** verify remote merged evidence and does **not** check whether physical cleanup happened.
 
 > **Engine check:** run `mstar iteration gate --phase 6 --workflow <id>` (engine `evaluatePostMergeCloseFromExecutionAuthority`) — a read-only close-state probe over the local post-merge close state (valid terminal shape + no dangling lease + root entry unregistered; stable codes `PHASE6_*`; an invalid or unreadable root is not proof that the entry is unregistered). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 

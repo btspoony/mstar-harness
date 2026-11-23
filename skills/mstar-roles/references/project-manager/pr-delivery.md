@@ -155,17 +155,17 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 
 ## Unresolved conversation gate (HARD — before head reconciliation, independent of pr_merge_policy)
 
-- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread，执行 `mstar pr merge-gate --pr <n>`（它读取每条 thread 的作者、`path:line` 与首条评论，分页耗尽即拒绝）；人类与 bot 都算，**不按 merge class 过滤**，`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。该命令只读 GitHub；其他 provider 上用项目支持的工具枚举 thread 并重读 head，逐条保留本 gate 的全部要求；命令与成文等价物都无法枚举 thread 的 provider 是 owner 的 STOP，绝不静默放行（#826）。
+- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread。**GitHub 形式**：`mstar pr merge-gate --pr <n>`（读取每条 thread 的作者、`path:line` 与首条评论，分页耗尽即拒绝）；**其他 provider 形式**：用项目支持的工具枚举绑定到**当前 head** 的全部 thread，逐条读取同样的三项。两种形式都：人类与 bot 都算，**不按 merge class 过滤**，`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。既无命令也无成文等价物可枚举 thread 的 provider 是 owner 的 STOP，绝不静默放行（#826）。
 - **门**：未解决项 > 0 时**不得 merge**，唯一出口是「恢复路径」的逐条 waive + 两次确认，或全部 resolve——owner 批准、`ship it`、CI 绿、「Merge authorization」 谓词成立都不能替代本 gate；本 gate 不因 thread 被归在 「Merge-ready checklist」 第 4 项而免检。
 - **清单**：PM 必须逐条列出 `author.login`、`path:line`、首条评论要点（bot 报告有 merge class 时一并给出），不得只报数量或以「有些评论」概括。
-- **两次确认**：存在未解决项时（clean 枚举按 「Merge-ready checklist」 第 4 项直接通过，不需用户确认），展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、出现新的未解决 thread 或清单变化 → 前一次确认作废并重走；确认结果写入 `--confirm` 文件（`{head, confirmations: 2, threads: [<thread id>...], digest}`，`digest` 取自该命令对未解决清单的输出），**head 对账（「Head reconciliation before merge」）之后、执行 merge 之前必须重跑同一条命令复验**——新 head、未解决集合变化（含新出现的未解决 thread、某条未解决 thread 被重新打开）或未解决 thread 的首条评论被编辑都会使复验失败，即无授权。
+- **两次确认**：存在未解决项时（clean 枚举按 「Merge-ready checklist」 第 4 项直接通过，不需用户确认），展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、出现新的未解决 thread 或清单变化 → 前一次确认作废并重走；确认结果写入 `--confirm` 文件（`{head, confirmations: 2, threads: [<thread id>...], digest}`）——**GitHub 形式**的 `digest` 取自该命令对未解决清单的输出，**其他 provider 形式**取自已枚举清单在同一工具输出上的摘要，两者都绑定当前 head；**head 对账（「Head reconciliation before merge」）之后、执行 merge 之前必须用同一形式复验**（GitHub 重跑同一条命令，其他 provider 用同一工具重新枚举）——新 head、未解决集合变化（含新出现的未解决 thread、某条未解决 thread 被重新打开）或未解决 thread 的首条评论被编辑都会使复验失败，即无授权。
 - **waive 粒度**：笼统的「合并」「可以了」不构成 waive；waive 必须逐条点名（thread id 或 `path:line` + 作者），且点名的是**该 thread**——只点名 head 或 surface 的 waive 不适用本 gate。
 - **恢复路径**：修复后 resolve（或由 reviewer/bot 自行 resolve）即通过；用户逐条书面 waive 且经上述两次确认亦通过——两者之外没有第三种出路。
 - **`owner-gated`**：owner 自行 merge 时 PM 无法拦截，但 PM **不得**把未解决项记为 resolved，也不得丢弃清单；由 PM 执行的 merge（含 owner 书面批准后的执行）一律先过本 gate。owner 在确认前自行 merge → Phase 6 仍按「verified merge 已发生」进入，入口记录该 head 上的未解决 thread 清单与**实际处置**（逐条 resolved-in-fact / still-open，不得写成已确认或已 waive），保留到 close；这不豁免下一次 merge 的 gate。
 
 ## Head reconciliation before merge
 
-**可执行，不是谓词的复述。** 执行 merge 的前一步，取 `gh pr view <n> --json headRefOid`，与该 policy 的授权证据绑定的 head 逐字比较（standalone：与 owner 明确 merge 指示中命名的 head 比较；任何 push 作废该指示，owner 须重新点名新 head）：
+**可执行，不是谓词的复述。** 执行 merge 的前一步读取当前 PR head——**GitHub 形式**取 `gh pr view <n> --json headRefOid`，**其他 provider 形式**用项目支持的工具读取该 head——与该 policy 的授权证据绑定的 head 逐字比较（standalone：与 owner 明确 merge 指示中命名的 head 比较；任何 push 作废该指示，owner 须重新点名新 head）：
 
 - `reviewed-auto` → 授权报告的 `head`。
 - `reviewed-bot` → bot 证据的 head：bot check 的 `head_sha` 必须等于 `headRefOid`，且该 check **自身**的 conclusion 绑定在这个 head 上（mstar-inspector 按 check 名 `mstar-inspector review` 定位，不按 bot 登录名）；**发布** `publication:v1` marker 的 bot 另需整体 review comment 的 `sha=` 等于 `headRefOid`，或**空增量继承**时为内容完全相同的祖先（该 head 的 check 已按继承结果 terminalize；`compare/<comment-sha>...<head>` 返回 `files == 0` 且 `status` 为 `identical` / `ahead`），并在 Phase 5 证据里同时记录 `reviewed` 与 `current` 两个 head。**无 marker 的 bot**（例如 Greptile）绑定到此为止：其 check 的 `head_sha` 与自身 conclusion 只决定按哪个 head 判定，不构成授权——授权仍按 「Merge authorization」 该 policy 行成立（达到该 bot 自身门且无未解决的 blocking finding）；它也没有继承路径：只能等它对新 head 产出 review，或就某个 blocking finding / 未达门的分数取得点名该 finding 或分数的书面 waive——只点名 head 的 waive 仅是升级记录，**不构成**授权。只有短 sha（`commit <sha7>`）或只有 line comments 不算绑定。
