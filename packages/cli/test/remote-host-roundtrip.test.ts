@@ -240,6 +240,15 @@ function observeAt(fixture: RemoteCollaborationFixture, sandbox: RemoteSandbox, 
   return sandbox.observe(fixture.observe(REMOTE_PROJECT, revision));
 }
 
+/**
+ * note: Re-submit the host check and traversal so the next freshness-gated verb runs inside the
+ * product's 60 s window; this suite's own deadline is longer than that window, so an expired
+ * check must never masquerade as the refusal under test.
+ */
+function refreshHost(fixture: RemoteCollaborationFixture, sandbox: RemoteSandbox): void {
+  expect(observeAt(fixture, sandbox, revisionOf(sandbox)).exitCode).toBe(0);
+}
+
 function adopt(
   sandbox: RemoteSandbox,
   operation: string,
@@ -342,6 +351,10 @@ describe("remote host round trip", () => {
     expect(native.exitCode).toBe(0);
     expect(native.data).toMatchObject({ kind: "provider-only", issueRef: null, title: SHARED_TITLE });
 
+    // note: The refusal block below runs several built-CLI subprocesses; re-prove the base first
+    // so each refusal is its own tested cause and never an expired access check.
+    refreshHost(fixture, sandbox);
+
     // note: Without the strict document the verb is a usage refusal (exit 2), before any store work.
     const missing = cli([
       ...REMOTE, "adopt-issue",
@@ -372,8 +385,14 @@ describe("remote host round trip", () => {
     expect(markedAdoption.exitCode).toBe(1);
     expect(markedAdoption.code).toBe("remote.scope-mismatch");
 
-    // invariant: Every refusal recorded nothing: no intent, no count change, and the unmarked UUID
-    // is still visible with no reference, no MStar disposition and no provider send.
+    // invariant: Every refusal recorded nothing, and not only nothing dispatchable: the operation
+    // ids name no intent at all, so `outbox-show` refuses instead of an empty pending query hiding
+    // a terminal or in-flight row that reserved the id.
+    for (const operation of [REFUSED_OPERATION, REFUSED_TITLE_OPERATION, REFUSED_PROJECT_OPERATION, MARKED_OPERATION]) {
+      const shown = cli([...REMOTE, "outbox-show", "--harness", sandbox.harness, "--operation", operation]);
+      expect(shown.exitCode).toBe(1);
+      expect(shown.code).toBe("remote.intent-not-found");
+    }
     expect(cli([...REMOTE, "outbox-pending", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]).data).toMatchObject({ intents: [] });
     const afterRefusals = cli(["issue", "list", "--harness", sandbox.harness]);
     expect(afterRefusals.data).toMatchObject({ total: 1 });
@@ -387,6 +406,7 @@ describe("remote host round trip", () => {
     expect(fixture.providerCalls).toEqual([]);
 
     // note: The exact unmarked provider UUID freezes ONE durable intent — not an adoption.
+    refreshHost(fixture, sandbox);
     const adopted = adopt(sandbox, ADOPT_OPERATION, FIXTURE_ISSUE_ID);
     expect(adopted.exitCode).toBe(0);
     expect(adopted.data).toMatchObject({ state: "enqueued", operationId: ADOPT_OPERATION, target: FIXTURE_ISSUE_ID });
@@ -398,6 +418,7 @@ describe("remote host round trip", () => {
     expect((pending.data.intents as Array<Record<string, unknown>>)[0]?.permit).toBeUndefined();
 
     // note: Exactly one permit across dispatch and its replay.
+    refreshHost(fixture, sandbox);
     const dispatched = dispatch(sandbox, ADOPT_OPERATION);
     expect(dispatched.exitCode).toBe(0);
     expect(dispatched.data.kind).toBe("permit");
@@ -465,18 +486,22 @@ describe("remote host round trip", () => {
     expect(cli(["issue", "list", "--harness", sandbox.harness]).data).toMatchObject({ total: 2 });
   }, 120_000);
 
-  test("a lost response stays unconfirmed on missing or ambiguous lookup evidence and confirms only on a unique match", () => {
+  test("a lost response stays unconfirmed on missing or ambiguous lookup evidence and confirms only the record it sent", () => {
     const fixture = host("lost-response");
     const sandbox = prepareHost(fixture);
     expect(observeAt(fixture, sandbox, 0).exitCode).toBe(0);
     expect(adopt(sandbox, LOST_OPERATION, FIXTURE_ISSUE_ID).data.state).toBe("enqueued");
+    refreshHost(fixture, sandbox);
     const dispatched = dispatch(sandbox, LOST_OPERATION);
     expect(dispatched.exitCode).toBe(0);
     const permit = dispatched.data.permit as unknown as OutboxPermit;
 
-    // note: The effect lands and the response is lost; the host records only what it saw.
+    // note: The effect lands and the response is lost; the host records only what it saw. The
+    // provider keeps the ONE record that send produced for the whole recovery.
+    const sent = fixture.send(permit);
+    const original = sent.outcome as { recordId: string; identity: unknown };
     const uncertain = receipt(sandbox, {
-      ...fixture.send(permit),
+      ...sent,
       observedAt: new Date().toISOString(),
       outcome: { kind: "unconfirmed", reason: "no-response" },
     });
@@ -503,32 +528,42 @@ describe("remote host round trip", () => {
         "--input", sandbox.writeJson("reconcile", { ...(document as Record<string, unknown>), observedAt: new Date((tick += 2_000)).toISOString() }),
       ]);
 
-    // note: The provider holds nothing for the attempt yet: an absent record is not a confirmation.
-    fixture.setAttemptHistory(permit, 0);
+    // note: The provider holds the record the send produced, but a stale read has not exposed it
+    // yet: an effect a lookup cannot observe is an absence, never a confirmation.
+    fixture.setAttemptObservable(permit, "stale");
     const missing = fixture.lookup(intent);
     expect(missing.outcome).toMatchObject({ kind: "unconfirmed", reason: "not-found" });
     const stillUncertain = settle(missing);
     expect(stillUncertain.exitCode).toBe(0);
     expect(stillUncertain.data).toMatchObject({ state: "unconfirmed", confirmed: null });
-    expect(dispatch(sandbox, LOST_OPERATION).data).toMatchObject({ kind: "state", state: "unconfirmed" });
+    const missingReplay = dispatch(sandbox, LOST_OPERATION);
+    expect(missingReplay.data).toMatchObject({ kind: "state", state: "unconfirmed" });
+    expect(missingReplay.data.permit).toBeUndefined();
 
     // invariant: A record the provider applied twice is ambiguous, never the effect — and the
     // ambiguity comes from provider-side history, not from a second host send.
-    fixture.setAttemptHistory(permit, 2);
+    fixture.setAttemptObservable(permit, "duplicated");
     const ambiguous = fixture.lookup(intent);
     expect(ambiguous.outcome).toMatchObject({ kind: "unconfirmed", reason: "ambiguous" });
     const ambiguousSettlement = settle(ambiguous);
     expect(ambiguousSettlement.exitCode).toBe(0);
     expect(ambiguousSettlement.data).toMatchObject({ state: "unconfirmed", confirmed: null });
-    expect(dispatch(sandbox, LOST_OPERATION).data).toMatchObject({ kind: "state", state: "unconfirmed" });
+    const ambiguousReplay = dispatch(sandbox, LOST_OPERATION);
+    expect(ambiguousReplay.data).toMatchObject({ kind: "state", state: "unconfirmed" });
+    expect(ambiguousReplay.data.permit).toBeUndefined();
 
-    // invariant: Only a unique exact match advances the attempt to confirmed.
-    fixture.setAttemptHistory(permit, 1);
+    // invariant: Only a unique exact match advances the attempt to confirmed — and it is the
+    // immutable record the original send produced, with the identity it landed on.
+    fixture.setAttemptObservable(permit, "sole");
     const unique = fixture.lookup(intent);
-    expect(unique.outcome).toMatchObject({ kind: "confirmed" });
+    // note: The lookup's outcome is the host evidence document; only its own record may confirm.
+    const confirmedOutcome = unique.outcome as { identity: unknown; recordId: string };
+    expect(confirmedOutcome).toMatchObject({ kind: "confirmed", recordId: original.recordId });
+    expect(confirmedOutcome.identity).toEqual(original.identity);
     const settled = settle(unique);
     expect(settled.exitCode).toBe(0);
     expect(settled.data.state).toBe("confirmed");
+    expect(settled.data.confirmed).toMatchObject({ recordId: original.recordId, identity: original.identity });
 
     // invariant: One host send and three read-only lookups — no retry, so no duplicate create.
     expect(fixture.providerCalls).toEqual([
@@ -551,6 +586,7 @@ describe("remote host round trip", () => {
     const sandbox = prepareHost(fixture);
     expect(observeAt(fixture, sandbox, 0).exitCode).toBe(0);
     expect(adopt(sandbox, CONFLICT_OPERATION, FIXTURE_ISSUE_ID).data.state).toBe("enqueued");
+    refreshHost(fixture, sandbox);
     const dispatched = dispatch(sandbox, CONFLICT_OPERATION);
     expect(dispatched.exitCode).toBe(0);
     const permit = dispatched.data.permit as unknown as OutboxPermit;
@@ -563,6 +599,9 @@ describe("remote host round trip", () => {
     expect(fixture.providerCalls).toEqual([{ kind: "send", operationId: CONFLICT_OPERATION }]);
 
     // invariant: A conflict is terminal for that intent: no permit, and no confirmation rewrites it.
+    // note: Re-prove the check and traversal first, so the refusal can only be the recorded conflict
+    // and never a check that expired while the suite queued its subprocesses.
+    refreshHost(fixture, sandbox);
     const blocked = dispatch(sandbox, CONFLICT_OPERATION);
     expect(blocked.exitCode).toBe(1);
     expect(blocked.code).toBe("remote.dispatch-refused");
@@ -638,13 +677,32 @@ describe("remote host round trip", () => {
     const sandbox = prepareHost(fixture);
     expect(observeAt(fixture, sandbox, 0).data).toMatchObject({ revision: 1, completeness: "complete" });
 
+    // note: The refused submission carries a DIFFERENT, valid payload, so a regression that wrote
+    // it while still reporting the stale revision would become visible in the admitted cache.
+    const refusedDirection = "A refused base must never replace the admitted direction.";
+    fixture.setProjectDocument({
+      ...PROJECT_DOCUMENT,
+      roadmap: {
+        ...PROJECT_DOCUMENT.roadmap,
+        contentMarkdown: PROJECT_DOCUMENT.roadmap.contentMarkdown.replace(
+          "Prove the host-mediated round trip at the controlled boundary.",
+          refusedDirection,
+        ),
+      },
+    });
+
     // note: The submission addresses revision 0 while the cache already holds 1.
     const stale = observeAt(fixture, sandbox, 0);
     expect(stale.exitCode).toBe(1);
     expect(stale.code).toBe("collaboration.observation-stale");
 
-    // invariant: The refused base wrote nothing: the cached revision, the marked finding and the
-    // visible unmarked issue all stay as the previous observation left them.
+    // invariant: The refused base wrote nothing: the cached revision, the admitted roadmap, the
+    // marked finding and the visible unmarked issue all stay as the previous observation left them.
+    const roadmap = sandbox.runJson(["roadmap", "show", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
+    expect(roadmap.exitCode).toBe(0);
+    const direction = (roadmap.data.content as { direction?: unknown } | null)?.direction;
+    expect(String(direction)).toContain("controlled boundary");
+    expect(String(direction)).not.toContain("refused base");
     const status = sandbox.status();
     expect(status.data).toMatchObject({ available: true, projects: [expect.objectContaining({ revision: 1, completeness: "complete" })] });
     const listed = sandbox.runJson(["issue", "list", "--harness", sandbox.harness]);
