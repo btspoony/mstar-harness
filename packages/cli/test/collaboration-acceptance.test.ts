@@ -121,8 +121,11 @@ function childEnvironment(home: string): Record<string, string> {
   };
 }
 
-/** note: The ambient Git environment captured before a fixture pins its own. */
+/** note: The ambient environment captured before a fixture pins its own. */
 type SavedEnvironment = ReadonlyArray<readonly [string, string | undefined]>;
+
+/** note: Every key `pinFixtureGitEnvironment` sets, so a previously absent one is recorded too. */
+const PINNED_KEYS = ["HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT"] as const;
 
 /**
  * invariant: The same isolation for the engine's in-process Git probes. Every ambient `GIT_*`
@@ -131,11 +134,16 @@ type SavedEnvironment = ReadonlyArray<readonly [string, string | undefined]>;
  */
 function pinFixtureGitEnvironment(home: string): SavedEnvironment {
   const saved: Array<readonly [string, string | undefined]> = [];
-  for (const key of Object.keys(process.env)) {
-    if (!key.startsWith("GIT_") && key !== "HOME") continue;
+  const record = (key: string): void => {
     saved.push([key, process.env[key]]);
     delete process.env[key];
+  };
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("GIT_") || key === "HOME") record(key);
   }
+  // invariant: A key that was ABSENT before is saved as `undefined`, so restore deletes it
+  // instead of leaving the fixture's value — and a fixture `HOME` — in this process.
+  for (const key of PINNED_KEYS) if (!saved.some(([savedKey]) => savedKey === key)) record(key);
   Object.assign(process.env, {
     HOME: home,
     GIT_CONFIG_NOSYSTEM: "1",
