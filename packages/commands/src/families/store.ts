@@ -46,6 +46,7 @@ import { resolveCliPath } from "../host-health.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
 
 /**
  * One per-lift delivery declaration for `store upgrade --delivery <json>...`
@@ -128,7 +129,10 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
       // Literal branches only: the repository's refusal-quality lint proves the
       // text statically, so every code the engine can emit carries the family's
       // own words for the exact route instead of a composed variable.
-      recovery: (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable")
+      // invariant: An engine-authored recovery is forwarded verbatim, never restated: it is the
+      // single owner of that code's repair route, so this chain only supplies the text for
+      // codes the engine does not own.
+      recovery: engineErrorFacts(error).recovery ?? (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable")
         ? "Store init never creates a remote cache: access to the canonical origin and the protected selector ref is the prerequisite, and the checkout is inspected with mstar path resolve. Then check mstar store collaboration remote status --harness <abs>, have the Host Agent verify the selected scope, complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->, and retry mstar store init --harness <abs>."
         // invariant: A stale binding is mode-specific, so the recovery names both modes instead of
         // replacing the local/mirror adoption route with instructions for another checkout.
@@ -164,12 +168,6 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
-          // invariant: The schema advance would pass the last version a released build admits,
-          // and only that build settles a mirror run in a combined store. Both commands name the
-          // SAME absolute harness: a run settled from another checkout settles THAT store and
-          // leaves this control root's run open, so the retry would refuse again.
-          : code === "store.upgrade-sync-run-open"
-          ? "Settle or take over the open mirror run(s) the refusal names with the 4.8.x build's mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> (add --take-run with an empty result list for a dead holder), then retry mstar store upgrade --harness <same-control-root> --operator <name>; after this build's schema advance neither build can settle the run."
           : code === "store.runtime-unsupported"
           ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
           : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
@@ -406,15 +404,15 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             attestation: attestation === undefined ? undefined : validateActivationAttestation(attestation),
           });
           // invariant: The refusal must disclose what it changed: the schema now stands past the
-          // last released 4.8.x build's ceiling, so that build refuses this store as
-          // `store.schema-unsupported` and the cutover ladder is the only way back to a store
-          // any 4.8.x command can use. The original cause stays verbatim.
+          // last released 4.8.x build's ceiling, and nothing lowers it, so that build refuses
+          // this store as `store.schema-unsupported` even after the cutover. The ladder is
+          // therefore this newer build's to complete — the original cause stays verbatim.
           throw new StoreError(
             "collaboration.cutover-required",
             `${error.message.replace(/^\[[^\]]+\]\s*/, "")} ` +
-              `The execution schema now stands at version ${schemaVersion}, past the last released 4.8.x build's ceiling: ` +
-              `that build refuses this store as \`store.schema-unsupported\`, so the cutover ladder must be completed before ` +
-              `the store is usable by any 4.8.x command.`,
+              `The execution schema now stands at version ${schemaVersion}, past the last released 4.8.x build's ceiling, ` +
+              `and it is never lowered: that build refuses this store as \`store.schema-unsupported\` even after the cutover. ` +
+              `Complete the cutover ladder with this newer build.`,
           );
         }
         const upgraded = await upgradeStoreMinimal({

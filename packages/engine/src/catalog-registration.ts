@@ -21,7 +21,7 @@ import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
-import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
 import { openCollaborationStore, openRemoteCache, withCollaborationWrite, withRemoteCacheWrite } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
@@ -1216,7 +1216,7 @@ export function assertCatalogExecutionCommittedOn(
 
 /**
  * note: Whether the gate has any verdict to give: ACTIVE authority AND a row in the
- * execution store's own registry. Both facts are that handle's, so the caller reads
+ * execution store's own registry. Both facts are that handle's, so every caller reads
  * them before it pays for the journal's cross-file read.
  */
 function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
@@ -1225,24 +1225,53 @@ function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
 }
 
 /**
- * why: Async handle-taking gate for callers outside an execution transaction
- * (`packages/dsh/src/gates/workflow-selection.ts`).
+ * invariant: The journal lane this workspace does not hold — a bound remote checkout
+ * whose cache is absent, or a scope with no collaboration store yet. A missing or
+ * staged lane carries no journal row, so it is the same pre-activation exclusion
+ * `store.not-active` already gets: never a catalog verdict, and it never retro-refuses a
+ * selection. A stale binding or unreadable lane is a real misconfiguration and still
+ * propagates.
+ */
+const NO_JOURNAL_LANE: readonly StoreErrorCode[] = ["collaboration.not-initialized", "collaboration.not-active"];
+
+/**
+ * why: Async gate over an already-open execution handle. Registry visibility is
+ * THIS store's own row, while the journal verdict comes from whichever file owns
+ * `catalog_operations` — so the registry is decided first and a workflow this
+ * store does not hold never pays for the cross-file read, nor can a lane it does
+ * not hold refuse it.
  *
- * The gate is ADVISORY here: registry visibility first on this execution handle,
- * then the journal verdict from whichever file owns `catalog_operations`. These
- * are two independent reads, never a snapshot across the databases, so a row
- * committed after either read is not seen by this call. The authoritative
- * refusal is the in-transaction one (`pendingRegistrationInTransaction`), which
- * re-reads the verdict under the committing transaction's own lock.
+ * The gate is ADVISORY here: these are two independent reads, never a snapshot
+ * across the databases, so a row committed after either read is not seen by this
+ * call. The authoritative refusal is the in-transaction one
+ * (`pendingRegistrationInTransaction`), which re-reads the verdict under the
+ * committing transaction's own lock.
+ */
+export async function assertCatalogExecutionCommittedWith(
+  context: StoreContext,
+  db: StoreDb,
+  workflowId: string,
+): Promise<void> {
+  const id = requireText(workflowId, "workflowId");
+  if (!catalogVerdictApplies(db, id)) return;
+  let pending: { operationId: string; phase: "prepared" | "execution-written" } | null;
+  try {
+    pending = await readPendingRegistration(context, id);
+  } catch (error) {
+    if (error instanceof StoreError && NO_JOURNAL_LANE.includes(error.code)) return;
+    throw error;
+  }
+  assertCatalogExecutionCommittedOn(db, id, pending);
+}
+
+/**
+ * why: Async handle-taking gate for callers outside an execution transaction
+ * (`packages/dsh/src/gates/workflow-selection.ts`, `coordination.ts`).
  */
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
-  const id = requireText(workflowId, "workflowId");
   const handle = await openStore(context, "read");
   try {
-    // note: Registry-first: a workflow this store does not hold is never a gate, so the
-    // journal lane is not even opened for it.
-    if (!catalogVerdictApplies(handle.db, id)) return;
-    assertCatalogExecutionCommittedOn(handle.db, id, await readPendingRegistration(context, id));
+    await assertCatalogExecutionCommittedWith(context, handle.db, workflowId);
   } finally {
     handle.close();
   }
