@@ -133,7 +133,7 @@ export type OutboxPermit = Readonly<{
     journalIssueId: string;
     writerId: string | null;
   }>;
-  frozenRequest: Readonly<{ event: unknown; target: string | null }>;
+  frozenRequest: Readonly<{ event: unknown; target: string | null; expectedHeads: readonly string[] }>;
 }>;
 
 /** note: One intent as `outbox-show` discloses it; a lookup runs under that original binding. */
@@ -295,6 +295,10 @@ export class RemoteCollaborationFixture {
   private published: PublishedSelector | null = null;
   /** note: The provider records this host actually holds; only `send` appends, only `lookup` reads. */
   private readonly effects: ProviderEffect[] = [];
+  /** note: Records the provider already held before this run; a traversal renders their complete history. */
+  private readonly seeded: Array<Readonly<{ issueId: string; record: ProviderIssueRecord }>> = [];
+  /** note: The portable project document a traversal renders; the default carries empty history. */
+  private projectDocument: Readonly<Record<string, unknown>> | null = null;
   /** note: Every provider call the TEST RUNNER made; the CLI has no channel into this state. */
   readonly providerCalls: Array<Readonly<{ kind: "send" | "lookup"; operationId: string }>> = [];
   private issues: readonly FixtureIssue[] = [
@@ -454,6 +458,106 @@ export class RemoteCollaborationFixture {
     this.issues = issues;
   }
 
+  /** note: Replace the portable project document (milestones, roadmap, catalog) a traversal renders. */
+  setProjectDocument(project: Readonly<Record<string, unknown>>): void {
+    this.projectDocument = project;
+  }
+
+  /**
+   * note: The provider holds a COMPETING record for one dispatched attempt instead of the frozen
+   * effect: one other event per observed fork head, each addressing the same record in the same
+   * scope under its own operation id. They are persisted in provider state, so a later traversal
+   * re-renders the competing subject the host must review rather than the event it sent.
+   */
+  conflict(permit: OutboxPermit): OutboxReceiptDocument {
+    this.providerCalls.push({ kind: "send", operationId: permit.operationId });
+    const frozen = permit.frozenRequest.event as RemoteEvent;
+    if (frozen.change.kind === "project-replace") {
+      throw new Error("fixture: a project replacement has no issue record to fork");
+    }
+    const observedRecords = [1, 2].map((index) => {
+      const event: RemoteEvent = {
+        ...frozen,
+        operationId: randomUUID(),
+        parents: [String(index).repeat(64)],
+        change: {
+          kind: frozen.change.kind,
+          issueRef: frozen.change.issueRef,
+          mstar: {
+            ...frozen.change.mstar,
+            fields: { ...(frozen.change.mstar.fields as Record<string, unknown>), revision: index + 1 },
+          },
+        },
+      } as RemoteEvent;
+      return {
+        identity: {
+          provider: "linear" as const,
+          workspaceId: permit.binding.workspaceId,
+          teamId: permit.binding.teamId,
+          projectId: permit.binding.projectId,
+          issueId: permit.frozenRequest.target ?? "",
+        },
+        recordId: randomUUID(),
+        event,
+        head: remoteEventHead(event),
+      };
+    });
+    for (const observed of observedRecords) {
+      this.effects.push({
+        operationId: permit.operationId,
+        attemptId: permit.attemptId,
+        recordId: observed.recordId,
+        identity: observed.identity,
+        event: observed.event,
+      });
+    }
+    return {
+      version: 1,
+      selectorCommit: permit.binding.selectorCommit,
+      generation: permit.binding.generation,
+      projectId: permit.binding.projectKey,
+      operationId: permit.operationId,
+      attemptId: permit.attemptId,
+      requestHash: permit.requestHash,
+      observedAt: new Date().toISOString(),
+      outcome: {
+        kind: "conflict",
+        expectedHeads: permit.frozenRequest.expectedHeads,
+        observedHeads: observedRecords.map((entry) => entry.head).sort(),
+        observedRecords: observedRecords.map(({ head: _head, ...entry }) => entry),
+      },
+    };
+  }
+
+  /**
+   * note: The provider's own history for one attempt: exactly one record, a duplicate it applied
+   * twice, or none yet. It is provider state, never a host send, so `providerCalls` does not grow
+   * and a lookup reports `not-found`, `ambiguous` or `confirmed` from the cardinality alone.
+   */
+  setAttemptHistory(permit: OutboxPermit, records: number): void {
+    for (let index = this.effects.length - 1; index >= 0; index -= 1) {
+      const effect = this.effects[index]!;
+      if (effect.operationId === permit.operationId && effect.attemptId === permit.attemptId) {
+        this.effects.splice(index, 1);
+      }
+    }
+    for (let index = 0; index < records; index += 1) {
+      this.effects.push({
+        operationId: permit.operationId,
+        attemptId: permit.attemptId,
+        recordId: randomUUID(),
+        identity: {
+          provider: "linear",
+          workspaceId: permit.binding.workspaceId,
+          teamId: permit.binding.teamId,
+          projectId: permit.binding.projectId,
+          issueId: permit.frozenRequest.target ?? randomUUID(),
+        },
+        event: permit.frozenRequest.event as RemoteEvent,
+      });
+    }
+  }
+
   /** note: The confirmed issue record the provider holds for one operation; `null` once discarded. */
   confirmedIssue(operationId: string): ProviderIssueRecord | null {
     const effect = this.effects.find((entry) => entry.operationId === operationId);
@@ -471,10 +575,19 @@ export class RemoteCollaborationFixture {
     }
   }
 
+  /**
+   * note: A record the provider ALREADY holds for one native issue (a prior finding), so an
+   * observation can carry non-empty extension history instead of only this run's effects.
+   */
+  seedRecord(issueId: string, record: ProviderIssueRecord): void {
+    this.seeded.push({ issueId, record });
+  }
+
   /** note: The confirmed issue record the provider holds for one native issue, if it holds one. */
   private recordFor(issueId: string): ProviderIssueRecord | null {
     const effect = this.effects.find((entry) => entry.identity.issueId === issueId);
-    return effect === undefined ? null : providerRecord(effect);
+    if (effect !== undefined) return providerRecord(effect);
+    return this.seeded.find((entry) => entry.issueId === issueId)?.record ?? null;
   }
 
   /**
@@ -602,6 +715,8 @@ export class RemoteCollaborationFixture {
             },
           ],
           catalogLinks: [],
+          // note: A seeded document replaces the empty defaults member by member.
+          ...this.projectDocument,
         },
         issues: this.issues.map((issue) => {
           const record = this.recordFor(issue.issueId);
