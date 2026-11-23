@@ -530,12 +530,26 @@ describe("mstar-iteration phase route map ", () => {
     }
   });
 
-  test("route map: stack and workflow close rows dispatch one file each", () => {
-    const routeMap = sectionLines("## Phase route map").join("\n");
-    expect(routeMap.includes("`references/pr-stack.md`"), "route map names pr-stack").toBe(true);
-    expect(routeMap.includes("`mstar-roles/references/project-manager/workflow-close.md`"), "route map names workflow-close").toBe(true);
-    expect(existsSync(join(ITERATION_DIR, "references/pr-stack.md"))).toBe(true);
-    expect(existsSync(join(SKILLS_DIR, "mstar-roles/references/project-manager/workflow-close.md"))).toBe(true);
+  test("route map: each row names exactly one route file and each file has exactly one row", () => {
+    const rows = sectionLines("## Phase route map").filter((l) => l.trim().startsWith("|")).slice(2);
+    const routeFiles = [
+      ...PHASE_ROUTE_FILES,
+      SHARED_PR_DELIVERY,
+      "references/pr-stack.md",
+      "mstar-roles/references/project-manager/workflow-close.md",
+    ];
+    for (const file of routeFiles) {
+      const path = file.startsWith("mstar-") ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
+      expect(existsSync(path), `${file} exists on disk`).toBe(true);
+    }
+    for (const row of rows) {
+      const named = routeFiles.filter((file) => row.includes(`\`${file}\``));
+      expect(named.length, `row names exactly one route file: ${row}`).toBe(1);
+    }
+    for (const file of routeFiles) {
+      const naming = rows.filter((row) => row.includes(`\`${file}\``));
+      expect(naming.length, `${file} is named by exactly one row`).toBe(1);
+    }
   });
 
   test("transition gates: execution and close entrances survive as responsibility rows", () => {
