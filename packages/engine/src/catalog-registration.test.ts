@@ -12,6 +12,7 @@ import { initializeCollaborationStore, writeCollaborationBinding } from "./colla
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   abortCatalogExecution,
+  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   purgeCatalogRegistration,
   readCatalogRevisions,
@@ -610,6 +611,25 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     });
 
   });
+  test("the advisory gate reads the execution registry before it opens the journal lane", async () => {
+    const { harnessDir, context } = await fixture("gate-order");
+    const workflowId = "wf-gate-order";
+    // why: A split owner plus a MISSING journal lane: reading the journal before the
+    // registry would refuse with `collaboration.not-initialized`, while a registry-first
+    // gate answers an unregistered workflow without opening the lane at all.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
+
+    // invariant: Registry-first: the workflow this execution store does not hold is answered
+    // before the journal lane is opened, so it passes even though that lane is unusable.
+    await assertCatalogExecutionCommitted(context, workflowId);
+  });
+
   test("purge ignores hostile cwd dotenv and preserves the marker and source bytes", async () => {
     const { harnessDir, context } = await fixture("purge-hostile-dotenv");
     const workflowId = "wf-purge-hostile-dotenv";
