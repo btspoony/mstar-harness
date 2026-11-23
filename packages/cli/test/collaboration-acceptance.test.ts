@@ -9,9 +9,11 @@
  *
  * Two scenarios had no owner and live in this file: the delete-and-reclone of a
  * local checkout against a retained user-level store (criterion 1), and the
- * cross-authority move refusal boundary (criterion 7 — boundary only, never the
- * staged move the ADR asks for). Criterion 1 also delegates its five identity and
- * cutover owner scenarios, so a renamed or deleted one fails this criterion.
+ * cross-authority move refusal boundary — named as boundary-only evidence that
+ * is NOT criterion 7's proof, because the staged move the ADR asks for does not
+ * exist (`I-001235`). Criterion 7 has no passing case here by design. Criterion 1
+ * also delegates its five identity and cutover owner scenarios, so a renamed or
+ * deleted one fails this criterion.
  *
  * Requires the locally built CLI (`bun run cli:build`) because the remote owner
  * suites spawn it, exactly like every other remote CLI suite.
@@ -62,7 +64,7 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/engine/src/collaboration-store.test.ts", title: "a changed provider base, a stale binding and a fork surface instead of a send or an overwrite" },
     { file: "packages/engine/src/collaboration-store.test.ts", title: "an absent, older or incomplete outbox never accepts an intent" },
     { file: "packages/engine/src/collaboration-store.test.ts", title: "a composite interrupted after confirmation replays only its execution acknowledgement" },
-    { file: "packages/cli/test/remote-host-roundtrip.test.ts", title: "a lost response stays unconfirmed on missing or ambiguous lookup evidence and confirms only on a unique match" },
+    { file: "packages/cli/test/remote-host-roundtrip.test.ts", title: "a lost response stays unconfirmed on missing or ambiguous lookup evidence and confirms only the record it sent" },
     { file: "packages/cli/test/remote-host-roundtrip.test.ts", title: "a competing provider effect is surfaced as a conflict, never overwritten" },
   ],
   "5. All read models and gates": [
@@ -73,6 +75,9 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/omp/test/store-cutover.test.ts", title: "a missing or staged store fails closed: the register write refuses by authority, never by shape" },
   ],
   "6. Migration and rebinding": [
+    // note: The P0 released-schema regression: a source the shipped build wrote
+    // upgrades its execution schema and is still handed to the reviewed cutover.
+    { file: "packages/commands/src/families/store.test.ts", title: "store.upgrade advances a combined source's execution schema before directing to the cutover" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "stage copies exact keys, history, foreign keys and revisions without activating" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a crash after the claim keeps it resumable and the source unfenced" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a fence that committed before publication is resumed by the same activation" },
@@ -98,6 +103,55 @@ function escapeTitle(title: string): string {
   return title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * invariant: A delegated owner's own Git calls run under a fixture `HOME` and no system or
+ * global Git config, so an ambient `GIT_DIR`, `GIT_WORK_TREE` or `GIT_CONFIG_*` can neither
+ * select the repository nor redirect the configuration the scenario builds.
+ */
+function childEnvironment(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
+  return {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: home,
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    TZ: "UTC",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+/** note: The ambient Git environment captured before a fixture pins its own. */
+type SavedEnvironment = ReadonlyArray<readonly [string, string | undefined]>;
+
+/**
+ * invariant: The same isolation for the engine's in-process Git probes. Every ambient `GIT_*`
+ * (so `GIT_DIR`, `GIT_WORK_TREE` and the `GIT_CONFIG_*` family) and `HOME` are replaced, so a
+ * caller-set config cannot supply the origin or selector the scenario reads.
+ */
+function pinFixtureGitEnvironment(home: string): SavedEnvironment {
+  const saved: Array<readonly [string, string | undefined]> = [];
+  for (const key of Object.keys(process.env)) {
+    if (!key.startsWith("GIT_") && key !== "HOME") continue;
+    saved.push([key, process.env[key]]);
+    delete process.env[key];
+  }
+  Object.assign(process.env, {
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_TERMINAL_PROMPT: "0",
+  });
+  return saved;
+}
+
+function restoreEnvironment(saved: SavedEnvironment): void {
+  for (const [key, value] of saved) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 /** note: One test case as the JUnit report recorded it. */
 type ReportedCase = Readonly<{ name: string; skipped: boolean; failed: boolean }>;
 
@@ -116,7 +170,9 @@ function runOwnerCase(owner: OwnerCase): { executed: string[]; failures: string[
       "-t", escapeTitle(owner.title),
       "--reporter=junit", `--reporter-outfile=${reportPath}`,
     ],
-    { cwd: REPO_ROOT, env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 240_000 },
+    // invariant: The owner's Git calls, its engine probes and any CLI it spawns inherit this
+    // minimal environment — never the caller's `HOME`, `GIT_DIR`, `GIT_WORK_TREE` or config.
+    { cwd: REPO_ROOT, env: childEnvironment(join(dir, "home")), stdout: "pipe", stderr: "pipe", timeout: 240_000 },
   );
   const stderr = child.stderr.toString();
   // note: A child killed on this run's own deadline proves nothing about the case.
@@ -183,21 +239,14 @@ describe("collaboration authority — ADR acceptance", () => {
     mkdirSync(home);
     // invariant: The user-level store lives under a fixture HOME; the real home is never read.
     const restore = spyOn(nodeOs, "homedir").mockImplementation(() => home);
+    // invariant: The engine's own Git probes (origin and selector) read this fixture's repository
+    // and its private config, never the invoking shell's.
+    const ambient = pinFixtureGitEnvironment(home);
     try {
       const git = (cwd: string, ...args: string[]): string =>
         execFileSync("git", args, {
           cwd,
-          // invariant: A minimal environment — no GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* from the
-          // invoking shell may select the repository or the config this fixture exercises.
-          env: {
-            PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-            HOME: home,
-            TMPDIR: process.env.TMPDIR ?? tmpdir(),
-            TZ: "UTC",
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: devNull,
-            GIT_TERMINAL_PROMPT: "0",
-          },
+          env: childEnvironment(home),
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
         }).trim();
@@ -223,6 +272,9 @@ describe("collaboration authority — ADR acceptance", () => {
       const first = checkout("first");
       (await initializeStore(first)).close();
       const published = await ensureCollaborationAuthority(first);
+      // invariant: The key is the fixture's own origin, so a config redirect that supplied the
+      // same foreign origin to both clones could not satisfy this assertion.
+      expect(published.repoKey).toBe("github.com/acme/acceptance-reclone");
       await captureIssue(
         first,
         {
@@ -255,12 +307,18 @@ describe("collaboration authority — ADR acceptance", () => {
       const second = checkout("second");
       expect(existsSync(join(second.harnessDir, "store.db"))).toBe(false);
       const authority = await readCollaborationAuthority(second);
-      expect(authority).toMatchObject({ state: "active", storeId: published.storeId, epoch: published.epoch });
+      expect(authority).toMatchObject({
+        state: "active",
+        storeId: published.storeId,
+        epoch: published.epoch,
+        repoKey: "github.com/acme/acceptance-reclone",
+      });
       const recovered = await listIssues(second, {});
       expect(recovered.items.map((issue) => issue.title)).toEqual(["Reclone finding"]);
       // invariant: Execution state is NOT restored with it — the replacement clone starts fresh.
       await expect(openStore(second, "read")).rejects.toMatchObject({ code: "store.not-initialized" });
     } finally {
+      restoreEnvironment(ambient);
       restore.mockRestore();
     }
   }, 240_000);
@@ -285,7 +343,7 @@ describe("collaboration authority — ADR acceptance", () => {
     expectOwners("6. Migration and rebinding");
   }, 240_000);
 
-  test("criterion 7 — boundary only: a remote project move refuses collaboration.mode-unavailable and leaves the observed issue and source generation unchanged", () => {
+  test("criterion 7 boundary only (unproven, I-001235) — a remote project move refuses collaboration.mode-unavailable", () => {
     // note: The ADR asks for a staged cross-authority move with interruption recovery. This
     // asserts only the refusal boundary at the shipped CLI: no staged move, no relation
     // resolution, no IssueRef preservation across authorities. Criterion 7 stays unproven.

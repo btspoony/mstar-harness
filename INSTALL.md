@@ -559,7 +559,7 @@ The complete list of 4.x entry changes is the release's entry in [CHANGELOG.md](
 
 5.0 moves issues, findings, projects, roadmaps, milestones, and portable catalog identity out of `{HARNESS_DIR}/store.db` into one user-level database per repository, and adds the explicit `[collaboration]` mode declaration in `.mstarc`. The move is a reviewed cutover — `store upgrade`, then `store collaboration plan`, `apply`, and `activate` with the operator's stop attestation — not an ordinary upgrade, and a combined store refuses runtime collaboration traffic until it runs. The last released 4.8.x CLI cannot read a cut-over repository's collaboration data: install and reload the 5.0 CLI before you activate.
 
-Step-by-step guide, including remote binding, rebind, backup and restore, and the recovery path for every refusal code: [docs/migration-5.0.md](docs/migration-5.0.md).
+Step-by-step guide, including remote binding, rebind, backup and restore, and the recovery path for the refusal classes the migration can produce: [docs/migration-5.0.md](docs/migration-5.0.md).
 
 ## Report command
 
