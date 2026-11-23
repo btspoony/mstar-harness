@@ -115,6 +115,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as the local `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads. Never selected under `reviewed-bot` |
 | `mstar-e2e` | Explicit independent real-browser/device/E2E workflow; PM orchestrates and ops executes, outside development acceptance gates |
 | `mstar-issue-mirror` | Host-owned Linear issue mirror：agent 用宿主 Linear MCP 工具执行全部 Linear 调用，mstar 只跑 issue-sync pending/apply/ingest 本地半程 |
+| `mstar-remote-collaboration` | `remote`（provider-authoritative）模式的 host 通道：status/bind → observe → adopt-issue → 一次 outbox-dispatch 许可 → receipt/reconcile/re-observe；provider 调用由宿主 Linear MCP 承担，mstar 只运行 provider-free 的 CLI 半程 |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`mstar-host/references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 

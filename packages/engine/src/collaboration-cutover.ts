@@ -669,8 +669,8 @@ function isRecoveryRecord(record: Record<string, unknown>): boolean {
  * logic documents a supported HISTORICAL shape written before `inputDigest`
  * existed: such a receipt still proves the source bytes but not the conversion
  * input, so it must be recognized as an execution record rather than blocking
- * the cutover. `skipped`/`dispositions` are likewise accepted when absent, and
- * validated when present.
+ * the cutover. `importedIds`, `skipped` and `dispositions` are likewise accepted
+ * when absent, and validated when present.
  */
 function isExecutionImportResult(record: Record<string, unknown>): boolean {
   const optionalStrings = (value: unknown): boolean =>
@@ -678,8 +678,7 @@ function isExecutionImportResult(record: Record<string, unknown>): boolean {
   return (
     (record.verdict === "upgraded" || record.verdict === "nothing-to-import") &&
     isCount(record.imported) &&
-    Array.isArray(record.importedIds) &&
-    record.importedIds.every((id) => typeof id === "string") &&
+    optionalStrings(record.importedIds) &&
     (record.skipped === undefined || Array.isArray(record.skipped)) &&
     optionalStrings(record.dispositions) &&
     isText(record.sourceDigest) &&
@@ -766,7 +765,7 @@ function readStagedLedger(db: StoreDb): unknown[][] {
 /**
  * invariant: The pending work that must be settled before a source may be fenced: an open
  * mirror run still owns the ledger, and a catalog journal entry that has not
- * committed still describes an in-flight registration.
+ * settled still describes an in-flight registration.
  */
 function readCutoverBlockers(db: StoreDb): Blockers {
   const blockers: Array<{ code: string; subject: string }> = [];
@@ -779,8 +778,14 @@ function readCutoverBlockers(db: StoreDb): Blockers {
       subject: `mirror run ${String(run.direction)} for binding ${String(run.binding_id)} (${String(run.run_id)}) is still open`,
     });
   }
+  // note: `committed` and `aborted` are settled terminal states: an aborted journal
+  // retains its source bytes and writes no execution rows, so only the two phases
+  // catalog-registration.ts itself calls pending are in-flight work here.
   const journal = db
-    .prepare("select operation_id, phase from catalog_operations where phase <> 'committed' order by operation_id")
+    .prepare(
+      "select operation_id, phase from catalog_operations " +
+        "where phase in ('prepared','execution-written') order by operation_id",
+    )
     .all() as Array<{ operation_id?: unknown; phase?: unknown }>;
   for (const entry of journal) {
     blockers.push({

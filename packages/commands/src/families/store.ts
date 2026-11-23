@@ -22,7 +22,9 @@ import {
   restoreCollaborationBackup,
   retireStoreSources,
   upgradeExistingCollaborationStore,
+  advanceSchemaWithGeneratedAttestation,
   upgradeStoreMinimal,
+  validateActivationAttestation,
   bindRemoteAuthority,
   ingestRemoteObservation,
   prepareRemoteAdoption,
@@ -162,6 +164,12 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
               : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
+          // invariant: The schema advance would pass the last version a released build admits,
+          // and only that build settles a mirror run in a combined store. Both commands name the
+          // SAME absolute harness: a run settled from another checkout settles THAT store and
+          // leaves this control root's run open, so the retry would refuse again.
+          : code === "store.upgrade-sync-run-open"
+          ? "Settle or take over the open mirror run(s) the refusal names with the 4.8.x build's mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> (add --take-run with an empty result list for a dead holder), then retry mstar store upgrade --harness <same-control-root> --operator <name>; after this build's schema advance neither build can settle the run."
           : code === "store.runtime-unsupported"
           ? "This command needs a runtime that provides native node:sqlite: install or select Node.js >=24.18.0 on PATH, then rerun the store verb you invoked with the same options — mstar store init, mstar store upgrade --operator <name> --harness <control-root>, mstar store backup --out <path>, mstar store migrate --manifest <path> --apply, mstar store activate --manifest <path> --operator <name>, or mstar store retire --manifest <path>. An existing store is untouched by this refusal, so nothing needs repair first."
           : id === "store.init" && (message.includes("legacy execution state exists at ") || message.includes("legacy catalog data exists at "))
@@ -380,7 +388,35 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         // can report any imported state. A combined source with collaboration
         // rows refuses with the cutover route, and the import itself refuses a
         // staged lane.
-        await ensureCollaborationAuthority(context);
+        try {
+          await ensureCollaborationAuthority(context);
+        } catch (error) {
+          // invariant: A combined source must reach this build's schema here, because the
+          // reviewed cutover's source floor is the last schema a released build writes: the
+          // refusal above otherwise leaves `store collaboration plan` and the terminal
+          // lifecycle write unreachable. Only EXECUTION advances; collaboration rows are the
+          // cutover's to move.
+          if (!(error instanceof StoreError) || error.code !== "collaboration.cutover-required") throw error;
+          // note: The SAME provision-and-retry the legacy-import branch uses, so the help's
+          // automatic-attestation promise holds here too; it also refuses an open mirror run
+          // before the schema passes the released build's ceiling.
+          const schemaVersion = await advanceSchemaWithGeneratedAttestation({
+            context,
+            operator,
+            attestation: attestation === undefined ? undefined : validateActivationAttestation(attestation),
+          });
+          // invariant: The refusal must disclose what it changed: the schema now stands past the
+          // last released 4.8.x build's ceiling, so that build refuses this store as
+          // `store.schema-unsupported` and the cutover ladder is the only way back to a store
+          // any 4.8.x command can use. The original cause stays verbatim.
+          throw new StoreError(
+            "collaboration.cutover-required",
+            `${error.message.replace(/^\[[^\]]+\]\s*/, "")} ` +
+              `The execution schema now stands at version ${schemaVersion}, past the last released 4.8.x build's ceiling: ` +
+              `that build refuses this store as \`store.schema-unsupported\`, so the cutover ladder must be completed before ` +
+              `the store is usable by any 4.8.x command.`,
+          );
+        }
         const upgraded = await upgradeStoreMinimal({
           context,
           operator,

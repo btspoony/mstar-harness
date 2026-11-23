@@ -66,6 +66,9 @@ export type StoreErrorCode =
   | "store.corrupt"
   | "store.busy"
   | "store.upgrade-attestation-missing"
+  // note: An open mirror run in a combined store is settled by the released build that owns
+  // `sync_runs` there, so the schema advance past its ceiling refuses instead of stranding it.
+  | "store.upgrade-sync-run-open"
   | "store.upgrade-state-changed"
   | "store.upgrade-staged-record-missing"
   | "store.upgrade-staged-record-malformed"
@@ -1142,6 +1145,38 @@ function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreErro
 
 export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
+/**
+ * invariant: Refuse a schema advance that would strand an open mirror run in a combined store.
+ *
+ * `sync_runs` is settlement state the 4.8.x mirror lane owns, and it settles the
+ * run only in the combined store - the split lane (and so every 5.0 build's
+ * `issue-sync`) refuses that mode. The fence migration is the last version that
+ * build admits, so the batch stops here while the store is still readable by it.
+ */
+function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
+  const runs = openMirrorRuns(db);
+  if (runs.length === 0) return;
+  const named = runs
+    .map((run) => `${run.direction} run ${run.runId} for binding ${run.bindingId} (pid ${run.holderPid} on host ${JSON.stringify(run.holderHost)}, started ${run.startedAt})`)
+    .join("; ");
+  throw Object.assign(
+    new StoreError(
+      "store.upgrade-sync-run-open",
+      `The combined store at schema ${currentVersion} still holds open mirror run(s): ${named}. Migration ` +
+        `${RELEASED_COMBINED_SCHEMA_MAX + 1} is the fence the last released 4.8.x build refuses, and that build is the only one that ` +
+        `settles a run in a combined store, so advancing past schema ${RELEASED_COMBINED_SCHEMA_MAX} would strand it: after the advance ` +
+        `neither build can settle it. Nothing was modified.`,
+      { runs },
+    ),
+    {
+      recovery:
+        "settle or take over the named run(s) with the 4.8.x build's `mstar issue-sync apply --project <project-id> --results <file|->` " +
+        "(add `--take-run` with an empty result list to take over a dead holder), confirm the store holds no `sync_runs` row, then retry " +
+        "mstar store upgrade --operator <name>.",
+    },
+  );
+}
+
 /** Migration 6 - durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
 create table project_roadmaps(
@@ -2099,6 +2134,13 @@ export const MIGRATIONS: readonly Migration[] = [
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
 /**
+ * note: The highest schema the last released 4.8.x build writes and admits. Migration 20 is the
+ * cutover fence, which that build refuses as `store.schema-unsupported`; so a combined store's
+ * open mirror run is only settleable while the store stays at or below this version.
+ */
+const RELEASED_COMBINED_SCHEMA_MAX = 19;
+
+/**
  * Execution tables the migrated schema must carry - the executable form of
  * §2.2 after migration 9. Migration 4 created `execution_leases`; migration 9
  * removed it with the plan-PM seat, so it is deliberately absent here: a store
@@ -2235,6 +2277,12 @@ function applyPendingMigrations(
     const prior = readAppliedMigrations(db, true);
     const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
     const pending = MIGRATIONS.filter((m) => m.version > priorMax);
+    // invariant: An open mirror run a COMBINED store holds is settled by the released build
+    // that owns `sync_runs` there, so the batch refuses BEFORE the schema passes that build's
+    // ceiling. A fresh store (no history) writes a new `sync_runs` and has none to strand.
+    if (priorMax > 0 && pending.some((migration) => migration.version > RELEASED_COMBINED_SCHEMA_MAX)) {
+      refuseOpenMirrorRuns(db, priorMax);
+    }
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
@@ -2404,6 +2452,39 @@ export function heldCollaborationTables(db: StoreDb, onHeld?: (table: string) =>
 /** Every collaboration-owned table (authority AND journal) this store still holds rows for. */
 export function heldCollaborationSourceTables(db: StoreDb): string[] {
   return heldTablesAmong(db, COLLABORATION_HELD_TABLES);
+}
+
+/**
+ * The open mirror runs a COMBINED store still holds, in listing order.
+ *
+ * Migration 18 created `sync_runs` for the one-way mirror, which the released
+ * 4.8.x build owns and settles in the combined store. Migration 19 is the last
+ * schema that build admits; migration 20 (the cutover fence) is the one it
+ * refuses as `store.schema-unsupported`, so an upgrade past 19 strands every
+ * open run: the settling build refuses the newer store, and this build's mirror
+ * lane refuses a combined store outright. The upgrade paths therefore read this
+ * list before the schema advance instead of discovering the loss afterwards.
+ */
+export function openMirrorRuns(db: StoreDb): Array<{
+  bindingId: string;
+  direction: string;
+  runId: string;
+  holderPid: number;
+  holderHost: string;
+  startedAt: string;
+}> {
+  if (!tableNamesOn(db).has("sync_runs")) return [];
+  const rows = db
+    .prepare("select binding_id, direction, run_id, holder_pid, holder_host, started_at from sync_runs order by binding_id, direction")
+    .all() as Array<Record<string, unknown>>;
+  return rows.map((row) => ({
+    bindingId: String(row.binding_id),
+    direction: String(row.direction),
+    runId: String(row.run_id),
+    holderPid: Number(row.holder_pid),
+    holderHost: String(row.holder_host),
+    startedAt: String(row.started_at),
+  }));
 }
 
 function heldTablesAmong(

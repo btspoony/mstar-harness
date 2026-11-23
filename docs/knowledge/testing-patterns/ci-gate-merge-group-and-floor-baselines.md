@@ -1,35 +1,38 @@
 ---
 module: CI comment gate (.github/workflows/ci.yml) and its lint consumers
 date: 2026-11-18
+last_updated: 2026-11-23
 problem_type: testing_pattern
 category: testing-patterns
 severity: medium
 applies_when:
   - "A workflow lints changed lines and also runs under merge_group"
-  - "An advisory corpus (unclassified comments, ownerless TODOs) gets a recorded size"
+  - "A detector's behaviour is asserted by a corpus count instead of its own tests"
   - "A gate step redirects or filters a linter's stderr"
   - "A second literal copy of a file-extension list exists in a test or a workflow"
 tags:
   - ci-gates
   - merge-queue
-  - baseline-floor
+  - corpus-floor-retired
   - extension-source
   - stderr-capture
 ---
 
-# Merge-queue bases and floor baselines for a two-step comment gate
+# Merge-queue bases and detector tests for a single-ratchet comment gate
 
 ## Context
 
-The CI comment gate runs two steps over `packages` and `scripts`: a whole-tree bound gate that fails on a broken bounded-shortcut marker (`simplify:` / `shortcut:` without an `upgrade:` clause or removal reference), and a changed-lines ratchet that fails on an unclassified comment the change added or modified. The split is deliberate — the whole-tree corpus of unclassified comments is far larger than one change should answer for — but three defects followed from it: a merge-queue run that silently linted every PR in the group, an advisory baseline recorded nowhere, and a gate step whose failure diagnostics could vanish. The rules below keep a two-step gate honest; they apply to any CI lint that mixes a whole-tree check with a changed-lines check.
+The CI comment gate runs one step over `packages` and `scripts`: a changed-lines ratchet that fails an unclassified comment the change added or modified. It once ran two — a whole-tree bound gate that failed on a broken bounded-shortcut marker (`simplify:` / `shortcut:` without an `upgrade:` clause or removal reference) beside the ratchet — and three defects followed from that split: a merge-queue run that silently linted every PR in the group, an advisory baseline whose recorded count drifted with the corpus, and a gate step whose failure diagnostics could vanish. The whole-tree step and its per-root count floor are retired, because a lower bound cannot tell a detector regression from a genuine cleanup ([retirement record](../../adr/implemented/process/2026-11-23-comment-corpus-floor-retired.md)); what remains is one gate, whose detector behaviour its own CLI tests assert. The rules below keep that gate honest, and they apply to any CI lint that judges a change's own increment.
 
 ## Guidance
 
 1. **A changed-lines gate has to name every base it runs under.** Under `merge_group`, both `pull_request.base.sha` and `push.before` are empty, so the common fallback — `git merge-base origin/<default> HEAD` — computes the whole merge group's diff against the default branch and makes the ratchet lint every PR in the queue. Resolve the base in one explicit order and say which event uses which base: `PR_BASE` → `MERGE_GROUP_BASE` (`github.event.merge_group.base_sha`) → `PUSH_BEFORE` → `origin/<default>`. Keep the last rung as the branch-point fallback for a first push, never as the merge-queue answer.
 
-2. **Record an advisory corpus as a floor, not a value.** Measure the corpus with the shipped command while the gate is green, record the measured count plus the exact re-measure command, and assert a floor below it rather than equality. New comments in unrelated files must not fail an unrelated change, while a collapse tells you the detector or the collector stopped seeing files. Treat the floor as a regression tripwire, not a target: raising it is a deliberate act with the fresh measurement in the change.
+2. **Assert the detector, not a corpus count.** The shipped gate is the ratchet (`mstar lint <file> --diff-base <ref>`): it resolves the merge base, keeps only the findings whose comment lines the diff touches, and fails those, so a change answers for its own increment and never for the corpus. Detector behaviour is pinned by `packages/cli/test/lint-cli.test.ts` instead of by a number — unclassified detection and its stderr count line, `why:` acceptance, doc-block handling, and the `--diff-base` ratchet over added, untouched and interior-moved lines — so a detector or collector regression fails at the rule it broke while the corpus stays free to move. A whole-tree run (`mstar lint <dir> --type code`) remains a local and review tool; CI asserts no corpus count anywhere.
 
-3. **One record for one number.** The workflow step cites the contract's single record for the measured baseline; it does not restate the figure. A second copy in a comment or a summary drifts the moment the corpus moves — the "~15k across 823 files" note that outlived its measurement is the failure mode, not the exception.
+   > **Retired (2026-11-23):** the earlier forms — equality against a copied count, then a lower bound recorded beside its re-measure command — both failed this test, because a cleanup and a detector regression produce the same drop. The floor's reasoning and its rejected alternatives are in the [retirement record](../../adr/implemented/process/2026-11-23-comment-corpus-floor-retired.md).
+
+3. **One record for one number.** The cleanup pass reports the measured `unclassified-comment net change` per root, quoted with the command and the commit it was taken on; no step restates that figure and no gate asserts it. A second copy in a comment or a summary drifts the moment the corpus moves — the "~15k across 823 files" note that outlived its measurement is the failure mode, not the exception.
 
 4. **Capture stderr before the pipeline can swallow it.** A gate step that pipes or redirects a linter's output loses the new diagnostics the moment the exit status is what the step checks. Let the linter write to a file or a command-substitution buffer, replay it on failure, and only then exit non-zero — otherwise the first failing run after a detector change reports nothing actionable.
 
@@ -37,12 +40,12 @@ The CI comment gate runs two steps over `packages` and `scripts`: a whole-tree b
 
 ## Why This Matters
 
-Each defect is cheap to fix but expensive to diagnose after the fact. A merge-queue ratchet that lints the whole group produces a red check on PRs whose diff never touched the flagged line, which reads as a flaky gate and trains reviewers to ignore it. An advisory count recorded as an equality turns every unrelated comment into a cross-cutting failure, so the gate gets bypassed instead of fixed. A single drifted number or extension list is invisible until someone debugs a gate that reported success over an unscanned file. The cost of the rules is one explicit base order, one measured floor and one shared list; the cost of skipping them is a gate whose failures do not name their cause.
+Each defect is cheap to fix but expensive to diagnose after the fact. A merge-queue ratchet that lints the whole group produces a red check on PRs whose diff never touched the flagged line, which reads as a flaky gate and trains reviewers to ignore it. A corpus count turns every unrelated comment into a cross-cutting failure, and the floor that replaced the equality hides the one thing it was meant to catch: a broken detector reads as a cleanup. A single drifted number or extension list is invisible until someone debugs a gate that reported success over an unscanned file. The cost of the rules is one explicit base order, one tested detector and one shared list; the cost of skipping them is a gate whose failures do not name their cause.
 
 ## When to Apply
 
 - A workflow uses `--diff-base` (or an equivalent changed-lines filter) and the repository may run it under a merge queue.
-- An advisory check has a corpus larger than a single change should answer for (unclassified comments, TODOs, style findings) and needs to stay green while the corpus moves.
+- A detector such as the comment scanner needs a behaviour proof, and the available signal is a corpus count rather than the rules' own tests.
 - A gate step filters or redirects its linter's stderr before checking the exit code.
 - A consumer of a repository-defined list (file extensions, roots, allowlist paths) keeps its own literal copy.
 
@@ -75,20 +78,37 @@ env:
     fi
 ```
 
-### Advisory baseline
+### Corpus baseline (retired)
 
-Before — equality against a number copied into the step:
+Before — the retired step asserted a per-root lower bound against numbers copied into the workflow:
 
 ```bash
-count="$(mstar lint packages scripts --type code | ... )"
-[ "$count" -eq 14845 ] || exit 1
+if ! node packages/cli/dist/mstar-harness.js lint packages --type code 2> "$RUNNER_TEMP/packages.err"; then
+  cat "$RUNNER_TEMP/packages.err" >&2; exit 1
+fi
+count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/packages.err" | grep -o '[0-9]*$')"
+[ "$count" -ge 12790 ] || { echo "packages corpus collapsed to $count (floor 12790)"; exit 1; }
+# scripts/ repeated the same step against a floor of 800
 ```
 
-After — a floor recorded beside its measurement command, with the step pointing at the contract:
+Retired — the floor still moved with every genuine cleanup, because a cleanup and a detector regression produce the same drop, so each deletion needed a workflow edit to lower it. (An earlier form had asserted equality against a copied count.) The reasoning and the rejected alternatives are in the [retirement record](../../adr/implemented/process/2026-11-23-comment-corpus-floor-retired.md).
+
+After — CI asserts no corpus count. The ratchet is the only comment gate:
 
 ```bash
-# The contract records the measurement and its command; this step only enforces the floor.
-[ "$count" -ge 14000 ] || { echo "unclassified floor collapsed: $count < 14000"; exit 1; }
+# selects the changed code files, then ratchets each against the merge base
+bash scripts/comment-gate-select.sh "$merge" > "$RUNNER_TEMP/comment-changed.bin"
+export MSTAR_COMMENT_BASE="$merge"
+xargs -0 -r -n 1 -P 8 sh -c 'node packages/cli/dist/mstar-harness.js lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh \
+  < "$RUNNER_TEMP/comment-changed.bin"
+```
+
+and the detector's behaviour is asserted where it lives:
+
+```ts
+// packages/cli/test/lint-cli.test.ts
+test("--diff-base fails the comment on an added line and not the one above it", ...);
+test("a documentation block above an export is not reported, one above a local is", ...);
 ```
 
 ### Extension list

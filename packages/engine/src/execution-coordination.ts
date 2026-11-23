@@ -17,7 +17,13 @@
  * `mutateExecutionPlan`.
  */
 import { dirname, isAbsolute } from "node:path";
-import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
+import {
+  assertCatalogExecutionCommittedOn,
+  openSplitJournal,
+  pendingRegistrationInTransaction,
+  withSplitJournal,
+  type SplitJournal,
+} from "./catalog-registration.js";
 import {
   CoordinationError,
   assertExactKeys,
@@ -791,6 +797,12 @@ function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: 
   }
 }
 
+/** note: Test-only hook observing the split-read→transaction gap of a DB prepare. */
+let prepareJournalGapForTest: (() => void) | undefined;
+export function setPrepareJournalGapForTest(callback: (() => void) | undefined): void {
+  prepareJournalGapForTest = callback;
+}
+
 /**
  * §3 `prepare` records the ordinary revisable execution configuration — the
  * explicit scope facts, the acceptance gate and the findings-cleanup mode — in one
@@ -830,26 +842,38 @@ export async function prepareExecutionPlan(
   // selection, never a cross-file atomic claim. A missing/staged catalog keeps
   // the row's prior pin untouched below.
   const catalogFacts = await readCatalogFacts(controlHarnessRoot(context), resolved.read.planId);
-  return withExecutionPlanOperation<ExecutionPlanView>(
-    context,
-    resolved,
-    requestHash,
-    (witness) => {
-      // §4.1 admission and actual-scope validation both run on the first attempt,
-      // before any write. `validateEffectiveScope` resolves the row's recorded
-      // scope, applies the supplied members and checks THAT against Git — a
-      // mistaken prior value stays revisable, and a supplied value is never an
-      // exemption from the check.
-      assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
-      const effective = effectiveScope(witness.view, inputs.config);
-      assertWorkingBranchIsFeature(context, effective.workingBranch);
-      if (effective.worktreePath !== undefined) {
-        validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
-      }
-    },
-    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts),
-    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts),
-  );
+  // invariant: The journal's owner decides WHERE the verdict is read, and a split owner's lane
+  // stays OPEN across the transaction below: the verdict is read at the transaction's own
+  // position, so a registration committing in the gap cannot be missed by a stale pre-read.
+  // The lane and the execution store are separate databases, so this read cannot be serialized
+  // with the lane's writes — see `SplitJournal` for that bounded residual.
+  const splitJournal = await openSplitJournal(context);
+  return withSplitJournal(splitJournal, async () => {
+    // note: A regression plants a journal row here — after the owner verdict, before the
+    // transaction takes its lock — to prove the verdict is re-read at the transaction position
+    // for BOTH owners: the combined row is the transaction's own, the split row its held lane's.
+    prepareJournalGapForTest?.();
+    return await withExecutionPlanOperation<ExecutionPlanView>(
+      context,
+      resolved,
+      requestHash,
+      (witness) => {
+        // why: §4.1 admission and actual-scope validation both run on the first attempt,
+        // before any write. `validateEffectiveScope` resolves the row's recorded
+        // scope, applies the supplied members and checks THAT against Git — a
+        // mistaken prior value stays revisable, and a supplied value is never an
+        // exemption from the check.
+        assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
+        const effective = effectiveScope(witness.view, inputs.config);
+        assertWorkingBranchIsFeature(context, effective.workingBranch);
+        if (effective.worktreePath !== undefined) {
+          validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
+        }
+      },
+      (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts, splitJournal),
+      (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts, splitJournal),
+    );
+  });
 }
 
 /**
@@ -869,7 +893,21 @@ function alreadyPrepared(
   tx: ExecutionTransaction,
   read: ResolvedPlanRead,
   catalogFacts: CatalogFacts,
+  splitJournal: SplitJournal | null,
 ): ExecutionRead<ExecutionPlanView> | undefined {
+  // invariant: The pending-registration gate covers THIS branch too: a prepared or
+  // execution-written journal row refuses an unchanged no-op exactly as it refuses a
+  // changed configuration, since both prepare a workflow whose registration never
+  // committed — and this branch writes its own receipt. The frame runs the committed
+  // -receipt replay before consulting it, so an identical retry still replays.
+  // invariant: The verdict is read HERE, at the transaction position, for both owners: a
+  // split journal's held lane is queried now rather than trusted from a pre-read, so a row
+  // committed after the owner was resolved still refuses.
+  assertCatalogExecutionCommittedOn(
+    tx.db,
+    read.workflowId,
+    pendingRegistrationInTransaction(splitJournal, tx.db, read.workflowId),
+  );
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
   // invariant: The already-satisfied shortcut still owns a pin decision: an unchanged
@@ -951,6 +989,7 @@ function writePreparedConfig(
   tx: ExecutionTransaction,
   at: string,
   catalogFacts: CatalogFacts,
+  splitJournal: SplitJournal | null,
 ): ExecutionRead<ExecutionPlanView> {
   const { planId, workflowId } = read;
   const plan = witness.view.plan as PlanRow;
@@ -960,7 +999,14 @@ function writePreparedConfig(
     : canonicalTarget(inputs.config.worktreePath);
   const nextBranch = inputs.config.workingBranch ??
     (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
-  assertCatalogExecutionCommittedOn(tx.db, workflowId);
+  // invariant: The pending-registration gate is read HERE, inside the transaction: a split
+  // owner's held lane is queried now (a row committed after the owner was resolved is seen),
+  // and a combined owner's row is this transaction's own.
+  assertCatalogExecutionCommittedOn(
+    tx.db,
+    workflowId,
+    pendingRegistrationInTransaction(splitJournal, tx.db, workflowId),
+  );
   const sealed = readExecutionSealedInput(tx, workflowId, planId);
   // note: The catalog side is the collaboration lane's; the binding is the execution
   // lane's own row. Neither is read through the other's connection.

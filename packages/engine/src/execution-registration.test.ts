@@ -39,6 +39,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -68,7 +69,7 @@ import {
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
 import { readExecutionAuthority } from "./execution-read.js";
-import { commitExecutionRegistration, registerShippedCatalogExecution } from "./execution-registration.js";
+import { commitExecutionRegistration, registerShippedCatalogExecution, setRegistrationJournalGapForTest } from "./execution-registration.js";
 import {
   bindExecutionSession,
   readExecutionState,
@@ -79,7 +80,7 @@ import {
   type ExecutionToken,
 } from "./execution-store.js";
 import * as engineIndex from "./index.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type RegisterIterationWorkflowOptions, type RegisterPlanWorkflowOptions } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
@@ -371,6 +372,11 @@ function catalogRevisionOf(context: StoreContext): number {
  * the journal's in-flight count.
  */
 async function footprint(context: StoreContext): Promise<Record<string, unknown>> {
+  // note: A post-fence source no longer carries the journal table, so its pending count
+  // is answered by the lane's own copy below instead of an unnameable subquery.
+  const executionHandle = await openStore(context, "read");
+  const journalOnExecution = tableNamesOn(executionHandle.db).has("catalog_operations");
+  executionHandle.close();
   const execution =
     (await one<Record<string, unknown>>(
       context,
@@ -381,8 +387,10 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
         "(select count(*) from execution_plans) as plans, " +
         "(select count(*) from execution_inputs) as inputs, " +
         "(select count(*) from execution_operations) as operations, " +
-        "(select count(*) from catalog_execution_bindings) as bindings, " +
-        "(select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending",
+        "(select count(*) from catalog_execution_bindings) as bindings" +
+        (journalOnExecution
+          ? ", (select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending"
+          : ""),
     )) ?? {};
   // why: The catalog and the collaboration revision live in the repository's own
   // lane; the execution store keeps only the binding and the legacy journal.
@@ -396,8 +404,11 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
           "select revision as collaboration_revision, catalog_revision, " +
             "(select count(*) from catalog_entities) as entities, " +
             "(select count(*) from catalog_links) as links, " +
-            "(select count(*) from collaboration_operations where key_space = 'composite') as effects " +
-            "from collaboration_meta where id = 1",
+            "(select count(*) from collaboration_operations where key_space = 'composite') as effects, " +
+            (journalOnExecution
+              ? "0 as lane_pending"
+              : "(select count(*) from catalog_operations where phase in ('prepared','execution-written')) as lane_pending") +
+            " from collaboration_meta where id = 1",
         )
         .get() as Record<string, unknown>),
     };
@@ -1367,10 +1378,167 @@ describe("execution-registration", () => {
     expect(refusal.message).toContain("op-legacy-pending");
     expect(refusal.message).toContain("mstar catalog reconcile --abort");
     expect(refusal.message).toContain("mstar catalog purge-registration");
+    // note: The refusal is reached by the registration entry itself, which holds no
+    // root visibility; the journal verdict is all this caller knows. (The dispatch and
+    // handle-taking gates, which DO read the registry row, still name it.)
+    expect(refusal.message).not.toContain("root-visible");
 
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
     expect((await listCatalog(fixture.context, {})).total).toBe(0);
+  });
+
+  test("execution-registration-keeps-the-stale-root-token-conflict-ahead-of-the-combined-journal", async () => {
+    const fixture = await activeFixture("pending-combined-stale-root");
+    await registerPlanWorkflow(fixture, "op-first");
+    // note: A combined source keeps its journal in the execution store, so this row is
+    // in the SAME transaction as the root-token CAS — the original ordering.
+    await plantPendingLegacyOperation(fixture.context, "op-combined-pending", WORKFLOW_ID_ALT);
+    const accepted = await footprint(fixture.context);
+
+    const refusal = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: { ...fixture.caller, workflowId: WORKFLOW_ID_ALT } },
+        {
+          ...planRequest({ context: fixture.context, operationId: "op-combined-stale", workflowId: WORKFLOW_ID_ALT }),
+          expected: fixture.rootToken,
+        },
+      ),
+    );
+    // invariant: The stale token is reported, not the pending journal.
+    expect(refusal.code).toBe("execution.stale-token");
+    expect(await footprint(fixture.context)).toEqual(accepted);
+  });
+
+  test("execution-registration-refuses-a-split-owner-journal-inside-the-transaction", async () => {
+    const fixture = await activeFixture("pending-split");
+    // why: The post-fence shape: the collaboration lane owns the journal, so the
+    // execution store no longer carries the table and the verdict is a split read.
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+    try {
+      lane.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, 'hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run("op-split-pending", JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+    } finally {
+      lane.close();
+    }
+    const before = await footprint(fixture.context);
+
+    const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-split-registration"));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    expect(refusal.message).toContain("op-split-pending");
+    expect(await footprint(fixture.context)).toEqual(before);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+
+    // invariant: The refusal is DECIDED inside the transaction, after the root-token CAS:
+    // a stale token is still reported as the token conflict, never as the journal verdict.
+    await registerPlanWorkflow(fixture, "op-split-first", PLAN_ID, WORKFLOW_ID_ALT);
+    const stale = await refusalOf(() =>
+      commitExecutionRegistration(
+        { ...fixture.context, caller: { ...fixture.caller, workflowId: WORKFLOW_ID } },
+        {
+          ...planRequest({ context: fixture.context, operationId: "op-split-stale", planId: SIDE_PLAN_ID }),
+          expected: fixture.rootToken,
+        },
+      ),
+    );
+    expect(stale.code).toBe("execution.stale-token");
+  });
+
+  test("execution-registration-refuses-a-split-owner-journal-committed-after-the-owner-read", async () => {
+    const fixture = await activeFixture("pending-split-gap");
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const before = await footprint(fixture.context);
+    let seamRan = false;
+    // invariant: The split lane stays open across the registration transaction, so the verdict
+    // is read at its position: a row that appears after the owner verdict and before that lock
+    // refuses. A pre-read-only verdict missed exactly this row.
+    setRegistrationJournalGapForTest(() => {
+      seamRan = true;
+      const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+      try {
+        lane.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, 'hash', 'execution-written', ?, '{}', '{}', null, ?, ?)",
+        ).run("op-split-gap", JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      } finally {
+        lane.close();
+      }
+    });
+    try {
+      const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-split-gap-registration"));
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-split-gap");
+      // note: The planted row IS the only lane change; remove it so the footprint proves the
+      // refusal wrote nothing else.
+      const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
+      try {
+        lane.prepare("delete from catalog_operations where operation_id = 'op-split-gap'").run();
+      } finally {
+        lane.close();
+      }
+      expect(await footprint(fixture.context)).toEqual(before);
+      expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+    } finally {
+      setRegistrationJournalGapForTest(undefined);
+    }
+  });
+
+  test("execution-registration-closes-the-split-lane-when-the-witness-stamp-refuses", async () => {
+    const fixture = await activeFixture("stamp-refusal-lane");
+    const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lanePath = resolveCollaborationLocation(fixture.context).dbPath;
+    // invariant: The verdict lane is a WRITE admission while the split journal's own lane is a
+    // READ one, so a checkout that records no binding opens the journal lane and then refuses at
+    // the stamp. The lane opened for the journal must be released by that refusal.
+    rmSync(join(fixture.harnessRoot, "collaboration-binding.json"));
+
+    // note: Count the lane connections this call opens and the ones it closes, through the real
+    // driver: `busyAware` closes the raw connection, so a `close` spy on the prototype sees it.
+    const driver = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (...args: unknown[]) => object };
+    const realDatabaseSync = driver.DatabaseSync;
+    const laneHandles: object[] = [];
+    const closedHandles: object[] = [];
+    // note: `node:sqlite` ships no type for the driver prototype this spy must reach; the shape
+    // here is the one member the spy replaces.
+    const driverPrototype: { close(this: object): void } = DatabaseSync.prototype;
+    const realClose = driverPrototype.close;
+    const constructorSpy = spyOn(driver, "DatabaseSync").mockImplementation(((...args: unknown[]) => {
+      const handle = new realDatabaseSync(...args);
+      if (args[0] === lanePath) laneHandles.push(handle);
+      return handle;
+    }) as never);
+    const closeSpy = spyOn(driverPrototype, "close").mockImplementation(function (this: object) {
+      closedHandles.push(this);
+      return realClose.call(this);
+    });
+    try {
+      const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-stamp-refusal"));
+      expect(refusal.code).toBe("collaboration.stale-binding");
+    } finally {
+      constructorSpy.mockRestore();
+      closeSpy.mockRestore();
+    }
+    // why: A stamp refusal happens AFTER the journal lane is opened, so every connection this
+    // call took on the lane must be closed; a leaked one keeps the store file's handle alive.
+    expect(laneHandles.length).toBeGreaterThan(0);
+    for (const handle of laneHandles) expect(closedHandles).toContain(handle);
   });
 
 });

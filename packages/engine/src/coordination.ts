@@ -89,7 +89,7 @@ import {
   resolveSddDir,
   resolveWorkflowDir,
 } from "./path.js";
-import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
+import { assertCatalogExecutionCommittedOn, readPendingRegistration } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
@@ -775,11 +775,11 @@ async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflow
     throw error;
   }
   try {
-    // invariant: The registry visibility and the pending legacy journal are the execution
-    // store's own rows: judge them on the handle this reader already holds
-    // instead of opening a second connection (the catalog itself is read from
-    // its own source, never through this handle).
-    assertCatalogExecutionCommittedOn(handle.db, workflowId);
+    // invariant: Registry visibility is the execution store's own row, while the pending
+    // journal belongs to whichever file OWNS `catalog_operations` — after the
+    // reviewed cutover that is the collaboration lane, never this connection.
+    const pending = await readPendingRegistration(context, workflowId);
+    assertCatalogExecutionCommittedOn(handle.db, workflowId, pending);
   } catch (error) {
     // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
     if (error instanceof CatalogError && error.code === "store.not-active") return;

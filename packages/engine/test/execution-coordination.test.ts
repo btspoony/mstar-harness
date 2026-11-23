@@ -32,6 +32,7 @@ import {
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
   setCompleteWitnessGapForTest,
+  setPrepareJournalGapForTest,
   withExecutionPlanAuthority,
   deliveryRouteOf,
   type ExecutionPlanCall,
@@ -282,6 +283,19 @@ function storedCoordinationText(context: StoreContext, planId: string): string {
     `select coordination_json from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${planId}'`,
   );
   return String(row!.coordination_json);
+}
+
+/** note: One plan's recorded coordination block, as the row stores it. */
+function coordinationOf(context: StoreContext, planId: string): Record<string, unknown> {
+  return JSON.parse(storedCoordinationText(context, planId)) as Record<string, unknown>;
+}
+
+/** note: Every operation receipt of this workflow, as its own identity (no serialized payload). */
+function receiptIdentities(context: StoreContext): Array<{ operationId: string; planId: unknown }> {
+  return rows(
+    context,
+    `select operation_id, plan_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by operation_id`,
+  ).map((row) => ({ operationId: String(row.operation_id), planId: row.plan_id }));
 }
 
 function storedOperationReceipts(context: StoreContext): string {
@@ -742,9 +756,113 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
       planCall(fixture, OWN_PLAN, "prepare-pending", planTokens[OWN_PLAN]!, { kind: "prepare" }),
     );
     expect(refusal.code).toBe("catalog.registration-pending");
+    // note: The registry row exists here, so the refusal names root visibility.
+    expect(refusal.message).toContain("root-visible");
     expect(footprint(context)).toEqual({ ...before, operations: before.operations as number });
     expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
     expect(rows(context, "select * from catalog_operations where operation_id = 'op-pending'")).toEqual(pendingBefore);
+  });
+
+  test("a combined journal row committed after the split read still refuses the prepare", async () => {
+    const fixture = await seededWorkflow("prepare-pending-combined-gap");
+    const { context, planTokens } = fixture;
+    const before = footprint(context);
+    let seamRan = false;
+    // invariant: The combined owner's journal is the execution store's own table, so it is
+    // read INSIDE the prepare transaction. A row landing in the gap between the split read
+    // and that lock must still refuse — a pre-read-only verdict would miss it.
+    setPrepareJournalGapForTest(() => {
+      seamRan = true;
+      withRaw(context, (db) => {
+        db.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+            "values ('op-gap', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+        ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planCall(fixture, OWN_PLAN, "prepare-gap", planTokens[OWN_PLAN]!, { kind: "prepare" }),
+      );
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-gap");
+      expect(refusal.message).toContain("root-visible");
+      expect(footprint(context)).toEqual(before);
+    } finally {
+      setPrepareJournalGapForTest(undefined);
+    }
+  });
+
+  test("a SPLIT journal row committed after the owner read still refuses the prepare", async () => {
+    const fixture = await seededWorkflow("prepare-pending-split-gap");
+    const { context, planTokens } = fixture;
+    // why: The post-cutover shape — the collaboration lane owns `catalog_operations`, so the
+    // verdict is a split read and the execution store no longer carries the table.
+    withRaw(context, (db) => {
+      db.exec("drop table catalog_operations");
+    });
+    const before = footprint(context);
+    let seamRan = false;
+    // invariant: A split owner's lane is held OPEN across the prepare transaction and re-read at
+    // its position. A row landing between the owner verdict and that lock must still refuse —
+    // the pre-read-only verdict this replaces would have missed it.
+    setPrepareJournalGapForTest(() => {
+      seamRan = true;
+      withRawCollaboration(context, (db) => {
+        db.prepare(
+          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+            "values ('op-split-gap', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+        ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+      });
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planCall(fixture, OWN_PLAN, "prepare-split-gap", planTokens[OWN_PLAN]!, { kind: "prepare" }),
+      );
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("catalog.registration-pending");
+      expect(refusal.message).toContain("op-split-gap");
+      expect(refusal.message).toContain("root-visible");
+      expect(footprint(context)).toEqual(before);
+    } finally {
+      setPrepareJournalGapForTest(undefined);
+    }
+  });
+
+  test("a pending journal refuses an identical prepare under a new operation id, while a committed retry still replays", async () => {
+    const fixture = await seededWorkflow("prepare-pending-satisfied");
+    const { context } = fixture;
+    const config = prepareCheckout(fixture, OWN_PLAN);
+    const first = await preparePlan(fixture, OWN_PLAN, "prepare-committed", config);
+    expect(first.replayed).toBe(false);
+    // invariant: The committed receipt replays even while the journal is pending: the
+    // replay is answered before the gate is consulted.
+    const committedFootprint = footprint(context);
+    withRaw(context, (db) => {
+      db.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+          "values ('op-pending-satisfied', 'h', 'prepared', ?, '{}', '{}', null, ?, ?)",
+      ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
+    });
+    const replay = await preparePlan(fixture, OWN_PLAN, "prepare-committed", config);
+    expect(replay.replayed).toBe(true);
+    expect(replay.data.coordination?.prepared).toEqual(first.data.coordination?.prepared);
+    expect(footprint(context)).toEqual(committedFootprint);
+
+    // note: The SAME configuration under a NEW operation id is not "already
+    // satisfied" while a journal row is pending: it refuses and records nothing.
+    const before = footprint(context);
+    const coordinationBefore = coordinationOf(context, OWN_PLAN);
+    const receiptsBefore = receiptIdentities(context);
+    const refusal = await refusalOf(() => preparePlan(fixture, OWN_PLAN, "prepare-satisfied-pending", config));
+    expect(refusal.code).toBe("catalog.registration-pending");
+    expect(refusal.message).toContain("op-pending-satisfied");
+    expect(footprint(context)).toEqual(before);
+    // invariant: The recorded preparation is the one from the committed attempt, and no new
+    // receipt was written for the refused one.
+    expect(coordinationOf(context, OWN_PLAN)).toEqual(coordinationBefore);
+    expect(receiptIdentities(context)).toEqual(receiptsBefore);
   });
 });
 

@@ -12,6 +12,7 @@ import { initializeCollaborationStore, writeCollaborationBinding } from "./colla
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   abortCatalogExecution,
+  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   purgeCatalogRegistration,
   readCatalogRevisions,
@@ -20,7 +21,7 @@ import { registerShippedCatalogExecution } from "./execution-registration.js";
 import { bindExecutionSession, readExecutionState, type ExecutionContext } from "./execution-store.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 
 /**
@@ -30,6 +31,20 @@ import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
  */
 const HOME = mkdtempSync(join(tmpdir(), "catalog-registration-home-"));
 let homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+
+/** note: The refusal of a call that must refuse, as its code and message. */
+async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
+  try {
+    await run();
+  } catch (error) {
+    const candidate = error as { code?: unknown; message?: unknown };
+    if (typeof candidate?.code === "string" && typeof candidate.message === "string") {
+      return { code: candidate.code, message: candidate.message };
+    }
+    throw error;
+  }
+  throw new Error("expected a refusal");
+}
 
 describe("ACTIVE catalog execution registration and legacy recovery", () => {
   let root: string | undefined;
@@ -154,6 +169,13 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
       code: "catalog.registration-pending",
       message: expect.stringContaining("mstar catalog reconcile --abort"),
     });
+    // invariant: The refusal states only the pending phase: this entry holds no registry
+    // row for the workflow, so it may not claim root visibility. (The gates that DO read
+    // a registry row — dispatch, handle-taking — still name it; see catalog-consumers.)
+    const unregistered = await refusalOf(() => registerShippedCatalogExecution(execution, { actor: "project-manager", workflow }));
+    expect(unregistered.code).toBe("catalog.registration-pending");
+    expect(unregistered.message).not.toContain("root-visible");
+    expect(unregistered.message).toContain("legacy-pending");
     const beforeAbort = await readCatalogRevisions(context);
     const abandoned = await abortCatalogExecution(context, "legacy-pending", "discard unwritten legacy request");
     expect(abandoned).toEqual({ operationId: "legacy-pending", workflowId, phase: "aborted", sourceBytesRetained: true });
@@ -241,6 +263,128 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect(readFileSync(snapshotPath, "utf8")).toBe(edited);
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+  });
+
+  test("a fenced source registers into the lane that now owns the catalog journal", async () => {
+    const { harnessDir, context, execution } = await fixture("post-cutover");
+    const location = resolveCollaborationLocation(context);
+    const planId = "20261009-post-cutover-plan";
+    const workflow = planWorkflow(harnessDir, "wf-post-cutover", planId, "Post-cutover plan");
+
+    // why: This is the post-cutover shape: the collaboration lane owns the
+    // catalog journal while the fenced execution store no longer carries it.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(location.dbPath);
+    try {
+      lane.exec(
+        "create table if not exists catalog_operations(operation_id text primary key, request_hash text not null, " +
+          "phase text not null check (phase in ('prepared','execution-written','committed','aborted')), " +
+          "catalog_delta_json text not null, before_versions_json text not null, after_versions_json text not null, " +
+          "result_json text, created_at text not null, updated_at text not null)",
+      );
+    } finally {
+      lane.close();
+    }
+
+    const receipt = await registerShippedCatalogExecution(execution, {
+      actor: "project-manager",
+      workflow,
+      operationId: "op-post-cutover",
+    });
+    expect(receipt).toMatchObject({ operationId: "op-post-cutover", workflowId: "wf-post-cutover", recovered: false });
+
+    // invariant: The journal row lands on the lane, committed; the execution store no
+    // longer carries the table at all.
+    const laneRows = new DatabaseSync(location.dbPath);
+    try {
+      expect(laneRows.prepare("select operation_id, phase from catalog_operations order by operation_id").all())
+        .toMatchObject([{ phase: "committed" }]);
+    } finally {
+      laneRows.close();
+    }
+    const executionStore = await openStore(context, "read");
+    try {
+      expect(tableNamesOn(executionStore.db).has("catalog_operations")).toBe(false);
+    } finally {
+      executionStore.close();
+    }
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    expect((await getCatalog(context, { kind: "plan", id: planId })).entity.title).toBe("Post-cutover plan");
+  });
+
+  test("a fenced catalog journal answers and compares the lane revision, not the stale execution one", async () => {
+    const { harnessDir, context } = await fixture("post-fence-revisions");
+    const location = resolveCollaborationLocation(context);
+    const workflowId = "wf-post-fence-revisions";
+    const operationId = "op-post-fence-revisions";
+    const snapshotPath = join(harnessDir, "workflows", workflowId, "snapshot.json");
+    mkdirSync(join(harnessDir, "workflows", workflowId), { recursive: true });
+    const snapshot = `{"identity":"${workflowId}"}\n`;
+    writeFileSync(snapshotPath, snapshot);
+    const digest = createHash("sha256").update(snapshot).digest("hex");
+
+    // why: The post-fence shape: the lane owns the journal and its counters, while the fenced
+    // execution store keeps ADVANCING its own — and now meaningless — revision pair.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+      fenced.prepare("update store_meta set revision = 41, catalog_revision = 99 where id = 1").run();
+    } finally {
+      fenced.close();
+    }
+    const lane = new DatabaseSync(location.dbPath);
+    try {
+      lane.exec(
+        "create table if not exists catalog_operations(operation_id text primary key, request_hash text not null, " +
+          "phase text not null check (phase in ('prepared','execution-written','committed','aborted')), " +
+          "catalog_delta_json text not null, before_versions_json text not null, after_versions_json text not null, " +
+          "result_json text, created_at text not null, updated_at text not null)",
+      );
+      lane.prepare("update collaboration_meta set revision = 7, catalog_revision = 5 where id = 1").run();
+      lane.prepare(
+        "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, ?, 'prepared', ?, '{}', ?, null, ?, ?)",
+      ).run(
+        operationId,
+        "post-fence-hash",
+        JSON.stringify({ workflow: { workflowId, harnessDir, snapshotPath }, execution: {}, catalog: {}, actor: "project-manager", expectedCatalogRevision: 5 }),
+        JSON.stringify({ failure: { workflow_id: workflowId, snapshot_path: snapshotPath, snapshot_content_sha256: digest, reviewed_identity: "legacy-identity" } }),
+        "2026-11-23",
+        "2026-11-23",
+      );
+    } finally {
+      lane.close();
+    }
+
+    // invariant: The reported revisions are the OWNER's, never the fenced store's.
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 7, catalogRevision: 5 });
+
+    // invariant: A stale execution revision can neither refuse the lane's correct one...
+    await expect(purgeCatalogRegistration(context, {
+      workflowId, operationId, expectedCatalogRevision: 99, actor: "project-manager",
+    })).rejects.toMatchObject({ code: "catalog.revision-conflict", message: expect.stringContaining("current revision is 5") });
+    // invariant: ...nor approve the settlement: the lane revision is what the CAS compares.
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId, operationId, expectedCatalogRevision: 5, actor: "project-manager",
+    });
+    expect(receipt).toMatchObject({ workflowId, sourceBytesRetained: true });
+    expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 8, catalogRevision: 5 });
+
+    // note: The settlement advanced the lane's counter only; the fenced pair is untouched.
+    const untouched = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      expect(untouched.prepare("select revision, catalog_revision from store_meta where id = 1").get())
+        .toEqual({ revision: 41, catalog_revision: 99 });
+    } finally {
+      untouched.close();
+    }
+    // invariant: Settlement retains the source document itself, never a re-serialized copy:
+    // reopening the snapshot still names the workflow this journal addressed.
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual({ identity: workflowId });
   });
 
   test("reconcile refuses registered active work but abort retains unregistered leases and permits disposition retry", async () => {
@@ -467,6 +611,25 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     });
 
   });
+  test("the advisory gate reads the execution registry before it opens the journal lane", async () => {
+    const { harnessDir, context } = await fixture("gate-order");
+    const workflowId = "wf-gate-order";
+    // why: A split owner plus a MISSING journal lane: reading the journal before the
+    // registry would refuse with `collaboration.not-initialized`, while a registry-first
+    // gate answers an unregistered workflow without opening the lane at all.
+    const fenced = new DatabaseSync(join(harnessDir, "store.db"));
+    try {
+      fenced.exec("drop table catalog_operations");
+    } finally {
+      fenced.close();
+    }
+    rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
+
+    // invariant: Registry-first: the workflow this execution store does not hold is answered
+    // before the journal lane is opened, so it passes even though that lane is unusable.
+    await assertCatalogExecutionCommitted(context, workflowId);
+  });
+
   test("purge ignores hostile cwd dotenv and preserves the marker and source bytes", async () => {
     const { harnessDir, context } = await fixture("purge-hostile-dotenv");
     const workflowId = "wf-purge-hostile-dotenv";
