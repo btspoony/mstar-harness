@@ -136,7 +136,7 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - [ ] 「Merge-ready loop」 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] **Iteration:** host todo `phase-5-pr-merge-ready` 可勾选
 - [ ] **Merge authorization** — satisfied per 「Merge authorization」, and 「Unresolved conversation gate」 passed (no unresolved thread, or each named and confirmed twice)
-- [ ] **Iteration:** PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`mstar-roles/references/project-manager/workflow-close.md`）
+- [ ] PR **merge** 完成后执行 post-merge close（`mstar-roles/references/project-manager/workflow-close.md`）；iteration 路线中这一步即进入 **Phase 6** 并追加 todo `phase-6-post-merge-close`
 
 ## Merge authorization (HARD)
 
