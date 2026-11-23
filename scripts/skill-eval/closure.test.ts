@@ -530,6 +530,23 @@ describe("mstar-iteration phase route map ", () => {
     }
   });
 
+  test("route map: stack and workflow close rows dispatch one file each", () => {
+    const routeMap = sectionLines("## Phase route map").join("\n");
+    expect(routeMap.includes("`references/pr-stack.md`"), "route map names pr-stack").toBe(true);
+    expect(routeMap.includes("`mstar-roles/references/project-manager/workflow-close.md`"), "route map names workflow-close").toBe(true);
+    expect(existsSync(join(ITERATION_DIR, "references/pr-stack.md"))).toBe(true);
+    expect(existsSync(join(SKILLS_DIR, "mstar-roles/references/project-manager/workflow-close.md"))).toBe(true);
+  });
+
+  test("transition gates: execution and close entrances survive as responsibility rows", () => {
+    const gates = sectionLines("## Phase transition gates（HARD — 防跳步）").join("\n");
+    expect(gates.includes("→ Phase 2")).toBe(true);
+    expect(gates.includes("→ Phase 3")).toBe(true);
+    expect(gates.includes("close → delivery chain")).toBe(true);
+    expect(gates.includes("→ workflow close")).toBe(true);
+    expect(gates.includes("→ 迭代交付完成")).toBe(true);
+  });
+
   test("no missing local file/anchor: entry headings + load-bearing AC2 semantics resolve", () => {
     for (const { file, entryAnchor } of PHASE_ROUTES) {
       expect(read(routeFilePath(file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
@@ -537,7 +554,7 @@ describe("mstar-iteration phase route map ", () => {
     expect(read(routeFilePath("references/pr-helper-discovery.md")).includes("# PR helper discovery")).toBe(true);
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
-    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）")).toBe(true);
+    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（execute → whole-chain close 通用 SSOT）")).toBe(true);
  // Phase 1 detail: the section heading is structural. The sequential
  // product-manager/architect/writing chain and `status: locked` are prose
  // claims whose owners are the phase-gates contract and `evaluatePhaseGate`,

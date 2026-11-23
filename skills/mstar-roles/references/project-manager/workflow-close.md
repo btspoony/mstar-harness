@@ -1,6 +1,6 @@
 # Workflow close after a verified merge
 
-> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file: the iteration route (`mstar-iteration` SKILL.md「Phase route map」Phase 6) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
+> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file: the iteration route (`mstar-iteration` SKILL.md「Phase route map」workflow close) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
 
 | Route | Entry fact |
 |---|---|
@@ -11,7 +11,7 @@
 ## Entry
 
 1. Print `## Phase 6: post-merge close`.
-2. Append the host todo `phase-6-post-merge-close` (session todos SSOT → `mstar-iteration/references/command-shared-invariants.md`).
+2. Append the host todo `workflow-close` (session todos SSOT → `mstar-iteration/references/command-shared-invariants.md`).
 3. Resumable: close may run in a later session, and it is idempotent against an already terminal lifecycle (a fully closed retry changes no authoritative target and does not rewrite `ended_at`).
 
 Ordered pipeline (HARD — fixed order, no skipping or inversion): **Terminal write → Unregister → Projection reconciliation → Cleanup handoff.**

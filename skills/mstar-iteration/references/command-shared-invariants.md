@@ -17,8 +17,8 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 | Product-code edits, test authoring or QC execution (Phase 2) | Dispatch implementer/QC specialists; only bounded PM acceptance checks are direct → `mstar-roles/references/project-manager/acceptance.md` |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `mstar-host/references/parallel-dispatch.md` § Hard rules） |
-| 最后一个 plan `Done` 后直接开 PR / 汇报结束；「Merge-ready checklist」exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`mstar-roles/references/project-manager/workflow-close.md`） |
-| Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
+| 最后一个 plan `Done` 后直接开 PR（或跳过 close）/ 汇报结束；单层「Merge-ready checklist」exit、单层 merge 或整链未证明即宣称交付完成 | 最后 1 个 plan `Done` 后先 iteration-close（§3.0→§3.5）；每层 PR 按 `mstar-roles/references/project-manager/pr-delivery.md` 逐层走到 merge，整链证明后 workflow close |
+| PR 修复时 PM 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-doc-corpus`**。
 
@@ -48,21 +48,21 @@ The primary coordinator projects the entire selected iteration into the table be
 |---------|----------|------------|
 | plan-wave todos | 进入 Phase 2 | 各 plan `Done` |
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
-| `phase-4-create-pr` | Phase 3 完成后 | PR 已创建并记录 URL/number |
-| `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 merge-ready：「Merge-ready checklist」第 1–5 项全 `[x]`（第 7 项是 merge 前置、第 8 项 merged 后才可勾，均不属于本 todo） |
-| `phase-6-post-merge-close` | 「Merge-ready checklist」第 7 项（「Merge authorization」）成立后 PR **已 merge**（mergeable ≠ merged） | Phase 6 workflow close 完成：Terminal write → Unregister → Projection reconciliation → Cleanup handoff（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
+| `delivery-chain` | 首个 layer PR 发布时（execute 期间） | 每层 PR 均已 merge 且整链证明记录在 compass `PR stack` 表（第 7 项是每层 merge 前置、该层第 8 项 merged 后才可勾） |
+| `workflow-close` | 整链证明记录后 | workflow close 完成：Terminal write → Unregister → Projection reconciliation → Cleanup handoff（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 
-Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 进入至 Phase 5 merge-ready（「Merge-ready checklist」第 1–5 项全 `[x]`）前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 phase 步骤，不向用户例行 yes/no check-in；merge 授权与 `owner-gated` 的停等 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。
+Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 execute 入口至 whole-chain proof 与 workflow close 前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 gate 动作，不向用户例行 yes/no check-in；每层 merge 授权与 `owner-gated` 的停等 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。
 
 **合法 STOP（仅此升级用户）**：
 
 - 迭代 branch metadata 缺失（`iteration_base_branch` / `target_branch`）
-- **「Merge authorization」未满足**：按 compass `pr_merge_policy` 的三个分支各自等待（谓词、恢复路径与 `pr_merge_policy` 缺失处理 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。这是设计的等待点，不是流程问题
-- **`Blocked`**：真冲突、secrets、不可逆范围缺口、Phase 5 多轮仍无法 merge-ready
+- **某层「Merge authorization」未满足**：该层按 compass `pr_merge_policy` 的三个分支各自等待（谓词、恢复路径与 `pr_merge_policy` 缺失处理 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。这是设计的等待点，不是流程问题
+- **tracker 报告它无法解决的 blocker**：收回该 PR 的观测与 triage，由 coordinator 按 `mstar-iteration/references/pr-stack.md`「Tracking」处置并记录
+- **`Blocked`**：真冲突、secrets、不可逆范围缺口、某层多轮仍无法 merge-ready
 - 用户本轮显式打断
 
 **Turn closure during Phase 2–5 continuous execution**: retain the existing in-flight-action discipline (invoke issued or next dispatch Assignment named); do not end with a routine user-confirmation question.
