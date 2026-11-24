@@ -5166,7 +5166,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="review" data-edge-to="merge_ready" data-edge-key="10" data-composition-routing="workflow-v2-auto" data-edge-role="" data-composition-points="524,472;524,456;567,456;567,372;586,372" d="M 524 472 L 524 464 Q 524 456 532 456 L 559 456 Q 567 456 567 448 L 567 380 Q 567 372 575 372 L 586 372" class="a-default" data-animate="edge" style="--step:4" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
-        <g id="node-describe" data-node-id="describe" data-node-label="描述工作" tabindex="0" role="button" aria-label="聚焦描述工作，设定意图, 你 › 执行 · 层交付并行" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="设定意图" data-node-context="你 › 执行 · 层交付并行">
+        <g id="node-describe" data-node-id="describe" data-node-label="描述工作" data-node-kind="frontend" data-node-sublabel="设定意图" data-node-context="你 › 执行 · 层交付并行">
           <title>描述工作 · 设定意图 · 你 › 执行 · 层交付并行</title>
           <rect x="48" y="94" width="92" height="52" rx="8" class="c-mask"/>
           <rect x="48" y="94" width="92" height="52" rx="8" class="c-frontend" data-animate="node" style="--step:0" stroke-width="1.5"/>
@@ -5180,7 +5180,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="94" y="132" class="t-muted" font-size="8" text-anchor="middle">设定意图</text>
         </g>
 
-        <g id="node-plan" data-node-id="plan" data-node-label="澄清并制定计划" tabindex="0" role="button" aria-label="聚焦澄清并制定计划，迭代或独立 plan, PM / 协调 › 执行 · 层交付并行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="迭代或独立 plan" data-node-context="PM / 协调 › 执行 · 层交付并行">
+        <g id="node-plan" data-node-id="plan" data-node-label="澄清并制定计划" data-node-kind="backend" data-node-sublabel="迭代或独立 plan" data-node-context="PM / 协调 › 执行 · 层交付并行">
           <title>澄清并制定计划 · 迭代或独立 plan · PM / 协调 › 执行 · 层交付并行</title>
           <rect x="168" y="220" width="92" height="52" rx="8" class="c-mask"/>
           <rect x="168" y="220" width="92" height="52" rx="8" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
@@ -5191,7 +5191,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="214" y="265.6" class="t-muted" font-size="8" text-anchor="middle">迭代或独立 plan</text>
         </g>
 
-        <g id="node-close" data-node-id="close" data-node-label="iteration-close" tabindex="0" role="button" aria-label="聚焦iteration-close，specs/ADR · roadmap 候选 · completed, PM / 协调 › close 与整链证明" aria-pressed="false" data-node-kind="backend" data-node-sublabel="specs/ADR · roadmap 候选 · completed" data-node-tag="非空 delta 时开 close-delta 层" data-node-context="PM / 协调 › close 与整链证明">
+        <g id="node-close" data-node-id="close" data-node-label="iteration-close" data-node-kind="backend" data-node-sublabel="specs/ADR · roadmap 候选 · completed" data-node-tag="非空 delta 时开 close-delta 层" data-node-context="PM / 协调 › close 与整链证明">
           <title>iteration-close · specs/ADR · roadmap 候选 · completed · PM / 协调 › close 与整链证明 · 非空 delta 时开 close-delta 层</title>
           <rect x="774.4" y="212" width="184" height="68" rx="8" class="c-mask"/>
           <rect x="774.4" y="212" width="184" height="68" rx="8" class="c-backend" data-animate="node" style="--step:7" stroke-width="1.5"/>
@@ -5203,7 +5203,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="866.4" y="268" class="t-backend" font-size="7" text-anchor="middle">非空 delta 时开 close-delta 层</text>
         </g>
 
-        <g id="node-implement" data-node-id="implement" data-node-label="实现" tabindex="0" role="button" aria-label="聚焦实现，feature branch, 开发席位 › 执行 · 层交付并行" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="feature branch" data-node-context="开发席位 › 执行 · 层交付并行">
+        <g id="node-implement" data-node-id="implement" data-node-label="实现" data-node-kind="frontend" data-node-sublabel="feature branch" data-node-context="开发席位 › 执行 · 层交付并行">
           <title>实现 · feature branch · 开发席位 › 执行 · 层交付并行</title>
           <rect x="288" y="346" width="92" height="52" rx="8" class="c-mask"/>
           <rect x="288" y="346" width="92" height="52" rx="8" class="c-frontend" data-animate="node" style="--step:2" stroke-width="1.5"/>
@@ -5217,7 +5217,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="334" y="384" class="t-muted" font-size="8" text-anchor="middle">feature branch</text>
         </g>
 
-        <g id="node-layer_pr" data-node-id="layer_pr" data-node-label="开层 PR" tabindex="0" role="button" aria-label="聚焦开层 PR，发布即推进 merge-ready, 开发席位 › 执行 · 层交付并行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="发布即推进 merge-ready" data-node-context="开发席位 › 执行 · 层交付并行">
+        <g id="node-layer_pr" data-node-id="layer_pr" data-node-label="开层 PR" data-node-kind="backend" data-node-sublabel="发布即推进 merge-ready" data-node-context="开发席位 › 执行 · 层交付并行">
           <title>开层 PR · 发布即推进 merge-ready · 开发席位 › 执行 · 层交付并行</title>
           <rect x="446" y="346" width="108" height="52" rx="8" class="c-mask"/>
           <rect x="446" y="346" width="108" height="52" rx="8" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
@@ -5228,7 +5228,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="500" y="384" class="t-muted" font-size="7.5" text-anchor="middle">发布即推进 merge-ready</text>
         </g>
 
-        <g id="node-merge_ready" data-node-id="merge_ready" data-node-label="Merge-ready" tabindex="0" role="button" aria-label="聚焦Merge-ready，CI 绿 · 线程清零 · 可合并, 开发席位 › Merge-ready 与合并" aria-pressed="false" data-node-kind="security" data-node-sublabel="CI 绿 · 线程清零 · 可合并" data-node-tag="就绪≠授权" data-node-context="开发席位 › Merge-ready 与合并">
+        <g id="node-merge_ready" data-node-id="merge_ready" data-node-label="Merge-ready" data-node-kind="security" data-node-sublabel="CI 绿 · 线程清零 · 可合并" data-node-tag="就绪≠授权" data-node-context="开发席位 › Merge-ready 与合并">
           <title>Merge-ready · CI 绿 · 线程清零 · 可合并 · 开发席位 › Merge-ready 与合并 · 就绪≠授权</title>
           <rect x="586" y="338" width="128" height="68" rx="8" class="c-mask"/>
           <rect x="586" y="338" width="128" height="68" rx="8" class="c-security" data-animate="node" style="--step:5" stroke-width="1.5"/>
@@ -5241,7 +5241,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="650" y="394" class="t-security" font-size="7" text-anchor="middle">就绪≠授权</text>
         </g>
 
-        <g id="node-blocked" data-node-id="blocked" data-node-label="阻塞" tabindex="0" role="button" aria-label="聚焦阻塞，CI 红 / 线程未清 / 未授权 · 修正后重推, 开发席位 › close 与整链证明" aria-pressed="false" data-node-kind="security" data-node-sublabel="CI 红 / 线程未清 / 未授权 · 修正后重推" data-node-context="开发席位 › close 与整链证明">
+        <g id="node-blocked" data-node-id="blocked" data-node-label="阻塞" data-node-kind="security" data-node-sublabel="CI 红 / 线程未清 / 未授权 · 修正后重推" data-node-context="开发席位 › close 与整链证明">
           <title>阻塞 · CI 红 / 线程未清 / 未授权 · 修正后重推 · 开发席位 › close 与整链证明</title>
           <rect x="770.4" y="346" width="192" height="52" rx="8" class="c-mask"/>
           <rect x="770.4" y="346" width="192" height="52" rx="8" class="c-security" data-animate="node" style="--step:12" stroke-width="1.5"/>
@@ -5253,7 +5253,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="866.4" y="384" class="t-muted" font-size="8" text-anchor="middle">CI 红 / 线程未清 / 未授权 · 修正后重推</text>
         </g>
 
-        <g id="node-review" data-node-id="review" data-node-label="审查与 CI" tabindex="0" role="button" aria-label="聚焦审查与 CI，QC 三席 · PM Acceptance · CI 与 bot, 独立审查 › 执行 · 层交付并行" aria-pressed="false" data-node-kind="security" data-node-sublabel="QC 三席 · PM Acceptance · CI 与 bot" data-node-context="独立审查 › 执行 · 层交付并行">
+        <g id="node-review" data-node-id="review" data-node-label="审查与 CI" data-node-kind="security" data-node-sublabel="QC 三席 · PM Acceptance · CI 与 bot" data-node-context="独立审查 › 执行 · 层交付并行">
           <title>审查与 CI · QC 三席 · PM Acceptance · CI 与 bot · 独立审查 › 执行 · 层交付并行</title>
           <rect x="412" y="472" width="176" height="52" rx="8" class="c-mask"/>
           <rect x="412" y="472" width="176" height="52" rx="8" class="c-security" data-animate="node" style="--step:4" stroke-width="1.5"/>
@@ -5265,7 +5265,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="500" y="510" class="t-muted" font-size="8" text-anchor="middle">QC 三席 · PM Acceptance · CI 与 bot</text>
         </g>
 
-        <g id="node-merge" data-node-id="merge" data-node-label="按栈序合并" tabindex="0" role="button" aria-label="聚焦按栈序合并，owner-gated 等 owner 批准, 集成与层 ref › Merge-ready 与合并" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="owner-gated 等 owner 批准" data-node-tag="merge commit" data-node-context="集成与层 ref › Merge-ready 与合并">
+        <g id="node-merge" data-node-id="merge" data-node-label="按栈序合并" data-node-kind="cloud" data-node-sublabel="owner-gated 等 owner 批准" data-node-tag="merge commit" data-node-context="集成与层 ref › Merge-ready 与合并">
           <title>按栈序合并 · owner-gated 等 owner 批准 · 集成与层 ref › Merge-ready 与合并 · merge commit</title>
           <rect x="586" y="590" width="128" height="68" rx="8" class="c-mask"/>
           <rect x="586" y="590" width="128" height="68" rx="8" class="c-cloud" data-animate="node" style="--step:6" stroke-width="1.5"/>
@@ -5277,7 +5277,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="650" y="646" class="t-cloud" font-size="7" text-anchor="middle">merge commit</text>
         </g>
 
-        <g id="node-proof" data-node-id="proof" data-node-label="整链证明" tabindex="0" role="button" aria-label="聚焦整链证明，全部必需层已合并 · 内容落 target, 集成与层 ref › close 与整链证明" aria-pressed="false" data-node-kind="security" data-node-sublabel="全部必需层已合并 · 内容落 target" data-node-tag="blocking" data-node-context="集成与层 ref › close 与整链证明">
+        <g id="node-proof" data-node-id="proof" data-node-label="整链证明" data-node-kind="security" data-node-sublabel="全部必需层已合并 · 内容落 target" data-node-tag="blocking" data-node-context="集成与层 ref › close 与整链证明">
           <title>整链证明 · 全部必需层已合并 · 内容落 target · 集成与层 ref › close 与整链证明 · blocking</title>
           <rect x="784.4" y="590" width="164" height="68" rx="8" class="c-mask"/>
           <rect x="784.4" y="590" width="164" height="68" rx="8" class="c-security" data-animate="node" style="--step:8" stroke-width="1.5"/>
@@ -5290,7 +5290,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="866.4" y="646" class="t-security" font-size="7" text-anchor="middle">blocking</text>
         </g>
 
-        <g id="node-wco" data-node-id="wco" data-node-label="Workflow Close Out" tabindex="0" role="button" aria-label="聚焦Workflow Close Out，登记清理与投影核对, 收尾 › close 与整链证明" aria-pressed="false" data-node-kind="external" data-node-sublabel="登记清理与投影核对" data-node-context="收尾 › close 与整链证明">
+        <g id="node-wco" data-node-id="wco" data-node-label="Workflow Close Out" data-node-kind="external" data-node-sublabel="登记清理与投影核对" data-node-context="收尾 › close 与整链证明">
           <title>Workflow Close Out · 登记清理与投影核对 · 收尾 › close 与整链证明</title>
           <rect x="806.4" y="724" width="120" height="52" rx="8" class="c-mask"/>
           <rect x="806.4" y="724" width="120" height="52" rx="8" class="c-external" data-animate="node" style="--step:9" stroke-width="1.5"/>

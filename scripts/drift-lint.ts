@@ -1782,10 +1782,16 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
     segments.push({ text: decodeXmlEntities(match[1]), line: lineAt(match.index ?? 0) });
   }
   // see scripts/drift-lint.ts § 16 — A diagram may embed HTML in a `foreignObject`; that text is reader-visible
-  // see scripts/drift-lint.ts § 16 — too, and the prose pass blanks the whole SVG, so it is read here.
+  // see scripts/drift-lint.ts § 16 — too, and the prose pass blanks the whole SVG, so it is read here. Each body
+  // see scripts/drift-lint.ts § 16 — row keeps its own source offset, so a label on the fourth row is not
+  // see scripts/drift-lint.ts § 16 — reported on the element's first line, where nothing needs fixing.
   for (const match of text.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
-    for (const line of match[1].replace(/<[^>]*>/g, " ").split(/\r\n|\n|\r/)) {
-      if (line.trim() !== "") segments.push({ text: decodeXmlEntities(line), line: lineAt(match.index ?? 0) });
+    const body = match[1];
+    const bodyOffset = (match.index ?? 0) + match[0].length - body.length - "</foreignObject>".length;
+    for (const row of body.matchAll(/[^\r\n]+/g)) {
+      const text = row[0].replace(/<[^>]*>/g, " ");
+      if (text.trim() === "") continue;
+      segments.push({ text: decodeXmlEntities(text), line: lineAt(bodyOffset + (row.index ?? 0)) });
     }
   }
   return segments;

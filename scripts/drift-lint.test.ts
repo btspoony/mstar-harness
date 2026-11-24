@@ -2383,6 +2383,18 @@ describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
     expect(checkRetiredStageNames([{ rel: "assets/workflow.svg", text }]).hits.length).toBeGreaterThan(0);
   });
 
+  test("a backticked probe in a diagram source and in its rendered label both report", () => {
+    // Paired fixture: the source label and the rendered label carry the same text, so either format
+    // drifting from the other fails here.
+    const label = "`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "` gate";
+    const source = checkRetiredStageNames([{ rel: "assets/x.archify.json", text: JSON.stringify({ nodes: [{ id: "close", label }] }) }]);
+    const rendered = checkRetiredStageNames([{ rel: "assets/x.svg", text: `<svg><g id="node-close"><text>${label}</text></g></svg>` }]);
+    for (const result of [source, rendered]) {
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain(`"${RETIRED_STAGE_MACHINE_LITERALS[0]}"`);
+    }
+  });
+
   test("a hit inside the earlier line is not reported again as split", () => {
     const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text: "Phase 4\nreview continues\n" }]);
     expect(result.hits.length).toBe(1);
@@ -2592,6 +2604,22 @@ describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
     expect(dirty.hits[0]).toContain("assets/workflow.svg");
     const clean = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase 3 → close</text>" }]);
     expect(clean.hits).toEqual([]);
+  });
+
+  test("a foreignObject label reports the row that holds it, not the element start", () => {
+    const svg = [
+      "<svg>",
+      '  <foreignObject x="0" y="0" width="10" height="10">',
+      '    <div xmlns="http://www.w3.org/1999/xhtml">',
+      "      <p>clean</p>",
+      "      <p>Phase 4 here</p>",
+      "    </div>",
+      "  </foreignObject>",
+      "</svg>",
+    ].join("\n");
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("assets/x.svg:5");
   });
 
   test("a json case corpus is read as full text", () => {
