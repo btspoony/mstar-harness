@@ -112,7 +112,7 @@ export interface IterationGateListView {
  * tool result shape reused verbatim by the pre-step catalog row).
  */
 export interface IterationGateView {
-  transition: 'phase-2-execute' | 'phase-3-close' | 'phase-4-pr-delivery'
+  transition: 'phase-2-execute' | 'phase-3-close'
   all_plans_done: boolean
   ok: boolean
   entry: IterationGateListView

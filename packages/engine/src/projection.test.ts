@@ -546,7 +546,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
           entry: { id: workflowId, type, started_at: STARTED_AT, dir: `workflows/${workflowId}` },
           snapshot: {
             schema_version: 1, id: workflowId, type, status: "running", started_at: STARTED_AT,
-            updated_at: STARTED_AT, phase: "phase-4-pr-delivery",
+            updated_at: STARTED_AT, phase: "phase-3-close",
             branch: { base: "main", integration: `int/${workflowId}`, target: "main" },
             ...(type === "plan" ? { plans: [], delivery_kind: "development" } : { plans: [], compass_ref: "delivery-compass.md" }),
           } as unknown as WorkflowSnapshot,

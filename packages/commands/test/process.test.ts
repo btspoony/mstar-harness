@@ -40,7 +40,7 @@ function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-async function cleanupFixture(merge = true) {
+async function cleanupFixture(merge = true, opts: { origin?: boolean; layer?: boolean; integrationWorktree?: boolean } = {}) {
   const ctx = context();
   git(["init", "-q", "-b", "main"], ctx.cwd);
   git(["config", "user.name", "Process Test"], ctx.cwd);
@@ -56,6 +56,11 @@ async function cleanupFixture(merge = true) {
   git(["add", "-A"], worktree);
   git(["commit", "-q", "-m", "done"], worktree);
   if (merge) git(["merge", "-q", "--ff-only", branch], ctx.cwd);
+  // The open-PR probe needs a GitHub origin to resolve a --repo slug, and a
+  // layer-ref candidate is what spawns the probe at all (see
+  // skills/mstar-branch-worktree/references/worktree-cleanup.md).
+  if (opts.origin) git(["remote", "add", "origin", "https://github.com/acme/tools.git"], ctx.cwd);
+  if (opts.layer) git(["branch", "iteration-stack/wf-smoke/s01"], ctx.cwd);
   const harness = path.join(ctx.cwd, ".mstar");
   mkdirSync(harness, { recursive: true });
   // Issue #428: worktree cleanup reads the ACTIVE execution store; create the
@@ -72,7 +77,7 @@ async function cleanupFixture(merge = true) {
     snapshot: {
       schema_version: 1, id: workflowId, type: "plan", status: "running",
       started_at: "2026-09-27T00:00:00.000Z", updated_at: "2026-09-27T00:00:00.000Z",
-      branch: { target: "main" },
+      branch: { target: "main", ...(opts.integrationWorktree ? { integration: branch } : {}) },
       plans: [{ id: "plan-smoke", title: "Smoke plan", file: "plans/plan-smoke.md", status: "Done", metadata: { working_branch: branch, worktree_path: worktree } }],
     } as never,
     expected: (await readExecutionState(storeContext)).token,
@@ -263,6 +268,75 @@ describe("process command family", () => {
     expect(existsSync(worktree)).toBe(false);
     expect(git(["show-ref", "--verify", `refs/heads/${branch}`], ctx.cwd)).toBeTruthy();
     expect((result.data as { decisions: { reason: string }[] }).decisions.some(({ reason }) => reason === "cleanup.refuse.unmerged")).toBe(true);
+  });
+
+  test("a missing gh fails the probe closed on layer refs only; unrelated candidates still clean up", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a
+    // probe that cannot START (gh not in $PATH → spawn ENOENT) is unverified,
+    // not fatal: the layer refs refuse and every other candidate proceeds on
+    // its own evidence instead of the whole command aborting.
+    const { ctx, worktree, branch } = await cleanupFixture(true, { origin: true, layer: true });
+    ctx.effects.spawn = async (request) => {
+      if (request.argv[0] === "gh") throw Object.assign(new Error("executable not found in $PATH: gh"), { code: "process.not-found", exitCode: 127, executable: "gh" });
+      return spawnProcess(request);
+    };
+    const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    const rows = (result.data as { decisions: { verdict: string; kind: string; ref: string; reason: string }[] }).decisions
+      .map((row) => `${row.verdict} | ${row.kind} | ${row.ref} | ${row.reason}`)
+      .join("\n");
+    expect(rows).toContain("refuse | local-branch | iteration-stack/wf-smoke/s01 | cleanup.refuse.open-pr-base");
+    expect(rows).toContain("remove | local-branch | feature/done | cleanup.remove.merged");
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // launch failure is reported, not hidden behind the refusal code: the
+    // note names the missing tool and the recovery.
+    const probeNotes = (result.data as { probeNotes?: unknown }).probeNotes;
+    expect(Array.isArray(probeNotes) && probeNotes.some((note) => typeof note === "string" && note.includes("`gh` was not found on PATH") && note.includes("rerun"))).toBe(true);
+    expect(existsSync(worktree)).toBe(false);
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the unrelated merged candidate is gone; only the refused layer ref survives.
+    expect(() => git(["show-ref", "--verify", `refs/heads/${branch}`], ctx.cwd)).toThrow();
+    expect(git(["show-ref", "--verify", "refs/heads/iteration-stack/wf-smoke/s01"], ctx.cwd)).toBeTruthy();
+  });
+
+  test("a missing gh in a late pass with no layer refs reports an unverified probe, not a refusal", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // post-deferred-worktree re-plan keeps the probe live while its probed-ref
+    // set is empty; an unverified probe there holds nothing back, so the note
+    // must not claim a layer-ref refusal that never happened.
+    const { ctx } = await cleanupFixture(true, { origin: true, layer: true, integrationWorktree: true });
+    ctx.effects.spawn = async (request) => {
+      if (request.argv[0] === "gh") {
+        let layerGone = false;
+        try { git(["show-ref", "--verify", "refs/heads/iteration-stack/wf-smoke/s01"], ctx.cwd); } catch { layerGone = true; }
+        if (layerGone) throw Object.assign(new Error("executable not found in $PATH: gh"), { code: "process.not-found", exitCode: 127, executable: "gh" });
+        return { exitCode: 0, signal: null, stdout: "[]", stderr: "" };
+      }
+      return spawnProcess(request);
+    };
+    const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
+    expect(result.status, JSON.stringify(result.data)).toBe("ok");
+    const rows = (result.data as { decisions: { reason: string }[] }).decisions;
+    expect(rows.some((row) => row.reason === "cleanup.refuse.open-pr-base")).toBe(false);
+    const probeNotes = (result.data as { probeNotes?: unknown }).probeNotes;
+    expect(Array.isArray(probeNotes)).toBe(true);
+    const notes = (probeNotes as unknown[]).filter((note): note is string => typeof note === "string");
+    expect(notes.some((note) => note.includes("refused"))).toBe(false);
+    expect(notes.join(" || ")).toContain("`gh` was not found on PATH");
+  });
+
+  test("a cancelled probe aborts the cleanup instead of deciding", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // probe's failure path never swallows a user cancellation: command.cancelled
+    // propagates and the run decides nothing further.
+    const { ctx } = await cleanupFixture(true, { origin: true, layer: true });
+    ctx.effects.spawn = async (request) => {
+      if (request.argv[0] === "gh") throw Object.assign(new Error("process admission cancelled"), { code: "command.cancelled" });
+      return spawnProcess(request);
+    };
+    const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("command.cancelled");
+    expect(existsSync(path.join(ctx.cwd, "worktrees", "done"))).toBe(true);
   });
 
   test("review setup rejects ambiguous, missing, and unresolved modes", async () => {

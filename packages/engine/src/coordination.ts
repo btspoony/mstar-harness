@@ -1391,6 +1391,14 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string | 
  * commit exists for.
  */
 function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string | undefined {
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — callers hand the ALREADY-normalized branch name: both close routes
+  // strip the qualified `refs/heads/<name>` / `refs/remotes/origin/<name>`
+  // record form exactly once. Stripping here too would turn a legitimate
+  // nested branch name (`refs/heads/refs/heads/x` names the branch literally
+  // called `refs/heads/x`) into the unrelated short branch `x`, and a merge
+  // into that branch would satisfy the proof without ever reaching the
+  // recorded target.
   const local = `refs/heads/${branch}`;
   const remote = `refs/remotes/origin/${branch}`;
   for (const ref of remoteFirst ? [remote, local] : [local, remote]) {
@@ -1439,58 +1447,122 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
 export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   const violations = consultDeliveryEvidence(snapshot);
   if (violations.length > 0) return violations;
-  if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development") return [];
-  return deliveryMergeViolations(snapshot);
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+  // a `development` plan proves its delivery branch reached the target; an
+  // iteration proves the chain top of its delivery line reached the target.
+  if (snapshot.type === "plan") {
+    return snapshot.delivery_kind === "development" ? deliveryMergeViolations(snapshot) : [];
+  }
+  return snapshot.type === "iteration" ? iterationDeliveryViolations(snapshot) : [];
 }
 
+function mergeUnproven(message: string, fix: string): ValidationResult[] {
+  return [{ ok: false, severity: "high", code: "PHASE6_DELIVERY_MERGE_UNPROVEN", message, fix }];
+}
 
-function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
-  const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
-  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  // The pure consultation just proved both branch anchors present. The merge
-  // member stays OPTIONAL — it is read when recorded, never required — so the
-  // proof below reads it defensively and only has to name what Git could not
-  // supply.
-  const deliveryBranch = deliveryBranchOf(branch) as string;
-  const targetBranch = branch.target as string;
-  const refuse = (message: string, fix: string): ValidationResult[] => [
-    { ok: false, severity: "high", code: "PHASE6_DELIVERY_MERGE_UNPROVEN", message, fix },
-  ];
-  const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`
-
+// see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f
+/**
+ * The one place that turns recorded rows into the checkout and the resolved
+ * target commit a delivery proof reads. Every route shares it, so the plan and
+ * iteration proofs can never disagree about where they look:
+ *
+ * - the recorded checkouts are the plan rows' own `metadata.worktree_path`,
+ *   with `extraCheckouts` ahead of them (the iteration route leads with its
+ *   recorded integration checkout — see
+ *   skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f);
+ * - the target ref is resolved remote-first inside each of them, because a
+ *   provider merge lands in the remote (see `deliveryRef`);
+ * - a recorded checkout repointed at a different clone, where neither ref
+ *   exists, is not the authority: the first one that resolves the target ref
+ *   is, and the first readable one is only the fallback that names the refusal.
+ *
+ * `wording` is the route's own vocabulary, so each refusal names a recovery its
+ * lifecycle can actually perform (an iteration can record no delivery payload).
+ */
+function deliveryCheckoutOf(
+  snapshot: WorkflowSnapshot,
+  workflowId: string,
+  deliveryBranch: string,
+  targetBranch: string,
+  wording: DeliveryProofWording,
+  extraCheckouts: readonly string[] = [],
+): { checkout: string; target: string } | { violations: ValidationResult[] } {
   const recorded = (snapshot.plans ?? [])
     .map((row) => (isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined))
     .filter((path): path is string => isNonEmptyString(path));
-  const readable = recorded.filter((path) => isAbsolute(path) && existsSync(path));
+  const candidates = [...extraCheckouts, ...recorded].filter(isAbsolute);
+  const readable = candidates.filter((path) => existsSync(path));
   if (readable.length === 0) {
-    return refuse(
-      recorded.length === 0
-        ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
-        : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${record}.`,
-    );
+    return {
+      violations: mergeUnproven(
+        candidates.length === 0
+          ? `Workflow '${workflowId}' records no ${wording.checkout}, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in a recorded checkout`
+          : `Workflow '${workflowId}' records checkout(s) ${candidates.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
+        candidates.length === 0
+          ? `Create a checkout of ${deliveryBranch} and record it on a plan row (metadata.worktree_path), then retry the close; if the merge was a squash or rebase, ${wording.record}.`
+          : `Rebuild the recorded checkout with 'git worktree add ${candidates[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
+      ),
+    };
   }
   const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);
   if (checkouts.length === 0) {
-    return refuse(
-      `Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`,
-      `Rebuild or repair the recorded checkout so it is a readable Git worktree, then retry the close; if the merge was a squash or rebase, ${record}.`,
-    );
+    return {
+      violations: mergeUnproven(
+        `Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`,
+        `Rebuild or repair the recorded checkout so it is a readable Git worktree, then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
+      ),
+    };
   }
-  // A recorded checkout can be repointed at a different clone, where neither ref
-  // exists; the first one that resolves the target ref is the authority and the
-  // first readable one is only the fallback that names the refusal.
   const resolving = checkouts
     .map((path) => ({ path, target: deliveryRef(path, targetBranch, true) }))
     .find((candidate) => candidate.target !== undefined);
   const checkout = resolving?.path ?? checkouts[0]!;
   const target = resolving?.target;
   if (target === undefined) {
-    return refuse(
-      `Workflow '${workflowId}' cannot prove its delivery merge: the plan checkout ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`,
-      `Fetch the target branch into the plan checkout, then retry the close; a recorded merge commit cannot substitute for the missing target ref.`,
-    );
+    return {
+      violations: mergeUnproven(
+        `Workflow '${workflowId}' cannot prove its delivery merge: the ${wording.checkout} ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`,
+        `Fetch the target branch into the ${wording.checkout}, then retry the close${wording.targetTail}`,
+      ),
+    };
   }
+  return { checkout, target };
+}
+
+/** Route vocabulary for `deliveryCheckoutOf`'s refusals — see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f. */
+type DeliveryProofWording = Readonly<{
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — the route's own recovery step, named after "if the merge was a squash or rebase". */
+  record: string;
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — how the missing-target-ref recovery names the recorded checkout. */
+  checkout: string;
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — what that recovery says about a recorded commit substituting for the target ref. */
+  targetTail: string;
+}>;
+
+/** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — a recorded `refs/heads/<name>` or `refs/remotes/origin/<name>` anchor names the same branch Git spells short. */
+function shortBranchName(branch: string): string {
+  return branch.replace(/^refs\/(heads|remotes\/origin)\//, "");
+}
+
+function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
+  const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
+  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — the pure consultation proved both branch anchors; the merge member
+  // stays OPTIONAL, so the proof below reads it defensively.
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — a qualified `refs/heads/<name>` record names the same branch; strip
+  // once so every message and ref composition reads the short name.
+  const deliveryBranch = shortBranchName(deliveryBranchOf(branch) as string);
+  const targetBranch = shortBranchName(branch.target as string);
+  const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`;
+  const base = deliveryCheckoutOf(snapshot, workflowId, deliveryBranch, targetBranch, {
+    record,
+    checkout: "plan checkout",
+    targetTail: "; a recorded merge commit cannot substitute for the missing target ref.",
+  });
+  if ("violations" in base) return base.violations;
+  const { checkout, target } = base;
   // A merge commit or fast-forward: the delivery tip is itself upstream.
   const tip = deliveryRef(checkout, deliveryBranch, false);
   if (tip !== undefined && gitIsAncestor(checkout, tip, target)) return [];
@@ -1515,10 +1587,10 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   } else {
     const cherry = gitRead(checkout, ["cherry", target, tip]);
     if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) {
-      // `git cherry` omits merge commits, so an all-`-` result only proves a
-      // merge-free delivery history: content that exists only in a merge would
-      // not be reported. A merge-bearing history falls through to the recorded
-      // commit proof or the refusal below.
+      // `git cherry` omits merge commits, so an all-`-` result proves only a
+      // merge-free delivery history — see
+      // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f;
+      // a merge-bearing history falls through to the recorded-commit proof.
       const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
       if (merges === "") return [];
       unproven.push(
@@ -1556,9 +1628,64 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
     );
   }
 
-  return refuse(
+  return mergeUnproven(
     `Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`,
     `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof \u2014 record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`,
+  );
+}
+
+/**
+ * see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+ * the iteration delivery proof: the chain TOP of the delivery line is on
+ * the target. An iteration's delivery line is `branch.integration` — every
+ * landed layer sits on it — so one ancestry read answers "did the whole chain
+ * land" without the engine authoring a per-layer inventory it cannot derive.
+ *
+ * Only a merge/fast-forward proves it. The plan branch's patch-equivalence and
+ * recorded-commit proofs exist for provider squash/rebase, which no iteration
+ * declares (`delivery` accepts `compound|merge`, §1); a chain top that is not
+ * an ancestor is the honest answer that the chain is still open, so the close
+ * refuses while the iteration stays `running` and a partially merged stack
+ * discloses only what did land.
+ */
+function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
+  const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
+  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
+  const deliveryBranch = isNonEmptyString(branch.integration) ? shortBranchName(branch.integration) : undefined;
+  const targetBranch = isNonEmptyString(branch.target) ? shortBranchName(branch.target) : undefined;
+  const stopped = `record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`;
+  if (deliveryBranch === undefined || targetBranch === undefined) {
+    const missing = deliveryBranch === undefined ? "branch.integration" : "branch.target";
+    return mergeUnproven(
+      `Workflow '${workflowId}' cannot prove its delivery merge: the iteration records no ${missing}, so its delivery line has no tip to prove against a target`,
+      `A terminal close of an iteration proves its delivery line landed, which needs both branch anchors; if the close is genuinely unprovable, ${stopped}.`,
+    );
+  }
+  // The iteration's own checkout authority is its recorded integration
+  // checkout; plan-row worktrees are only the fallback once it is gone —
+  // routine post-Done cleanup removes them (see
+  // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+  const base = deliveryCheckoutOf(
+    snapshot,
+    workflowId,
+    deliveryBranch,
+    targetBranch,
+    {
+      record: `an unprovable close is recorded with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`,
+      checkout: "recorded checkout",
+      targetTail: `; a terminal close proves the chain top itself, so ${stopped}.`,
+    },
+    isNonEmptyString(snapshot.integration_worktree_path) ? [snapshot.integration_worktree_path] : [],
+  );
+  if ("violations" in base) return base.violations;
+  const { checkout, target } = base;
+  const tip = deliveryRef(checkout, deliveryBranch, false);
+  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) return [];
+  return mergeUnproven(
+    tip === undefined
+      ? `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} has no ref in ${checkout}, so its chain top cannot be shown to be on ${targetBranch} (${target})`
+      : `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} tip ${tip} is not on ${targetBranch} (${target}), so the iteration's landed chain is unproven`,
+    `Land ${deliveryBranch} on ${targetBranch} through the provider and fetch the target into the recorded checkout (the proof reads refs/remotes/origin/${targetBranch} first, then refs/heads/${targetBranch}; a fetched remote ref outranks a stale local head, while a local merge still proves the close where no remote ref exists), then retry the close; if the chain genuinely cannot land, ${stopped}.`,
   );
 }
 
@@ -1575,7 +1702,10 @@ export function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: s
     );
   }
   const branch = gitRead(anchors.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch !== anchors.targetBranch) {
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — the delivery proofs accept the same anchor qualified, so the guard
+  // reads the short name too — `rev-parse --abbrev-ref HEAD` never reports one.
+  if (branch !== shortBranchName(anchors.targetBranch)) {
     throw integrationDiverged(
       `plan ${planId} integration checkout ${anchors.worktreePath} is on ${branch || "a detached HEAD"}, not the recorded target ${anchors.targetBranch}`,
       { plan_id: planId, expected: anchors.targetBranch, actual: branch },

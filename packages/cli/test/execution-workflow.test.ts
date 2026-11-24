@@ -603,6 +603,38 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(phase.exitCode).toBe(1);
     expect(String(jsonOf(phase).code)).toBe("coordination.scope-mismatch");
     expect(existsSync(strayCompass)).toBe(false);
+
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // the close is writable once every row is Done, the compass closed and the
+    // recorded integration checkout is on its own branch.
+    const store = await openStore(fixture.context, "write");
+    try {
+      const row = store.db
+        .prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(ITERATION_ID, PLAN_ID) as { state_json: string };
+      store.db
+        .prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify({ ...(JSON.parse(row.state_json) as Record<string, unknown>), status: "Done" }), ITERATION_ID, PLAN_ID);
+    } finally {
+      store.close();
+    }
+    const compassRef = `iterations/${ITERATION_ID}/delivery-compass.md`;
+    writeText(
+      join(fixture.harnessDir, compassRef),
+      `---\niteration_id: ${ITERATION_ID}\nstart_date: 2026-09-22\nstatus: completed\niteration_base_branch: main\ntarget_branch: main\nplans: [${PLAN_ID}]\nend_date: 2026-09-30\n---\n\n# ${ITERATION_ID}\n`,
+    );
+    const close = runCli(
+      workflowVerbArgs("phase", fixture, bound, await workflowTokenOf(fixture, ITERATION_ID), "phase-close", [
+        "--phase",
+        "phase-3-close",
+        "--compass",
+        join(fixture.harnessDir, compassRef),
+      ]),
+      fixture,
+      identity,
+    );
+    if (close.exitCode !== 0) throw new Error(`close phase refused: ${close.stdout}${close.stderr}`);
+    expect((await storedHeader(fixture, ITERATION_ID)).phase).toBe("phase-3-close");
   });
 
   test("an iteration refuses an anchor its own type does not carry and records the ones it does", async () => {

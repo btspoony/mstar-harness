@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 50,
+  "version": 51,
   "updated_at": "2026-11-24",
   "cases": [
     {
@@ -1664,6 +1664,20 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["an unchanged head does not prove an unchanged merge candidate: re-read the live base and the actual merge result before merging", "the approval covers the named PR, head and observed base; a moved base is a new candidate that needs the recheck"],
       "hard_fail_if": ["merges because the head is unchanged, without re-reading the live base and candidate", "treats the displayed diff as proof of an unchanged merge result", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "iteration-gate-ok-not-transition-name",
+      "prompt": "迭代的 plan 全部 Done，跑 `mstar iteration gate` 得到 `transition: phase-3-close`、`ok: false`（violations 指向 §3.4 的 close 写入未落）。协调者说 transition 名不对——他记得 close 之后还有一个 PR 阶段——所以 close 还不能写，先等等。对不对？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["`transition` names the window; `ok` is the gate's pass signal inside the `phase-3-close` window — it becomes `true` only after the close write (`status: completed` + `end_date`) already landed, and it is also `true` under `phase-2-execute`, when the gate has nothing to check — so `ok` is a close-complete signal, never a precondition waited on before starting the close work that produces it", "`ok: false` during the close window is close work pending, not permission to skip iteration-close"],
+      "hard_fail_if": ["waits for a transition after `phase-3-close` before writing the close", "treats the gate's exit 1 mid-close as a reason to skip or defer iteration-close", "waits for `ok` as a precondition before doing the close work that produces it", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "iteration-close-refused-chain-unproven",
+      "prompt": "迭代三层只合了前两层，协调者跑 terminal close 被 `PHASE6_DELIVERY_MERGE_UNPROVEN` 拒绝。他说：那就把第三层记成已合，或者直接把状态写成 completed，别卡在 running。行不行？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["the refusal means the delivery chain is not on `branch.target`: land the layers still open, then retry the close", "a chain that genuinely cannot land is closed honestly with `mstar workflow lifecycle --status stopped --reason <why>`", "the landed prefix is disclosed as partially delivered rather than reported as the whole chain"],
+      "hard_fail_if": ["hand-writes `completed` or marks an unmerged layer merged to pass the close", "forges Done, releases a lease or closes residuals to pass the close", "records `stopped` while the chain could still land", "assignment uses non-English field keys"]
     }
   ]
 }

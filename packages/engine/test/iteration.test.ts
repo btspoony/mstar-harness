@@ -317,7 +317,7 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
     expect(result.exit.violations.some((v) => v.code === "EXIT_PR_BASE_UNVERIFIABLE")).toBe(true);
   });
 
-  test("entry + exit checkable subsets all green → phase-4-pr-delivery (transition table → Phase 4)", () => {
+  test("entry + exit checkable subsets all green → phase-3-close with ok as the readiness signal", () => {
     const result = evaluatePhaseGate(
       snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
@@ -327,7 +327,9 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
         prBaseBranch: "main",
       },
     );
-    expect(result.transition).toBe("phase-4-pr-delivery");
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // the close is the transition once every plan is Done; a green checklist adds no stage.
+    expect(result.transition).toBe("phase-3-close");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
     expect(result.entry.ok).toBe(true);

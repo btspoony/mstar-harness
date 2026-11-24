@@ -65,7 +65,7 @@ export type CompassDoc = {
 };
 
 /** Where the iteration stands per the Phase transition gates table. */
-export type PhaseTransition = "phase-2-execute" | "phase-3-close" | "phase-4-pr-delivery";
+export type PhaseTransition = "phase-2-execute" | "phase-3-close";
 
 /**
  * Git probe inputs for the §3.5 exit checklist. The engine never shells out
@@ -85,15 +85,22 @@ export type PhaseGateOptions = {
  * checkable subsets of the §3.1 / §3.5 checklists; `ok`/`violations` are the
  * gate verdict over the triggered transition:
  * - not all plans Done → `phase-2-execute` (keep executing; gate passes).
- * - all plans Done with missing checklist items → `phase-3-close` (Phase 3
- *   required; missing items listed in `violations`).
- * - all plans Done and both checklists clean → `phase-4-pr-delivery`.
+ * - all plans Done → `phase-3-close` (Phase 3 required; missing checklist
+ *   items listed in `violations`).
+ *
+ * `phase-3-close` is the transition from the moment every plan is Done.
+ * `transition` names the window; `ok` is the gate's pass signal inside the
+ * `phase-3-close` window — it becomes `true` only after the close write
+ * (`status: completed` + `end_date`) already landed, and it is also `true`
+ * under `phase-2-execute`, when the gate has nothing to check — so `ok` is a
+ * close-complete signal, never a precondition waited on before starting the
+ * close work that produces it.
  *
  * Note : during the Phase-3 window `ok` is false because the
  * §3.4 close items (`status: completed` + `end_date`) are only written at
- * the END of close — the exit checklist gates Phase 4, not the Phase-3
- * entry, so callers (e.g. the CLI, which exits 1) must treat that as "close
- * work pending", not "don't enter Phase 3".
+ * the END of close — the exit checklist gates the delivery chain, not the
+ * Phase-3 entry, so callers (e.g. the CLI, which exits 1) must treat that as
+ * "close work pending", not "don't enter Phase 3".
  */
 export type PhaseGateResult = {
   transition: PhaseTransition;
@@ -456,10 +463,7 @@ export function evaluatePhaseGate(
     });
   const entry: GateResult = { ok: entryViolations.length === 0, violations: entryViolations };
   const exit: GateResult = { ok: exitViolations.length === 0, violations: exitViolations };
-  let transition: PhaseTransition;
-  if (!allPlansDone) transition = "phase-2-execute";
-  else if (entry.ok && exit.ok) transition = "phase-4-pr-delivery";
-  else transition = "phase-3-close";
+  const transition: PhaseTransition = allPlansDone ? "phase-3-close" : "phase-2-execute";
   const gateBlocking = allPlansDone ? [...entryViolations, ...exitViolations] : [];
   return {
     transition,

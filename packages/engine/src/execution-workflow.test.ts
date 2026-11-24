@@ -56,7 +56,7 @@ import {
 import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
-import { prepareAmendmentComponent } from "../src/coordination.js";
+import { assertIntegrationCheckout, prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
@@ -488,11 +488,11 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const fixture = await workflowFixture("phase-skipped");
     const before = await workflowFootprint(fixture.context);
 
-    // The row is Todo, so the gate produces phase-2-execute: Phase 4 is skipped.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md — the row is Todo, so the gate produces phase-2-execute and the close request is refused.
     const skipped = await refusalOf(() =>
-      workflowMutation(fixture, "op-phase-4", {
+      workflowMutation(fixture, "op-phase-close", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: fixture.compassPath,
       }),
     );
@@ -506,7 +506,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const outsider = await refusalOf(() =>
       workflowMutation(fixture, "op-phase-foreign", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: foreign,
       }),
     );
@@ -520,9 +520,9 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       endDate: "2026-01-02",
     });
     const contradicted = await refusalOf(() =>
-      workflowMutation(fixture, "op-phase-4-again", {
+      workflowMutation(fixture, "op-phase-close-again", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: fixture.compassPath,
       }),
     );
@@ -530,12 +530,12 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 
-  test("phase-4 is accepted exactly when the gate's own evidence is complete", async () => {
-    const fixture = await workflowFixture("phase-4");
+  test("phase-3-close is accepted exactly when the gate's own evidence is complete", async () => {
+    const fixture = await workflowFixture("phase-close");
     setRowStatus(fixture.context, PLAN_ID, "Done");
-    // The §3.5 exit item 6 probe is the recorded PR identity (§4d): the DB
-    // authority holds no operator PR probe, so that evidence is what makes
-    // Phase 4 verifiable at all.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4d — the recorded PR identity is the only probe the DB authority holds,
+    // so that evidence is what makes the close verifiable at all.
     await workflowMutation(fixture, "op-delivery-4", { kind: "delivery", delivery: DELIVERY_TAIL });
     writeCompass(fixture.compassPath, {
       status: "completed",
@@ -544,13 +544,25 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       endDate: "2026-01-02",
     });
 
-    const receipt = await workflowMutation(fixture, "op-phase-4-ok", {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // every row Done with green checklists IS the close; a PR-stage request here is refused.
+    const skipped = await refusalOf(() =>
+      workflowMutation(fixture, "op-phase-execute-again", {
+        kind: "phase",
+        phase: "phase-2-execute",
+        compassPath: fixture.compassPath,
+      }),
+    );
+    expect(skipped.code).toBe("coordination.invalid-transition");
+    expect(skipped.details.gate).toBe("phase-3-close");
+
+    const receipt = await workflowMutation(fixture, "op-phase-close-ok", {
       kind: "phase",
-      phase: "phase-4-pr-delivery",
+      phase: "phase-3-close",
       compassPath: fixture.compassPath,
     });
     const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    expect(state.phase).toBe("phase-4-pr-delivery");
+    expect(state.phase).toBe("phase-3-close");
   });
 
   test("phase entry refuses an integration branch switched after preflight", async () => {
@@ -1283,8 +1295,214 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
+  test("an iteration close needs the delivery line tip on the target, and proves it after the merge", async () => {
+    const fixture = await workflowFixture("iteration-unmerged", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+    // every fixture starts the delivery line at the target tip, so ancestry
+    // would pass for free; this divergent, unmerged commit is the honest block.
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer the target never received\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    const tip = headOf(fixture.integrationPath);
+    expect(() => execFileSync("git", ["merge-base", "--is-ancestor", tip, "main"], { cwd: fixture.repoRoot, stdio: "ignore" })).toThrow();
+
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-iteration-unmerged-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    const stated = JSON.stringify(refused.details);
+    expect(stated).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on main`);
+    // The recovery names the remote-first target read and the local fallback:
+    // a fetched refs/remotes/origin/main outranks the local head, and the
+    // local merge below is what proves this exact shape — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    expect(stated).toContain(`Land ${INTEGRATION_BRANCH} on main through the provider`);
+    expect(stated).toContain("--status stopped");
+    // The iteration stays running: a refused close writes nothing (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The chain lands: the same close now proves the tip is on the target (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "land the stack", INTEGRATION_BRANCH], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-iteration-merged-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the stacked delivery landed",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+  test("a qualified refs/heads/ target anchor still resolves for the close proof", async () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — registration preserves the anchor string it is handed and the
+    // proof composes `refs/heads/<target>` itself, so a recorded
+    // `refs/heads/main` must name `main`, never `refs/heads/refs/heads/main`.
+    const fixture = await workflowFixture("iteration-qualified-target", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const anchored = await workflowMutation(fixture, "op-qualified-anchor", {
+      kind: "delivery-anchors",
+      branch: { target: "refs/heads/main" },
+      reason: "the target was recorded in its qualified ref form",
+    });
+    expect(anchored.replayed).toBe(false);
+    const closed = await workflowMutation(fixture, "op-qualified-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the qualified target resolved",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a nested refs/heads/ branch name normalizes exactly once, so an unrelated branch cannot satisfy the proof", async () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the close route strips the qualified record prefix ONCE; the ref
+    // resolution must not strip again, or a branch literally named
+    // `refs/heads/release` (ref refs/heads/refs/heads/release) collapses onto
+    // the unrelated branch `release`, and a chain that landed only there
+    // would close an iteration whose recorded target never received it.
+    const fixture = await workflowFixture("iteration-nested-qualified-target", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — both branches exist at the init commit, with divergent ancestry ahead.
+    runGit(["branch", "release"], fixture.repoRoot);
+    runGit(["branch", "refs/heads/release"], fixture.repoRoot);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the chain advances past the target: one landed layer on the delivery line.
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer the target never received\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    const tip = headOf(fixture.integrationPath);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the chain lands on the unrelated branch `release` ONLY (fast-forward);
+    // the recorded target `refs/heads/release` stays at the init commit.
+    runGit(["worktree", "add", "-q", join(fixture.repoRoot, "wt-release"), "release"], fixture.repoRoot);
+    runGit(["merge", "-q", "--ff-only", INTEGRATION_BRANCH], join(fixture.repoRoot, "wt-release"));
+    await workflowMutation(fixture, "op-nested-anchor", {
+      kind: "delivery-anchors",
+      branch: { target: "refs/heads/refs/heads/release" },
+      reason: "the target branch is literally named refs/heads/release",
+    });
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — landing on `release` alone must NOT satisfy the proof: the recorded
+    // target is the nested branch, and only a double strip would read it.
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-nested-unproven-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    expect(JSON.stringify(refused.details)).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on refs/heads/release`);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the refusal names the recorded target, never the collapsed short branch.
+    expect(JSON.stringify(refused.details)).not.toContain(`is not on release`);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — when the chain reaches the recorded nested branch too, the close proves
+    // itself against THAT ref: the resolution reads the intended branch.
+    runGit(["update-ref", "refs/heads/refs/heads/release", tip], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-nested-proven-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the chain landed on the recorded nested target",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
 
 
+  test("an iteration whose delivery line never advanced still closes", async () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+    // the fixture starts the integration branch at the target tip, so the
+    // proof is one ancestry read that succeeds.
+    const fixture = await workflowFixture("iteration-already-landed", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const closed = await workflowMutation(fixture, "op-iteration-landed-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "nothing to land",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a landed iteration closes on its recorded integration checkout once the plan worktrees are cleaned up", async () => {
+    const fixture = await workflowFixture("iteration-cleaned-plans", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // Land the delivery line on the target, then take away every plan-row
+    // worktree the snapshot still names — the documented post-Done cleanup
+    // state (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "land the stack", INTEGRATION_BRANCH], fixture.repoRoot);
+    runGit(["worktree", "remove", "--force", fixture.planPath], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-iteration-cleaned-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "landed; plan checkouts already cleaned",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a chain landed through separate per-layer merges closes with no integration merge on the target", async () => {
+    const fixture = await workflowFixture("iteration-separate-merges", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // Each layer is merged into the target on its own: the chain top is an
+    // ancestor while the target carries no merge of the delivery line itself
+    // (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    writeText(join(fixture.integrationPath, "layer-1.txt"), "layer one\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "layer one lands", INTEGRATION_BRANCH], fixture.repoRoot);
+    writeText(join(fixture.integrationPath, "layer-2.txt"), "layer two\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer two"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "layer two lands", INTEGRATION_BRANCH], fixture.repoRoot);
+    // One more target-side commit makes the chain top only a TRANSITIVE
+    // ancestor: a direct-parent-only proof would fail here — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    commitMain(fixture, "target work after the layers");
+    const closed = await workflowMutation(fixture, "op-iteration-separate-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "every layer landed on its own merge",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a close with no recorded checkout names a record step, and one with a dead path names the worktree rebuild", async () => {
+    const fixture = await workflowFixture("merge-no-checkout");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-nocheckout-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.metadata = { ...(state.metadata as Record<string, unknown>), worktree_path: join(fixture.repoRoot, "wt-gone") };
+      db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+    });
+    // A recorded but unreadable path keeps the worktree-rebuild recovery —
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    const deadPath = await refusalOf(() =>
+      workflowMutation(fixture, "op-nocheckout-dead", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(deadPath.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    expect(JSON.stringify(deadPath.details)).toContain("git worktree add");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const metadata = { ...(state.metadata as Record<string, unknown>) };
+      delete metadata.worktree_path;
+      state.metadata = metadata;
+      db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+    });
+    // Nothing recorded at all: the recovery is a record step, never a literal
+    // `git worktree add` against an empty candidates[0] — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    const empty = await refusalOf(() =>
+      workflowMutation(fixture, "op-nocheckout-empty", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(empty.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    const stated = JSON.stringify(empty.details);
+    expect(stated).toContain("metadata.worktree_path");
+    expect(stated).not.toContain("git worktree add");
+  });
 });
 
   test("a report-only close reads a stored legacy fulfilment block as history and needs no rewrite", async () => {
@@ -1867,9 +2085,9 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     });
     const before = await workflowFootprint(fixture.context);
 
-    // The gate of this lifecycle produces phase-4; the request asks for phase-2.
-    // The refusal keeps its own verdict AND names the exact conflicting field,
-    // its current value, the requested one and the one decision left.
+    // The gate of this lifecycle produces phase-3-close and the request asks
+    // for phase-2 — see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md;
+    // the refusal names the conflicting field, both values and the one decision left.
     const refused = await refusalOf(() =>
       workflowMutation(fixture, "op-conflict-phase", {
         kind: "phase",
@@ -1878,7 +2096,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
       }),
     );
     expect(refused.code).toBe("coordination.invalid-transition");
-    expect(refused.details.gate).toBe("phase-4-pr-delivery");
+    expect(refused.details.gate).toBe("phase-3-close");
     const recovery = recoveryOf(refused.details);
     expect(recovery.outcome).toBe("unresolved");
     expect(recovery.commitState).toBe("none");
@@ -1886,7 +2104,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(problems).toHaveLength(1);
     expect(problems[0]!.component).toBe("workflow-header");
     expect(problems[0]!.path).toBe("operation.phase");
-    expect(listOf(problems[0]!, "currentFacts")).toContain("phase-4-pr-delivery");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("phase-3-close");
     expect(String(problems[0]!.withheldEffect)).toContain("was not overwritten");
     expect(String(problems[0]!.needed)).toContain("phase-2-execute");
     expect(listOf(problems[0]!, "availableWork")).toContain("read the current state of workflow");
@@ -3878,6 +4096,21 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
       } as never),
     );
     expect(integrationRefusal.code).toBe("coordination.forbidden-field");
+  });
+
+  test("the integration-checkout guard accepts a qualified recorded anchor", () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the delivery proof accepts `refs/heads/<name>` anchors, so the
+    // checkout guard reads the same anchor's short name rather than refusing
+    // the spelling the proof takes.
+    const repo = realpathSync(mkdtempSync(join(ROOT, "integration-guard-")));
+    runGit(["init", "-q", "-b", "main"], repo);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repo);
+    const worktreePath = join(repo, "wt-int");
+    runGit(["worktree", "add", "-q", "-b", "iteration/wf-guard", worktreePath], repo);
+    const accepted = assertIntegrationCheckout({ targetBranch: "refs/heads/iteration/wf-guard", worktreePath }, PLAN_ID);
+    expect(accepted.clean).toBe(true);
+    expect(() => assertIntegrationCheckout({ targetBranch: "refs/heads/other-branch", worktreePath }, PLAN_ID)).toThrowError(/not the recorded target/);
   });
 
   test("an anchorless, empty or reason-less repair is refused with no mutation", async () => {
