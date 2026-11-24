@@ -1905,6 +1905,7 @@ async function replaceDerivedLaneBelow(
     state: string;
     created_at: string;
     resolved_by: unknown;
+    repair_state: string | null;
   };
   let recorded: { version: number; meta: CollaborationMeta; unsettled: OutboxRow[] };
   try {
@@ -1918,8 +1919,11 @@ async function replaceDerivedLaneBelow(
         ? []
         : (db
             .prepare(
-              "select operation_id, generation, project_key, state, created_at, resolved_by from remote_outbox " +
-                "where state not in ('confirmed','abandoned') order by created_at, operation_id",
+              // note: The linked repair's own state comes with the row: the refusal's route for one
+              // conflict depends on it (withdraw, dispatch, reconcile first, or follow its link).
+              "select operation_id, generation, project_key, state, created_at, resolved_by, " +
+                "(select r.state from remote_outbox r where r.operation_id = remote_outbox.resolved_by) as repair_state " +
+                "from remote_outbox where state not in ('confirmed','abandoned') order by created_at, operation_id",
             )
             .all() as OutboxRow[]).filter((row) => !conflictRepairSettled(db, row));
     recorded = {
@@ -1954,41 +1958,73 @@ async function replaceDerivedLaneBelow(
     // a dispatch issues only a permit, a resolve only enqueues a repair, and a receipt records
     // evidence, so none of them is called settling on its own.
     const cli = (verb: string): string => `mstar store collaboration remote ${verb}`;
-    const firstStep = (state: string): string =>
-      state === "enqueued"
+    const showCommand = (operation: string): string =>
+      "`" + cli("outbox-show") + " --harness <abs> --operation " + operation + "`";
+    const shown = (operation: string): string => "read it with " + showCommand(operation);
+    const resolved = (): string =>
+      "`" + cli("outbox-resolve") + " --harness <abs> --operation <conflicted-uuid> --input <file>`";
+    const dispatched = (operation: string): string =>
+      "`" + cli("outbox-dispatch") + " --harness <abs> --operation " + operation + " --input <file|->`";
+    const withdrawn = (operation: string): string =>
+      "`" + cli("outbox-abandon") + " --harness <abs> --operation " + operation + " --reason <text>`";
+    const evidenced = (): string =>
+      "`" + cli("outbox-receipt") + " --harness <abs> --input <file|->`";
+    const reconciled = (): string =>
+      "`" + cli("outbox-reconcile") + " --harness <abs> --input <file|->`";
+    // why: An abandon, a dispatch and a reconcile are admitted for different repair states, so the
+    // conflict line names only what moves the repair its own `resolvedBy` actually holds. A repair
+    // that is already `confirmed` never reaches this branch: the settle rule dropped its parent
+    // row, so an unblocked bind needs no line.
+    const conflictStep = (repairState: string | null): string => {
+      const follow = "follow the repair its resolvedBy names with " + showCommand("<repair-uuid>");
+      if (repairState === "enqueued") {
+        return shown("<uuid>") + "; its repair is enqueued, so " + follow + ", then either withdraw it with " +
+          withdrawn("<repair-uuid>") + " or dispatch it with " + dispatched("<repair-uuid>") +
+          " and record its confirming receipt with " + evidenced();
+      }
+      if (repairState === "unconfirmed") {
+        return shown("<uuid>") + "; its repair is unconfirmed, so " + follow +
+          ". An unconfirmed repair can be withdrawn only after its original host records a not-sent receipt: " +
+          "reconcile it with " + reconciled() + " - or record that not-sent receipt with " + evidenced() +
+          " - and only then withdraw it with " + withdrawn("<repair-uuid>");
+      }
+      if (repairState === "conflict") {
+        return shown("<uuid>") + "; its repair is itself a conflict, and an abandon of a conflict row is refused " +
+          "outright: follow that repair's own resolvedBy link with " + showCommand("<repair-uuid>") +
+          " and settle THAT conflict before preparing another repair";
+      }
+      return shown("<uuid>") + ". It carries no live repair, so prepare one with " + resolved() +
+        " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +
+        " and record its confirming receipt with " + evidenced();
+    };
+    const firstStep = (row: OutboxRow): string =>
+      row.state === "enqueued"
         ? "list it with `" + cli("outbox-pending") + " --harness <abs> --project <local-project-id>`, then dispatch an " +
           "ordinary intent with `" + cli("outbox-dispatch") + " --harness <abs> --operation <uuid>`; a reviewed resolution " +
           "needs its host fork observation through --input, so dispatch it as `" + cli("outbox-dispatch") +
           " --harness <abs> --operation <uuid> --input <file|->`. A dispatch issues only a send permit: record what the " +
           "send observed with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->`, and a row proven unsent " +
           "can instead be abandoned with `" + cli("outbox-abandon") + " --harness <abs> --operation <uuid> --reason <text>`"
-        : state === "unconfirmed"
+        : row.state === "unconfirmed"
           ? "read it with `" + cli("outbox-show") + " --harness <abs> --operation <uuid>`, then record that attempt's " +
             "evidence with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->` or `" + cli("outbox-reconcile") +
             " --harness <abs> --input <file|->`"
-          : "read it with `" + cli("outbox-show") + " --harness <abs> --operation <uuid>`. If it already carries a " +
-            "repair, `" + cli("outbox-resolve") + "` refuses until that repair is withdrawn: follow its resolved_by " +
-            "operation id with `" + cli("outbox-show") + " --harness <abs> --operation <repair-uuid>`, and withdraw that " +
-            "repair with `" + cli("outbox-abandon") + " --harness <abs> --operation <repair-uuid> --reason <text>` before " +
-            "preparing another. With no live repair, prepare one with `" + cli("outbox-resolve") +
-            " --harness <abs> --operation <conflicted-uuid> --input <file>` - a resolve only enqueues the repair - then " +
-            "dispatch it with `" + cli("outbox-dispatch") + " --harness <abs> --operation <new-uuid> --input <file|->` and " +
-            "record its confirming receipt with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->`";
+          : conflictStep(row.repair_state);
     const lines: string[] = [];
     const named = new Set<string>();
     for (const row of recorded.unsettled) {
       if (named.has(row.state)) continue;
       named.add(row.state);
-      lines.push(`- state ${row.state}: oldest operation ${row.operation_id}; ${firstStep(row.state)}`);
+      lines.push(`- state ${row.state}: oldest operation ${row.operation_id}; ${firstStep(row)}`);
     }
     const oldest = recorded.unsettled[0]!;
     throw new StoreError(
       "remote.effect-pending",
       `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); such an
         intent may already have taken effect at the provider, so the cache is not replaced. Settle every state
-        listed below, then rerun the same bind. The lines are in row-age order, which is not a dispatch order: a
-        newer unconfirmed or conflict intent blocks an older dispatch, and a blocked dispatch names the intent
-        that blocks it:
+        listed below, then rerun the same bind. The lines are in row-age order, which is not a dispatch order:
+        dispatch blocking is scoped to the same generation and project and exempts a repair's own ancestor, so a
+        newer intent does not always block an older dispatch; a blocked dispatch names the intent that blocks it:
         ${lines.join("\n        ")}
         Nothing was replaced.`,
       { oldestOperationId: oldest.operation_id, unsettledCount: recorded.unsettled.length },
@@ -3963,6 +3999,10 @@ async function withWriteLane<T>(
       // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
       // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
+      // invariant: The recovery surface is proved on the LOCKED writer too, in the same critical
+      // section that installs it: a settlement write never runs over cache bytes whose own
+      // objects can reach a table the surface does not serve.
+      if (recovery) assertRecoverySurfaceIsolated(db);
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
       const effect = apply({
@@ -4123,13 +4163,23 @@ function recoverySurfaceGuard(sql: string): void {
 }
 
 /**
- * invariant: The recovery surface is installed only over cache bytes whose own database objects
- * cannot reach a table it does not serve. The cache is derived state and may be foreign, so the
- * check runs on sqlite_master, not on the text of whatever statement a caller later writes: a
- * trigger on a recovery table is refused (it could write a domain table from an outbox write),
- * and so is a view that names a table outside the recovery allowlist, or a trigger that touches
- * the surface and names one. Triggers that only read domain tables stay legal: the surface never
- * writes those tables, so they never fire.
+ * invariant: The recovery surface is installed only over cache bytes whose own objects cannot
+ * reach a table it does not serve, and both admissions prove it before they install the wrapper:
+ * the recovery open on its read handle, the outbox recovery write lane on its locked writer.
+ *
+ * note: What this proves, exactly - no more. With `recoverySurfaceGuard` it refuses a statement
+ * naming a domain table, a statement form that could escape the surface, and a statement over no
+ * recovery-surface table; and it refuses to install at all when a recovery table carries a
+ * trigger, or when a trigger that touches the surface or a view names a table outside the
+ * recovery allowlist. Triggers that only read domain tables stay legal: the surface never writes
+ * those tables, so they never fire.
+ *
+ * why the residue is stated here: this is NOT a database-level sandbox, and no reader may take it
+ * for one. Indirect access is not proven. A view's dependency chain is not resolved, so an
+ * INSTEAD OF trigger on a view whose own body spells no domain table passes. A foreign key whose
+ * target this build's key layout does not validate is not checked, so an unvalidated inbound edge
+ * from a domain table into the surface is not excluded. The guarantee covers the objects this
+ * build enumerates in `sqlite_master`, over the statements its own verbs write.
  */
 function assertRecoverySurfaceIsolated(db: StoreDb): void {
   const tables: string[] = [];

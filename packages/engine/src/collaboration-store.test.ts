@@ -9973,6 +9973,53 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("remote_outbox");
   }, 30_000);
 
+  test("the recovery write lane refuses a cache carrying a trigger on a recovery table", async () => {
+    const fixture = remoteFixture("remote-v3-guard-trigger-write");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const frozenId = "00000000-0000-4000-8000-000000000a01";
+    // note: A real frozen request, so the public settlement verb would succeed on these bytes if the
+    // write lane installed the surface anyway: the refusal is the lane's own, not a payload failure.
+    const request = intentRequest(fixture, commit, frozenId);
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', " +
+          "'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', '2026-11-21T00:00:00.000Z', '{}')",
+      ).run(generation, SELECTED_PROJECT.localProjectId, commit);
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
+          "values (?, ?, ?, 'seed-hash', ?, 'enqueued', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(frozenId, generation, SELECTED_PROJECT.localProjectId, JSON.stringify(request));
+      // note: The trigger fires on the settlement write this case performs (an abandon is an update),
+      // so a write lane that installed the surface unproved would reach the domain table.
+      db.exec(
+        "create trigger outbox_mirror after update on remote_outbox begin " +
+          "update issues set revision = revision; end;",
+      );
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    // invariant: The settlement write refuses exactly as the recovery read does: the surface is never
+    // installed, inside the lock, over bytes whose own trigger can reach a domain table.
+    const refused = await refusalOf(() => abandonRemoteIntent(context, { operationId: frozenId, reason: "settle it" }));
+    expect(refused.code).toBe("collaboration.upgrade-required");
+    expect(refused.message).toContain("outbox_mirror");
+    expect(refused.message).toContain("remote_outbox");
+    // invariant: Nothing was written: the row is still enqueued and the ledger is unchanged.
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: frozenId, state: "enqueued" }),
+    );
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+  }, 30_000);
+
   test("the recovery guard allows the scalar replace() function and still refuses replace into", async () => {
     const fixture = remoteFixture("remote-v3-guard-replace");
     const commit = fixture.publish(fixture.payload());
@@ -10033,21 +10080,126 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->");
     // note: An enqueued reviewed resolution is dispatched WITH its fork observation input.
     expect(refused.message).toContain("outbox-dispatch --harness <abs> --operation <uuid> --input <file|->");
-    // note: A resolve only enqueues; dispatch and a confirming receipt follow. While a repair is
-    // live the same verb refuses, so the line points at the show and abandon route instead.
+    // note: A resolve only enqueues; dispatch and a confirming receipt follow. This conflict carries
+    // no live repair, so no withdraw route is named for a repair here.
     expect(refused.message).toContain("outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>");
     expect(refused.message).toContain("only enqueues the repair");
     expect(refused.message).toContain("record its confirming receipt");
-    expect(refused.message).toContain("refuses until that repair is withdrawn");
-    // note: An unsent enqueued row and a live repair each name their shortest honest exit.
+    expect(refused.message).toContain("It carries no live repair");
+    // invariant: Dispatch blocking is scoped, not age-ordered: the same generation and project, and
+    // a repair's own ancestor is exempt.
+    expect(refused.message).toContain("dispatch blocking is scoped to the same generation and project");
+    expect(refused.message).toContain("exempts a repair's own ancestor");
+    // note: An unsent enqueued row names its shortest honest exit; nothing names an abandon for a
+    // conflict row.
     expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <uuid> --reason <text>");
-    expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <repair-uuid> --reason <text>");
+    expect(refused.message).not.toContain("--operation <repair-uuid> --reason <text>");
     // note: No age-order promise: every listed state must be settled, and a blocked dispatch
     // names the intent that blocks it.
     expect(refused.message).not.toContain("oldest operation first");
     expect(refused.message).toContain("Settle every state");
     expect(refused.message).toContain("blocked dispatch names the intent");
   }, 30_000);
+
+  /**
+   * note: One v3 remote cache holding a conflicted intent and, in the state given, the repair its
+   * own `resolved_by` names: the shape an operator meets after `outbox-resolve`.
+   */
+  function seedConflictRepair(
+    location: CollaborationLocation,
+    conflictId: string,
+    repairId: string,
+    repairState: RemoteIntentState,
+  ): void {
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.exec(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
+          "'seed-commit', 'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}');" +
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "created_at, updated_at, resolves) values " +
+          "('" + repairId + "', 1, 'seed-project', 'seed-hash', '{}', '" + repairState + "', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', '" + conflictId + "'), " +
+          "('" + conflictId + "', 1, 'seed-project', 'seed-hash', '{}', 'conflict', " +
+          "'2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', null);" +
+          "update remote_outbox set resolved_by = '" + repairId + "' where operation_id = '" + conflictId + "';",
+      );
+    } finally {
+      db.close();
+    }
+  }
+
+  test("the conflict refusal routes by the state of the repair its resolvedBy names", async () => {
+    const cases: Array<{
+      repairState: RemoteIntentState;
+      exact: string[];
+      order?: [string, string];
+      absent?: string;
+    }> = [
+      {
+        // note: An enqueued repair may be withdrawn, or dispatched with the fork observation its
+        // review requires.
+        repairState: "enqueued",
+        exact: [
+          "its repair is enqueued, so follow the repair its resolvedBy names with `mstar store collaboration remote " +
+            "outbox-show --harness <abs> --operation <repair-uuid>`",
+          "then either withdraw it with `mstar store collaboration remote outbox-abandon --harness <abs> --operation " +
+            "<repair-uuid> --reason <text>` or dispatch it with `mstar store collaboration remote outbox-dispatch " +
+            "--harness <abs> --operation <repair-uuid> --input <file|->`",
+        ],
+      },
+      {
+        // note: An unconfirmed repair is withdrawable only behind the original host's not-sent receipt,
+        // so the reconcile is named before the abandon.
+        repairState: "unconfirmed",
+        exact: [
+          "its repair is unconfirmed, so follow the repair its resolvedBy names with `mstar store collaboration " +
+            "remote outbox-show --harness <abs> --operation <repair-uuid>`",
+          "An unconfirmed repair can be withdrawn only after its original host records a not-sent receipt: " +
+            "reconcile it with `mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->`",
+          "- and only then withdraw it with `mstar store collaboration remote outbox-abandon --harness <abs> " +
+            "--operation <repair-uuid> --reason <text>`",
+        ],
+        order: ["outbox-reconcile --harness <abs> --input <file|->", "--operation <repair-uuid> --reason <text>"],
+      },
+      {
+        // note: A conflict repair is not withdrawable at all: its own resolvedBy link is the route.
+        repairState: "conflict",
+        exact: [
+          "its repair is itself a conflict, and an abandon of a conflict row is refused outright: follow that " +
+            "repair's own resolvedBy link with `mstar store collaboration remote outbox-show --harness <abs> " +
+            "--operation <repair-uuid>`",
+          "and settle THAT conflict before preparing another repair",
+        ],
+        absent: "--operation <repair-uuid> --reason <text>",
+      },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const fixture = remoteFixture("remote-v3-repair-state-" + entry.repairState);
+      const commit = fixture.publish(fixture.payload());
+      const generation = Number(fixture.payload().generation);
+      const context = contextAt(fixture.repo);
+      const location = locationAt(fixture.repo);
+      const conflictId = "00000000-0000-4000-8000-000000000b0" + String(index);
+      const repairId = "00000000-0000-4000-8000-000000000c0" + String(index);
+      seedConflictRepair(location, conflictId, repairId, entry.repairState);
+      const recorded = recordedGeneration(location);
+      writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+      const refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+      );
+      expect(refused.code).toBe("remote.effect-pending");
+      expect(refused.message).toContain("state conflict: oldest operation " + conflictId);
+      for (const exact of entry.exact) expect(refused.message).toContain(exact);
+      if (entry.order !== undefined) {
+        expect(refused.message.indexOf(entry.order[0])).toBeLessThan(refused.message.indexOf(entry.order[1]));
+      }
+      if (entry.absent !== undefined) expect(refused.message).not.toContain(entry.absent);
+    }
+  }, 90_000);
 
   test("the recovery surface guard is fail closed over its allowlist", async () => {
     const fixture = remoteFixture("remote-v3-guard-closed");
