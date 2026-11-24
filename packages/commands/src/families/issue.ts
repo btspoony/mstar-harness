@@ -337,6 +337,15 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         if (toAuthority === undefined) {
           throw unsupportedMove("--discard", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
         }
+        // invariant: The handoff flags belong to the staged exchange, which a discard never runs:
+        // `--discard` releases the row this checkout holds and neither reads nor emits a document,
+        // so admitting either flag here would drop it silently beside a completed discard.
+        if (input.input !== undefined) {
+          throw unsupportedMove("--input", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        }
+        if (input.out !== undefined) {
+          throw unsupportedMove("--out", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        }
         if (expectStore !== undefined) {
           const error = new Error(
             "expectStore is not a --discard input: a discard restores the source record and never compares the lane " +

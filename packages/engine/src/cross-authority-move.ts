@@ -971,13 +971,29 @@ function assertObservedBase(observed: ObservedMoveSubject, request: MoveRequest)
 }
 
 /**
+ * invariant: A remote lane's store revision is its observation sum over the ADMITTED generation
+ * only — the number `issue list` reports there, read from the same `remote_bindings` join the view
+ * serves. Rows a superseded selector generation left behind are not this cache's evidence, so
+ * counting them would name a base the caller never read and refuse every move after a rollover.
+ */
+function observedStoreRevision(db: StoreDb): number {
+  const row = db
+    .prepare(
+      "select coalesce(sum(o.revision), 0) as n " +
+        "from remote_bindings b left join remote_observations o on o.generation = b.generation and o.project_key = b.project_key " +
+        "where b.generation = (select max(generation) from remote_bindings)",
+    )
+    .get() as { n?: unknown };
+  return typeof row.n === "number" ? row.n : 0;
+}
+
+/**
  * invariant: The observation the copy was frozen from is re-read inside the write transaction that
  * records the row: an observation replaced in between is a base this move never saw, and freezing it
  * would carry bytes the caller's revision does not describe.
  */
 function assertObservationUnchanged(db: StoreDb, sampledStoreRevision: number): void {
-  const row = db.prepare("select coalesce(sum(revision), 0) as n from remote_observations").get() as { n?: unknown };
-  const current = typeof row.n === "number" ? row.n : 0;
+  const current = observedStoreRevision(db);
   if (current === sampledStoreRevision) return;
   throw new StoreError(
     "collaboration.observation-stale",
@@ -995,8 +1011,7 @@ function assertObservationUnchanged(db: StoreDb, sampledStoreRevision: number): 
  */
 function assertRemoteStoreBase(db: StoreDb, request: MoveRequest): void {
   if (request.expectedStoreRevision === undefined) return;
-  const row = db.prepare("select coalesce(sum(revision), 0) as n from remote_observations").get() as { n?: unknown };
-  const current = typeof row.n === "number" ? row.n : 0;
+  const current = observedStoreRevision(db);
   if (request.expectedStoreRevision === current) return;
   throw issueRefusal(
     "milestone.revision-conflict",
@@ -1772,14 +1787,48 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
       },
     );
   }
+  if (role === "source" && own.mode === "remote" && row.phase !== "discarded") {
+    // invariant: The ledger row reaches `switched` only when the move command next runs, but the
+    // provider's tombstone is durable the moment `outbox-receipt` records its confirmation. Between
+    // those two commits this row still reads `verified`, and discarding it would strand the record:
+    // the provider record is already obsolete and the destination's admission is the only remaining
+    // copy. An unsettled intent is refused the same way: abandoning the move while the provider may
+    // still apply the tombstone would open the same window.
+    const tombstone = await readOwnLane(context, (db) =>
+      db
+        .prepare("select state from remote_outbox where operation_id = ?")
+        .get(remoteMoveOperationId(request.operationId, "obsolete")) as { state?: unknown } | undefined,
+    );
+    if (tombstone !== undefined && tombstone.state !== "abandoned") {
+      const state = typeof tombstone.state === "string" ? tombstone.state : "?";
+      throw new StoreError(
+        "collaboration.move-phase-invalid",
+        `Move ${request.operationId} froze its provider tombstone and that intent is ${state}: the provider record is ` +
+          `already closing and the destination's admission is the only remaining copy, so abandoning this move here ` +
+          `would strand the record. Nothing was modified.`,
+        {
+          operation_id: request.operationId,
+          phase: row.phase,
+          tombstone_state: state,
+          recovery:
+            state === "confirmed"
+              ? "Finish the move instead: reissue it with the destination's `staged` handoff so this side emits its " +
+                "`switch` document, then admit with that document in the destination checkout."
+              : `Settle the tombstone intent first: abandon it with \`mstar store collaboration remote outbox-abandon ` +
+                `--harness <abs> --operation ${remoteMoveOperationId(request.operationId, "obsolete")} --reason <text>\` ` +
+                `when nothing was sent, otherwise dispatch it and record the provider's receipt; then reissue this ` +
+                `--discard before the destination admits the record.`,
+        },
+      );
+    }
+  }
   if (row.phase !== "discarded") {
     await writeOwnLaneRow(context, (db) => {
+      // invariant: The `discarded` row STAYS as the cancelled record: deleting it would re-open the
+      // operation id, and a saved `request` handoff replayed afterwards would stage a fresh row the
+      // source already abandoned. `writeDestinationRow` refuses an existing `discarded` row, so the
+      // durable claim is what makes a replayed handoff refuse instead of enqueue a provider issue.
       advanceRowTo(db, request.operationId, role, "discarded");
-      // note: a destination's staging is deleted once claimed, exactly as the one-checkout discard does,
-      // so a re-stage of this operation id cannot be admitted afterwards.
-      if (role === "destination") {
-        db.prepare("delete from issue_moves where operation_id = ? and role = 'destination'").run(request.operationId);
-      }
     });
   }
   return {
@@ -2948,8 +2997,11 @@ async function writeDestinationRow(
       return;
     }
     // note: the run that writes the first row is this side's staging run, so it alone compares the
-    // caller's store base; a local lane reads it from its ledger, a remote lane from its observation sum.
-    if (local) assertMoveBase(db, request);
+    // caller's store base; a local lane reads it from its ledger, a remote lane from its observation
+    // sum. The destination lane holds no member of the SOURCE issue, so only its own lane revision is
+    // compared here: the record's `--expect` is the source's CAS, which the source itself compared
+    // when it staged the handoff this document carries.
+    if (local) assertMoveBase(db, { ...request, expectedRevision: undefined });
     else assertRemoteStoreBase(db, request);
     guard?.(db);
     recordIssueMove(db, {

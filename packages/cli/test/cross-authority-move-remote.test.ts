@@ -1181,11 +1181,15 @@ describe("cross-authority move through two checkouts", () => {
         "--out", requestPath,
       ]).data).toMatchObject({ phase: "staged" });
       const stagedPath = destination.outPath("staged");
+      // invariant: the destination stage accepts the record's --expect even though its own lane
+      // holds no member of the source issue: the source's CAS was proved when the handoff was
+      // frozen, so only the destination's own store revision is compared here.
       expect(destination.runJson([
         "issue", "move",
         "--id", FIXTURE_REF,
         "--to-authority", fixture.localRepoKey,
         "--payload", payload,
+        "--expect", "2",
         "--expect-store", "0",
         "--actor", "project-manager",
         "--operation-id", MOVE_OPERATION,
@@ -1206,6 +1210,22 @@ describe("cross-authority move through two checkouts", () => {
       expect(destinationDiscard.result.stderr).toBe("");
       expect(destinationDiscard.exitCode).toBe(0);
       expect(destinationDiscard.data).toMatchObject({ phase: "discarded" });
+
+      // invariant: the discard leaves a durable `discarded` row, so the saved `request` handoff
+      // replayed afterwards is refused instead of staging a fresh row — the provider issue a
+      // re-created staging would enqueue is exactly what the discard cancelled.
+      const replayedStage = destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+      ]);
+      expect(replayedStage.exitCode).toBe(1);
+      expect(replayedStage.code).toBe("collaboration.move-phase-invalid");
 
       const sourceDiscard = source.runJson([
         "issue", "move",
@@ -1240,4 +1260,289 @@ describe("cross-authority move through two checkouts", () => {
       for (const created of fixtures.splice(0)) created.dispose();
     }
   }, 240_000);
+  test("--discard refuses the exchange's handoff flags instead of dropping them", () => {
+    // invariant: `--discard` releases the row this checkout holds; it never reads or emits a
+    // document, so `--input` and `--out` refuse by code before anything mutates — a discarded
+    // move beside a silently dropped flag is exactly the misreport this refusal prevents.
+    const fixture = host("discard-handoff-flags");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const payload = JSON.stringify({ projectId: "_default", reason: "leave the provider project" });
+      const requestPath = source.outPath("request");
+      expect(source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--out", requestPath,
+      ]).data).toMatchObject({ phase: "staged" });
+
+      const withOut = source.outPath("discarded-out");
+      const refusedOut = source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--discard",
+        "--out", withOut,
+      ]);
+      expect(refusedOut.exitCode).toBe(1);
+      expect(refusedOut.code).toBe("issue.scope-refused");
+      expect(existsSync(withOut)).toBe(false);
+
+      const refusedInput = source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--discard",
+        "--input", requestPath,
+      ]);
+      expect(refusedInput.exitCode).toBe(1);
+      expect(refusedInput.code).toBe("issue.scope-refused");
+
+      // invariant: both refusals mutated nothing, so the same --discard still releases the move.
+      const discarded = source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--discard",
+      ]);
+      expect(discarded.exitCode).toBe(0);
+      expect(discarded.data).toMatchObject({ phase: "discarded" });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a confirmed provider tombstone refuses the source discard, and the move still completes", () => {
+    // invariant: `outbox-receipt` commits the tombstone before the ledger row reaches `switched`,
+    // so between those commits the row still reads `verified`. Discarding in that window would
+    // strand the record: the provider record is already obsolete and the destination's admission
+    // is the only remaining copy.
+    const fixture = host("discard-after-tombstone");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const destination = localHost(fixture);
+      const payload = JSON.stringify({ projectId: "_default", reason: "leave the provider project" });
+      const moveArgs = [
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+      ];
+
+      const requestPath = source.outPath("request");
+      expect(source.runJson([
+        ...moveArgs, "--expect-store", "1", "--out", requestPath,
+      ]).data).toMatchObject({ phase: "staged" });
+      const stagedPath = destination.outPath("staged");
+      expect(destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+        "--out", stagedPath,
+      ]).data).toMatchObject({ phase: "verified" });
+
+      // note: the tombstone is enqueued, dispatched and CONFIRMED before the discard is tried.
+      const tombstone = source.runJson([...moveArgs, "--expect-store", "1", "--input", stagedPath]);
+      expect(tombstone.exitCode).toBe(1);
+      expect(tombstone.code).toBe("remote.effect-pending");
+      const tombstoneDetails = refusalDetails(tombstone);
+      const operation = String(tombstoneDetails.operationId);
+      const dispatch = source.runJson([...REMOTE, "outbox-dispatch", "--harness", source.harness, "--operation", operation]);
+      expect(dispatch.exitCode).toBe(0);
+      const receipt = fixture.send(dispatch.data.permit as never);
+      const recorded = source.runJson([
+        ...REMOTE, "outbox-receipt", "--harness", source.harness,
+        "--input", source.writeJson("receipt", receipt),
+      ]);
+      expect(recorded.exitCode).toBe(0);
+      expect(recorded.data.state).toBe("confirmed");
+
+      // invariant: with the tombstone confirmed the provider record is already obsolete, so the
+      // discard refuses and names the move completion as the recovery.
+      const refused = source.runJson([...moveArgs, "--discard"]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.code).toBe("collaboration.move-phase-invalid");
+      expect(refused.message).toContain("tombstone");
+
+      // invariant: the move itself is unharmed: the source emits `switch`, the destination admits,
+      // and the source publishes — the only copy the tombstone left is the admitted one.
+      const switchPath = source.outPath("switch");
+      expect(source.runJson([
+        ...moveArgs, "--expect-store", "1", "--input", stagedPath, "--out", switchPath,
+      ]).data).toMatchObject({ phase: "switched", side: "source" });
+      const admissionPath = destination.outPath("admission");
+      expect(destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", switchPath,
+        "--out", admissionPath,
+      ]).data).toMatchObject({ phase: "switched", side: "destination" });
+      expect(source.runJson([
+        ...moveArgs, "--expect-store", "1", "--input", admissionPath,
+      ]).data).toMatchObject({ phase: "published", side: "source" });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a remote move after a selector rollover reads only the admitted generation's observations", () => {
+    // invariant: the observation sum a move's bases name is the admitted generation's — the rows a
+    // superseded generation left behind are not this cache's evidence, so a predecessor revision
+    // must not refuse a move whose bases the live view reported.
+    const fixture = host("rollover-move");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const destination = localHost(fixture);
+      const payload = JSON.stringify({ projectId: "_default", reason: "leave the provider project" });
+
+      // note: a reviewed successor generation supersedes the bound one; the checkout rebinds and
+      // re-observes, leaving the predecessor's observation rows in the same lane.
+      fixture.publish(2);
+      expect(source.bind(fixture.verify()).exitCode).toBe(0);
+      expect(source.observe(fixture.observe(REMOTE_PROJECT, 0)).exitCode).toBe(0);
+
+      const requestPath = source.outPath("request");
+      const staged = source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--out", requestPath,
+      ]);
+      expect(staged.result.stderr).toBe("");
+      expect(staged.exitCode).toBe(0);
+      expect(staged.data).toMatchObject({ phase: "staged", side: "source" });
+
+      const stagedPath = destination.outPath("staged");
+      expect(destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", payload,
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+        "--out", stagedPath,
+      ]).data).toMatchObject({ phase: "verified", side: "destination" });
+      expect(generation(source)).toMatchObject({ state: "bound", generation: 2 });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a remote destination stage after a selector rollover compares the admitted generation", () => {
+    // invariant: the remote destination's --expect-store names the same generation-scoped sum the
+    // view serves; a sum over every retained observation row would refuse a correct base after a
+    // successor selector bound.
+    const fixture = host("rollover-destination");
+    try {
+      fixture.publish(1);
+      const destination = remoteHost(fixture, "remote-destination");
+      const source = localHost(fixture, "local-source");
+      const remoteKey = fixture.repoKey;
+      const payload = JSON.stringify({ projectId: REMOTE_PROJECT.localProjectId, reason: "cross to the provider" });
+
+      const seeded = source.runJson([
+        "issue", "add",
+        "--payload", JSON.stringify({
+          projectId: "_default",
+          title: "Local finding that leaves",
+          kind: "bug",
+          severity: "high",
+          impact: "A local record must carry its reference to a remote authority.",
+          acceptance: "The provider holds the same reference after the move.",
+          sourceIdentity: "review/local-move",
+          rootCauseKey: "local.move.root",
+          acceptanceKey: "local.move.accept",
+          occurrenceKey: "occ-local-move",
+          sourceKind: "test",
+          location: "packages/cli/test/cross-authority-move-remote.test.ts",
+          observedBehavior: "The record left its local authority.",
+          evidence: ["controlled host fixture"],
+          discoveredAt: AT,
+        }),
+        "--actor", "project-manager",
+        "--operation-id", "33333333-3333-4333-8333-333333333333",
+      ]);
+      expect(seeded.exitCode).toBe(0);
+      const localId = String(seeded.data.issueId);
+      const localRef = String(source.runJson(["issue", "show", "--id", localId, "--harness", source.harness]).data.issueRef);
+      const storeRevision = String(source.runJson(["issue", "list", "--harness", source.harness]).data.storeRevision);
+
+      const requestPath = source.outPath("request");
+      expect(source.runJson([
+        "issue", "move",
+        "--id", localId,
+        "--to-authority", remoteKey,
+        "--payload", payload,
+        "--expect", "1",
+        "--expect-store", storeRevision,
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--out", requestPath,
+      ]).data).toMatchObject({ phase: "staged" });
+
+      // note: the rollover lands between the source's request and the destination's stage; the
+      // re-observed lane keeps its predecessor's rows in the same cache.
+      fixture.publish(2);
+      expect(destination.bind(fixture.verify()).exitCode).toBe(0);
+      expect(destination.observe(fixture.observe(REMOTE_PROJECT, 0)).exitCode).toBe(0);
+
+      const pending = destination.runJson([
+        "issue", "move",
+        "--id", localRef,
+        "--to-authority", remoteKey,
+        "--payload", payload,
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+      ]);
+      // invariant: the stage accepted the admitted generation's base — `remote.effect-pending` is
+      // the frozen create intent answering, never a revision conflict.
+      expect(pending.exitCode).toBe(1);
+      expect(pending.code).toBe("remote.effect-pending");
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
 });
