@@ -66,7 +66,7 @@ Leftover `unmet` acceptance criteria are separate tally increments, not findings
 | PR context | Head and fix site |
 | --- | --- |
 | Iteration PR | PR head = that PR's layer ref `iteration-stack/<iteration-id>/sNN`; edit and commit in a fix feature worktree, then that PR's single pusher merges the fix into its layer ref and the coordinator propagates the integration update to affected upper layers per `mstar-iteration/references/pr-stack.md`「Propagation」. Follow `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」. |
-| Iteration aggregate PR (Rollout) | PR head = `branch.integration`; there is no layer ref, so the fix is repaired on `branch.integration` in the integration worktree and merged serially by the coordinator, per `mstar-iteration/references/pr-stack.md`「Rollout」; no layer ref is created and the PR is never reinterpreted as a stack. |
+| Iteration aggregate PR (Rollout) | PR head = `branch.integration`; there is no layer ref. An ordinary fix is edited and reviewed in a fix feature worktree based on `branch.integration`, then merged serially by the coordinator in the integration worktree; conflict repair is the only work done in that checkout. No layer ref is created and the PR is never reinterpreted as a stack; follow `mstar-iteration/references/pr-stack.md`「Rollout」. |
 | Standalone `development` plan | PR head = registered `branch.work`; commits land in a dedicated worktree checked out on that branch, never the primary checkout. |
 
 The iteration merge ritual is not generalized to standalone plans.
