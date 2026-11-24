@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { getCommandDefinitions } from "@mstar-harness/commands";
 import { createMcpEffects } from "../src/mcp/effects.js";
+import { createContextResolver } from "../src/mcp/stdio.js";
 import { startBounded } from "../src/browser-opener.js";
 
 function fakeChild(): ChildProcess {
@@ -98,5 +101,23 @@ describe("mcp process effects", () => {
       signal: new AbortController().signal,
     }).catch((reason: unknown) => reason);
     expect(error).toMatchObject({ code: "process.not-found", executable: "mstar-no-such-executable-for-test" });
+  });
+
+  test("a vanished declared workspace names the MCP reconnection, not a directory change", async () => {
+    // see packages/cli/src/mcp/stdio.ts
+    // why: the server runs every call from the `--workspace` path it was
+    // launched with, so a retry on the same connection re-enters the vanished
+    // directory. The gate's recovery therefore has to name the reconnection —
+    // "change directory and rerun" only repairs the CLI.
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "mstar-mcp-vanished-"));
+    rmSync(workspace, { recursive: true, force: true });
+    const definition = getCommandDefinitions().find((entry) => entry.id === "pr.merge-gate");
+    if (definition === undefined) throw new Error("missing command: pr.merge-gate");
+    const context = await createContextResolver({ workspace })(definition, undefined, new AbortController().signal, [], createMcpEffects([]));
+    expect(context.cwd).toBe(workspace);
+    const refused = await definition.execute({ pr: "42" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "process.cwd-not-found", details: { cwd: workspace } });
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
+    expect(recovery).toContain("mstar mcp --workspace");
   });
 });

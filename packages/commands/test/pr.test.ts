@@ -251,7 +251,13 @@ describe("pr merge-gate", () => {
     const refused = await command("pr.merge-gate").execute({ pr: "42" }, context);
     expect(refused).toMatchObject({ status: "refused", code: "process.cwd-not-found" });
     expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ cwd: "/gone/workspace" });
-    expect(refused.status === "ok" ? "" : (refused.details?.recovery as string)).toContain("workspace, which no longer exists");
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
+    expect(recovery).toContain("workspace, which no longer exists");
+    expect(recovery).toContain("rerun mstar pr merge-gate --pr <n>");
+    // see packages/cli/src/mcp/stdio.ts
+    // why: an MCP connection retries the workspace it was launched with, so a
+    // "change directory and rerun" recovery cannot repair this connection.
+    expect(recovery).toContain("mstar mcp --workspace");
     expect(refused.status === "ok" ? "" : JSON.stringify(refused)).not.toContain("GitHub CLI");
   });
 

@@ -68,10 +68,15 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     // see packages/commands/src/effects/process.ts
     // why: the gate inherits the invocation workspace, so a vanished directory
     // is repaired by running from an existing one — installing a tool cannot.
+    // why: an MCP connection does not read the operator's shell directory; its
+    // per-call workspace is the `--workspace` path the launcher declared
+    // (packages/cli/src/mcp/stdio.ts), so "change directory and retry" repeats
+    // the same failure there and the recovery has to name the reconnection.
+    // reachability: manual — the recovery names the launcher's `mstar mcp --workspace` reconnection, which the command-catalog grammar the linter reads does not model (`mstar mcp` is not a catalog command); the CLI half stays statically provable and the behavioural suite pins both halves.
     return refusalEnvelope({
       command: id, status: "refused", code, exitCode: 1, message,
       details: details ?? {},
-      recovery: "The gate runs in this invocation's workspace, which no longer exists. Change to an existing directory, then rerun mstar pr merge-gate --pr <n>.",
+      recovery: "The gate runs in this invocation's workspace, which no longer exists. From the CLI, rerun mstar pr merge-gate --pr <n> in a valid checkout of the intended repository. On an MCP connection the server keeps the --workspace path it was launched with, so restore that directory, or reconnect with mstar mcp --workspace <absolute checkout path> and rerun there.",
     });
   }
   if (code === undefined) {
