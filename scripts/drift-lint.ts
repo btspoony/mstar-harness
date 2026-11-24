@@ -1801,11 +1801,13 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
   for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
     // see scripts/drift-lint.ts § 16 — why: the native decoder is the only faithful one — it keeps a literal
     // see scripts/drift-lint.ts § 16 — `\\n` as a backslash and an `n`, and turns a real `\n` into a line break.
+    // see scripts/drift-lint.ts § 16 — The value is then entity-decoded once, so a `&#52;` a prompt author wrote
+    // see scripts/drift-lint.ts § 16 — reads as the character it renders as.
     let decoded: string;
     try {
-      decoded = JSON.parse(`"${match[1]}"`);
+      decoded = decodeXmlEntities(JSON.parse(`"${match[1]}"`));
     } catch {
-      decoded = match[1];
+      decoded = decodeXmlEntities(match[1]);
     }
     values.push({ text: decoded, line: lineAt(match.index ?? 0) });
   }
