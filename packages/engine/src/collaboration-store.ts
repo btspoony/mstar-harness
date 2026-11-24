@@ -1842,50 +1842,87 @@ async function continueExisting(location: CollaborationLocation, timeout: number
  * store identity that record names), and no unsettled outbox intent - an `enqueued`,
  * `unconfirmed` or `conflict` row may already have taken effect at the provider, so replacing
  * those bytes would leave the intent only in the preserved copy. A `conflict` row whose
- * `resolved_by` chain reaches a `confirmed` repair counts as settled (conflictRepairSettled);
- * an abandoned, missing or unsettled link still blocks.
+ * `resolved_by` chain reaches a `confirmed` repair that ALSO carries a recorded confirmed
+ * receipt counts as settled (conflictRepairSettled); an abandoned, missing, unproven or
+ * unsettled link still blocks.
  * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
  * reads: the canonical name is released after the successor is staged, never before.
  */
 /**
+ * note: One `resolved_by` hop, classified: `absent` when the conflict names no repair at all,
+ * `damaged` when the named operation id is not this scope's repair (missing row, another
+ * generation or project, or no reverse `resolves` pointer at the parent), and `repair` when it
+ * is. A damaged link is never treated as an absent one: their exits differ.
+ */
+type ConflictRepairHop =
+  | Readonly<{ kind: "absent" }>
+  | Readonly<{ kind: "damaged" }>
+  | Readonly<{ kind: "repair"; state: string; resolvedBy: string | null }>;
+
+function conflictRepairHop(
+  db: StoreDb,
+  conflict: { generation: unknown; project_key: unknown },
+  parentId: string,
+  cursor: string | null,
+): ConflictRepairHop {
+  if (cursor === null) return { kind: "absent" };
+  const linked = db
+    .prepare("select generation, project_key, state, resolved_by, resolves from remote_outbox where operation_id = ?")
+    .get(cursor) as
+    | { generation?: unknown; project_key?: unknown; state?: unknown; resolved_by?: unknown; resolves?: unknown }
+    | undefined;
+  if (linked === undefined || typeof linked.state !== "string") return { kind: "damaged" };
+  // invariant: An operation id alone is not a link. The hop is this conflict's repair only when
+  // the linked row is the same generation and project_key and carries the reverse
+  // `resolves` pointer at its parent; a row of another generation or project, or one without
+  // that back-pointer (a valid-shaped but wrong link in foreign or damaged cache bytes), is a
+  // damaged link.
+  if (linked.generation !== conflict.generation || linked.project_key !== conflict.project_key || linked.resolves !== parentId) {
+    return { kind: "damaged" };
+  }
+  return { kind: "repair", state: linked.state, resolvedBy: typeof linked.resolved_by === "string" ? linked.resolved_by : null };
+}
+
+/**
+ * note: Recorded confirmation of one operation: the receipt row a `confirmed` state rests on.
+ * Only `recordReceiptEvidence` writes that state, and it records this receipt in the same
+ * transaction, so a confirmed row without one is a damaged or foreign cache.
+ */
+export function hasConfirmedReceipt(db: StoreDb, operationId: string): boolean {
+  return (
+    db
+      .prepare("select 1 as found from remote_outbox_receipts where operation_id = ? and outcome = 'confirmed' limit 1")
+      .get(operationId) !== undefined
+  );
+}
+
+/**
  * note: The settle rule for one conflict row: it is settled exactly when its `resolved_by`
- * repair chain reaches a `confirmed` repair. `abandonRemoteIntent` refuses a conflict row, so
- * the parent itself can never be abandoned, and `prepareRemoteResolution` refuses a second
- * resolution while the linked one is live, so the single `resolved_by` pointer names the only
- * repair that could have confirmed. An abandoned, missing or non-confirmed link therefore
- * leaves the parent unsettled: a withdrawn review (the linked repair abandoned) blocks the
- * replacement again until a new reviewed resolution is prepared and confirmed.
+ * repair chain reaches a `confirmed` repair that HOLDS RECORDED EVIDENCE - a
+ * `remote_outbox_receipts` row with outcome `confirmed` for that operation id. The state column
+ * is not proof by itself. `abandonRemoteIntent` refuses a conflict row, so the parent itself can
+ * never be abandoned, and `prepareRemoteResolution` refuses a second resolution while the linked
+ * one is live, so the single `resolved_by` pointer names the only repair that could have
+ * confirmed. An abandoned, missing, unproven or non-confirmed link therefore leaves the parent
+ * unsettled: a withdrawn review (the linked repair abandoned) blocks the replacement again until
+ * a new reviewed resolution is prepared and confirmed.
  */
 function conflictRepairSettled(
   db: StoreDb,
   row: { operation_id: string; generation: unknown; project_key: unknown; state: string; resolved_by: unknown },
 ): boolean {
   if (row.state !== "conflict") return false;
-  const generation = row.generation;
-  const projectKey = row.project_key;
   let parentId = row.operation_id;
   let cursor = typeof row.resolved_by === "string" ? row.resolved_by : null;
   const visited = new Set<string>();
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
-    const linked = db
-      .prepare("select generation, project_key, state, resolved_by, resolves from remote_outbox where operation_id = ?")
-      .get(cursor) as
-      | { generation?: unknown; project_key?: unknown; state?: unknown; resolved_by?: unknown; resolves?: unknown }
-      | undefined;
-    if (linked === undefined || typeof linked.state !== "string") return false;
-    // invariant: An operation id alone is not a link. The hop is this conflict's repair only when
-    // the linked row is the same generation and project_key and carries the reverse
-    // `resolves` pointer at its parent; a row of another generation or project, or one without
-    // that back-pointer (a valid-shaped but wrong link in foreign or damaged cache bytes), leaves
-    // the parent unsettled. The visited set still ends a cycle.
-    if (linked.generation !== generation || linked.project_key !== projectKey || linked.resolves !== parentId) {
-      return false;
-    }
-    if (linked.state === "confirmed") return true;
-    if (linked.state !== "conflict") return false;
+    const hop = conflictRepairHop(db, row, parentId, cursor);
+    if (hop.kind !== "repair") return false;
+    if (hop.state === "confirmed") return hasConfirmedReceipt(db, cursor);
+    if (hop.state !== "conflict") return false;
     parentId = cursor;
-    cursor = typeof linked.resolved_by === "string" ? linked.resolved_by : null;
+    cursor = hop.resolvedBy;
   }
   return false;
 }
@@ -1905,27 +1942,44 @@ async function replaceDerivedLaneBelow(
     state: string;
     created_at: string;
     resolved_by: unknown;
-    repair_state: string | null;
   };
-  let recorded: { version: number; meta: CollaborationMeta; unsettled: OutboxRow[] };
+  type UnsettledRow = OutboxRow & Readonly<{ repair: ConflictRepairHop }>;
+  let recorded: { version: number; meta: CollaborationMeta; unsettled: UnsettledRow[] };
   try {
     // invariant: The outbox guard reads the SAME connection as the version probe, so the check is
     // taken at the first probe and again at the publication boundary - never against stale bytes.
     const outboxPresent = db
       .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'remote_outbox'")
       .get() as { n?: unknown };
-    const unsettled =
+    // note: The settle rule reads the receipts table, so bytes without one prove no confirmation:
+    // nothing there is settled, and no statement runs against a missing table.
+    const receiptsPresent =
+      Number(
+        (
+          db
+            .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'remote_outbox_receipts'")
+            .get() as { n?: unknown }
+        )?.n ?? 0,
+      ) > 0;
+    const unsettled: UnsettledRow[] =
       Number(outboxPresent?.n ?? 0) === 0
         ? []
         : (db
             .prepare(
-              // note: The linked repair's own state comes with the row: the refusal's route for one
-              // conflict depends on it (withdraw, dispatch, reconcile first, or follow its link).
-              "select operation_id, generation, project_key, state, created_at, resolved_by, " +
-                "(select r.state from remote_outbox r where r.operation_id = remote_outbox.resolved_by) as repair_state " +
+              "select operation_id, generation, project_key, state, created_at, resolved_by " +
                 "from remote_outbox where state not in ('confirmed','abandoned') order by created_at, operation_id",
             )
-            .all() as OutboxRow[]).filter((row) => !conflictRepairSettled(db, row));
+            .all() as OutboxRow[])
+            .filter((row) => !(receiptsPresent && conflictRepairSettled(db, row)))
+            // note: The link's own classification comes with the row: the refusal's route for one
+            // conflict depends on it (no repair, a damaged link, or the repair's state).
+            .map((row) => ({
+              ...row,
+              repair:
+                row.state === "conflict"
+                  ? conflictRepairHop(db, row, row.operation_id, typeof row.resolved_by === "string" ? row.resolved_by : null)
+                  : ({ kind: "absent" } as const),
+            }));
     recorded = {
       version: validateCollaborationMigrations(readAppliedMigrations(db, false)),
       meta: readMeta(db),
@@ -1971,24 +2025,42 @@ async function replaceDerivedLaneBelow(
       "`" + cli("outbox-receipt") + " --harness <abs> --input <file|->`";
     const reconciled = (): string =>
       "`" + cli("outbox-reconcile") + " --harness <abs> --input <file|->`";
-    // why: An abandon, a dispatch and a reconcile are admitted for different repair states, so the
+    // why: An abandon, a dispatch and a receipt are admitted for different repair states, so the
     // conflict line names only what moves the repair its own `resolvedBy` actually holds. A repair
-    // that is already `confirmed` never reaches this branch: the settle rule dropped its parent
-    // row, so an unblocked bind needs no line.
-    const conflictStep = (repairState: string | null): string => {
+    // that is `confirmed` AND holds its recorded receipt never reaches this branch: the settle
+    // rule dropped its parent row, so an unblocked bind needs no line. A link this scope cannot
+    // honor is named as damaged, never as an absent one: `outbox-resolve` refuses while it stands.
+    const conflictStep = (repair: ConflictRepairHop): string => {
+      if (repair.kind === "damaged") {
+        return shown("<uuid>") + ". Its recorded resolvedBy link is damaged - the operation it names is missing, " +
+          "belongs to another generation or project, or carries no reverse resolves pointer - so a reviewed resolve " +
+          "refuses while that link stands and no receipt can settle it in place: this cache is rebuilt from the " +
+          "provider through a fresh reviewed bind once the checked selector names a new generation, and the pending " +
+          "intent's record is not preserved in place.";
+      }
+      if (repair.kind === "absent") {
+        return shown("<uuid>") + ". It carries no live repair, so prepare one with " + resolved() +
+          " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +
+          " and record its confirming receipt with " + evidenced();
+      }
       const follow = "follow the repair its resolvedBy names with " + showCommand("<repair-uuid>");
-      if (repairState === "enqueued") {
+      if (repair.state === "confirmed") {
+        return shown("<uuid>") + "; its repair is marked confirmed but holds no recorded confirmed receipt, so that " +
+          "effect is not proven and the settle rule does not count it: record that receipt with " + evidenced() +
+          " (a reconcile under the original binding records the same evidence)";
+      }
+      if (repair.state === "enqueued") {
         return shown("<uuid>") + "; its repair is enqueued, so " + follow + ", then either withdraw it with " +
           withdrawn("<repair-uuid>") + " or dispatch it with " + dispatched("<repair-uuid>") +
           " and record its confirming receipt with " + evidenced();
       }
-      if (repairState === "unconfirmed") {
+      if (repair.state === "unconfirmed") {
         return shown("<uuid>") + "; its repair is unconfirmed, so " + follow +
-          ". An unconfirmed repair can be withdrawn only after its original host records a not-sent receipt: " +
-          "reconcile it with " + reconciled() + " - or record that not-sent receipt with " + evidenced() +
-          " - and only then withdraw it with " + withdrawn("<repair-uuid>");
+          ". An unconfirmed repair is withdrawable only behind its ORIGINAL dispatching host's own not-sent receipt: " +
+          "record it with " + evidenced() + " (a reconcile records no not-sent outcome) and only then withdraw it with " +
+          withdrawn("<repair-uuid>");
       }
-      if (repairState === "conflict") {
+      if (repair.state === "conflict") {
         return shown("<uuid>") + "; its repair is itself a conflict, and an abandon of a conflict row is refused " +
           "outright: follow that repair's own resolvedBy link with " + showCommand("<repair-uuid>") +
           " and settle THAT conflict before preparing another repair";
@@ -1997,7 +2069,7 @@ async function replaceDerivedLaneBelow(
         " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +
         " and record its confirming receipt with " + evidenced();
     };
-    const firstStep = (row: OutboxRow): string =>
+    const firstStep = (row: UnsettledRow): string =>
       row.state === "enqueued"
         ? "list it with `" + cli("outbox-pending") + " --harness <abs> --project <local-project-id>`, then dispatch an " +
           "ordinary intent with `" + cli("outbox-dispatch") + " --harness <abs> --operation <uuid>`; a reviewed resolution " +
@@ -2009,7 +2081,7 @@ async function replaceDerivedLaneBelow(
           ? "read it with `" + cli("outbox-show") + " --harness <abs> --operation <uuid>`, then record that attempt's " +
             "evidence with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->` or `" + cli("outbox-reconcile") +
             " --harness <abs> --input <file|->`"
-          : conflictStep(row.repair_state);
+          : conflictStep(row.repair);
     const lines: string[] = [];
     const named = new Set<string>();
     for (const row of recorded.unsettled) {
@@ -2023,8 +2095,9 @@ async function replaceDerivedLaneBelow(
       `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); such an
         intent may already have taken effect at the provider, so the cache is not replaced. Settle every state
         listed below, then rerun the same bind. The lines are in row-age order, which is not a dispatch order:
-        dispatch blocking is scoped to the same generation and project and exempts a repair's own ancestor, so a
-        newer intent does not always block an older dispatch; a blocked dispatch names the intent that blocks it:
+        dispatch blocking is scoped to the same generation and project, and a reviewed repair is exempt from its own
+        CONFLICT ancestor only (an unconfirmed ancestor still blocks), so a newer intent does not always block an
+        older dispatch; a blocked dispatch names the intent that blocks it:
         ${lines.join("\n        ")}
         Nothing was replaced.`,
       { oldestOperationId: oldest.operation_id, unsettledCount: recorded.unsettled.length },
@@ -3999,10 +4072,11 @@ async function withWriteLane<T>(
       // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
       // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
-      // invariant: The recovery surface is proved on the LOCKED writer too, in the same critical
-      // section that installs it: a settlement write never runs over cache bytes whose own
-      // objects can reach a table the surface does not serve.
-      if (recovery) assertRecoverySurfaceIsolated(db);
+      // note: The schema-object proof runs on the recovery READ open only. Proving it here as well
+      // would refuse every settlement write on a foreign cache carrying a trigger on a recovery
+      // table, which no supported route could then settle or replace - a block without an exit.
+      // The settlement write relies on the statement guard and the version inventory instead; the
+      // trigger case is a known, accepted limitation (assertRecoverySurfaceIsolated).
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
       const effect = apply({
@@ -4163,22 +4237,27 @@ function recoverySurfaceGuard(sql: string): void {
 }
 
 /**
- * invariant: The recovery surface is installed only over cache bytes whose own objects cannot
- * reach a table it does not serve, and both admissions prove it before they install the wrapper:
- * the recovery open on its read handle, the outbox recovery write lane on its locked writer.
+ * note: The schema-object proof, and where it runs: ONLY on the recovery READ open, immediately
+ * before that open installs its surface wrapper. With `recoverySurfaceGuard` it refuses a
+ * statement naming a domain table, a statement form that could escape the surface, and a
+ * statement over no recovery-surface table; and it refuses to install at all when a recovery
+ * table carries a trigger, or when a trigger that touches the surface or a view names a table
+ * outside the recovery allowlist.
  *
- * note: What this proves, exactly - no more. With `recoverySurfaceGuard` it refuses a statement
- * naming a domain table, a statement form that could escape the surface, and a statement over no
- * recovery-surface table; and it refuses to install at all when a recovery table carries a
- * trigger, or when a trigger that touches the surface or a view names a table outside the
- * recovery allowlist. Triggers that only read domain tables stay legal: the surface never writes
- * those tables, so they never fire.
+ * why the settlement WRITE path is not schema-proved: a foreign or damaged cache carrying a
+ * trigger on a recovery table would make every settlement write refuse, and the bind refuses to
+ * replace the cache until those intents are settled - a block with no supported exit. The write
+ * lane therefore relies on the statement guard plus the version inventory alone, and a trigger on
+ * a recovery table WOULD fire during a settlement write. That is a known, accepted limitation of
+ * the indirect-access residue (an open issue in the repository issue ledger), never a claim of
+ * write-side isolation; it is not reachable through this build's own schema, which creates no
+ * trigger on a recovery table.
  *
  * why the residue is stated here: this is NOT a database-level sandbox, and no reader may take it
  * for one. Indirect access is not proven. A view's dependency chain is not resolved, so an
  * INSTEAD OF trigger on a view whose own body spells no domain table passes. A foreign key whose
  * target this build's key layout does not validate is not checked, so an unvalidated inbound edge
- * from a domain table into the surface is not excluded. The guarantee covers the objects this
+ * from a domain table into the surface is not excluded. The READ guarantee covers the objects this
  * build enumerates in `sqlite_master`, over the statements its own verbs write.
  */
 function assertRecoverySurfaceIsolated(db: StoreDb): void {

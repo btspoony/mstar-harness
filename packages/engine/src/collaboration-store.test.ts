@@ -9875,6 +9875,63 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
 
+  test("a confirmed repair holds no settle without its recorded confirmed receipt", async () => {
+    const conflictId = "00000000-0000-4000-8000-000000000a10";
+    const repairId = "00000000-0000-4000-8000-000000000a11";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-unproven-repair", conflictId);
+    const bind = () =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      });
+    const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
+    await prepareRemoteResolution(cache.context, conflictId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    const dispatched = await dispatchRemoteIntent(
+      cache.context,
+      repairId,
+      forkObservationFor({ commit: cache.commit, dbPath: cache.location.dbPath }, conflictId, cache.fork.heads),
+    );
+    const repair = await readRemoteIntent(cache.context, repairId);
+    // note: The state column alone claims a confirmation: the receipt that would prove it was never
+    // recorded, which is the damaged-cache shape a bind must not trust.
+    const db = new DatabaseSync(cache.location.dbPath);
+    try {
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run(repairId);
+    } finally {
+      db.close();
+    }
+    const refused = await refusalOf(bind);
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(conflictId);
+    expect(refused.message).toContain("holds no recorded confirmed receipt");
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+
+    // invariant: The recorded receipt is the exit, so the public receipt verb still records it on a
+    // row whose state claims the confirmation - otherwise that cache could never settle.
+    const confirmed = await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8",
+        event: resolutionEvent,
+      }),
+    );
+    expect(confirmed).toMatchObject({ operationId: repairId, state: "confirmed" });
+
+    const recorded = recordedGeneration(cache.location);
+    const bound = await bind();
+    expect(bound).toMatchObject({ version: 1, generation: cache.generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS);
+  }, 30_000);
+
   test("a confirmed repair link of another generation never settles the conflict", async () => {
     const conflictId = "00000000-0000-4000-8000-0000000009fa";
     const repairId = "00000000-0000-4000-8000-0000000009fb";
@@ -9900,7 +9957,9 @@ describe("pre-v3 remote cache recovery", () => {
     }
 
     // invariant: The parent is not settled by another generation link: the bind still refuses
-    // and nothing is replaced.
+    // and nothing is replaced. A link this scope cannot honor is named as DAMAGED, and the route
+    // for an absent repair (outbox-resolve) is never offered for it: a resolve refuses while that
+    // link stands.
     const refused = await refusalOf(() =>
       bindRemoteAuthority(cache.context, {
         version: 1,
@@ -9911,7 +9970,8 @@ describe("pre-v3 remote cache recovery", () => {
     );
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(conflictId);
-    expect(refused.message).toContain("outbox-resolve");
+    expect(refused.message).toContain("Its recorded resolvedBy link is damaged");
+    expect(refused.message).not.toContain("outbox-resolve");
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
 
@@ -9943,7 +10003,10 @@ describe("pre-v3 remote cache recovery", () => {
     );
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(conflictId);
-    expect(refused.message).toContain("outbox-resolve");
+    // invariant: A confirmed state whose link this scope cannot honor is damaged, never absent:
+    // the resolve route refuses while the link stands, so it is not offered.
+    expect(refused.message).toContain("Its recorded resolvedBy link is damaged");
+    expect(refused.message).not.toContain("outbox-resolve");
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
 
@@ -9973,15 +10036,15 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("remote_outbox");
   }, 30_000);
 
-  test("the recovery write lane refuses a cache carrying a trigger on a recovery table", async () => {
+  test("a settlement write is guarded by statement text, not by schema objects", async () => {
     const fixture = remoteFixture("remote-v3-guard-trigger-write");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     const frozenId = "00000000-0000-4000-8000-000000000a01";
-    // note: A real frozen request, so the public settlement verb would succeed on these bytes if the
-    // write lane installed the surface anyway: the refusal is the lane's own, not a payload failure.
+    // note: A real frozen request, so the public settlement verb is decided by the write lane alone,
+    // not by a payload failure.
     const request = intentRequest(fixture, commit, frozenId);
     writeV3RemoteLane(location);
     const db = new DatabaseSync(location.dbPath);
@@ -9995,8 +10058,11 @@ describe("pre-v3 remote cache recovery", () => {
         "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
           "values (?, ?, ?, 'seed-hash', ?, 'enqueued', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
       ).run(frozenId, generation, SELECTED_PROJECT.localProjectId, JSON.stringify(request));
-      // note: The trigger fires on the settlement write this case performs (an abandon is an update),
-      // so a write lane that installed the surface unproved would reach the domain table.
+      // note: The trigger fires on the settlement write this case performs (an abandon is an update).
+      // The accepted limitation: the write lane is guarded statement by statement plus the version
+      // inventory, never schema-object by schema-object, because proving that here would leave a
+      // foreign cache like this one with no exit - every settlement refuses while the bind refuses
+      // to replace the still-unsettled cache.
       db.exec(
         "create trigger outbox_mirror after update on remote_outbox begin " +
           "update issues set revision = revision; end;",
@@ -10007,15 +10073,13 @@ describe("pre-v3 remote cache recovery", () => {
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
 
-    // invariant: The settlement write refuses exactly as the recovery read does: the surface is never
-    // installed, inside the lock, over bytes whose own trigger can reach a domain table.
-    const refused = await refusalOf(() => abandonRemoteIntent(context, { operationId: frozenId, reason: "settle it" }));
-    expect(refused.code).toBe("collaboration.upgrade-required");
-    expect(refused.message).toContain("outbox_mirror");
-    expect(refused.message).toContain("remote_outbox");
-    // invariant: Nothing was written: the row is still enqueued and the ledger is unchanged.
+    // invariant: The settlement write IS admitted on such bytes. A write-side schema proof would
+    // make every settlement verb refuse while the bind refuses to replace the unsettled cache, a
+    // block with no supported exit; the trigger case is covered through the READ open instead.
+    const abandoned = await abandonRemoteIntent(context, { operationId: frozenId, reason: "settle it" });
+    expect(abandoned).toMatchObject({ operationId: frozenId, state: "abandoned" });
     expect(outboxRows(location.dbPath)).toContainEqual(
-      expect.objectContaining({ operation_id: frozenId, state: "enqueued" }),
+      expect.objectContaining({ operation_id: frozenId, state: "abandoned" }),
     );
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
@@ -10087,9 +10151,9 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("record its confirming receipt");
     expect(refused.message).toContain("It carries no live repair");
     // invariant: Dispatch blocking is scoped, not age-ordered: the same generation and project, and
-    // a repair's own ancestor is exempt.
+    // only a CONFLICT ancestor of a reviewed repair is exempt - an unconfirmed ancestor still blocks.
     expect(refused.message).toContain("dispatch blocking is scoped to the same generation and project");
-    expect(refused.message).toContain("exempts a repair's own ancestor");
+    expect(refused.message).toContain("CONFLICT ancestor only (an unconfirmed ancestor still blocks)");
     // note: An unsent enqueued row names its shortest honest exit; nothing names an abandon for a
     // conflict row.
     expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <uuid> --reason <text>");
@@ -10135,9 +10199,9 @@ describe("pre-v3 remote cache recovery", () => {
   test("the conflict refusal routes by the state of the repair its resolvedBy names", async () => {
     const cases: Array<{
       repairState: RemoteIntentState;
+      damaged?: boolean;
       exact: string[];
-      order?: [string, string];
-      absent?: string;
+      absentInConflictLine?: string[];
     }> = [
       {
         // note: An enqueued repair may be withdrawn, or dispatched with the fork observation its
@@ -10152,18 +10216,19 @@ describe("pre-v3 remote cache recovery", () => {
         ],
       },
       {
-        // note: An unconfirmed repair is withdrawable only behind the original host's not-sent receipt,
-        // so the reconcile is named before the abandon.
+        // note: The not-sent proof is the ORIGINAL dispatching host's own receipt, and only that
+        // receipt records one: a reconcile accepts no not-sent outcome, so it is never named here.
         repairState: "unconfirmed",
         exact: [
           "its repair is unconfirmed, so follow the repair its resolvedBy names with `mstar store collaboration " +
             "remote outbox-show --harness <abs> --operation <repair-uuid>`",
-          "An unconfirmed repair can be withdrawn only after its original host records a not-sent receipt: " +
-            "reconcile it with `mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->`",
-          "- and only then withdraw it with `mstar store collaboration remote outbox-abandon --harness <abs> " +
+          "An unconfirmed repair is withdrawable only behind its ORIGINAL dispatching host's own not-sent receipt: " +
+            "record it with `mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->` " +
+            "(a reconcile records no not-sent outcome)",
+          "and only then withdraw it with `mstar store collaboration remote outbox-abandon --harness <abs> " +
             "--operation <repair-uuid> --reason <text>`",
         ],
-        order: ["outbox-reconcile --harness <abs> --input <file|->", "--operation <repair-uuid> --reason <text>"],
+        absentInConflictLine: ["outbox-reconcile"],
       },
       {
         // note: A conflict repair is not withdrawable at all: its own resolvedBy link is the route.
@@ -10174,11 +10239,19 @@ describe("pre-v3 remote cache recovery", () => {
             "--operation <repair-uuid>`",
           "and settle THAT conflict before preparing another repair",
         ],
-        absent: "--operation <repair-uuid> --reason <text>",
+        absentInConflictLine: ["--operation <repair-uuid> --reason <text>"],
+      },
+      {
+        // invariant: A link this scope cannot honor is named as DAMAGED, never as an absent repair: a
+        // resolve refuses while that link stands, so the outbox-resolve route is not offered for it.
+        repairState: "enqueued",
+        damaged: true,
+        exact: ["Its recorded resolvedBy link is damaged", "rebuilt from the provider through a fresh reviewed bind"],
+        absentInConflictLine: ["outbox-resolve", "outbox-reconcile"],
       },
     ];
     for (const [index, entry] of cases.entries()) {
-      const fixture = remoteFixture("remote-v3-repair-state-" + entry.repairState);
+      const fixture = remoteFixture("remote-v3-repair-state-" + entry.repairState + (entry.damaged === true ? "-damaged" : ""));
       const commit = fixture.publish(fixture.payload());
       const generation = Number(fixture.payload().generation);
       const context = contextAt(fixture.repo);
@@ -10186,6 +10259,16 @@ describe("pre-v3 remote cache recovery", () => {
       const conflictId = "00000000-0000-4000-8000-000000000b0" + String(index);
       const repairId = "00000000-0000-4000-8000-000000000c0" + String(index);
       seedConflictRepair(location, conflictId, repairId, entry.repairState);
+      if (entry.damaged === true) {
+        // note: Same generation and project, but no reverse resolves pointer: the link is broken,
+        // and the linked row's own live state must never be routed as this conflict's repair.
+        const db = new DatabaseSync(location.dbPath);
+        try {
+          db.prepare("update remote_outbox set resolves = null where operation_id = ?").run(repairId);
+        } finally {
+          db.close();
+        }
+      }
       const recorded = recordedGeneration(location);
       writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
       const refused = await refusalOf(() =>
@@ -10194,10 +10277,11 @@ describe("pre-v3 remote cache recovery", () => {
       expect(refused.code).toBe("remote.effect-pending");
       expect(refused.message).toContain("state conflict: oldest operation " + conflictId);
       for (const exact of entry.exact) expect(refused.message).toContain(exact);
-      if (entry.order !== undefined) {
-        expect(refused.message.indexOf(entry.order[0])).toBeLessThan(refused.message.indexOf(entry.order[1]));
-      }
-      if (entry.absent !== undefined) expect(refused.message).not.toContain(entry.absent);
+      const conflictLine = refused.message
+        .split("\n")
+        .find((line) => line.includes("state conflict: oldest operation " + conflictId));
+      expect(conflictLine).toBeDefined();
+      for (const absent of entry.absentInConflictLine ?? []) expect(conflictLine).not.toContain(absent);
     }
   }, 90_000);
 

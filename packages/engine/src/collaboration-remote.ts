@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  hasConfirmedReceipt,
   readCollaborationBinding,
   initializeRemoteCacheStore,
   ISSUE_REF_PATTERN,
@@ -4046,7 +4047,11 @@ async function recordReceiptEvidence(
       // invariant: The same submission replays its recorded evidence and never re-applies a state change.
       return intentRead(db, row, stored, readPermission(db, row.generation, row.projectKey));
     }
-    if (row.state !== "unconfirmed" && row.state !== "conflict") {
+    // invariant: A row whose state claims `confirmed` while no confirmed receipt is recorded holds
+    // no provable effect - damaged cache bytes, since only this transaction writes that state. The
+    // receipt that proves it is exactly what settles the intent, so recording it stays admitted.
+    const unprovenConfirmation = row.state === "confirmed" && !hasConfirmedReceipt(db, envelope.operationId);
+    if (row.state !== "unconfirmed" && row.state !== "conflict" && !unprovenConfirmation) {
       throw new StoreError(
         "remote.dispatch-refused",
         `Operation ${envelope.operationId} is ${row.state}; only an unconfirmed or conflicted send accepts a new receipt ` +
