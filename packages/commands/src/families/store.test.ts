@@ -152,8 +152,8 @@ test("store.upgrade records and replays under the caller's --operation id", asyn
     const upgrade = (operation: string) =>
       definition.execute(definition.input.parse({ harness, operator: "fixture-operator", operation }), invocation(root));
 
-    // invariant: The caller's id is the one the import operation uses — the recovery this verb
-    // advertises tells the operator to reissue with it, so it must address THIS reservation.
+    // invariant: The caller's id is the one the import operation uses, so a clean retry (same
+    // options, same source bytes) addresses THIS reservation instead of minting a second.
     const first = await upgrade("caller-owned-operation");
     expect(first.status).toBe("ok");
     if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
@@ -173,11 +173,58 @@ test("store.upgrade records and replays under the caller's --operation id", asyn
     expect(recorded.length).toBeGreaterThan(0);
     expect(recorded.every((id) => id.startsWith("caller-owned-operation"))).toBe(true);
 
-    // invariant: Reissuing the SAME id replays its retained receipt instead of reserving a second
-    // operation, so the advertised retry is reachable in one step.
+    // invariant: Reissuing the SAME id with the SAME options replays its retained receipt instead
+    // of reserving a second operation.
     const replay = await upgrade("caller-owned-operation");
     expect(replay.status).toBe("ok");
     expect(operations()).toEqual(recorded);
+
+    // invariant: The receipt binds the EXACT request, so a retry that ADDS an acknowledgement is a
+    // different request and refuses under the old id. That is why `--operation` is not part of the
+    // advertised acknowledgement recovery: the operator omits it and the new request reserves its
+    // own operation, while the earlier receipt and the rows it committed stay native facts.
+    const changedRequest = await definition.execute(
+      definition.input.parse({
+        harness,
+        operator: "fixture-operator",
+        operation: "caller-owned-operation",
+        ackSkipWorkflow: ["upgrade-fixture-workflow"],
+      }),
+      invocation(root),
+    );
+    expect(changedRequest).toMatchObject({ status: "refused", code: "execution.operation-conflict" });
+    // invariant: The retained receipt is untouched by the refusal.
+    expect(operations()).toEqual(recorded);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("store.upgrade refuses a malformed --operation before it touches the schema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-bad-operation-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+
+    // invariant: A malformed id is caller input, so it is refused before the irreversible schema
+    // advance: the operator corrects the value and continues from an UNCHANGED store.
+    const refused = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", operation: "import 1" }),
+      invocation(root),
+    );
+    expect(refused).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
+    expect(existsSync(join(harness, "store.db"))).toBe(false);
+    // invariant: Nothing of the legacy source was consumed either — the same command succeeds once
+    // the id is corrected.
+    const accepted = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", operation: "import-1" }),
+      invocation(root),
+    );
+    expect(accepted.status).toBe("ok");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

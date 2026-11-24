@@ -570,7 +570,7 @@ export type ExecutionWorkflowSourceRead =
       readonly storeId: string
       readonly epoch: number
     }
-  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection; readonly storeId?: string; readonly epoch?: number }
+  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection; readonly storeId?: string; readonly epoch?: number; readonly registration?: CatalogRegistrationRefusal }
   | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
 
 /**
@@ -671,6 +671,10 @@ export async function readExecutionWorkflowSource(
     return {
       kind: 'error',
       selection: { kind: 'error', code: registration.code, message: registration.message },
+      // invariant: The verdict travels as its own field, so a gate that must fail closed on a
+      // half-registered lifecycle cannot re-derive it from a message or treat it as an ordinary
+      // unreadable source: a pending registration is a registration verdict, never "cannot read".
+      registration,
       storeId: read.storeId,
       epoch: read.epoch,
     }
@@ -946,7 +950,7 @@ export async function catalogRegistrationRefusal(
     return null
   } catch (error) {
     const code = (error as { code?: unknown } | null | undefined)?.code
-    // A missing or staged execution store is the pre-activation exclusion, never a verdict.
+    // why: A missing or staged execution store is the pre-activation exclusion, never a verdict.
     if (code === 'store.not-initialized' || code === 'store.not-active') return null
     return {
       code: typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable',

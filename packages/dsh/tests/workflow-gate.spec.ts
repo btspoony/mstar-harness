@@ -60,7 +60,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { SEVERITY_ORDER } from '@mstar-harness/engine'
 import { iterationViolationView } from '../src/gates/_shared.ts'
-import { bootApp, gitInit, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
+import { bootApp, gitInit, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, seedPendingRegistration, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -714,6 +714,29 @@ describe('workflow gate — P-b lease attribution', () => {
     const unbound = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
     expect(unbound).toEqual({ kind: 'allow' })
     expect(warns.length - unboundWarnSnapshot).toBe(1)
+  })
+
+  it('(j) a pending catalog registration vetoes the hard dispatch instead of degrading to unreadable', async () => {
+    // invariant: The store's own registration verdict is not the fail-open "cannot read" arm — a
+    // half-registered lifecycle must block writable fan-out under `hard`, so `ralph` cannot start
+    // work beside a lifecycle whose catalog registration never committed. The plan row here is
+    // COVERED: without the registration veto this exact call is the ordinary allow.
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-registration-pending-')
+    const harnessDir = join(ws, '.mstar')
+    await seedPbTree(harnessDir, IN_PROGRESS_WITH_LEASE)
+    seedPendingRegistration(harnessDir, 'wf-1')
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('catalog.registration-pending')
+    // invariant: This is not the degrade — a fail-open read would have emitted its one warn and
+    // allowed the call.
+    expect(warns.length - warnSnapshot).toBe(0)
   })
 })
 

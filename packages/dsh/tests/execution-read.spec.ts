@@ -20,7 +20,6 @@ import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
-import { DatabaseSync } from 'node:sqlite'
 import {
   createExecutionWorkflow,
   ensureCollaborationAuthority,
@@ -28,7 +27,6 @@ import {
   openStore,
   readExecutionState,
   registerCatalogEntity,
-  resolveCollaborationLocation,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, IntegrationMergeLease } from '@mstar-harness/engine'
 import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
@@ -36,7 +34,7 @@ import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_STATUS_CONTEXT_NAME } from '../src/gates/system-prompt.ts'
 import { EXECUTION_DIRECT_WRITE_CODE, STORE_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
-import { useCleanControlRoot, bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedHarness, seedPendingRegistration, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 useCleanControlRoot()
 
@@ -224,42 +222,6 @@ function mergeLease(overrides: Record<string, unknown> = {}): IntegrationMergeLe
 async function sealStoreForReaders(harnessDir: string): Promise<void> {
   const handle = await openStore({ harnessDir }, 'read')
   handle.close()
-}
-
-/**
- * Seed one PENDING catalog-registration journal row for a workflow on the file
- * that OWNS the journal: the execution store while it still carries
- * `catalog_operations` (a combined source), otherwise this repository's
- * collaboration database. That is the half-registered state a dispatch must
- * never walk into.
- */
-function seedPendingRegistration(harnessDir: string, workflowId: string): void {
-  const storePath = join(harnessDir, 'store.db')
-  const owned = new DatabaseSync(storePath, { readOnly: true })
-  let ownerPath: string
-  try {
-    ownerPath = owned
-      .prepare("select 1 as found from sqlite_master where type = 'table' and name = 'catalog_operations'")
-      .get() === undefined
-      ? resolveCollaborationLocation({ harnessDir }).dbPath
-      : storePath
-  } finally {
-    owned.close()
-  }
-  const owner = new DatabaseSync(ownerPath)
-  try {
-    owner.prepare(
-      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
-        "values (?, 'dsh-hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
-    ).run(
-      `op-pending-${workflowId}`,
-      JSON.stringify({ workflow: { workflowId }, execution: {}, catalog: {} }),
-      TS,
-      TS,
-    )
-  } finally {
-    owner.close()
-  }
 }
 
 let execSeq = 0
@@ -692,7 +654,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
 
   it('refuses a half-registered selection on the source read every consumer uses, and still selects a committed one', async () => {
     const { harnessDir } = await appWithRoot('execution-registration-gate')
-    // Two ACTIVE lifecycles, so the durable pick (not position) decides — the
+    // why: Two ACTIVE lifecycles, so the durable pick (not position) decides — the
     // verdict has to follow the SELECTION, not the registry.
     await seedExecutionAuthority(harnessDir, [
       { id: 'wf-committed', planId: 'plan-committed' },
@@ -704,8 +666,11 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     // route `readExecutionWorkflowSource` serves every host gate — never a dispatchable lifecycle.
     const half = await readExecutionWorkflowSource({ harnessDir }, { selectedWorkflowId: 'wf-half' })
     expect(half.kind).toBe('error')
-    if (half.kind !== 'error' || half.selection.kind !== 'error') return
-    expect(half.selection.code).toBe('catalog.registration-pending')
+    if (half.kind !== 'error') throw new Error(`expected a structured refusal for the half-registered pick, got ${half.kind}`)
+    expect(half.selection).toMatchObject({ kind: 'error', code: 'catalog.registration-pending' })
+    // invariant: The verdict also travels as its own field, so the fan-out gate can fail closed
+    // without re-deriving it from the message.
+    expect(half.registration?.code).toBe('catalog.registration-pending')
 
     // invariant: Tolerating a pending journal elsewhere never hides a committed lifecycle: the same
     // reader still selects it, with its plan rows, when the pick names it.

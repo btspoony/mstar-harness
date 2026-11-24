@@ -24,7 +24,7 @@ import { DEFAULT_WORKFLOW_TOOLS, DISPATCH_LOGGER } from './dispatch.ts'
 import { workflowGateInputOf } from './dispatch-workflow.ts'
 
 /**
- * P-b lease attribution for the workflow/ralph gate: the calling workspace's ACTIVE
+ * why: P-b lease attribution for the workflow/ralph gate: the calling workspace's ACTIVE
  * workflow snapshot has any plan `InProgress` LACKING matching
  * recorded scope. Iterates ALL snapshot plan rows (no
  * Assignment header exists on the workflow/ralph branch — unlike
@@ -49,13 +49,20 @@ import { workflowGateInputOf } from './dispatch-workflow.ts'
  * healthy read-only workspace. Fail-open is preserved in every case — P-b
  * degrades for the call, never bricks fan-out.
  *
+ * The ONE exception is the catalog-registration verdict: a half-registered
+ * lifecycle is a REFUSAL the store already made, not an unreadable source, so
+ * it returns `registrationRefusal` instead of `unreadable` and the caller vetoes
+ * the call under every mode rather than degrading it (a pending registration is
+ * never dispatchable state, and treating it as "cannot read" would let a
+ * dispatch start work beside it).
+ *
  * @returns the first uncovered plan id (undefined = covered / nothing to
- *   attribute) + the unreadable flag.
+ *   attribute) + the unreadable flag + the registration refusal, if any.
  */
 async function writableFanOutUncovered(
   harnessDir: string | null,
   hint?: SessionHint,
-): Promise<{ uncoveredPlanId?: string; unreadable: boolean; workflowId?: string; workflowDir?: string; selectedGeneration?: { storeId: string; epoch: number } }> {
+): Promise<{ uncoveredPlanId?: string; unreadable: boolean; registrationRefusal?: { code: string; message: string }; workflowId?: string; workflowDir?: string; selectedGeneration?: { storeId: string; epoch: number } }> {
   if (harnessDir === null) return { unreadable: false }
   // §5 the ONE route decision precedes every read (plan S4): while the
   // execution authority is ACTIVE the root register and the workflow
@@ -71,6 +78,11 @@ async function writableFanOutUncovered(
   }
   if (source.kind === 'unavailable') return { unreadable: source.code !== 'store.not-initialized' }
   if (source.kind === 'error') {
+    // invariant: A registration verdict is NEVER the unreadable degrade — that degrade is fail-open
+    // (one warn, call allowed), which would let `ralph`/`workflow` start work beside a lifecycle whose
+    // catalog registration has not committed. It travels as its own refusal so the caller vetoes
+    // before any child starts; only a genuinely unreadable source keeps its documented fail-open.
+    if (source.registration !== undefined) return { unreadable: false, registrationRefusal: source.registration }
     return {
       unreadable: source.selection.kind === 'error' && source.selection.code !== 'workflow.selection.no-active',
     }
@@ -171,6 +183,16 @@ export async function gateWorkflow(
   // the read to the lifecycle THIS session is bound to (an unbound session
   // has no rows to attribute: the one-warn degrade below).
   const pb = await writableFanOutUncovered(harnessDir, hintReadOf().hint)
+  if (pb.registrationRefusal !== undefined) {
+    // invariant: A catalog-registration verdict vetoes under EVERY mode this branch reaches — it is
+    // not the P-b red line but the store refusing to hand out a half-registered lifecycle, so
+    // `warn`/`ask` must not downgrade it to an advisory the call may proceed through. `off` returned
+    // above (documented: no store read), and no verdict row is recorded: there is no selected
+    // lifecycle to attribute the verdict to.
+    const { code, message } = pb.registrationRefusal
+    ctx.logger(DISPATCH_LOGGER).error(`workflow gate (${toolName}) vetoed: ${code}`)
+    return { kind: 'deny', reason: `${code}: ${message}` }
+  }
   if (pb.unreadable) {
     // Fail-open + ONE warn (Step 3 / Clarify — a broken store read must not
     // brick fan-out): P-b is degraded for this call only; P-a/P-c (name-based,

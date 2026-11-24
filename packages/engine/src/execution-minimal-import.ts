@@ -1285,6 +1285,10 @@ export async function upgradeStoreMinimal(input: {
   deliveryDeclarations?: DeliveryLiftDeclarations;
 }): Promise<MinimalStoreUpgradeResult> {
   const { context } = input;
+  // invariant: The id is caller input, so it is refused BEFORE the store is touched: the schema
+  // advance below is irreversible, and a malformed id must leave the prior schema and authority
+  // exactly as they were (the same gate `importExecutionMinimal` runs, hoisted to the entry).
+  assertOperationId(input.operationId);
   const attestation: MigrationContext["attestation"] =
     input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
   const dbPath = storeDbPath(context);
