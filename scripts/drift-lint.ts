@@ -1793,14 +1793,19 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       continue;
     }
-    // why: an evaluated prompt may carry a stage number as an escape and still
-    // reach the model as the rendered character.
-    const decodeEscapes = (line: string): string =>
-      file.rel.endsWith(".json")
-        ? line
-            .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-            .replace(/\\[nrt]/g, " ")
-        : line;
+    // why: an evaluated prompt may carry a stage number or a block boundary as
+    // an escape and still reach the model as the rendered character; decode the
+    // whole text first so an escaped newline stays a newline.
+    const decodeJsonText = (text: string): string =>
+      text
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+        .replace(/\\([nrt])/g, (_match, code: string) => (code === "t" ? "\t" : "\n"))
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+    const sourceLines = file.rel.endsWith(".json") ? decodeJsonText(file.text).split("\n") : file.text.split("\n");
+    // why: quote membership is decided by the parsed `>` prefix, not by raw
+    // whitespace, so a permitted indent does not drop a quoted fence.
+    const quoteOf = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
     // why: a fence closes only on its own delimiter character, at least as
     // long as the opener, with nothing after it, and only inside the quote
     // container it opened in — a tilde line inside a backtick fence is content,
@@ -1814,11 +1819,11 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         `Guard 16 retired-stage-name: ${file.rel}:${row} - the iteration delivery has no stages 4-6; name the procedure instead`,
       );
     };
-    file.text.split("\n").forEach((line, index) => {
+    sourceLines.forEach((line, index) => {
       // A fence may sit inside a blockquote; its `> ` prefix is not content.
-      const delimiter = line.match(/^(\s*(?:>\s*)*)(`{3,}|~{3,})(.*)$/);
-      const quote = delimiter ? (delimiter[1].match(/(?:>\s*)+/)?.[0] ?? "") : "";
-      const text = decodeEscapes(line);
+      const delimiter = line.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
+      const quote = quoteOf(line);
+      const text = line;
       if (fence !== null) {
         const closes =
           delimiter !== null &&
@@ -1831,7 +1836,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           previous = "";
           return;
         }
-        if (fence.quote === "" || line.startsWith(fence.quote)) {
+        if (quote === fence.quote) {
           previous = "";
           for (const hit of findRetiredStageSpellings(text, true)) report(`${index + 1} "${hit}"`);
           return;
@@ -1848,21 +1853,23 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       const lineHits = findRetiredStageSpellings(text, false);
       for (const hit of lineHits) report(`${index + 1} "${hit}"`);
-      // why: a block element starts its own block — a bullet, or a heading,
-      // table or quote line — so its leading character is not a stage separator.
-      const blockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(text);
-      const previousBlockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(previous);
+      // why: a block element starts its own block — a bullet, a heading of any
+      // level, a table or quote line, a fence — so its leading character is not
+      // a stage separator.
+      const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
+      const blockStarts = blockStart.test(text);
+      const previousBlockStarts = blockStart.test(previous);
       if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
-        // Normalize both lines the way the matcher does — probes inside a span
-        // leave it, other span text is judged — so a hit that only exists after
-        // unwrapping is found and an allowed probe is not invented by the join.
-        const normalize = (value: string): string =>
-          decodeXmlEntities(value)
+        // Unwrap spans on the source form first (so a `&#96;` is a character, not
+        // a delimiter), then decode to the rendered text and match that without
+        // running span recognition a second time.
+        const stripSpans = (value: string): string =>
+          value
             .replace(/`([^`\n]*)`/g, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "))
             .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "));
-        const previousNorm = normalize(previous);
-        const joined = `${previousNorm} ${normalize(text)}`;
-        for (const hit of findRetiredStageSpellings(joined, false)) {
+        const previousNorm = decodeXmlEntities(stripSpans(previous));
+        const joined = `${previousNorm} ${decodeXmlEntities(stripSpans(text))}`;
+        for (const hit of findRetiredStageSpellings(joined, false, false)) {
           if (lineHits.includes(hit)) continue;
           // Only a match that starts in the earlier line and ends in the current
           // one crosses the boundary; either side alone was reported there.

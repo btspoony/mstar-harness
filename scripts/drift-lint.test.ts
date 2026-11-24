@@ -2413,6 +2413,26 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     const text = "Run the probe:\n`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "`.\n";
     expect(checkRetiredStageNames([{ rel: "skills/x/d.md", text }]).hits).toEqual([]);
   });
+
+  test("an indented quoted fence still passes", () => {
+    const text = ["  > ```text", "  > " + RETIRED_STAGE_MACHINE_LITERALS[0], "  > ```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/e.md", text }]).hits).toEqual([]);
+  });
+
+  test("a json escaped blank line still separates blocks", () => {
+    const text = '{"prompt":"Phase 2\\n\\n-4 °C is the minimum."}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
+  });
+
+  test("an entity-rendered backtick does not become a code span across the join", () => {
+    const text = "Use &#96;--phase\n6&#96; here.\n";
+    const result = checkRetiredStageNames([{ rel: "skills/x/g.md", text }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a level-two heading is not joined to its paragraph", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/f.md", text: "## Phase 2\n-4 °C is the minimum.\n" }]).hits).toEqual([]);
+  });
 });
 
 describe("checkRetiredStageNames — fence tracking", () => {
