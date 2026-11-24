@@ -1084,6 +1084,7 @@ export {
   CATALOG_REGISTRATION_JOURNAL_VERSION,
   CatalogRegistrationError,
   abortCatalogExecution,
+  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   readCatalogRevisions,
   purgeCatalogRegistration,

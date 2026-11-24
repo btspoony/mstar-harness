@@ -89,7 +89,7 @@ import {
   resolveSddDir,
   resolveWorkflowDir,
 } from "./path.js";
-import { assertCatalogExecutionCommittedOn, readPendingRegistration } from "./catalog-registration.js";
+import { assertCatalogExecutionCommittedWith } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
@@ -762,8 +762,9 @@ export type CatalogPinFacts = CatalogFacts & {
  * readers: a root-visible workflow whose catalog registration is not committed
  * refuses `catalog.registration-pending` — a pending operation is never a
  * valid workspace. Pre-activation exclusion (§7 of the issue contract): a
- * missing or staged store is not a catalog verdict, so workspaces without an
- * ACTIVE store keep their pass-through and are never retro-refused here.
+ * missing or staged store, and a journal lane this workspace does not hold, are
+ * not catalog verdicts, so workspaces without an ACTIVE store keep their
+ * pass-through and are never retro-refused here.
  */
 async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflowId: string): Promise<void> {
   const context: StoreContext = { harnessDir: harnessRoot };
@@ -775,11 +776,10 @@ async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflow
     throw error;
   }
   try {
-    // invariant: Registry visibility is the execution store's own row, while the pending
-    // journal belongs to whichever file OWNS `catalog_operations` — after the
-    // reviewed cutover that is the collaboration lane, never this connection.
-    const pending = await readPendingRegistration(context, workflowId);
-    assertCatalogExecutionCommittedOn(handle.db, workflowId, pending);
+    // invariant: One gate, one order: `assertCatalogExecutionCommittedWith` decides the
+    // execution store's own registry row BEFORE it pays for the journal's cross-file read,
+    // and tolerates a lane this workspace does not hold.
+    await assertCatalogExecutionCommittedWith(context, handle.db, workflowId);
   } catch (error) {
     // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
     if (error instanceof CatalogError && error.code === "store.not-active") return;

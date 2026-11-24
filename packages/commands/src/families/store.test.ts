@@ -139,6 +139,132 @@ test("store.upgrade discovers the canonical project harness and imports its lega
   }
 });
 
+test("store.upgrade records and replays under the caller's --operation id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-operation-"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = (operation: string) =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator", operation }), invocation(root));
+
+    // invariant: The caller's id is the one the import operation uses, so a clean retry (same
+    // options, same source bytes) addresses THIS reservation instead of minting a second.
+    const first = await upgrade("caller-owned-operation");
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
+
+    const operations = () => {
+      const store = new DatabaseSync(join(harness, "store.db"));
+      try {
+        return store.prepare("select operation_id from store_operations order by rowid").all()
+          .map((row) => String((row as { operation_id?: unknown }).operation_id));
+      } finally {
+        store.close();
+      }
+    };
+    // note: The legacy import records its own receipt under the caller's id; the DSH host-state
+    // phase derives its id from it, so every recorded id is namespaced by the caller's value.
+    const recorded = operations()
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded.every((id) => id.startsWith("caller-owned-operation"))).toBe(true);
+
+    // invariant: Reissuing the SAME id with the SAME options replays its retained receipt instead
+    // of reserving a second operation.
+    const replay = await upgrade("caller-owned-operation");
+    expect(replay.status).toBe("ok");
+    expect(operations()).toEqual(recorded);
+
+    // invariant: The receipt binds the EXACT request, so a retry that ADDS a request-identity
+    // option (--ack-skip-workflow / --ack-skip-compass / --delivery) is a different request and
+    // refuses under the old id. That is why `--operation` is not part of the advertised
+    // acknowledgement recovery: the operator omits it and the new request reserves its own
+    // operation, while the earlier receipt and the rows it committed stay native facts.
+    const changedRequest = await definition.execute(
+      definition.input.parse({
+        harness,
+        operator: "fixture-operator",
+        operation: "caller-owned-operation",
+        ackSkipWorkflow: ["upgrade-fixture-workflow"],
+      }),
+      invocation(root),
+    );
+    expect(changedRequest).toMatchObject({ status: "refused", code: "execution.operation-conflict" });
+    // invariant: The retained receipt is untouched by the refusal.
+    expect(operations()).toEqual(recorded);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * why: The other half of the id contract — `--ack-skip-dsh` is host-state import state, NOT request
+ * identity. The documented `store.upgrade-dsh-source-refused` recovery reissues the SAME entry
+ * (same `--operation`, one added selector) because the failed run already committed its execution
+ * half; the retry must replay that half instead of dying as `execution.operation-conflict`.
+ */
+test("store.upgrade replays its committed execution half when a retry adds --ack-skip-dsh", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-dsh-ack-replay-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    // why: one refused DSH host-state fact — a malformed accepted-identity line.
+    const workflowDir = join(harness, "workflows", "upgrade-fixture-workflow");
+    writeFileSync(join(workflowDir, "agent-flow-ids.jsonl"), '{"id":"accepted","d":"digest"}\nmalformed\n');
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = (extra: Record<string, unknown>) =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator", operation: "replayed-operation", ...extra }), invocation(root));
+
+    const refused = await upgrade({});
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused" });
+
+    // invariant: The SAME id with one added DSH selector replays the committed execution half
+    // instead of refusing `execution.operation-conflict`, so the advertised recovery is reachable
+    // in one step.
+    const recovered = await upgrade({ ackSkipDsh: ["dsh-ledger:upgrade-fixture-workflow"] });
+    expect(recovered.status).toBe("ok");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("store.upgrade refuses a malformed --operation before it touches the schema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-bad-operation-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+
+    // invariant: A malformed id is caller input, so it is refused before the irreversible schema
+    // advance: the operator corrects the value and continues from an UNCHANGED store.
+    const refused = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", operation: "import 1" }),
+      invocation(root),
+    );
+    expect(refused).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
+    expect(existsSync(join(harness, "store.db"))).toBe(false);
+    // invariant: Nothing of the legacy source was consumed either — the same command succeeds once
+    // the id is corrected.
+    const accepted = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", operation: "import-1" }),
+      invocation(root),
+    );
+    expect(accepted.status).toBe("ok");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("store.upgrade names the required operator input before writing", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-missing-operator-"));
   try {
@@ -698,13 +824,15 @@ test("store.upgrade advances a combined source's execution schema before directi
 
     // note: The collaboration authority is still the cutover's to move, and the refusal must
     // disclose the schema advance it committed: the released 4.8.x ceiling is already behind
-    // this store, so that build refuses it and the ladder is the only way back.
+    // this store, nothing lowers it, so that build refuses it even after the cutover and the
+    // ladder is this newer build's to finish.
     const refused = await upgrade();
     expect(refused).toMatchObject({ status: "refused", code: "collaboration.cutover-required", exitCode: 1 });
     if (refused.status !== "refused") throw new Error("expected the cutover refusal");
     expect(refused.message).toContain("The execution schema now stands at version");
     expect(refused.message).toContain("store.schema-unsupported");
-    expect(refused.message).toContain("cutover ladder must be completed");
+    expect(refused.message).toContain("refuses this store as `store.schema-unsupported` even after the cutover");
+    expect(refused.message).toContain("Complete the cutover ladder with this newer build");
 
     // invariant: The execution schema reached this build, so the cutover's source floor and the
     // terminal lifecycle write are both reachable from the store the refusal left behind.

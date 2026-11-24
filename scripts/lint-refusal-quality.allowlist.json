@@ -106,5 +106,11 @@
     "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter after family-refusal.ts type-checks it; strict static proof cannot evaluate the `recovery ?? literal` expression, the same class as pr-review.ts — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/store.ts:8b6fb04c6d73",
+    "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter (`engineErrorFacts(error).recovery ?? <per-code literals>`), the same shape pr.ts and issue-sync.ts use; strict static proof cannot evaluate the `??` expression \u2014 see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
   }
 ]
