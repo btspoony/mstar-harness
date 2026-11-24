@@ -604,9 +604,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(String(jsonOf(phase).code)).toBe("coordination.scope-mismatch");
     expect(existsSync(strayCompass)).toBe(false);
 
-    // The close is writable the moment it is legitimate: every registered row
-    // Done, the compass closed, and the recorded integration checkout on its own
-    // branch. The older gate named a PR stage here and refused this exact call.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // the close is writable once every row is Done, the compass closed and the
+    // recorded integration checkout is on its own branch.
     const store = await openStore(fixture.context, "write");
     try {
       const row = store.db

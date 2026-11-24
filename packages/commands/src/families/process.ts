@@ -227,7 +227,7 @@ async function setupReviewWorktree(input: Input, invocation: InvocationContext):
     throw error;
   }
 }
-/** Engine-defined layer-ref namespace (`iteration-stack/<workflow-id>/sNN`); documents the one scoped name-derived ownership exception. */
+/** Engine-defined layer-ref namespace (`iteration-stack/<workflow-id>/sNN`) — see skills/mstar-iteration/references/pr-stack.md. */
 const LAYER_REF = /^iteration-stack\/([^/]+)\/s\d+(?:\/|$)/;
 type CleanupClaim = { workflowId: string; planId?: string };
 function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", value: string): CleanupClaim[] {
@@ -236,8 +236,8 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
     try { return fs.realpathSync(candidate); } catch { return path.resolve(candidate); }
   };
   if (field === "branch" && snapshot.branch?.integration === value) claims.push({ workflowId: snapshot.id });
-  // A layer ref names its owning workflow; contributes no planId so the
-  // merged-evidence base stays `branch.target` and non-terminal protection applies.
+  // see skills/mstar-iteration/references/pr-stack.md — a layer ref names its
+  // owning workflow; no planId, so merged evidence reads branch.target.
   if (field === "branch" && LAYER_REF.exec(value)?.[1] === snapshot.id) claims.push({ workflowId: snapshot.id });
   if (field === "path" && [snapshot.integration_worktree_path, (snapshot as WorkflowSnapshot & { control_worktree_path?: string }).control_worktree_path].some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value))) claims.push({ workflowId: snapshot.id });
   for (const row of snapshot.plans as unknown as Record<string, unknown>[]) {

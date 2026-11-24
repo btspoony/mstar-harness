@@ -522,8 +522,9 @@ async function remoteFixture(prefix: string): Promise<{ root: string; bare: stri
       started_at: "2026-09-11",
       updated_at: "2026-09-11",
       branch: { base: mainBranch, integration: "iteration/wf-2", target: mainBranch },
-      // The plan row records the main checkout: the completed close's delivery
-      // proof reads the integration tip's ancestry on main from there.
+      // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+      // §4f — the completed close's proof reads the integration tip's ancestry
+      // on main from the recorded checkout.
       plans: [row("plan-a", "Done", { metadata: { worktree_path: worktreeList(root)[0]!.path } })],
     },
     "completed",
@@ -608,14 +609,13 @@ async function probeFixture(
     status: "running",
     started_at: "2026-09-11",
     updated_at: "2026-09-11",
-    // Two DISTINCT base strings resolving to the SAME commit OID: V=1. The
-    // iteration's delivery line IS its integration branch, so the recorded
-    // target is that same branch (bare name — deliveryRef supplies the
-    // refs/ prefix): tip === target is a trivially landed chain.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — an iteration's delivery line IS its integration branch, so the
+    // recorded target is that same branch and tip === target is a landed chain.
     branch: { base: "refs/heads/integration/wf-3", integration: "integration/wf-3", target: "integration/wf-3" },
     plans: [
-      // plan-a records the main checkout: the completed close's delivery proof
-      // reads the integration/target refs from there.
+      // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+      // §4f — the completed close's proof reads the refs from the recorded checkout.
       planRow("plan-a", { metadata: { working_branch: merged[0], track_branches: extraTracks, worktree_path: worktreeList(root)[0]!.path } }),
       planRow("plan-b", { metadata: { working_branch: "unmerged-1" } }),
     ],
@@ -962,9 +962,9 @@ async function terminalIntegrationFixture(prefix: string): Promise<{ root: strin
     branch: { base: mainBranch, integration: "iteration/wf-9", target: mainBranch },
     integration_worktree_path: intPath,
     plans: [row("plan-a", "Done", { metadata: { working_branch: "feature/done-a", worktree_path: donePath } })],
-    // The integration line never landed on main, so the honest terminal state
-    // is `stopped` — `completed` is exactly what the delivery-merge gate now
-    // refuses, and the unmerged-branch test needs the branch to stay unmerged.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the integration line never landed on main, so `stopped` is the
+    // honest terminal state and the branch stays unmerged for the test.
   }, "stopped");
   return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath, context };
 }
@@ -2665,7 +2665,7 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
  * `gh` PATH shim: logs every child argv to a JSONL file, then answers
  * `gh pr list` by base-filtering `MSTAR_GH_PR_LIST` (JSON string) and
  * applying its `--limit`, or fails when `MSTAR_GH_FAIL` is set. Any other
- * gh argv exits 127 — the probe is the only permitted call.
+ * gh argv exits 127 — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
  */
 function installGhShim(home: string): { shimDir: string; logPath: string; env: Record<string, string> } {
   const shimDir = join(home, "gh-shim");
@@ -2708,7 +2708,7 @@ function readGhLog(logPath: string): { cwd: string; argv: string[] }[] {
     .map((line) => JSON.parse(line) as { cwd: string; argv: string[] });
 }
 
-/** Terminal iteration whose `branch.target` is the default branch — a layer ref is merged-evidence eligible. */
+/** Terminal iteration whose `branch.target` is the default branch — a layer ref is merged-evidence eligible; see skills/mstar-iteration/references/pr-stack.md. */
 async function layerFixture(prefix: string): Promise<{ root: string; mainBranch: string; context: StoreContext }> {
   const home = tmpRoot(prefix);
   const bare = join(home, "origin.git");
@@ -2723,7 +2723,8 @@ async function layerFixture(prefix: string): Promise<{ root: string; mainBranch:
   const mainBranch = git(["branch", "--show-current"], root);
   git(["push", "-q", "-u", "origin", mainBranch], root);
   const context = await activateStore(root);
-  // "stopped" is terminal without tripping the phase-6 delivery-merge gate,
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — `stopped` is terminal without tripping the delivery-merge gate,
   // which only guards a `completed` iteration close.
   await registerTerminalWorkflow(context, {
     schema_version: 1,
@@ -2744,15 +2745,15 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
     const home = dirname(fx.root);
     const shim = installGhShim(home);
     try {
-      // No layer ref exists → the probe gate keeps gh unspawned.
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md — no layer ref, so the probe never spawns gh.
       const noLayer = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, shim.env);
       expect(noLayer.exitCode).toBe(0);
       expect(readGhLog(shim.logPath)).toEqual([]);
 
-      // A layer ref of this workflow, merged into branch.target.
+      // A layer ref of this workflow, merged into branch.target — see skills/mstar-iteration/references/pr-stack.md.
       git(["branch", "iteration-stack/iter-1/s01"], fx.root);
 
-      // Nobody's open base → eligible remove; the probe runs once per layer ref.
+      // Nobody's open base → eligible remove; the probe runs once per layer ref — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       const notBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
       expect(notBase.exitCode).toBe(0);
       expect(decisionRows(notBase)).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
@@ -2762,7 +2763,7 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       expect(probe.argv[probe.argv.indexOf("--repo") + 1]).toMatch(/^[^/]+\/[^/]+$/);
       expect(probe.argv[probe.argv.indexOf("--base") + 1]).toBe("iteration-stack/iter-1/s01");
 
-      // An open PR bases on the layer ref → refuse.
+      // An open PR bases on the layer ref → refuse; see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       const openBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, {
         ...shim.env,
         MSTAR_GH_PR_LIST: JSON.stringify([{ baseRefName: "iteration-stack/iter-1/s01", headRefName: "iteration-stack/iter-1/s02" }]),
@@ -2770,7 +2771,7 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       expect(openBase.exitCode).toBe(0);
       expect(decisionRows(openBase)).toContain("refuse | local-branch | iteration-stack/iter-1/s01 | cleanup.refuse.open-pr-base");
 
-      // Probe failure → the same refusal (fail closed).
+      // Probe failure → the same refusal (fail closed); see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       const failed = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_FAIL: "1" });
       expect(failed.exitCode).toBe(0);
       expect(decisionRows(failed)).toContain("refuse | local-branch | iteration-stack/iter-1/s01 | cleanup.refuse.open-pr-base");
@@ -2787,7 +2788,7 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       git(["branch", "iteration-stack/wf-other/s01"], fx.root);
       const dry = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
       expect(dry.exitCode).toBe(0);
-      // Foreign under the default scope: no candidate row is printed at all.
+      // Foreign under the default scope: no candidate row is printed — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       expect(decisionRows(dry).join("\n")).not.toContain("iteration-stack/wf-other");
       const all = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root, "--all-workflows"], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
       expect(all.exitCode).toBe(0);

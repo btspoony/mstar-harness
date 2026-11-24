@@ -424,12 +424,12 @@ describe("planWorktreeCleanup", () => {
       snapshots: [iterDone],
       mergedLocalBranches: { main: ["main", "iteration-stack/iter-done/s01"] },
       targets: [
-        // CLI attribution: cleanupClaims names {workflowId: "iter-done"}, no planId.
+        // see skills/mstar-iteration/references/pr-stack.md — CLI attribution names {workflowId}, no planId.
         target({ kind: "local-branch", ref: "iteration-stack/iter-done/s01", branch: "iteration-stack/iter-done/s01", owner: { workflowId: "iter-done" } }),
       ],
     };
-    // No planId ⇒ mergedEvidenceBase resolves branch.target ("main"), and
-    // membership of the layer tip in main carries the remove verdict.
+    // see skills/mstar-iteration/references/pr-stack.md — no planId, so
+    // mergedEvidenceBase resolves branch.target and membership carries remove.
     expect(planWorktreeCleanup(iterDone, facts)).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s01", verdict: "remove", reason: "cleanup.remove.merged" },
     ]);
@@ -450,15 +450,15 @@ describe("planWorktreeCleanup", () => {
       mergedLocalBranches: { main: ["main", "iteration-stack/iter-done/s02"] },
       targets: [layer],
     };
-    // Merged evidence would pass, but the open-PR-base rule fires first.
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — merged evidence passes, but the open-PR-base rule fires first.
     expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["iteration-stack/iter-done/s02"] })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
     ]);
-    // null = probe unverified: fail closed with the same code.
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — null = probe unverified, fail closed with the same code.
     expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: null })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
     ]);
-    // A layer that is nobody's open base still removes.
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a layer that is nobody's open base still removes.
     expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["feature/other"] })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "remove", reason: "cleanup.remove.merged" },
     ]);

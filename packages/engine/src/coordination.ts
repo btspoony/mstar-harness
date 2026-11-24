@@ -1439,9 +1439,9 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
 export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   const violations = consultDeliveryEvidence(snapshot);
   if (violations.length > 0) return violations;
-  // The route decides which proof runs: a `development` plan proves its
-  // delivery branch reached the target (merge, rebase, squash); an iteration
-  // proves the chain top of its delivery line reached the target.
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+  // a `development` plan proves its delivery branch reached the target; an
+  // iteration proves the chain top of its delivery line reached the target.
   if (snapshot.type === "plan") {
     return snapshot.delivery_kind === "development" ? deliveryMergeViolations(snapshot) : [];
   }
@@ -1452,6 +1452,7 @@ function mergeUnproven(message: string, fix: string): ValidationResult[] {
   return [{ ok: false, severity: "high", code: "PHASE6_DELIVERY_MERGE_UNPROVEN", message, fix }];
 }
 
+// see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f
 /**
  * The one place that turns recorded rows into the checkout and the resolved
  * target commit a delivery proof reads. Every route shares it, so the plan and
@@ -1459,7 +1460,8 @@ function mergeUnproven(message: string, fix: string): ValidationResult[] {
  *
  * - the recorded checkouts are the plan rows' own `metadata.worktree_path`,
  *   with `extraCheckouts` ahead of them (the iteration route leads with its
- *   recorded integration checkout);
+ *   recorded integration checkout — see
+ *   skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f);
  * - the target ref is resolved remote-first inside each of them, because a
  *   provider merge lands in the remote (see `deliveryRef`);
  * - a recorded checkout repointed at a different clone, where neither ref
@@ -1517,23 +1519,22 @@ function deliveryCheckoutOf(
   return { checkout, target };
 }
 
-/** Route vocabulary for `deliveryCheckoutOf`'s refusals. */
+/** Route vocabulary for `deliveryCheckoutOf`'s refusals — see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f. */
 type DeliveryProofWording = Readonly<{
-  /** The route's own recovery step, named after "if the merge was a squash or rebase". */
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — the route's own recovery step, named after "if the merge was a squash or rebase". */
   record: string;
-  /** How the missing-target-ref recovery refers to the recorded checkout. */
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — how the missing-target-ref recovery names the recorded checkout. */
   checkout: string;
-  /** What that recovery says about a recorded commit substituting for the target ref. */
+  /** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — what that recovery says about a recorded commit substituting for the target ref. */
   targetTail: string;
 }>;
 
 function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  // The pure consultation just proved both branch anchors present. The merge
-  // member stays OPTIONAL — it is read when recorded, never required — so the
-  // proof below reads it defensively and only has to name what Git could not
-  // supply.
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — the pure consultation proved both branch anchors; the merge member
+  // stays OPTIONAL, so the proof below reads it defensively.
   const deliveryBranch = deliveryBranchOf(branch) as string;
   const targetBranch = branch.target as string;
   const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`;
@@ -1568,10 +1569,10 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   } else {
     const cherry = gitRead(checkout, ["cherry", target, tip]);
     if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) {
-      // `git cherry` omits merge commits, so an all-`-` result only proves a
-      // merge-free delivery history: content that exists only in a merge would
-      // not be reported. A merge-bearing history falls through to the recorded
-      // commit proof or the refusal below.
+      // `git cherry` omits merge commits, so an all-`-` result proves only a
+      // merge-free delivery history — see
+      // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f;
+      // a merge-bearing history falls through to the recorded-commit proof.
       const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
       if (merges === "") return [];
       unproven.push(
@@ -1616,7 +1617,8 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
 }
 
 /**
- * §4f the iteration delivery proof: the chain TOP of the delivery line is on
+ * see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+ * the iteration delivery proof: the chain TOP of the delivery line is on
  * the target. An iteration's delivery line is `branch.integration` — every
  * landed layer sits on it — so one ancestry read answers "did the whole chain
  * land" without the engine authoring a per-layer inventory it cannot derive.

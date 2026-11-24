@@ -2343,8 +2343,8 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
   });
 
   test("a retired stage name is not re-licensable inside a code span", () => {
-    // The old gate named a third transition; the guard must reject it in a code
-    // span as it does in prose, and a longer identifier is not a probe either.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // a retired stage name is rejected in a code span, and a longer identifier is not a probe either.
     for (const form of ["`phase-4-pr-delivery`", "`phase-4-pr-delivery-extra`", "phase-4-pr-delivery"]) {
       expect(findRetiredStageSpellings(`run ${form} now`).length).toBeGreaterThan(0);
     }

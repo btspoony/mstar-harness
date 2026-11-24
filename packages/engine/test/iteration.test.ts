@@ -327,8 +327,8 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
         prBaseBranch: "main",
       },
     );
-    // The close is the transition the moment every plan is Done: a green
-    // checklist cannot move the gate to a third stage after the close.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // the close is the transition once every plan is Done; a green checklist adds no stage.
     expect(result.transition).toBe("phase-3-close");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);

@@ -488,7 +488,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const fixture = await workflowFixture("phase-skipped");
     const before = await workflowFootprint(fixture.context);
 
-    // The row is Todo, so the gate produces phase-2-execute: the close is skipped.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md — the row is Todo, so the gate produces phase-2-execute and the close request is refused.
     const skipped = await refusalOf(() =>
       workflowMutation(fixture, "op-phase-close", {
         kind: "phase",
@@ -533,9 +533,9 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
   test("phase-3-close is accepted exactly when the gate's own evidence is complete", async () => {
     const fixture = await workflowFixture("phase-close");
     setRowStatus(fixture.context, PLAN_ID, "Done");
-    // The §3.5 exit item 6 probe is the recorded PR identity (§4d): the DB
-    // authority holds no operator PR probe, so that evidence is what makes
-    // the close verifiable at all.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4d — the recorded PR identity is the only probe the DB authority holds,
+    // so that evidence is what makes the close verifiable at all.
     await workflowMutation(fixture, "op-delivery-4", { kind: "delivery", delivery: DELIVERY_TAIL });
     writeCompass(fixture.compassPath, {
       status: "completed",
@@ -544,8 +544,8 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       endDate: "2026-01-02",
     });
 
-    // Every row Done with green checklists IS the close: the older gate named a
-    // PR stage here instead and refused this exact call.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // every row Done with green checklists IS the close; a PR-stage request here is refused.
     const skipped = await refusalOf(() =>
       workflowMutation(fixture, "op-phase-execute-again", {
         kind: "phase",
@@ -1298,9 +1298,9 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
   test("an iteration close needs the delivery line tip on the target, and proves it after the merge", async () => {
     const fixture = await workflowFixture("iteration-unmerged", [], "iteration");
     setRowStatus(fixture.context, PLAN_ID, "Done");
-    // A real commit on the iteration's own delivery line: every fixture starts
-    // it at the target tip, so an ancestry check would otherwise pass for
-    // free. This one is divergent and not merged.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+    // every fixture starts the delivery line at the target tip, so ancestry
+    // would pass for free; this divergent, unmerged commit is the honest block.
     writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer the target never received\n");
     runGit(["add", "-A"], fixture.integrationPath);
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
@@ -1316,10 +1316,10 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     const stated = JSON.stringify(refused.details);
     expect(stated).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on main`);
     expect(stated).toContain("--status stopped");
-    // The iteration stays running: a refused close writes nothing.
+    // The iteration stays running: a refused close writes nothing (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
-    // The chain lands: the same close now proves the tip is on the target.
+    // The chain lands: the same close now proves the tip is on the target (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "land the stack", INTEGRATION_BRANCH], fixture.repoRoot);
     const closed = await workflowMutation(fixture, "op-iteration-merged-close", {
       kind: "lifecycle",
@@ -1330,8 +1330,9 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
   });
 
   test("an iteration whose delivery line never advanced still closes", async () => {
-    // The common shape: every fixture starts the integration branch at the
-    // target tip, so the proof is one ancestry read that succeeds.
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —
+    // the fixture starts the integration branch at the target tip, so the
+    // proof is one ancestry read that succeeds.
     const fixture = await workflowFixture("iteration-already-landed", [], "iteration");
     setRowStatus(fixture.context, PLAN_ID, "Done");
     const closed = await workflowMutation(fixture, "op-iteration-landed-close", {
