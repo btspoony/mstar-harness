@@ -2557,6 +2557,24 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/f.md", text: "## Phase 2\n-4 °C is the minimum.\n" }]).hits).toEqual([]);
   });
 
+  test("a quoted heading is not joined to the quoted paragraph below it", () => {
+    for (const text of ["> ## Phase\n> 4 checks passed.\n", "> ## Phase 2\n> -4 °C is the minimum.\n"]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/fq.md", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("a quoted paragraph's lazy continuation joins without its own marker", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/ql.md", text: "> Open the Phase\n4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blank line or a new block opener breaks a quoted paragraph's lazy continuation", () => {
+    for (const text of ["> Open the Phase\n\n4 delivery.\n", "> Open the Phase\n## 4 delivery.\n"]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/ql2.md", text }]).hits).toEqual([]);
+    }
+  });
+
   test("a quoted bullet is a new block, not a stage run", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/r.md", text: "> Phase 2\n> - 4 checks passed\n" }]).hits).toEqual([]);
   });
@@ -2818,6 +2836,53 @@ describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
   test("a json case corpus is read as full text", () => {
     const result = checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text: '{"prompt":"Phase 4 closes"}' }]);
     expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a single-quoted detail attribute is reader-visible text", () => {
+    for (const text of [
+      "<svg><g data-node-label='Phase 5'></g></svg>",
+      "<svg><g data-edge-sublabel='Phase 4 now'></g></svg>",
+      '<svg><g data-node-sublabel="Phase 5"></g></svg>',
+    ]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toMatch(/"Phase [45]/);
+    }
+  });
+
+  test("a single-quoted attribute value does not swallow the next node's label", () => {
+    const svg = "<svg><g data-node-label='clean'></g><text>Phase 5</text></svg>";
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 5"');
+  });
+
+  test("a separate-control element splits a run in page prose", () => {
+    for (const html of [
+      "<html><body><select><option>Phase</option><option>4 checks</option></select></body></html>",
+      "<html><body><details><summary>Phase</summary><p>4 checks</p></details></body></html>",
+      "<html><body><fieldset>Phase</fieldset><fieldset>4 checks</fieldset></body></html>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.html", text: html }]).hits).toEqual([]);
+    }
+  });
+
+  test("a separate-control element splits a run in embedded HTML", () => {
+    for (const text of [
+      "<svg><foreignObject><option>Phase</option><option>4 checks</option></foreignObject></svg>",
+      "<svg><foreignObject><summary>Phase</summary><summary>4 checks</summary></foreignObject></svg>",
+      "<svg><foreignObject><textarea>Phase</textarea><textarea>4 checks</textarea></foreignObject></svg>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.svg", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("an inline element still joins its neighbours", () => {
+    const result = checkRetiredStageNames([
+      { rel: "assets/x.html", text: "<html><body><p>Then Pha<span>se</span> 4 closes it.</p></body></html>" },
+    ]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
   });
 });
 

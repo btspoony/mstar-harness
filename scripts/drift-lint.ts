@@ -102,26 +102,31 @@
  * the `<text>`, `<title>`, `<desc>` and `aria-label` values are read with
  * comments skipped, inline markup joined and numeric character references
  * decoded, and so are the `data-node-*` / `data-edge-*` detail attributes an
- * interactive viewer renders on demand. A diagram label is literal text: a
+ * interactive viewer renders on demand, in either quote style. A diagram label is literal text: a
  * backtick is a character a reader sees, so a probe in a label is prose. An
  * `.html` page also has its ordinary prose judged as rendered blocks:
- * block-level tags and `<button>` separate runs, a source line break or
- * `<br>` inside a run renders as one space, and an inline tag is dropped
- * without adding one, so `Pha<b>se</b>
- * 4` and a `Phase` / `4` line break both read as `Phase 4`. Each run's
+ * block-level elements, separate controls and embedded blocks separate runs,
+ * a source line break or `<br>` inside a run renders as one space, and an
+ * inline tag is dropped without adding one, so `Pha<b>se</b>
+ * 4` and a `Phase` / `4` line break both read as `Phase 4`. Both passes read
+ * one element list (`BLOCK_ELEMENTS`), so a diagram's embedded HTML and the
+ * page prose cannot disagree about what a block is. Each run's
  * diagnostic names the line its text starts on. A `foreignObject`'s embedded
  * HTML is read the same way, so `section<br>5.1` reads as `section 5.1`.
  * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
- * and adjacent prose lines are judged as one block: a line is a block
- * boundary when it opens a heading, table, fence or blockquote the previous
- * line did not already open, or when it starts a list marker; two lines join
- * when neither is a boundary, or when the current line is the same blockquote
- * container's next line or a list item's lazy continuation at any
- * indentation, so a name split by a line break is still reported. A blank
- * line ends the block and the quote prefix is dropped before the join; a match
- * wholly inside the earlier line is reported there only. A list marker is
- * `-`/`*`/`+` or an ordered `1.`/`1)` in either spelling, and a new marker of
- * any indentation is a block boundary, never a wrapped line. `<code>` is
+ * and adjacent prose lines are judged as one block. One rule decides the join:
+ * a line joins its predecessor only when the predecessor is a **paragraph**
+ * line — not a heading, fence or table row — and it then either continues the
+ * same blockquote container, carries a quote prefix equal to the previous
+ * container's, or carries none under a quoted paragraph, which is a lazy
+ * continuation. A new block opener always breaks: a heading, a fence, a table
+ * row, or a list marker `-`/`*`/`+`/`1.`/`1)` in either spelling at any
+ * indentation, never a wrapped line. So `> Phase` / `4 delivery` joins (a
+ * lazy continuation), `> Phase` / `> 4 delivery` joins (one container), a
+ * quoted heading `> ## Phase` does not join the paragraph below it even in the
+ * same quote, and a quote opened after a plain paragraph is its own block. A
+ * blank line ends the block and the quote prefix is dropped before the join; a
+ * match wholly inside the earlier line is reported there only. `<code>` is
  * judged
  * like a backtick span in Markdown, and a span opens and closes on a whole
  * backtick run of equal length. A fence
@@ -1686,8 +1691,9 @@ const INLINE_CODE = /(?<!`)(`+)([^`]*)\1(?!`)/g;
  * `desc` is reader-visible too (tooltip and screen-reader text). */
 const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
-// see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text.
-const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*"([^"]*)"/gi;
+// see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text;
+// the quote style is not part of the contract, so either pair opens the value.
+const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*(["'])([\s\S]*?)\1/gi;
 /** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier that
  * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
  * `PHASE6_` code family is exempt by prefix because the CLI names its
@@ -1709,12 +1715,23 @@ const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
  * attribute is part of the tag, not the label) or the text between two tags or comment boundaries. */
 const TAG = /<(?:[^>"']|"[^"]*"|'[^']*')*>/;
 const TAG_OR_TEXT = /<(?:[^>"']|"[^"]*"|'[^']*')*>|[^\0<]+/g;
-/** see scripts/drift-lint.ts § 16 — block-level elements (and buttons, which a browser renders as separate
- * controls) break a text run; any other tag is dropped without adding whitespace. */
-const BLOCK_TAG =
-  /^<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd|button)\b/i;
+/** see scripts/drift-lint.ts § 16 — the one element list both prose passes read: block-level elements,
+ * separate controls and embedded blocks break a text run, while an inline element is dropped without
+ * adding whitespace. */
+const BLOCK_ELEMENTS = [
+  "address", "article", "aside", "audio", "blockquote", "br", "button", "canvas", "caption", "dd",
+  "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "iframe", "li", "main", "nav",
+  "noscript", "object", "ol", "option", "p", "picture", "pre", "section", "select", "summary",
+  "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "tr", "ul", "video",
+].join("|");
+/** see scripts/drift-lint.ts § 16 — the `foreignObject` pass tests a single tag token against the list. */
+const BLOCK_TAG = new RegExp(`^</?(?:${BLOCK_ELEMENTS})\\b`, "i");
+/** see scripts/drift-lint.ts § 16 — the HTML prose pass splits a page on the same list. */
+const BLOCK_ELEMENT = new RegExp(`</?(?:${BLOCK_ELEMENTS})\\b[^>]*>`, "gi");
 /** see scripts/drift-lint.ts § 16 — why: `<br>` renders a line break inside a run, which a reader sees as
- * whitespace, so it joins its neighbours with one space instead of ending the run. */
+ * whitespace, so it joins its neighbours with one space instead of ending the run; `br` sits in the list
+ * above, so a pass that tests this first keeps that meaning. */
 const BR_TAG = /^<br\b/i;
 /** see scripts/drift-lint.ts § 16 — an SVG element that embeds HTML the reader sees as ordinary prose. */
 const FOREIGN_OBJECT = /<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi;
@@ -1834,7 +1851,7 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   // see scripts/drift-lint.ts § 16 — an interactive viewer renders some text from element attributes on
   // demand, so a clean static caption does not prove the interactive detail is clean.
   for (const match of markup.matchAll(DATA_TEXT)) {
-    const value = decodeXmlEntities(match[1].replace(/\0+/g, ""));
+    const value = decodeXmlEntities(match[2].replace(/\0+/g, ""));
     if (value.trim() === "") continue;
     segments.push({ text: value, line: lineAt(match.index ?? 0) });
   }
@@ -1858,8 +1875,8 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
     for (const token of body.matchAll(TAG_OR_TEXT)) {
       const fragment = token[0];
       if (fragment.startsWith("<")) {
-        if (BLOCK_TAG.test(fragment)) flush();
-        else if (BR_TAG.test(fragment)) run += " ";
+        if (BR_TAG.test(fragment)) run += " ";
+        else if (BLOCK_TAG.test(fragment)) flush();
         continue;
       }
       const lead = fragment.search(/\S/);
@@ -1920,6 +1937,12 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
 const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
 /** see scripts/drift-lint.ts § 16 — a list marker in either spelling starts a block. */
 const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])(?:\s|$)/;
+/** see scripts/drift-lint.ts § 16 — a list marker with no item content opens no paragraph, so nothing joins
+ * it; a marker line carrying prose opens the item's paragraph and its continuation joins it. */
+const BARE_MARKER = /^\s*(?:[-*+]|\d+[.)])\s*$/;
+/** see scripts/drift-lint.ts § 16 — a heading or table row opens a block that is not a paragraph, so it
+ * never joins the line below it. A fence is tracked separately. */
+const PARAGRAPH_BREAKER = /^\s*(?:#{1,6}(?:\s|$)|\|)/;
 /** see scripts/drift-lint.ts § 16 — a heading, table or fence opens a block; a blockquote is judged
  * against the previous line, since the same container's next line continues it. */
 const BLOCK_OPENER = /^\s*(?:#{1,6}(?:\s|$)|\||`{3,}|~{3,})/;
@@ -1940,10 +1963,11 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
   // unquoted fence keeps a leading `>` as literal content.
   let fence: { char: string; len: number; quote: string } | null = null;
   // see scripts/drift-lint.ts § 16 — why: Markdown renders adjacent prose lines as one block, so a name
-  // split across a line break is judged on the joined pair as well.
+  // split across a line break is judged on the joined pair as well. What the predecessor line was decides
+  // whether the next one may join it: its quote container, and whether it was a paragraph at all.
   let previous = "";
-  let previousStartsBlock = false;
-  let previousIsItem = false;
+  let previousQuote = "";
+  let previousIsParagraph = false;
   for (const { text, line } of rows) {
     const delimiter = text.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
     const quote = quoteOf(text);
@@ -1981,20 +2005,17 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     }
     const lineHits = findRetiredStageSpellings(text, false);
     for (const hit of lineHits) report(line, hit);
-    // see scripts/drift-lint.ts § 16 — the rule, stated once: a line is a block boundary when it opens
-    // a heading, a table, a fence or a blockquote the previous line did not already open, or when it
-    // starts a list marker (`-`, `*`, `+`, `1.`, `1)`). Two lines join when neither is a boundary, or
-    // when the current line continues the previous block: it is the same blockquote container's next
-    // line, or the previous line is a list item and this one is not a new marker, i.e. a lazy
-    // continuation at any indentation. The quote prefix is markup, so the inner line is classified:
-    // `> Phase 2` followed by `> - 4 checks` is a new bullet.
+    // see scripts/drift-lint.ts § 16 — the rule, stated once: a line joins its predecessor only when the
+    // predecessor is a paragraph line (not a heading, table row or fence) and the current line is not a
+    // new block opener (a list marker `-`/`*`/`+`/`1.`/`1)` at any indentation, a heading, a fence or a
+    // table row). Then it must also continue the same container: the same blockquote prefix, or — under a
+    // quoted paragraph — no prefix at all, which is a lazy continuation; an opening quote after a plain
+    // paragraph is a new block. The quote prefix is markup, so the inner line is classified: `> Phase 2`
+    // followed by `> - 4 checks` is a new bullet, and `> ## Phase` followed by `> 4 checks` is two blocks.
     const inner = quoteless(text);
-    const startsMarker = LIST_MARKER.test(inner);
-    const startsBlock = startsMarker || BLOCK_OPENER.test(inner);
-    const startsQuote = quote !== "";
-    const opensQuote = startsQuote && quote !== quoteOf(previous);
-    const sameQuote = startsQuote && quote === quoteOf(previous);
-    const joins = !(startsBlock || opensQuote) && (!previousStartsBlock || previousIsItem || sameQuote);
+    const startsBlock = LIST_MARKER.test(inner) || BLOCK_OPENER.test(inner);
+    const continues = quote === previousQuote || (quote === "" && previousQuote !== "");
+    const joins = previousIsParagraph && !startsBlock && continues;
     if (previous !== "" && text.trim() !== "" && joins) {
       // see scripts/drift-lint.ts § 16 — recognize spans on the joined SOURCE (a Markdown code span may
       // cross one line break), with the boundary rendered as a space so a probe inside a straddling
@@ -2022,9 +2043,15 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
       }
     }
     previous = text.trim() === "" ? "" : text;
-    // see scripts/drift-lint.ts § 16 — what this line opened decides whether the next one continues it.
-    previousIsItem = startsMarker;
-    previousStartsBlock = startsBlock || startsQuote;
+    // see scripts/drift-lint.ts § 16 — a blank line ends the block, so nothing joins it; otherwise what
+    // this line was decides whether the next one may.
+    if (text.trim() === "") {
+      previousQuote = "";
+      previousIsParagraph = false;
+    } else {
+      previousQuote = quote;
+      previousIsParagraph = !BARE_MARKER.test(inner) && !PARAGRAPH_BREAKER.test(inner);
+    }
   }
 }
 
@@ -2073,9 +2100,8 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         // separate blocks, a line break or `<br>` between inline content renders as one space, and an
         // inline tag is dropped without inserting one (so `Pha<b>se</b> 4` renders `Phase 4`). `<button>`
         // is a boundary too: two buttons are separate controls, so `Open` + `Phase 4` never joins.
-        // Each block is judged whole.
-        const blockTag =
-          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd|button)\b[^>]*>/gi;
+        // Each block is judged whole, on the one element list `BLOCK_TAG` also reads.
+        const blockTag = BLOCK_ELEMENT;
         // see scripts/drift-lint.ts § 16 — the first character of the rendered text, so the diagnostic
         // names the line that text starts on rather than the line its opening tag sits on.
         const firstContent = (slice: string): number => {

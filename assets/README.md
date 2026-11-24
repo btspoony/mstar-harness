@@ -22,8 +22,8 @@ rendered pages then need hand post-processing, which the generator has no flag f
    payload, and every `.diagram-guide-credit`, `.diagram-guide-credit-link` and `.diagram-guide-star`
    rule block — base, `:hover` and `:focus-visible` — from the page stylesheet; the rules are dead
    once the element is gone, and the SVG inherits them through the stylesheet extraction below.
-   Attribution stays in the embedded `archify-software-notices` metadata the generator requires. No
-   element, attribute or script may still name those selectors afterwards.
+   Attribution stays in the page's `archify-software-notices` payload, which step 5 copies into the
+   standalone SVG as well. No element, attribute or script may still name those selectors afterwards.
 3. Build the standalone SVG from the page: take its `<svg>…</svg>`, prepend
    `xmlns="http://www.w3.org/2000/svg"` and `xmlns:xlink="http://www.w3.org/1999/xlink"` to the
    root, insert one `<style><![CDATA[…]]></style>` holding the page-level stylesheets joined in
@@ -37,7 +37,20 @@ rendered pages then need hand post-processing, which the generator has no flag f
    `]]>`, carrying the light values the page's `[data-theme="light"]` block declares. It must be the
    last on-screen `:root` declaration, so nothing later overrides it, and `screen` keeps the print
    stylesheet's forced-light palette authoritative on paper.
-5. Verify both SVGs parse:
+5. Copy the `archify-software-notices` payload into each SVG as a `<metadata id="archify-software-notices">`
+   element directly under the root, before the `<style>`. The generator writes that NOTICE only into
+   the page's `<script type="application/json">` block, so step 3 above drops it; the SVG
+   redistributes Archify's stylesheet, so it must carry the same notice text verbatim. A
+   `<metadata>` element travels with the file, a comment does not. The payload is JSON, so decode it
+   (`JSON.parse`) and embed the decoded text — never the escaped wire form.
+6. Rewrite the classic-preset rules the page scopes to its own document:
+   `html[data-preset="classic"] .diagram-container > svg X { … }` drops that prefix to `X { … }`,
+   keeping the rule body. A standalone file has neither an `html` nor a `.diagram-container` ancestor,
+   so without the rewrite the node card shadow and the lane wash/rule never apply and the static asset
+   is flatter than the page. The two rules keyed on `[data-theme="light"]` / `[data-theme="dark"]`
+   become the media-query arms step 4 already establishes: dark values stay on the base rule and the
+   light values move into `@media screen and (prefers-color-scheme: light)`.
+7. Verify both SVGs parse:
    `python3 -c "import xml.etree.ElementTree as ET; [ET.parse(p) for p in ['assets/workflow.svg','assets/workflow.zh.svg']]; print('ok')"`
    Parsing proves well-formedness only, not palette selection: open both SVGs under a light and a dark
    OS theme, and under GitHub's light and dark themes, because an embedded SVG may inherit the host
