@@ -479,7 +479,7 @@ async function destinationLane(projectId: string): Promise<{ repoKey: string; lo
 }
 
 /** note: A captured record with two occurrences, one transition, one provenance row and a settled mirror row. */
-async function seededRecord(context: StoreContext, db: StoreDb, projectId: string): Promise<string> {
+async function seededRecord(context: StoreContext, db: StoreDb, projectId: string, tag = ""): Promise<string> {
   const receipt = await captureIssue(
     context,
     {
@@ -489,33 +489,33 @@ async function seededRecord(context: StoreContext, db: StoreDb, projectId: strin
       severity: "high",
       impact: "impact",
       acceptance: "acceptance",
-      sourceIdentity: "review/move",
-      rootCauseKey: "root-move",
-      acceptanceKey: "accept-move",
-      occurrenceKey: "occ-move-1",
+      sourceIdentity: `review/move${tag}`,
+      rootCauseKey: `root-move${tag}`,
+      acceptanceKey: `accept-move${tag}`,
+      occurrenceKey: `occ-move-1${tag}`,
       sourceKind: "test",
       location: "src/a.ts",
       observedBehavior: "fails",
       evidence: ["repro"],
       discoveredAt: "2026-11-21T00:00:00.000Z",
     },
-    { actor: "project-manager", operationId: `capture-${String(engineSequence)}` },
+    { actor: "project-manager", operationId: `capture-${String(engineSequence)}${tag}` },
   );
   await appendOccurrence(
     context,
     receipt.issueId,
     {
-      sourceIdentity: "review/move",
-      rootCauseKey: "root-move",
-      acceptanceKey: "accept-move",
-      occurrenceKey: "occ-move-2",
+      sourceIdentity: `review/move${tag}`,
+      rootCauseKey: `root-move${tag}`,
+      acceptanceKey: `accept-move${tag}`,
+      occurrenceKey: `occ-move-2${tag}`,
       sourceKind: "test",
       location: "src/b.ts",
       observedBehavior: "fails again",
       evidence: [],
       discoveredAt: "2026-11-21T00:00:01.000Z",
     },
-    { actor: "project-manager", operationId: `occurrence-${String(engineSequence)}` },
+    { actor: "project-manager", operationId: `occurrence-${String(engineSequence)}${tag}` },
   );
   db.prepare(
     "insert into issue_sync_state(binding_id, direction, local_id, item_state, revision, updated_at) " +
@@ -890,6 +890,70 @@ describe("cross-authority move phase engine", () => {
       db.close();
     }
   }, 60_000);
+  test("two moves linked by relations publish through each other's fence", async () => {
+    // invariant: Critical 2 (review wave 4) — a publication flips its own source row to `published`
+    // inside the same transaction before the record's children go, so the delete and rewrite guards
+    // must admit exactly that work even while the OTHER endpoint is still frozen by its own move.
+    // Without the exemption two linked records deadlock: each publication deletes or rewrites an
+    // edge whose other endpoint is mid-move.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const firstId = await seededRecord(context, db, "p-source");
+      const secondId = await seededRecord(context, db, "p-source", "-second");
+      // note: One edge in each direction, so each publication both DELETES an outgoing edge into a
+      // frozen record and REWRITES an incoming edge held by one.
+      await linkIssue(context, firstId, { relation: "blocks", issueId: secondId }, {
+        actor: "project-manager",
+        operationId: `link-out-${String(engineSequence)}`,
+        expectedRevision: laneIssueRevision(db, firstId),
+      });
+      await linkIssue(context, secondId, { relation: "blocks", issueId: firstId }, {
+        actor: "project-manager",
+        operationId: `link-back-${String(engineSequence)}`,
+        expectedRevision: laneIssueRevision(db, secondId),
+      });
+      const first = {
+        operationId: "move-linked-first",
+        actor: "project-manager",
+        sourceIssueId: firstId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "linked departure",
+      };
+      const second = {
+        operationId: "move-linked-second",
+        actor: "project-manager",
+        sourceIssueId: secondId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "linked departure",
+      };
+
+      // note: Both moves freeze first, so each publication meets the other's fence exactly.
+      await moveAcrossAuthorities(context, first, "switched");
+      await moveAcrossAuthorities(context, second, "switched");
+      expect(blockingMoveFor(db, firstId)?.phase).toBe("switched");
+      expect(blockingMoveFor(db, secondId)?.phase).toBe("switched");
+
+      // invariant: The second move's publish deletes its outgoing edge into the still-frozen first
+      // record and rewrites the edge the frozen record holds into it; neither fires the guard.
+      expect((await moveAcrossAuthorities(context, second)).phase).toBe("published");
+      expect((await moveAcrossAuthorities(context, first)).phase).toBe("published");
+      expect(db.prepare("select count(*) as n from issues where id in (?, ?)").get(firstId, secondId)).toEqual({ n: 0 });
+      const admitted = await readCollaborationStage(destination.location, ({ db: lane }) => ({
+        issues: lane.prepare("select count(*) as n from issues").get(),
+        relations: lane.prepare("select relation, to_issue as toIssue, to_ref as toRef from relations order by from_issue, relation").all(),
+      }));
+      expect(admitted.issues).toEqual({ n: 2 });
+      // invariant: The destination holds both records' outgoing edges, localized to the display ids
+      // the admission allocated; nothing of the source lane was left stranded.
+      expect(admitted.relations.length).toBe(2);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
 
   test("discard leaves the source record byte-identical and deletes the destination row", async () => {
     const { context, db } = await sourceCheckout();
@@ -1905,6 +1969,24 @@ describe("cross-authority move phase engine", () => {
         operationId,
       ];
 
+      const expectedDiscard = (issueRevision: number): string[] => [
+        "issue",
+        "move",
+        "--id",
+        issueId,
+        "--to-authority",
+        destination.repoKey,
+        "--payload",
+        JSON.stringify({ projectId: project, reason: request.reason }),
+        "--expect",
+        String(issueRevision),
+        "--actor",
+        "project-manager",
+        "--operation-id",
+        operationId,
+        "--discard",
+      ];
+
       await stageMove(context, request);
       const frozen = await appendOccurrence(
         context,
@@ -1923,9 +2005,12 @@ describe("cross-authority move phase engine", () => {
         { actor: "project-manager", operationId: "occurrence-recovery" },
       ).then(() => null, (error: unknown) => error as { details?: Record<string, unknown> });
       const triggerCommand = String(frozen?.details?.recovery);
-      expect(run(triggerCommand.match(/`([^`]+)`/)?.[1] ?? triggerCommand)).toEqual(
-        expected(laneIssueRevision(db, issueId), laneRevision(db)),
-      );
+      const commands = triggerCommand.match(/`([^`]+)`/g)?.map((quoted) => quoted.slice(1, -1)) ?? [];
+      expect(commands.length).toBe(2);
+      expect(run(commands[0]!)).toEqual(expected(laneIssueRevision(db, issueId), laneRevision(db)));
+      // invariant: The discard command must run as written: `--expect-store` is refused under
+      // `--discard`, so it is the one flag the abandonment command cannot carry.
+      expect(run(commands[1]!)).toEqual(expectedDiscard(laneIssueRevision(db, issueId)));
 
       await moveAcrossAuthorities(context, request, "switched");
       const read = await getIssue(context, issueId).then(

@@ -701,6 +701,26 @@ function pendingIntentRecovery(operation: string, state: string): string {
         `and then \`${outbox} outbox-receipt --harness <abs> --input <file|->\`; reissue this move with the same ` +
         `--operation-id once it is settled.`;
 }
+/**
+ * invariant: The live leaf of a tombstone chain is settled by ITS OWN route, not the original's:
+ * when the chain walked past a conflict to a reviewed resolution, the leaf is that repair — an
+ * `enqueued` one needs the fork evidence `outbox-resolve` recorded (the competing record's
+ * observation through `--input`), while `unconfirmed` and `conflict` keep their ordinary routes.
+ */
+function tombstoneIntentRecovery(frozen: string, settlement: { operationId: string; state: string }): string {
+  if (settlement.operationId === frozen || settlement.state !== "enqueued") {
+    return pendingIntentRecovery(settlement.operationId, settlement.state);
+  }
+  const outbox = "mstar store collaboration remote";
+  return (
+    `Settle the outbox route first: ${settlement.operationId} is the reviewed resolution that ` +
+    `outbox-resolve enqueued for the fork ${frozen} hit, so \`${outbox} outbox-dispatch --harness <abs> ` +
+    `--operation ${settlement.operationId} --input <file|->\` sends it with the competing record's host fork ` +
+    `observation, then \`${outbox} outbox-receipt --harness <abs> --input <file|->\` records the provider's answer; ` +
+    `reissue this move with the same --operation-id once it is settled.`
+  );
+}
+
 
 /**
  * note: What one move tombstone intent effectively settled to, following its LIVE `resolved_by`
@@ -711,13 +731,15 @@ function pendingIntentRecovery(operation: string, state: string): string {
  * through `resolved_by`, so the raw row alone never answers whether the record left this authority.
  */
 type TombstoneSettlement =
-  | { kind: "confirmed"; operationId: string; obsolete: boolean }
+  | { kind: "confirmed"; operationId: string; obsolete: boolean; subject: Record<string, unknown> | null }
   | { kind: "abandoned"; operationId: string }
   | { kind: "live"; operationId: string; state: string }
   | { kind: "none" };
 
-/** note: Whether the confirmed terminal repair closed this record `obsolete`, read from its receipt. */
-function confirmedObsolete(db: StoreDb, operationId: string): boolean {
+/** note: The confirmed terminal repair's verdict AND its confirmed subject, read from its receipt:
+ * `obsolete` says whether the record left this authority, and the subject carries every row the
+ * reviewed event wrote — the history the switched copy admits instead of the pre-conflict freeze. */
+function confirmedTombstone(db: StoreDb, operationId: string): { obsolete: boolean; subject: Record<string, unknown> | null } {
   const receipt = db
     .prepare(
       "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'confirmed' " +
@@ -750,14 +772,14 @@ function confirmedObsolete(db: StoreDb, operationId: string): boolean {
   const change = isRecordLike(event) ? event.change : undefined;
   const mstar = isRecordLike(change) ? change.mstar : undefined;
   const fields = isRecordLike(mstar) ? mstar.fields : undefined;
-  return (
+  const obsolete =
     isRecordLike(outcome) &&
     outcome.kind === "confirmed" &&
     isRecordLike(change) &&
     change.kind === "issue-replace" &&
     isRecordLike(fields) &&
-    fields.disposition === "obsolete"
-  );
+    fields.disposition === "obsolete";
+  return { obsolete, subject: obsolete && isRecordLike(mstar) ? mstar : null };
 }
 
 /** note: An object-shaped value; the receipt's own contract validates the members this walk reads. */
@@ -782,7 +804,7 @@ function tombstoneSettlement(db: StoreDb, operationId: string): TombstoneSettlem
     if (row === undefined) return fork === null ? { kind: "none" } : { kind: "live", operationId: fork, state: "conflict" };
     const state = typeof row.state === "string" ? row.state : null;
     if (state === null) return { kind: "live", operationId: cursor, state: "?" };
-    if (state === "confirmed") return { kind: "confirmed", operationId: cursor, obsolete: confirmedObsolete(db, cursor) };
+    if (state === "confirmed") return { kind: "confirmed", operationId: cursor, ...confirmedTombstone(db, cursor) };
     if (state === "abandoned") {
       // invariant: An abandoned ORIGINAL never acquires a successor; an abandoned REPAIR withdraws
       // only that repair, so the fork it addressed is the live leaf a replacement still resolves.
@@ -911,6 +933,34 @@ function moveResumeCommand(db: StoreDb, row: IssueMoveRecord): string {
     shellQuote(row.actor),
     "--operation-id",
     shellQuote(row.operationId),
+  ].join(" ");
+}
+
+/**
+ * invariant: A discard abandons the RECORDED move, so it carries every flag the resume carries
+ * except `--expect-store`: the CLI refuses that flag on `--discard` because the move's own phase
+ * commits already advanced the lane revision the discard never compares. Reusing the resume string
+ * would print a command that always fails with `issue.invalid-payload`.
+ */
+function moveDiscardCommand(db: StoreDb, row: IssueMoveRecord): string {
+  const issue = db.prepare("select revision from issues where id = ?").get(row.sourceIssueId) as { revision?: unknown } | undefined;
+  const issueRevision = typeof issue?.revision === "number" ? issue.revision : 0;
+  const payload = JSON.stringify({ projectId: row.destinationProject, reason: row.reason });
+  return [
+    "mstar issue move",
+    "--id",
+    shellQuote(row.sourceIssueId ?? "<issue-id>"),
+    "--to-authority",
+    shellQuote(row.destinationAuthority),
+    "--payload",
+    shellQuote(payload),
+    "--expect",
+    String(issueRevision),
+    "--actor",
+    shellQuote(row.actor),
+    "--operation-id",
+    shellQuote(row.operationId),
+    "--discard",
   ].join(" ");
 }
 
@@ -1746,20 +1796,29 @@ function removeSourceRecord(db: StoreDb, row: IssueMoveRecord, counts: MoveCount
   const issueId = row.sourceIssueId;
   // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
   // record's stable reference, which is the unresolved shape both local readers already render.
-  const rewritten = db.prepare("update relations set to_issue = null, to_ref = ? where to_issue = ?").run(row.issueRef, issueId) as {
-    changes?: number;
-  };
+  // invariant: The staged incoming count is a ceiling, not a target: an edge whose OWNER already
+  // published went away with that record's own delete, and rewriting only the survivors is the
+  // correct outcome. The comparison is therefore against the edges still anchored to a record the
+  // lane holds — a row some other writer added or removed mid-flight still fails the count.
+  const surviving = countOf(
+    db,
+    "select count(*) as n from relations where to_issue = ? and from_issue in (select id from issues)",
+    issueId,
+  );
+  const rewritten = db
+    .prepare("update relations set to_issue = null, to_ref = ? where to_issue = ? and from_issue in (select id from issues)")
+    .run(row.issueRef, issueId) as { changes?: number };
   const rewrittenCount = Number(rewritten?.changes ?? 0);
-  if (rewrittenCount !== counts.relationsLeftBehind) {
+  if (rewrittenCount !== surviving) {
     throw new StoreError(
       "collaboration.operation-partial",
-      `Move ${row.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
-        `this publication rewrote ${String(rewrittenCount)}: a relation changed while the move was in flight. The publication ` +
-        `rolled back and the record is unchanged.`,
+      `Move ${row.operationId} was staged to rewrite the record's incoming edges, but ` +
+        `this publication rewrote ${String(rewrittenCount)} of ${String(surviving)} still present: a relation changed while ` +
+        `the move was in flight. The publication rolled back and the record is unchanged.`,
       {
         operation_id: row.operationId,
         issue_id: issueId,
-        expected: counts.relationsLeftBehind,
+        expected: surviving,
         rewritten: rewrittenCount,
         recovery:
           "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
@@ -1931,8 +1990,8 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
             settlement.kind === "confirmed"
               ? "Finish the move instead: reissue it with the destination's `staged` handoff so this side emits its " +
                 "`switch` document, then admit with that document in the destination checkout."
-              : `Settle the tombstone intent first: ${pendingIntentRecovery(leaf, state)} Then reissue this --discard ` +
-                `before the destination admits the record.`,
+              : `Settle the tombstone intent first: ${tombstoneIntentRecovery(remoteMoveOperationId(request.operationId, "obsolete"), { operationId: leaf, state })} ` +
+                `Then reissue this --discard before the destination admits the record.`,
         },
       );
     }
@@ -2059,7 +2118,7 @@ export function frozenMoveRefusal(db: StoreDb, cause: unknown, recordId?: string
         named === null
           ? `Reissue each move named in blocking_moves (or discard it with its own --operation-id) and retry this write.`
           : `Reissue the move to finish it: \`${moveResumeCommand(db, named)}\`. To abandon it instead, ` +
-            `add --discard to that same command before the destination admits the record; then retry this write.`,
+            `run \`${moveDiscardCommand(db, named)}\` before the destination admits the record; then retry this write.`,
     },
   );
 }
@@ -2523,6 +2582,39 @@ function documentMismatch(row: IssueMoveRecord, document: IssueMoveDocument): st
     ? null
     : `the handoff counts ${document.stagedCounts}, not ${row.stagedCounts}`;
 }
+/**
+ * invariant: A `switch` handoff whose payload digest differs from the staged row's is admissible
+ * ONLY as the confirmed tombstone's own subject: the source re-freezes the copy it switches on when
+ * a reviewed repair confirmed different rows. The carried copy is verified against the staged one
+ * instead of trusted — the record's carried columns must be the staged ones exactly, and every
+ * carried member row must extend the staged rows the same way a confirmed event extends a record:
+ * as a prefix-preserving superset. A copy that replaces or drops history is the rewritten handoff
+ * the digest gate exists to refuse.
+ */
+function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): MoveCopy | null {
+  let staged: MoveCopy;
+  let carried: MoveCopy;
+  try {
+    staged = JSON.parse(row.payloadJson) as MoveCopy;
+    carried = JSON.parse(document.payloadJson) as MoveCopy;
+  } catch {
+    return null;
+  }
+  for (const column of CARRIED_ISSUE_COLUMNS) {
+    if (JSON.stringify(carried.issue[column] ?? null) !== JSON.stringify(staged.issue[column] ?? null)) return null;
+  }
+  const members: Array<keyof Omit<MoveCopy, "issue">> = ["occurrences", "transitions", "provenance", "projectMoves", "relations"];
+  for (const member of members) {
+    const before = staged[member];
+    const after = carried[member];
+    if (!Array.isArray(before) || !Array.isArray(after) || after.length < before.length) return null;
+    for (let at = 0; at < before.length; at++) {
+      if (JSON.stringify(after[at]) !== JSON.stringify(before[at])) return null;
+    }
+  }
+  return carried;
+}
+
 
 /**
  * invariant: A failed handoff is a discarded move, never a half-done one: the source record stays
@@ -2831,6 +2923,11 @@ export async function exchangeRemoteSource(
   const source = await requireOwnSourceRow(context, request, "switch");
   if (source.phase === "published") return exchangeReceipt(source, "source", null);
   if (handoff.phase === "staged") {
+    // invariant: A `staged` handoff serves this side exactly once — the verify that lets the
+    // tombstone freeze. Once the row is `switched` its payload is the CONFIRMED subject, which a
+    // repair extends past the staged freeze, so the old document no longer matches and must not
+    // discard a move whose answer is the `switch` document it already emitted.
+    if (source.phase === "switched") return exchangeReceipt(source, "source", documentOfRow(source, "switch"));
     const mismatch = documentMismatch(source, handoff);
     if (mismatch !== null) return await refuseDocumentMismatch(context, request, source, mismatch);
     await writeOwnLaneRow(context, (db) => {
@@ -3001,7 +3098,31 @@ async function tombstoneRemoteSource(
     },
   });
   const intent = frozenIntent(outcome);
-  let confirmedTombstone = intent.operationId;
+  let confirmedOperation = intent.operationId;
+  // invariant: The confirmed tombstone's subject is the record the destination admits: the frozen
+  // copy's issue fields with the confirmed revision, and the confirmed subject's complete member
+  // rows, so a repair's added history crosses instead of the pre-conflict freeze missing it.
+  let carried: MoveCopy | null = null;
+  const carryConfirmed = (subject: Record<string, unknown>): MoveCopy => {
+    const members = subject as unknown as ObservedMoveSubject;
+    const fields = isRecordLike(subject.fields) ? subject.fields : {};
+    const copyFromConfirmed = moveCopyOfRemoteSubject({
+      projectId: String(copy.issue.project_id),
+      issueRef: source.issueRef,
+      generation: 0,
+      storeRevision: 0,
+      fields,
+      occurrences: observedRows(members, "occurrences"),
+      transitions: observedRows(members, "transitions"),
+      relations: observedRows(members, "relations"),
+      provenance: observedRows(members, "provenance"),
+      projectMoves: observedRows(members, "projectMoves"),
+    });
+    // note: the record's own fields stay the frozen live ones — the tombstone's `obsolete` belongs
+    // to the provider record leaving this authority, not to the member the destination admits; the
+    // confirmed revision alone crosses, because it numbers the history the destination holds.
+    return { ...copyFromConfirmed, issue: { ...copy.issue, revision: copyFromConfirmed.issue.revision } };
+  };
   if (intent.confirmed === null) {
     // invariant: The intent's own row is not the whole answer: a conflict is terminal for that row
     // only, and the reviewed resolution confirms a DIFFERENT operation linked through `resolved_by`.
@@ -3026,7 +3147,8 @@ async function tombstoneRemoteSource(
           },
         );
       }
-      confirmedTombstone = settlement.operationId;
+      confirmedOperation = settlement.operationId;
+      if (settlement.subject !== null) carried = carryConfirmed(settlement.subject);
     } else if (settlement.kind === "abandoned") {
       // note: `abandoned` is settled for the outbox, so `effect-pending` cannot name it; the
       // tombstone effect this move needed will never land, which is the mismatch family — the
@@ -3052,7 +3174,7 @@ async function tombstoneRemoteSource(
           operation_id: request.operationId,
           operationId: settlement.operationId,
           state: settlement.state,
-          recovery: `${pendingIntentRecovery(settlement.operationId, settlement.state)}`,
+          recovery: `${tombstoneIntentRecovery(operationId, settlement)}`,
         },
       );
     } else {
@@ -3077,11 +3199,29 @@ async function tombstoneRemoteSource(
         { operation_id: request.operationId, issueRef: source.issueRef },
       );
     }
+    carried = carryConfirmed(confirmed.change.mstar);
   }
   await writeOwnLaneRow(context, (db) => {
+    // invariant: The confirmed subject's rows ARE the switched subject: the ledger row and the
+    // `switch` document it emits carry the repaired copy and its counts, so the destination admits
+    // the record with the history the confirmed event wrote, never the pre-conflict freeze.
+    if (carried !== null) {
+      const carriedJson = JSON.stringify(carried);
+      const carriedCounts: MoveCounts = {
+        occurrences: carried.occurrences.length,
+        issueTransitions: carried.transitions.length,
+        provenance: carried.provenance.length,
+        relations: carried.relations.length,
+        issueProjectMoves: carried.projectMoves.length,
+        relationsLeftBehind: 0,
+      };
+      db.prepare(
+        "update issue_moves set payload_json = ?, payload_digest = ?, staged_counts = ? where operation_id = ? and role = 'source'",
+      ).run(carriedJson, digestOf(carriedJson), JSON.stringify(carriedCounts), request.operationId);
+    }
     advanceRowTo(db, request.operationId, "source", "switched");
   });
-  return confirmedTombstone;
+  return confirmedOperation;
 }
 
 /**
@@ -3130,8 +3270,30 @@ export async function exchangeLocalDestination(
       { operation_id: request.operationId, phase: handoff.phase },
     );
   }
-  const row = await requireOwnDestinationRow(context, request);
+  let row = await requireOwnDestinationRow(context, request);
   if (row.destinationIssueId !== null) return exchangeReceipt(row, "destination", documentOfRow(row, "admission"));
+  // invariant: A `switch` carries the subject the confirmed tombstone actually wrote — which a
+  // reviewed repair extends with its own rows — so a payload that outgrew the staged freeze is the
+  // repaired copy, never a rewritten one. The row is re-staged to it when the handoff still proves
+  // every staged row and keeps every other verified fact; anything else discards the move.
+  if (handoff.payloadDigest !== row.payloadDigest) {
+    const replaced = adoptCarriedCopy(row, handoff);
+    if (replaced === null) {
+      return await refuseDocumentMismatch(
+        context,
+        request,
+        row,
+        `the handoff carries digest ${handoff.payloadDigest}, not ${row.payloadDigest}`,
+      );
+    }
+    await writeOwnLaneRow(context, (db) => {
+      db.prepare(
+        "update issue_moves set payload_json = ?, payload_digest = ?, staged_counts = ?, updated_at = ? " +
+          "where operation_id = ? and role = 'destination'",
+      ).run(handoff.payloadJson, handoff.payloadDigest, handoff.stagedCounts, nowRfc3339(), request.operationId);
+    });
+    row = await requireOwnDestinationRow(context, request);
+  }
   const mismatch = documentMismatch(row, handoff);
   if (mismatch !== null) return await refuseDocumentMismatch(context, request, row, mismatch);
   const copy = JSON.parse(row.payloadJson) as MoveCopy;

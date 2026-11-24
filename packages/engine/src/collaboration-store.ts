@@ -701,6 +701,12 @@ when exists (
   where m.role = 'source' and m.phase in ('staged','verified','switched')
     and m.source_issue_id in (old.from_issue, old.to_issue, new.from_issue, new.to_issue)
 )
+-- note: the publisher's own edge rewrite is the one admitted exception: its row committed
+-- 'published' in this same transaction before the rewrite, which the 'published' probe sees.
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.to_issue
+)
 begin
   select raise(abort, 'issue.move-in-progress');
 end;
@@ -735,11 +741,17 @@ end;
 
 -- invariant: A publication delete must not strip a frozen record's links early: the relation rows
 -- are the copy the destination admitted, and only the ledger's terminal phase may remove them.
+-- The publication's own delete of its OUTGOING edges is the one admitted exception, visible the
+-- same way: the row committed 'published' in this same transaction before the children go.
 create trigger relations_move_guard_delete before delete on relations
 when exists (
   select 1 from issue_moves m
   where m.role = 'source' and m.phase in ('staged','verified','switched')
     and m.source_issue_id in (old.from_issue, old.to_issue)
+)
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.from_issue
 )
 begin
   select raise(abort, 'issue.move-in-progress');

@@ -9606,29 +9606,40 @@ describe("remote move conflict settlement", () => {
     return { heads, tombstoneId };
   }
 
-  test("a repaired tombstone closes the move and blocks discard, exactly as its own confirmation would", async () => {
+  test("a repaired tombstone closes the move and blocks discard, carrying the reviewed history", async () => {
     // invariant: Critical 2 (review wave 3) — a conflict is terminal for its own ROW only. Once a
     // reviewed repair confirms the same tombstone under a different operation id, the move completes
     // its switch through the `resolved_by` chain, and the discard refuses: the provider record is
     // already closing, so abandoning the move would strand it.
+    // invariant: Critical 1 (review wave 4) — the subject the switch carries is the CONFIRMED one,
+    // not the pre-conflict freeze: the repair's rows reach the destination copy it admits.
     const cache = await outboxCache("move-repair-obsolete");
     const operationId = "00000000-0000-4000-8000-000000000941";
+    const destinationKey = `github.com/remote-fixture/move-destination-${sequence++}`;
     const request = {
       operationId,
       actor: "project-manager",
       sourceIssueId: FORGED_ISSUE_REF,
-      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationAuthority: destinationKey,
       destinationProject: "fixture-project",
       reason: "move to a local lane",
     };
-    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
-    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
-    await initializeCollaborationStore(localLane);
+    // note: A real local destination checkout bound to the same key, so the exchange halves meet
+    // over the documents rather than a faked ledger row.
+    const destinationContext = contextAt(makeRepo(`https://${destinationKey}.git`));
+    await initializeCollaborationStore(resolveCollaborationLocation(destinationContext));
+    activate(resolveCollaborationLocation(destinationContext).dbPath);
     const staged = await moveAcrossByDocument(cache.context, request, null);
     const doc = staged.document;
     expect(doc).not.toBeNull();
+    // note: The destination half of the staged exchange: its row and `staged` document are written
+    // in ITS lane from the real request document.
+    const destinationStaged = await moveAcrossByDocument(destinationContext, request, staged.document!);
+    expect(destinationStaged.phase).toBe("verified");
+    const stagedDoc = destinationStaged.document;
+    expect(stagedDoc?.phase).toBe("staged");
 
-    const enqueued = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+    const enqueued = await moveAcrossByDocument(cache.context, request, stagedDoc!).then(
       () => null,
       (error: unknown) => error as { code?: string },
     );
@@ -9636,12 +9647,56 @@ describe("remote move conflict settlement", () => {
 
     const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
     const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
     const repairId = "00000000-0000-4000-8000-000000000942";
+    // note: The reviewed resolution carries the record plus the rows the reviewer kept: one extra
+    // occurrence and one extra provenance row over the freeze, so the carried copy is provably the
+    // repair's subject rather than the request's.
+    const repairMstar = {
+      ...(frozen.change.mstar as Record<string, unknown>),
+      occurrences: [
+        ...(frozen.change.mstar.occurrences as unknown[]),
+        {
+          eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaad1",
+          occurrenceKey: "occ-repaired",
+          sourceKind: "test",
+          sourceIdentity: "review/repair",
+          rootCauseKey: "root-repair",
+          acceptanceKey: "accept-repair",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "The reviewed repair added this row.",
+          evidence: [],
+          discoveredAt: "2026-11-22T00:00:00.000Z",
+          recordedAt: "2026-11-22T00:00:00.000Z",
+          imported: false,
+        },
+      ],
+      provenance: [
+        ...(frozen.change.mstar.provenance as unknown[]),
+        {
+          eventId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbd1",
+          kind: "plan",
+          target: "repair-plan",
+          sourceHash: "5".repeat(64),
+          origin: "scoped",
+          legacyProject: null,
+          legacyBucket: null,
+          legacyEntryId: null,
+          legacyRecord: null,
+          importedAt: null,
+        },
+      ],
+    };
     await prepareRemoteResolution(cache.context, tombstoneId, {
       operationId: repairId,
       operator: "operator-one",
       reason: "keep the tombstone",
-      event: { ...frozen, operationId: repairId, parents: heads },
+      event: {
+        ...frozen,
+        operationId: repairId,
+        parents: heads,
+        change: { ...frozen.change, mstar: repairMstar },
+      },
     });
     const repairAttempt = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)));
     await recordRemoteReceipt(
@@ -9656,16 +9711,104 @@ describe("remote move conflict settlement", () => {
 
     // invariant: The repaired confirmation IS the tombstone this move needed: the same exchange
     // advances the source row to `switched` and emits the switch document under the repair's id.
-    const switched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" });
+    const switched = await moveAcrossByDocument(cache.context, request, stagedDoc!);
     expect(switched.phase).toBe("switched");
     expect(switched.pendingOperationId).toBe(repairId);
+    // invariant: The switch document carries the CONFIRMED subject — the repair's added rows are in
+    // its payload and counts, so the digest legitimately outgrew the staged freeze.
+    const switchDoc = switched.document;
+    expect(switchDoc?.phase).toBe("switch");
+    expect(switchDoc?.payloadDigest).not.toBe(stagedDoc!.payloadDigest);
+    const carriedCopy = JSON.parse(switchDoc!.payloadJson) as {
+      occurrences: Array<{ occurrence_key: string }>;
+      provenance: Array<Record<string, unknown>>;
+      issue: Record<string, unknown>;
+    };
+    expect(carriedCopy.occurrences.length).toBe(2);
+    expect(carriedCopy.occurrences.some((row) => row.occurrence_key === "occ-repaired")).toBe(true);
+    expect(carriedCopy.provenance.length).toBe(2);
+    expect(carriedCopy.issue.disposition).toBe("open");
 
     const refused = await discardAcrossAuthorities(cache.context, request).then(
       () => null,
       (error: unknown) => error as { code?: string },
     );
     expect(refused?.code).toBe("collaboration.move-phase-invalid");
+
+    // invariant: The destination's admission is the end of the chain the finding tested: the copy it
+    // admits is the confirmed one, so the repaired rows land in the local lane with the record.
+    const admitted = await moveAcrossByDocument(destinationContext, request, switchDoc!);
+    expect(admitted.phase).toBe("switched");
+    expect(admitted.document?.phase).toBe("admission");
+    const destinationDb = new DatabaseSync(resolveCollaborationLocation(destinationContext).dbPath);
+    try {
+      expect(destinationDb.prepare("select count(*) as n from occurrences where occurrence_key = 'occ-repaired'").get()).toEqual({ n: 1 });
+      expect(
+        destinationDb
+          .prepare("select disposition from issues where issue_ref = ?")
+          .get(FORGED_ISSUE_REF),
+      ).toEqual({ disposition: "open" });
+      expect(
+        destinationDb
+          .prepare("select count(*) as n from provenance where issue_id = (select id from issues where issue_ref = ?)")
+          .get(FORGED_ISSUE_REF),
+      ).toEqual({ n: 2 });
+    } finally {
+      destinationDb.close();
+    }
+    // invariant: The admission handoff completes the move on the source half too.
+    const published = await moveAcrossByDocument(cache.context, request, admitted.document!);
+    expect(published.phase).toBe("published");
   }, 30_000);
+  test("an enqueued repair names the fork-evidence route, not the original's dispatch", async () => {
+    // invariant: Critical 3 (review wave 4) — once `outbox-resolve` enqueued a repair for the
+    // conflicted tombstone, the live leaf IS that repair: an ordinary dispatch refuses it because a
+    // reviewed resolution must carry the host's fork observation through `--input`. The refusal's
+    // recovery must name that route, and the original's abandon+dispatch text must never appear.
+    const cache = await outboxCache("move-repair-pending");
+    const operationId = "00000000-0000-4000-8000-000000000946";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const enqueued = await moveAcrossByDocument(cache.context, request, { ...staged.document!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(enqueued?.code).toBe("remote.effect-pending");
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    const repairId = "00000000-0000-4000-8000-000000000947";
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the tombstone",
+      event: { ...frozen, operationId: repairId, parents: heads },
+    });
+
+    // invariant: The repair is enqueued but never dispatched, so the chain's live leaf is the
+    // repair itself: the refusal's recovery names the fork-evidence route an enqueued resolution
+    // takes, never the original intent's dispatch-without-input route.
+    const pending = await moveAcrossByDocument(cache.context, request, { ...staged.document!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+    );
+    expect(pending?.code).toBe("remote.effect-pending");
+    expect(pending?.details).toMatchObject({ operationId: repairId, state: "enqueued" });
+    const recovery = String(pending?.details?.recovery ?? "");
+    expect(recovery).toContain(`outbox-dispatch --harness <abs> --operation ${repairId} --input <file|->`);
+    expect(recovery).toContain("outbox-receipt");
+    expect(recovery).toContain("outbox-resolve");
+    expect(recovery).not.toContain("outbox-abandon");
+    expect(recovery).not.toContain(`--operation ${tombstoneId}`);
+  }, 30_000);
+
 
   test("a reviewed repair that keeps the record open lets the discard and never switches", async () => {
     // invariant: Critical 2 (review wave 3) — the chain's terminal repair confirmed a DIFFERENT
