@@ -61,7 +61,14 @@ import {
   checkGateSurfaceChange,
   checkProvenanceScan,
   checkReferenceCorpus,
+  checkRetiredStageNames,
+  extractSvgText,
+  findRetiredStageSpellings,
   readReferenceCorpus,
+  readRetiredStageCorpus,
+  RETIRED_STAGE_MACHINE_LITERALS,
+  RETIRED_STAGE_OWN_PROCESS,
+  RETIRED_STAGE_ROOTS,
   checkSkillIndexCoverage,
   readSkillIndexCoverage,
   readSkillIndexTable,
@@ -2265,6 +2272,121 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
       expect(read.files).toEqual([]);
       expect(read.failures.length).toBe(1);
       expect(read.failures[0]).toContain("Guard 15 reference corpus read");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
+  test("a compact stage name of 4, 5 or 6 fails in each spelling", () => {
+    for (const line of ["Phase 4 PR delivery", "a phase-5-rollout step", "the phase6 habit"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a stage run after phase(s) fails when it reaches 4, 5 or 6", () => {
+    for (const line of ["Phase 2 → 3 → 4", "Phases 1–6", "Phase 2 through 6", "Phase 2–5"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a retired section citation fails in both spellings", () => {
+    for (const line of ["see §5.3", "per §6.1", "the policy 5.2 rule", "Section 6.0 covers it"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a section citation inside a stage sentence is not read as a stage run", () => {
+    expect(findRetiredStageSpellings("Phase 3 §3.4 owns the close")).toEqual([]);
+    expect(findRetiredStageSpellings("Phase 1→2 is one step")).toEqual([]);
+    expect(findRetiredStageSpellings("phase-1-lock and phase-2-execute stay")).toEqual([]);
+  });
+
+  test("bare §4 and §6 are not retired section citations", () => {
+    expect(findRetiredStageSpellings("§4 and §6 name other documents")).toEqual([]);
+  });
+
+  test("an engine probe passes in a code span or a fenced line and fails in prose", () => {
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) {
+      expect(findRetiredStageSpellings(`run \`${literal}\` now`)).toEqual([]);
+      expect(findRetiredStageSpellings(literal, true)).toEqual([]);
+      expect(findRetiredStageSpellings(`run ${literal} now`).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a retired stage name in backticks is still a retired stage name", () => {
+    expect(findRetiredStageSpellings("the `Phase 4` step").length).toBeGreaterThan(0);
+  });
+});
+
+describe("extractSvgText — Guard 16 diagram text", () => {
+  test("text, title and aria-label values are read, nested markup flattened", () => {
+    const svg = '<svg><title>Phase 5 merge</title><text x="1">a <tspan>Phase 4</tspan> b</text><g aria-label="§6.2"></g></svg>';
+    const segments = extractSvgText(svg);
+    expect(segments.length).toBe(3);
+    expect(segments.join(" ")).toContain("Phase 5 merge");
+    expect(segments.join(" ")).toContain("Phase 4");
+    expect(segments.join(" ")).toContain("§6.2");
+  });
+});
+
+describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
+  test("markdown lines report their file and line, and a fence state carries", () => {
+    const result = checkRetiredStageNames([
+      { rel: "skills/x/SKILL.md", text: "clean\n\nPhase 4 was here\n" },
+      { rel: "skills/x/references/a.md", text: "```text\n--phase 6\n```\n" },
+    ]);
+    expect(result.filesScanned).toBe(2);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("skills/x/SKILL.md:3");
+    expect(result.hits[0]).toContain("Phase 4");
+  });
+
+  test("diagram text is judged, and a clean diagram passes", () => {
+    const dirty = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase 6 close</text>" }]);
+    expect(dirty.hits.length).toBeGreaterThan(0);
+    expect(dirty.hits[0]).toContain("assets/workflow.svg");
+    const clean = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase 3 → close</text>" }]);
+    expect(clean.hits).toEqual([]);
+  });
+
+  test("a json case corpus is read as full text", () => {
+    const result = checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text: '{"prompt":"Phase 4 closes"}' }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+});
+
+describe("readRetiredStageCorpus — Guard 16 scope", () => {
+  test("only tracked prompt-face text is read, and own-process skills are exempt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-retired-stage-"));
+    try {
+      const write = (rel: string, text: string): void => {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        writeFileSync(join(dir, rel), text, "utf8");
+      };
+      const skill = `${RETIRED_STAGE_ROOTS[0]}example/SKILL.md`;
+      const ownProcess = `${RETIRED_STAGE_OWN_PROCESS[0]}SKILL.md`;
+      write(skill, "Phase 4\n");
+      write(ownProcess, "Phase 4\n");
+      write("scripts/notes.md", "Phase 4\n");
+      write("assets/diagram.svg", "<text>Phase 4</text>\n");
+      const tracked = new Set([skill, ownProcess, "scripts/notes.md", "assets/diagram.svg"]);
+      const read = readRetiredStageCorpus(dir, tracked);
+      expect(read.readFailures).toEqual([]);
+      expect(read.files.map((file) => file.rel).sort()).toEqual([skill, "assets/diagram.svg"].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable tracked file returns a named row, never a silent skip", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-retired-stage-read-"));
+    try {
+      const read = readRetiredStageCorpus(dir, new Set([`${RETIRED_STAGE_ROOTS[0]}gone/SKILL.md`]));
+      expect(read.files).toEqual([]);
+      expect(read.readFailures.length).toBe(1);
+      expect(read.readFailures[0]).toContain("Guard 16 retired-stage-name corpus read");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

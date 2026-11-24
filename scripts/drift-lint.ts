@@ -85,6 +85,20 @@
  * (`report-template.md` under two skills) resolve to the file a citation
  * names; an owner prefix disambiguates a collision, then the citing skill's
  * own file, and only a genuinely ambiguous basename fails.
+ * 16. prompt face — retired stage names (`checkRetiredStageNames`): the
+ * iteration delivery stages 4, 5 and 6 no longer exist, so a tracked line
+ * under the prompt roots that cites a retired section (`§5.x`, `§6.x`, or
+ * its word spellings `policy 5.x` / `section 5.x`), or names stage 4, 5 or
+ * 6 (`Phase 4`, `phase-4-…`, `phase5-…`, a stage list after `phase(s)` such
+ * as `Phase 2 → 3 → 4`), fails. Section citations are removed before a
+ * stage list is read, so `Phase 3 §3.4` stays clean. `.svg` text counts: the
+ * `<text>`, `<title>` and `aria-label` values are read, so a diagram cannot
+ * keep a retired name a Markdown scan would miss. The three engine probes
+ * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an
+ * inline code span or a fenced block, and their presence in prose fails.
+ * Skills whose numbered steps are their own process (`mstar-audit`,
+ * `mstar-knowledge`) are exempt by path: their `Phase 4` is their own step,
+ * not an iteration delivery stage.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -1582,6 +1596,157 @@ export function readReferenceCorpus(repoRoot: string): {
   return { files, referenceFiles, failures: [] };
 }
 
+/* ------------------------------------------------------------------ */
+/* Guard 16: retired stage names — the rule lives in this file's header */
+/* ------------------------------------------------------------------ */
+
+/** Roots of the prompt face a retired stage name may not survive in. */
+export const RETIRED_STAGE_ROOTS = [
+  "skills/",
+  "commands/",
+  "agents/",
+  "codex/",
+  "docs/",
+  ".cursor/skills/mstar-routing-eval/",
+  ".changes/unreleased/",
+  "assets/",
+] as const;
+/** Prompt-face files outside those roots. */
+export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
+/** Text faces read from that set: Markdown, diagram text, and evaluation cases. */
+export const RETIRED_STAGE_EXTS = [".md", ".svg", ".json"] as const;
+/** The three engine probes that stay, only inside a code span or fenced block. */
+export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_", "phase-4-pr-delivery"] as const;
+/** Skills whose numbered steps are their own process, not delivery stages. */
+export const RETIRED_STAGE_OWN_PROCESS = ["skills/mstar-audit/", "skills/mstar-knowledge/"] as const;
+
+/** Guard 16 result: corpus size plus one failure row per retired spelling. */
+export interface RetiredStageResult {
+  filesScanned: number;
+  hits: string[];
+}
+
+/** A retired section citation: `§5.x` / `§6.x` and the word spellings the
+ * English workflow diagram uses. */
+const RETIRED_SECTION = /§\s*[56]\.\d+/g;
+const RETIRED_SECTION_WORD = /\b(?:policy|section)\s+[56]\.\d+/gi;
+/** A compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
+const RETIRED_COMPACT_STAGE = /\bphase[- ]?[456]\b/gi;
+/** A stage run after `phase(s)`: numbers joined only by list separators, so a
+ * sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
+ * does not read as a list. */
+const STAGE_RUN =
+  /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
+/** An inline code span; its content is read unless it is an engine probe. */
+const INLINE_CODE = /`([^`\n]*)`/g;
+/** An HTML comment span; a commented citation is not visible prose. */
+const SVG_NODE = /<(?:text|title)\b[^>]*>([\s\S]*?)<\/(?:text|title)>/gi;
+const SVG_ARIA = /aria-label\s*=\s*"([^"]*)"/gi;
+
+/** why: the three engine probes survive only where the reader sees them as a
+ * literal, so the scan removes them from a code span or fence and reports
+ * them anywhere else. Other span content is judged like prose: a retired
+ * stage name in backticks is still a retired stage name. */
+export function findRetiredStageSpellings(line: string, inFence = false): string[] {
+  const hits: string[] = [];
+  let rest = line;
+  if (inFence) {
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) rest = rest.split(literal).join("");
+  } else {
+    const spans: string[] = [];
+    rest = rest.replace(INLINE_CODE, (_match, inner: string) => {
+      // An engine probe inside a span is removed and the span's remaining text
+      // is judged like prose: `mstar iteration gate --phase 6` passes, while
+      // `--phase 6 then Phase 4` still reports Phase 4.
+      let content = inner;
+      for (const literal of RETIRED_STAGE_MACHINE_LITERALS) content = content.split(literal).join(" ");
+      if (content.trim() !== "") spans.push(content);
+      return " ";
+    });
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
+    rest += `\n${spans.join("\n")}`;
+  }
+  for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
+  for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
+  // Section citations are removed before a stage run is read, so `Phase 3 §3.4`
+  // is not mistaken for a list that reaches stage 4.
+  const withoutSections = rest.replace(/§\s*\d+(?:\.\d+)?/g, " ");
+  for (const match of withoutSections.matchAll(RETIRED_COMPACT_STAGE)) hits.push(match[0]);
+  for (const match of withoutSections.matchAll(STAGE_RUN)) {
+    if (/[456]/.test(match[1])) hits.push(match[0].trim());
+  }
+  return [...new Set(hits)];
+}
+
+/** Text a reader of a diagram sees: `<text>`/`<title>` bodies and `aria-label`
+ * values, with nested markup flattened. */
+export function extractSvgText(text: string): string[] {
+  const out: string[] = [];
+  for (const match of text.matchAll(SVG_NODE)) out.push(match[1].replace(/<[^>]*>/g, " "));
+  for (const match of text.matchAll(SVG_ARIA)) out.push(match[1]);
+  return out;
+}
+
+/**
+ * Guard 16 — the rule is stated once, in this file's header (item 16). A
+ * Markdown line is judged with its fenced state; an `.svg` file is judged on
+ * the text a reader sees, and a `.json` file on its full text.
+ */
+export function checkRetiredStageNames(files: Array<{ rel: string; text: string }>): RetiredStageResult {
+  const hits: string[] = [];
+  for (const file of files) {
+    if (file.rel.endsWith(".svg")) {
+      extractSvgText(file.text).forEach((segment, index) => {
+        for (const hit of findRetiredStageSpellings(segment)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel} text node ${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
+      });
+      continue;
+    }
+    let inFence = false;
+    file.text.split("\n").forEach((line, index) => {
+      if (/^\s*(?:```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return;
+      }
+      const fenced = inFence && !file.rel.endsWith(".json");
+      for (const hit of findRetiredStageSpellings(line, fenced)) {
+        hits.push(
+          `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+        );
+      }
+    });
+  }
+  return { filesScanned: files.length, hits };
+}
+
+/** Guard 16 corpus read: tracked files under the prompt roots, intersected
+ * with the tracked set so an untracked scratch file cannot fail the scan.
+ * Guard-or-clear-error: an unreadable file becomes one named row. */
+export function readRetiredStageCorpus(
+  repoRoot: string,
+  tracked: Set<string>,
+): {
+  files: Array<{ rel: string; text: string }>;
+  readFailures: string[];
+} {
+  const files: Array<{ rel: string; text: string }> = [];
+  const readFailures: string[] = [];
+  for (const rel of tracked) {
+    if (!RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root)) && !RETIRED_STAGE_FILES.includes(rel)) continue;
+    if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
+    if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
+    try {
+      files.push({ rel, text: readFileSync(join(repoRoot, rel), "utf8") });
+    } catch (error) {
+      readFailures.push(`Guard 16 retired-stage-name corpus read: ${rel} - ${(error as Error).message}`);
+    }
+  }
+  return { files, readFailures };
+}
+
 /** Advisory inventory of oversized test suites; this never contributes failure rows. */
 export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
   try {
@@ -2122,6 +2287,16 @@ if (import.meta.main) {
   }
   for (const row of references.failures) fail(row);
 
+/* why: Guard 16 wiring — the rule is stated once, in this file's header § 16. */
+
+  const retiredStage =
+    tracked.failures.length === 0
+      ? readRetiredStageCorpus(root, tracked.tracked)
+      : { files: [], readFailures: [] as string[] };
+  for (const row of retiredStage.readFailures) fail(row);
+  const retiredStageHits = checkRetiredStageNames(retiredStage.files);
+  for (const row of retiredStageHits.hits) fail(row);
+
 /* ------------------------------------------------------------------ */
 /* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
 /* ------------------------------------------------------------------ */
@@ -2180,6 +2355,10 @@ if (import.meta.main) {
     referenceFailures === 0 ? "OK" : `FAIL (${referenceFailures} violation${referenceFailures === 1 ? "" : "s"})`
   }`;
 
+  const retiredStageSummary = `Guard 16 retired stage names ${retiredStageHits.filesScanned} files scanned, ${
+    retiredStageHits.hits.length === 0 ? "OK" : `FAIL (${retiredStageHits.hits.length} hit${retiredStageHits.hits.length === 1 ? "" : "s"})`
+  }`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -2187,12 +2366,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${retiredStageSummary}; ${gateSurfaceSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${retiredStageSummary}; ${gateSurfaceSummary}`,
   );
 }

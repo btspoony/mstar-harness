@@ -58,7 +58,7 @@ Topic skills, grouped by what they own:
 | `mstar-roles` | Role prompts and load selection |
 | `mstar-host` | Host adapters and per-host entry details |
 | `mstar-phase-gates` | Prepare/Execute gates, clarify loop, hotfix route |
-| `mstar-iteration` | Iteration lifecycle, phases 1–6 |
+| `mstar-iteration` | Iteration lifecycle, phases 1–3, then the shared delivery and close-out references |
 | `mstar-dispatch-gates` | Dispatch, delegation boundaries, anti-recursion |
 | `mstar-sdd` | Subagent-driven per-task implementation and review |
 | `mstar-branch-worktree` | Branches, worktrees, QC / PM Acceptance checkout alignment |
