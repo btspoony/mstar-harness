@@ -264,6 +264,25 @@ function cleanupOwner(claims: CleanupClaim[], snapshots: readonly WorkflowSnapsh
   });
   return eligible.length === 1 ? eligible[0]! : null;
 }
+
+/**
+ * The repository `gh pr list --repo` must probe, in the `host/owner/repo` form
+ * it accepts for a non-default host: keeping the origin host is what stops a
+ * GitHub Enterprise origin from silently probing github.com (see
+ * skills/mstar-branch-worktree/references/worktree-cleanup.md). URL and
+ * scp-like remotes parse; a non-GitHub origin (local path, no host) returns
+ * undefined so the probe fails closed instead of aiming at the wrong host.
+ */
+function githubRepoOf(origin: string): string | undefined {
+  const normalized = origin.replace(/\.git$/, "").replace(/\/+$/, "");
+  const parsed = (() => { try { return new URL(normalized); } catch { return undefined; } })();
+  const scp = /^[^@/]+@([^/:]+):(.+)$/.exec(normalized);
+  const host = scp ? scp[1] : parsed?.hostname;
+  const tail = scp ? scp[2]! : parsed?.pathname.replace(/^\/+/, "");
+  if (!host || !tail || !/^[^/]+\/[^/]+$/.test(tail)) return undefined;
+  return `${host}/${tail}`;
+}
+
 async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>): Promise<CommandEnvelope> {
   if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
   if (input.workflow === "." || input.workflow === ".." || input.workflow.includes("/") || input.workflow.includes("\\")) throw new SddScriptError(`invalid workflow id ${JSON.stringify(input.workflow)}`, 1);
@@ -388,41 +407,42 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   }
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
-  // see skills/mstar-branch-worktree/references/worktree-cleanup.md — one
-  // base-filtered `gh pr list` per layer-ref candidate, pinned to the
-  // repository `origin` resolves to; a probe that cannot run, parse or
-  // complete under its own cap fails closed (`null`), never a partial list.
+  // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a layer-ref
+  // candidate spawns ONE `gh pr list` for every open PR, pinned to the repository
+  // `origin` resolves to (host included, so a GitHub Enterprise origin cannot
+  // probe github.com); the guard itself covers EVERY branch candidate, and a
+  // probe that cannot run, parse, resolve or complete under its own cap fails
+  // closed (`null`) — never a partial list — on the probed layer refs.
   let openPullRequestBases: CleanupFacts["openPullRequestBases"] = [];
   const layerBranches = targets.filter((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch)).map((target) => target.branch);
   if (layerBranches.length > 0) {
     const origin = (await gitProbe(invocation, ["remote", "get-url", "origin"], main.root)).replace(/\.git$/, "").replace(/\/+$/, "");
-    const slug = /([^/:]+)\/([^/]+)$/.exec(origin)?.[0];
+    const slug = githubRepoOf(origin);
     if (slug === undefined) {
       openPullRequestBases = null;
     } else {
+      const gh = await processReply(invocation, ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "baseRefName", "--limit", "1000"], main.root);
+      let verified = gh.exitCode === 0;
       const bases: string[] = [];
-      let verified = true;
-      for (const branch of layerBranches) {
-        const gh = await processReply(invocation, ["gh", "pr", "list", "--repo", slug, "--base", branch, "--state", "open", "--json", "baseRefName", "--limit", "100"], main.root);
-        if (gh.exitCode !== 0) { verified = false; break; }
+      if (verified) {
         try {
           const rows = JSON.parse(gh.stdout) as unknown;
-          if (!Array.isArray(rows)) { verified = false; break; }
-          if (rows.length >= 100) { verified = false; break; }
-          for (const row of rows) {
-            if (typeof row !== "object" || row === null || !("baseRefName" in row) || typeof row.baseRefName !== "string") { verified = false; break; }
-            bases.push(row.baseRefName);
+          if (!Array.isArray(rows) || rows.length >= 1000) {
+            verified = false;
+          } else {
+            for (const row of rows) {
+              if (typeof row !== "object" || row === null || !("baseRefName" in row) || typeof row.baseRefName !== "string") { verified = false; break; }
+              bases.push(row.baseRefName);
+            }
           }
-          if (!verified) break;
         } catch {
           verified = false;
-          break;
         }
       }
       openPullRequestBases = verified ? bases : null;
     }
   }
-  const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence, openPullRequestBases };
+  const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence, openPullRequestBases, openPullRequestProbeRefs: layerBranches };
   const plan = planWorktreeCleanup(selected, facts);
   if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });
   const evidenceBaseBranches = new Set(snapshots.flatMap((snapshot) => [snapshot.branch?.integration, snapshot.branch?.target]).filter((value): value is string => Boolean(value)));

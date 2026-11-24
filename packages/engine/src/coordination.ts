@@ -1490,7 +1490,9 @@ function deliveryCheckoutOf(
         candidates.length === 0
           ? `Workflow '${workflowId}' records no ${wording.checkout}, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in a recorded checkout`
           : `Workflow '${workflowId}' records checkout(s) ${candidates.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-        `Rebuild the recorded checkout with 'git worktree add ${candidates[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
+        candidates.length === 0
+          ? `Create a checkout of ${deliveryBranch} and record it on a plan row (metadata.worktree_path), then retry the close; if the merge was a squash or rebase, ${wording.record}.`
+          : `Rebuild the recorded checkout with 'git worktree add ${candidates[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
       ),
     };
   }
@@ -1667,7 +1669,7 @@ function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResu
     tip === undefined
       ? `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} has no ref in ${checkout}, so its chain top cannot be shown to be on ${targetBranch} (${target})`
       : `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} tip ${tip} is not on ${targetBranch} (${target}), so the iteration's landed chain is unproven`,
-    `Fetch ${targetBranch} into the recorded checkout and merge ${deliveryBranch} into it, then retry the close; if the chain genuinely cannot land, ${stopped}.`,
+    `Fetch ${targetBranch} into the recorded checkout and land ${deliveryBranch} on ${targetBranch} through the provider (the proof reads refs/remotes/origin/${targetBranch}; a local merge alone does not move it), then retry the close; if the chain genuinely cannot land, ${stopped}.`,
   );
 }
 

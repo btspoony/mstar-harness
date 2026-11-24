@@ -2709,7 +2709,7 @@ function readGhLog(logPath: string): { cwd: string; argv: string[] }[] {
 }
 
 /** Terminal iteration whose `branch.target` is the default branch — a layer ref is merged-evidence eligible; see skills/mstar-iteration/references/pr-stack.md. */
-async function layerFixture(prefix: string): Promise<{ root: string; mainBranch: string; context: StoreContext }> {
+async function layerFixture(prefix: string, plans: Record<string, unknown>[] = []): Promise<{ root: string; mainBranch: string; context: StoreContext }> {
   const home = tmpRoot(prefix);
   const bare = join(home, "origin.git");
   git(["init", "-q", "--bare", bare], home);
@@ -2734,8 +2734,11 @@ async function layerFixture(prefix: string): Promise<{ root: string; mainBranch:
     started_at: "2026-09-10",
     updated_at: "2026-09-10",
     branch: { base: mainBranch, integration: "iteration/iter-1", target: mainBranch },
-    plans: [],
+    plans,
   }, "stopped");
+  // A GitHub Enterprise-shaped origin: the open-PR probe must keep this host
+  // in the `--repo` it passes to gh — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
+  git(["remote", "set-url", "origin", "https://ghe.example.com/acme/tools.git"], root);
   return { root, mainBranch, context };
 }
 
@@ -2753,15 +2756,14 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       // A layer ref of this workflow, merged into branch.target — see skills/mstar-iteration/references/pr-stack.md.
       git(["branch", "iteration-stack/iter-1/s01"], fx.root);
 
-      // Nobody's open base → eligible remove; the probe runs once per layer ref — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
+      // Nobody's open base → eligible remove; one unfiltered probe lists every open PR — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       const notBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
       expect(notBase.exitCode).toBe(0);
       expect(decisionRows(notBase)).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
       expect(readGhLog(shim.logPath).filter((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")).toHaveLength(1);
       const probe = readGhLog(shim.logPath).find((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")!;
-      expect(probe.argv).toContain("--repo");
-      expect(probe.argv[probe.argv.indexOf("--repo") + 1]).toMatch(/^[^/]+\/[^/]+$/);
-      expect(probe.argv[probe.argv.indexOf("--base") + 1]).toBe("iteration-stack/iter-1/s01");
+      expect(probe.argv).not.toContain("--base");
+      expect(probe.argv[probe.argv.indexOf("--repo") + 1]).toBe("ghe.example.com/acme/tools");
 
       // An open PR bases on the layer ref → refuse; see skills/mstar-branch-worktree/references/worktree-cleanup.md.
       const openBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, {
@@ -2797,4 +2799,43 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 60000);
+
+  test("the verified probe guards every branch candidate; a probe failure refuses only the probed layer ref", async () => {
+    // A Done plan row whose merged feature branch shares the cleanup run
+    // with a layer ref — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
+    const fx = await layerFixture("mstar-cleanup-layer-mixed-", [
+      { id: "plan-a", title: "Plan A", file: "plan-a.md", status: "Done", metadata: { working_branch: "feature/plan-a" } },
+    ]);
+    const home = dirname(fx.root);
+    const shim = installGhShim(home);
+    try {
+      git(["branch", "iteration/iter-1"], fx.root);
+      git(["branch", "iteration-stack/iter-1/s01"], fx.root);
+      git(["branch", "feature/plan-a"], fx.root);
+
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an
+      // open PR bases on the ordinary merged branch, so the verified probe's
+      // base list must cover non-layer candidates too.
+      const prBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, {
+        ...shim.env,
+        MSTAR_GH_PR_LIST: JSON.stringify([{ baseRefName: "feature/plan-a", headRefName: "feature/follow-up" }]),
+      });
+      expect(prBase.exitCode).toBe(0);
+      const prRows = decisionRows(prBase).join("\n");
+      expect(prRows).toContain("refuse | local-branch | feature/plan-a | cleanup.refuse.open-pr-base");
+      expect(prRows).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
+
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an
+      // unverified probe fails closed on the probed layer ref only, so the
+      // ordinary merged plan branch it shares the run with still removes.
+      const failed = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_FAIL: "1" });
+      expect(failed.exitCode).toBe(0);
+      const failRows = decisionRows(failed).join("\n");
+      expect(failRows).toContain("refuse | local-branch | iteration-stack/iter-1/s01 | cleanup.refuse.open-pr-base");
+      expect(failRows).toContain("remove | local-branch | feature/plan-a | cleanup.remove.merged");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60000);
+
 });

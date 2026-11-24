@@ -84,6 +84,7 @@ function lane1Facts(worktrees: ReturnType<typeof worktree>[]): CleanupFacts {
     },
     remoteEvidence: [],
     openPullRequestBases: [],
+    openPullRequestProbeRefs: [],
   };
 }
 
@@ -333,6 +334,7 @@ describe("planWorktreeCleanup", () => {
       },
       remoteEvidence: [],
       openPullRequestBases: [],
+      openPullRequestProbeRefs: [],
     };
     expect(planWorktreeCleanup(iterDone, facts)).toEqual([
       { kind: "worktree", ref: "/repo/.worktrees/iter-done", verdict: "remove", reason: "cleanup.remove.merged" },
@@ -376,6 +378,7 @@ describe("planWorktreeCleanup", () => {
         { branch: "iteration/iter-moved", tip: TIP_MERGED, base: "main", ancestor: true, prMerged: true },
       ],
       openPullRequestBases: [],
+      openPullRequestProbeRefs: [],
     };
     expect(planWorktreeCleanup(iterDone, facts)).toEqual([
       { kind: "local-branch", ref: "iteration/iter-done", verdict: "remove", reason: "cleanup.remove.merged" },
@@ -451,16 +454,53 @@ describe("planWorktreeCleanup", () => {
       targets: [layer],
     };
     // see skills/mstar-branch-worktree/references/worktree-cleanup.md — merged evidence passes, but the open-PR-base rule fires first.
-    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["iteration-stack/iter-done/s02"] })).toEqual([
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["iteration-stack/iter-done/s02"], openPullRequestProbeRefs: ["iteration-stack/iter-done/s02"] })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
     ]);
-    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — null = probe unverified, fail closed with the same code.
-    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: null })).toEqual([
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — null = probe unverified, fail closed with the same code on the probed ref.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: null, openPullRequestProbeRefs: ["iteration-stack/iter-done/s02"] })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
     ]);
     // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a layer that is nobody's open base still removes.
-    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["feature/other"] })).toEqual([
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["feature/other"], openPullRequestProbeRefs: ["iteration-stack/iter-done/s02"] })).toEqual([
       { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+  });
+
+  test("an unverified probe refuses only the probed layer ref; a verified probe still covers every branch candidate", () => {
+    const iterDone = snap({
+      id: "iter-done",
+      type: "iteration",
+      status: "completed",
+      ended_at: "2026-09-12",
+      branch: { base: "main", integration: "iteration/iter-done", target: "main" },
+      plans: [{ id: "plan-a", status: "Done", metadata: { working_branch: "feature/plan-a" } }],
+    });
+    const layer = target({ kind: "local-branch", ref: "iteration-stack/iter-done/s01", branch: "iteration-stack/iter-done/s01", owner: { workflowId: "iter-done" } });
+    const feature = target({ kind: "local-branch", ref: "feature/plan-a", branch: "feature/plan-a", owner: { workflowId: "iter-done", planId: "plan-a" } });
+    const shared: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true })]),
+      snapshots: [iterDone],
+      mergedLocalBranches: {
+        main: ["main", "iteration/iter-done", "iteration-stack/iter-done/s01"],
+        "iteration/iter-done": ["feature/plan-a", "iteration/iter-done"],
+      },
+      openPullRequestProbeRefs: ["iteration-stack/iter-done/s01"],
+      targets: [layer, feature],
+    };
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an
+    // unverified probe fails closed on the probed layer ref only; the ordinary
+    // merged plan branch it shares the run with still removes.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: null })).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s01", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
+      { kind: "local-branch", ref: "feature/plan-a", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // verified probe's base list covers every branch candidate, so an ordinary
+    // branch that is an open PR's base refuses too.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["feature/plan-a"] })).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s01", verdict: "remove", reason: "cleanup.remove.merged" },
+      { kind: "local-branch", ref: "feature/plan-a", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
     ]);
   });
 
@@ -476,6 +516,7 @@ describe("planWorktreeCleanup", () => {
       ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true }), worktree("/repo/.worktrees/iter-done", "iteration-stack/iter-done/s01")]),
       snapshots: [iterDone],
       openPullRequestBases: ["iteration-stack/iter-done/s01"],
+      openPullRequestProbeRefs: ["iteration-stack/iter-done/s01"],
       targets: [
         target({ kind: "worktree", ref: "/repo/.worktrees/iter-done", branch: "iteration-stack/iter-done/s01", owner: { workflowId: "iter-done" } }),
       ],

@@ -1315,6 +1315,10 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
     const stated = JSON.stringify(refused.details);
     expect(stated).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on main`);
+    // The recovery names the remote-first target: a local merge into
+    // refs/heads/main cannot satisfy refs/remotes/origin/main — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    expect(stated).toContain(`land ${INTEGRATION_BRANCH} on main through the provider`);
     expect(stated).toContain("--status stopped");
     // The iteration stays running: a refused close writes nothing (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
     expect(await workflowFootprint(fixture.context)).toEqual(before);
@@ -1376,12 +1380,53 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     runGit(["add", "-A"], fixture.integrationPath);
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer two"], fixture.integrationPath);
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "layer two lands", INTEGRATION_BRANCH], fixture.repoRoot);
+    // One more target-side commit makes the chain top only a TRANSITIVE
+    // ancestor: a direct-parent-only proof would fail here — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    commitMain(fixture, "target work after the layers");
     const closed = await workflowMutation(fixture, "op-iteration-separate-close", {
       kind: "lifecycle",
       status: "completed",
       reason: "every layer landed on its own merge",
     });
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a close with no recorded checkout names a record step, and one with a dead path names the worktree rebuild", async () => {
+    const fixture = await workflowFixture("merge-no-checkout");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-nocheckout-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.metadata = { ...(state.metadata as Record<string, unknown>), worktree_path: join(fixture.repoRoot, "wt-gone") };
+      db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+    });
+    // A recorded but unreadable path keeps the worktree-rebuild recovery —
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    const deadPath = await refusalOf(() =>
+      workflowMutation(fixture, "op-nocheckout-dead", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(deadPath.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    expect(JSON.stringify(deadPath.details)).toContain("git worktree add");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const metadata = { ...(state.metadata as Record<string, unknown>) };
+      delete metadata.worktree_path;
+      state.metadata = metadata;
+      db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), WORKFLOW_ID, PLAN_ID);
+    });
+    // Nothing recorded at all: the recovery is a record step, never a literal
+    // `git worktree add` against an empty candidates[0] — see
+    // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
+    const empty = await refusalOf(() =>
+      workflowMutation(fixture, "op-nocheckout-empty", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(empty.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    const stated = JSON.stringify(empty.details);
+    expect(stated).toContain("metadata.worktree_path");
+    expect(stated).not.toContain("git worktree add");
   });
 });
 

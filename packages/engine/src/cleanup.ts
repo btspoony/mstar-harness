@@ -26,8 +26,8 @@
  *   5. non-terminal integration or non-Done plan
  *                                    → cleanup.refuse.non-terminal
  *   6. branch checked out anywhere   → cleanup.refuse.checked-out
- *   7. open PR base (unverified fails closed)
- *                                    → cleanup.refuse.open-pr-base
+ *   7. open PR base (unverified fails closed on the
+ *      probed layer refs only)       → cleanup.refuse.open-pr-base
  *   8. unmerged/missing evidence     → cleanup.refuse.unmerged
  *   9. dirty/locked worktree         → cleanup.refuse.dirty-worktree /
  *                                      cleanup.refuse.locked-worktree
@@ -81,8 +81,10 @@ export type CleanupFacts = {
     ancestor: boolean;
     prMerged: boolean | null;
   }[];
-  /** Open PR base refs (`gh pr list --base`); `null` = probe unverified, fail closed — see skills/mstar-branch-worktree/references/worktree-cleanup.md. */
+  /** Open PR base refs (`gh pr list`); `null` = probe unverified, fail closed on `openPullRequestProbeRefs` only — see skills/mstar-branch-worktree/references/worktree-cleanup.md. */
   openPullRequestBases: readonly string[] | null;
+  /** see skills/mstar-branch-worktree/references/worktree-cleanup.md — the layer-ref candidates whose presence spawned the open-PR probe; an unverified (`null`) probe refuses exactly this set, never unrelated branch candidates. */
+  openPullRequestProbeRefs: readonly string[];
 };
 
 /** Stable machine codes ( — § "Stable machine codes"; never renamed ad hoc). */
@@ -285,10 +287,11 @@ export function planWorktreeCleanup(snapshot: WorkflowSnapshot, facts: CleanupFa
     if (target.kind !== "worktree" && facts.worktrees.some((wt) => wt.branch !== null && wt.branch === target.branch)) {
       return decide("refuse", REASON.refuseCheckedOut);
     }
-    // 7. open-PR-base refuse — branch candidates only, fail closed when the
-    // probe is unverified (`null`) — see
-    // skills/mstar-branch-worktree/references/worktree-cleanup.md.
-    if (target.kind !== "worktree" && (facts.openPullRequestBases === null || facts.openPullRequestBases.includes(target.branch))) {
+    // 7. open-PR-base refuse — branch candidates only; an unverified probe
+    // fails closed on the probed layer refs alone, never on unrelated
+    // candidates — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
+    if (target.kind !== "worktree" &&
+      (facts.openPullRequestBases === null ? facts.openPullRequestProbeRefs.includes(target.branch) : facts.openPullRequestBases.includes(target.branch))) {
       return decide("refuse", REASON.refuseOpenPrBase);
     }
     // 8. unmerged/missing merge evidence — branch candidates only (ownerless
