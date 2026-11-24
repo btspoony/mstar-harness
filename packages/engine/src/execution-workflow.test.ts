@@ -1315,10 +1315,11 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
     const stated = JSON.stringify(refused.details);
     expect(stated).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on main`);
-    // The recovery names the remote-first target: a local merge into
-    // refs/heads/main cannot satisfy refs/remotes/origin/main — see
+    // The recovery names the remote-first target read and the local fallback:
+    // a fetched refs/remotes/origin/main outranks the local head, and the
+    // local merge below is what proves this exact shape — see
     // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f.
-    expect(stated).toContain(`land ${INTEGRATION_BRANCH} on main through the provider`);
+    expect(stated).toContain(`Land ${INTEGRATION_BRANCH} on main through the provider`);
     expect(stated).toContain("--status stopped");
     // The iteration stays running: a refused close writes nothing (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
     expect(await workflowFootprint(fixture.context)).toEqual(before);
@@ -1332,6 +1333,27 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     });
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
+  test("a qualified refs/heads/ target anchor still resolves for the close proof", async () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — registration preserves the anchor string it is handed and the
+    // proof composes `refs/heads/<target>` itself, so a recorded
+    // `refs/heads/main` must name `main`, never `refs/heads/refs/heads/main`.
+    const fixture = await workflowFixture("iteration-qualified-target", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const anchored = await workflowMutation(fixture, "op-qualified-anchor", {
+      kind: "delivery-anchors",
+      branch: { target: "refs/heads/main" },
+      reason: "the target was recorded in its qualified ref form",
+    });
+    expect(anchored.replayed).toBe(false);
+    const closed = await workflowMutation(fixture, "op-qualified-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the qualified target resolved",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
 
   test("an iteration whose delivery line never advanced still closes", async () => {
     // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —

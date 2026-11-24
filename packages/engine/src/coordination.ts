@@ -1391,8 +1391,12 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string | 
  * commit exists for.
  */
 function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string | undefined {
-  const local = `refs/heads/${branch}`;
-  const remote = `refs/remotes/origin/${branch}`;
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — a recorded anchor may carry the qualified `refs/heads/<name>` form;
+  // normalize so it names the same branch, not a nested ref that cannot exist.
+  const name = branch.replace(/^refs\/(heads|remotes\/origin)\//, "");
+  const local = `refs/heads/${name}`;
+  const remote = `refs/remotes/origin/${name}`;
   for (const ref of remoteFirst ? [remote, local] : [local, remote]) {
     const sha = gitRead(cwd, ["rev-parse", "--verify", "--quiet", ref]);
     if (sha !== undefined && sha !== "") return sha;
@@ -1537,8 +1541,11 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
   // §4f — the pure consultation proved both branch anchors; the merge member
   // stays OPTIONAL, so the proof below reads it defensively.
-  const deliveryBranch = deliveryBranchOf(branch) as string;
-  const targetBranch = branch.target as string;
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — a qualified `refs/heads/<name>` record names the same branch; strip
+  // once so every message and ref composition reads the short name.
+  const deliveryBranch = (deliveryBranchOf(branch) as string).replace(/^refs\/(heads|remotes\/origin)\//, "");
+  const targetBranch = (branch.target as string).replace(/^refs\/(heads|remotes\/origin)\//, "");
   const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`;
   const base = deliveryCheckoutOf(snapshot, workflowId, deliveryBranch, targetBranch, {
     record,
@@ -1635,8 +1642,8 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
 function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  const deliveryBranch = isNonEmptyString(branch.integration) ? branch.integration : undefined;
-  const targetBranch = isNonEmptyString(branch.target) ? branch.target : undefined;
+  const deliveryBranch = isNonEmptyString(branch.integration) ? branch.integration.replace(/^refs\/(heads|remotes\/origin)\//, "") : undefined;
+  const targetBranch = isNonEmptyString(branch.target) ? branch.target.replace(/^refs\/(heads|remotes\/origin)\//, "") : undefined;
   const stopped = `record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`;
   if (deliveryBranch === undefined || targetBranch === undefined) {
     const missing = deliveryBranch === undefined ? "branch.integration" : "branch.target";
@@ -1669,7 +1676,7 @@ function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResu
     tip === undefined
       ? `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} has no ref in ${checkout}, so its chain top cannot be shown to be on ${targetBranch} (${target})`
       : `Workflow '${workflowId}' cannot prove its delivery merge: the delivery line ${deliveryBranch} tip ${tip} is not on ${targetBranch} (${target}), so the iteration's landed chain is unproven`,
-    `Fetch ${targetBranch} into the recorded checkout and land ${deliveryBranch} on ${targetBranch} through the provider (the proof reads refs/remotes/origin/${targetBranch}; a local merge alone does not move it), then retry the close; if the chain genuinely cannot land, ${stopped}.`,
+    `Land ${deliveryBranch} on ${targetBranch} through the provider and fetch the target into the recorded checkout (the proof reads refs/remotes/origin/${targetBranch} first, then refs/heads/${targetBranch}; a fetched remote ref outranks a stale local head, while a local merge still proves the close where no remote ref exists), then retry the close; if the chain genuinely cannot land, ${stopped}.`,
   );
 }
 

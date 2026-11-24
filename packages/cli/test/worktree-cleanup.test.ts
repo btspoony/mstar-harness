@@ -2838,4 +2838,52 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
     }
   }, 60000);
 
+  test("--apply keeps a verified open-PR base refused after the last layer ref is gone", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // apply run re-plans after each deletion wave; once the layer ref is
+    // deleted no layer candidate remains, and the retained verified base list
+    // — not a fresh empty probe — is what still refuses the protected branch.
+    const fx = await layerFixture("mstar-cleanup-layer-apply-", [
+      { id: "plan-a", title: "Plan A", file: "plan-a.md", status: "Done", metadata: { working_branch: "feature/plan-a" } },
+    ]);
+    const home = dirname(fx.root);
+    const shim = installGhShim(home);
+    try {
+      git(["branch", "iteration-stack/iter-1/s01"], fx.root);
+      git(["branch", "feature/plan-a"], fx.root);
+      const apply = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root, "--apply"], fx.root, {
+        ...shim.env,
+        MSTAR_GH_PR_LIST: JSON.stringify([{ baseRefName: "feature/plan-a", headRefName: "feature/follow-up" }]),
+      });
+      expect(apply.exitCode, apply.stdout + apply.stderr).toBe(0);
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the layer ref is gone; the open-PR base branch survives every pass.
+      expect(git(["branch", "--list", "iteration-stack/iter-1/s01"], fx.root)).toBe("");
+      expect(git(["branch", "--list", "feature/plan-a"], fx.root)).toContain("feature/plan-a");
+      expect(readGhLog(shim.logPath).filter((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")).toHaveLength(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("a user-less scp-like origin still resolves to its GitHub repo", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md —
+    // `[user@]host:path` with SSH config supplying the user is a valid remote
+    // (git-clone(1)); the probe must still reach `github.com/acme/tools`
+    // instead of failing closed on every layer ref.
+    const fx = await layerFixture("mstar-cleanup-layer-scp-");
+    const home = dirname(fx.root);
+    const shim = installGhShim(home);
+    try {
+      git(["remote", "set-url", "origin", "ghe.example.com:acme/tools.git"], fx.root);
+      git(["branch", "iteration-stack/iter-1/s01"], fx.root);
+      const dry = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
+      expect(dry.exitCode, dry.stdout + dry.stderr).toBe(0);
+      expect(decisionRows(dry)).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
+      const probe = readGhLog(shim.logPath).find((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")!;
+      expect(probe.argv[probe.argv.indexOf("--repo") + 1]).toBe("ghe.example.com/acme/tools");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60000);
+
 });
