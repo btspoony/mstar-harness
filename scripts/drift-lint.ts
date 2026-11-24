@@ -99,10 +99,13 @@
  * `.json`, `.toml` (the Codex prompt sources) and, in `assets/`, only a
  * direct `*.svg` child. `.svg` text counts: the `<text>`, `<title>`, `<desc>`
  * and `aria-label` values are read with inline markup joined and numeric
- * character references decoded, and a diagram label is judged as prose. The
- * same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape, and
- * adjacent prose lines are judged as one block, so a name split by a line
- * break is still reported. `<code>` is judged like a backtick span. A fence
+ * character references decoded. A diagram label is literal text: a backtick
+ * is a character a reader sees, so a probe in a label is prose. The same
+ * decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape, and
+ * adjacent prose lines are judged as one block (a blank line or a following
+ * list marker ends the block), so a name split by a line break is still
+ * reported; a match wholly inside the earlier line is reported there only.
+ * `<code>` is judged like a backtick span in Markdown. A fence
  * closes only on its own character, at least as long as the opener, with
  * nothing after it, and may sit inside a blockquote. The three engine probes
  * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
@@ -1696,8 +1699,10 @@ function decodeXmlEntities(text: string): string {
 /** why: the three engine probes survive only where the reader sees them as a
  * literal, so the scan removes them from a code span or fence and reports
  * them anywhere else. Other span content is judged like prose: a retired
- * stage name in backticks is still a retired stage name. */
-export function findRetiredStageSpellings(line: string, inFence = false): string[] {
+ * stage name in backticks is still a retired stage name. `markup: false`
+ * judges literal text (a diagram label, where a backtick is a character a
+ * reader sees, not Markdown). */
+export function findRetiredStageSpellings(line: string, inFence = false, markup = true): string[] {
   const hits: string[] = [];
   // A render-equivalent spelling may be written as `&#52;`; decode before any
   // shape is judged, on the Markdown path as well as in a diagram.
@@ -1705,6 +1710,9 @@ export function findRetiredStageSpellings(line: string, inFence = false): string
   const stripProbes = (inner: string): string => inner.replace(PROBE_PATTERN, " ");
   if (inFence) {
     rest = stripProbes(rest);
+  } else if (!markup) {
+    // Literal text: nothing here is a code span, so a probe is prose.
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   } else {
     // A span keeps its position: only the probe literals leave it, so a stage
     // run written across prose and backticks is still one run. `<code>` is the
@@ -1735,7 +1743,19 @@ export function findRetiredStageSpellings(line: string, inFence = false): string
  * dropped without adding whitespace, each with its source line. */
 function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   const segments: Array<{ text: string; line: number }> = [];
-  const lineAt = (index: number): number => text.slice(0, index).split("\n").length;
+  // One pass builds the line starts; each label then needs a binary search.
+  const lineStarts: number[] = [0];
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
+  const lineAt = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid] <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
   for (const match of text.matchAll(SVG_NODE)) {
     segments.push({ text: decodeXmlEntities(match[1].replace(/<[^>]*>/g, "")), line: lineAt(match.index ?? 0) });
   }
@@ -1758,10 +1778,10 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
   const hits: string[] = [];
   for (const file of files) {
     if (file.rel.endsWith(".svg")) {
-      // SVG label text is prose a reader sees: a probe in a label is not in a
-      // Markdown code span or fence, so it is reported like prose.
+      // SVG label text is literal text a reader sees: a backtick is a
+      // character, and a probe in a label is prose.
       for (const segment of svgTextSegments(file.text)) {
-        for (const hit of findRetiredStageSpellings(segment.text, false)) {
+        for (const hit of findRetiredStageSpellings(segment.text, false, false)) {
           hits.push(
             `Guard 16 retired-stage-name: ${file.rel}:${segment.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
           );
@@ -1815,8 +1835,13 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       // sentence above it, and its `-` would read as a stage-list separator.
       const blockStarts = /^\s*(?:[-*+]|\d+\.)\s/.test(text);
       if (previous !== "" && text.trim() !== "" && !blockStarts) {
-        for (const hit of findRetiredStageSpellings(`${previous} ${text}`, false)) {
-          if (!lineHits.includes(hit)) report(`${index + 1} "${hit}" (split across the line break)`);
+        const joined = `${previous} ${text}`;
+        for (const hit of findRetiredStageSpellings(joined, false)) {
+          if (lineHits.includes(hit)) continue;
+          // Only a match that reaches past the join boundary belongs to the
+          // current line; a hit wholly inside the previous line was reported there.
+          const at = joined.indexOf(hit);
+          if (at >= 0 && at + hit.length > previous.length) report(`${index + 1} "${hit}" (split across the line break)`);
         }
       }
       previous = text.trim() === "" ? "" : text;

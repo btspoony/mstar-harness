@@ -2377,6 +2377,17 @@ describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
     const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>" + RETIRED_STAGE_MACHINE_LITERALS[0] + "</text>" }]);
     expect(result.hits.length).toBeGreaterThan(0);
   });
+
+  test("a backtick in a diagram label is a character, not a span", () => {
+    const text = "<text>`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "`</text>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.svg", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a hit inside the earlier line is not reported again as split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text: "Phase 4\nreview continues\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
 });
 
 describe("checkRetiredStageNames — a name split across a line break", () => {
