@@ -23,7 +23,7 @@
  * 3. skills corpus — no ephemeral citations anywhere in the skills/
  * markdown tree (engine findEphemeralCitations over the full corpus),
  * turning the manual corpus smoke into a permanent CI guard.
- * 4. roles/load-order corpus ( * every `skills/mstar-*` SKILL.md must declare
+ * 4. roles/load-order corpus ( * every `mstar-*` SKILL.md under `skills` must declare
  * `mstar-harness-core` in a Load Order / First action section (engine
  * `lintLoadOrder`; the engine-absent archive is exempt by exact name and is
  * instead linted inbound-only over its whole text face, `SKILL.md` +
@@ -32,7 +32,7 @@
  * (engine `validateRoleMapping` on `skills/mstar-roles`).
  * 5. skills corpus — five-question runtime smoke (audit finding 5;
  * classifier wiring per the shared lint-classifier):
- * every shipped `skills/mstar-*` SKILL.md selected as `runtime` by the
+ * every shipped `mstar-*` SKILL.md under `skills` selected as `runtime` by the
  * shared Engine classifier (`classifySkillLint`; the
  * `mstar-harness-core` hub and the standard-bearing
  * `mstar-skill-authoring` are not runtime corpus) must pass engine
@@ -1773,7 +1773,7 @@ export function extractSvgText(text: string): string[] {
   return svgTextSegments(text).map((segment) => segment.text);
 }
 
-/**
+/** see scripts/drift-lint.ts § 16
  * Guard 16 — the rule is stated once, in this file's header (item 16). A
  * Markdown line is judged with its fenced state; an `.svg` file is judged on
  * the text a reader sees; a `.json` file is judged value by value.
