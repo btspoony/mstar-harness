@@ -693,6 +693,13 @@ describe("adversarial phase-transition case assertions ", () => {
     }
   });
 
+  test("every decision_record case declares the DECISION: record protocol in its fixture AGENTS.md", () => {
+    for (const c of cases) {
+      if (!c.assertions.some((a) => a.kind === "decision_record")) continue;
+      expect(agentsMdOf(c).includes("DECISION:"), `${c.id} declares the record protocol`).toBe(true);
+    }
+  });
+
   test("no heading-inferred semantic pass: no final-message assertion value across the corpus is a markdown heading", () => {
     for (const c of cases) {
       for (const a of c.assertions) {

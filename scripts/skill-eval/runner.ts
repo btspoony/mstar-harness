@@ -51,6 +51,7 @@ import {
   canonicalJson,
   canonicalRunId,
   computeConfigHash,
+  DECISION_RECORD_PREFIX,
   disposableRootContainmentErrors,
   deriveDisposableRepoRoot,
   REPEATS_ALLOWED,
@@ -60,6 +61,7 @@ import {
   VARIANT_IDS,
   type AssertionKind,
   type CaseSplit,
+  type DecisionRecordSpec,
   type EvalManifest,
   type GroupedFactsSpec,
   type Io,
@@ -1748,6 +1750,101 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
   };
 }
 
+/**
+ * Parses the one `DECISION:` line out of a final message. Returns
+ * `"malformed"` for zero/multiple record lines, invalid JSON, or a non-object
+ * payload — every such shape grades unverified, never pass.
+ */
+function readDecisionRecord(content: string): Record<string, unknown> | "malformed" {
+  const lines = content.split(/\r?\n/).filter((line) => line.trimStart().startsWith(DECISION_RECORD_PREFIX));
+  if (lines.length !== 1) return "malformed";
+  const body = lines[0]!.trimStart().slice(DECISION_RECORD_PREFIX.length).trim();
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "malformed";
+    return parsed as Record<string, unknown>;
+  } catch {
+    return "malformed";
+  }
+}
+
+/**
+ * Deterministic decision-record oracle (#828): the final carries exactly one
+ * machine-readable `DECISION:` JSON object whose fields match the spec's
+ * allowed values, or the contradictory prose behind a refusal marker still
+ * grades fail. A missing/malformed record stays unverified — the same honesty
+ * rule the grouped-facts oracle uses — so an unrecorded reply never passes.
+ */
+function gradeDecisionRecord(ctx: GradingContext, assertionId: string, spec: DecisionRecordSpec): AssertionGrade {
+  const turn = lastCompletedTurn(ctx.unit);
+  const kind = "decision_record" as const;
+  if (!turn) {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: { detail: "no completed turn produced a final message; decision record stays unverified until evidence adjudicated" },
+    };
+  }
+  let content: string | null = null;
+  try {
+    content = ctx.io.readText(turn.artifacts.final);
+  } catch {
+    content = null;
+  }
+  if (content === null) {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "final.md missing; decision record unverified until evidence adjudicated" },
+    };
+  }
+  const record = readDecisionRecord(content);
+  if (record === "malformed") {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `no single parseable \`${DECISION_RECORD_PREFIX}\` JSON record line; the decision oracle cannot be evaluated`,
+      },
+    };
+  }
+  const violations: string[] = [];
+  for (const [field, allowed] of Object.entries(spec.fields)) {
+    const actual = record[field];
+    if (actual === undefined) violations.push(`${field} is missing (allowed: ${allowed.join("|")})`);
+    else if (typeof actual !== "string" || !allowed.includes(actual)) {
+      violations.push(`${field}=${JSON.stringify(actual)} (allowed: ${allowed.join("|")})`);
+    }
+  }
+  if (violations.length > 0) {
+    return {
+      assertionId,
+      kind,
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `decision record violates the case spec: ${violations.join("; ")}`,
+      },
+    };
+  }
+  return {
+    assertionId,
+    kind,
+    grade: "pass",
+    evidence: {
+      turn: turn.turn,
+      file: turn.artifacts.final,
+      detail: `decision record satisfies [${Object.keys(spec.fields).join(", ")}]`,
+    },
+  };
+}
+
 function gradeDiffAssertion(ctx: GradingContext, assertionId: string, allowed: string[]): AssertionGrade {
   const { diff } = ctx;
   const violations = [...diff.deleted, ...diff.created.filter((p) => !allowed.includes(p)), ...diff.modified.filter((p) => !allowed.includes(p))];
@@ -1833,6 +1930,9 @@ function gradeUnit(ctx: GradingContext): UnitGrading {
         break;
       case "grouped_facts_final":
         assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as GroupedFactsSpec));
+        break;
+      case "decision_record":
+        assertions.push(gradeDecisionRecord(ctx, assertion.id, assertion.value as DecisionRecordSpec));
         break;
       case "thread_reused":
         assertions.push(gradeThreadReused(ctx, assertion.id));

@@ -47,6 +47,7 @@ import {
   validateResolvedManifest,
   validateRunSplit,
   type CaseSplit,
+  type DecisionRecordSpec,
   type EvalManifest,
   type ExecArgv,
   type Io,
@@ -425,6 +426,24 @@ describe("prepare — frozen baseline manifest (Task 1)", () => {
     expect(mem.writes.length).toBe(0);
   });
 
+  test("prepare rejects a malformed decision_record spec with exit 2 before any write", async () => {
+    const mem = setupMemory();
+    mem.files.set(
+      resolve("/cfg/cases.json"),
+      mutatedCasesText((cases) => {
+        const target = cases.find((c) => c.id === "close-heldout-2-changelog-fragment-only")!;
+        const assertions = target.assertions as { kind: string; value: unknown }[];
+        const record = assertions.find((a) => a.kind === "decision_record")!;
+        record.value = { fields: {} };
+      }),
+    );
+    const spy = makeSubprocessSpy();
+    const result = await prepareManifest(prepareArgs(mem, spy));
+    expect(result.exit).toBe(2);
+    expect(result.errors.join("\n")).toContain("value.fields must be a non-empty object");
+    expect(mem.writes.length).toBe(0);
+  });
+
   test("prepare rejects unsafe real checkout targets with exit 2 before any write", async () => {
     const spy = makeSubprocessSpy();
 
@@ -680,6 +699,16 @@ function basePassScript(manifest: EvalManifest, caseId: string, opts?: { omitThr
   const c = manifest.cases.find((x) => x.id === caseId)!;
   const readValues = c.assertions.filter((a) => a.kind === "tool_read_contains").map((a) => a.value as string);
   const finalValues = c.assertions.filter((a) => a.kind === "final_contains").map((a) => a.value as string);
+  // A decision_record case needs the machine-readable line to pass; derive it
+  // from each spec's first allowed value per field (the intended outcome).
+  // The spec shape is validated in manifest.ts at prepare time.
+  const records = c.assertions
+    .filter((a) => a.kind === "decision_record")
+    .map((a) => {
+      const fields = (a.value as DecisionRecordSpec).fields;
+      const record = Object.fromEntries(Object.entries(fields).map(([field, allowed]) => [field, allowed[0]]));
+      return `DECISION: ${JSON.stringify(record)}`;
+    });
   const lines: string[] = [];
   if (!opts?.omitThread) lines.push(JSON.stringify({ type: "thread.started", thread_id: threadIdFor(caseId) }));
   lines.push(
@@ -696,7 +725,7 @@ function basePassScript(manifest: EvalManifest, caseId: string, opts?: { omitThr
   if (c.sandbox === "workspace-write" && allowed.length > 0) {
     writes.push({ path: allowed[0], content: "// touched by the SYNTHETIC adapter\n" });
   }
-  return { events: `${lines.join("\n")}\n`, final: `${finalValues.join("\n")}\n`, code: 0, writes };
+  return { events: `${lines.join("\n")}\n`, final: `${[...finalValues, ...records].join("\n")}\n`, code: 0, writes };
 }
 
 /** SYNTHETIC all-pass handler (turn-agnostic; resume turns echo the thread id). */
@@ -2459,5 +2488,64 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     await runSmoke(io, manifest, spawn);
     const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
     expect(io.readText(report.mdPath)).toContain("raw per-turn invocation observations");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decision_record oracle (#828), synthetic
+// ---------------------------------------------------------------------------
+
+describe("decision_record: a contradictory record fails, a missing one stays unverified (synthetic)", () => {
+  const RECORD_CASE = "close-heldout-2-changelog-fragment-only";
+  const REFUSAL = "RESULT: REFUSED-PHASE-JUMP";
+
+  /** Runs the heldout split; the record case's final is supplied by the caller. */
+  async function gradeRecordFinal(recordLine: string | null) {
+    const { io, manifest } = await preparedRunDir();
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== RECORD_CASE) return basePassScript(manifest, id);
+      const base = basePassScript(manifest, id);
+      const final = [...base.final!.trimEnd().split("\n").filter((line) => !line.startsWith("DECISION:")), ...(recordLine === null ? [] : [recordLine])];
+      return { ...base, final: `${final.join("\n")}\n` };
+    });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "heldout",
+      variants: ["baseline"],
+      repeats: 1,
+      io,
+      launchFn: spawn,
+    });
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RECORD_CASE)!;
+    const assertion = unit.grading!.assertions.find((a) => a.kind === "decision_record")!;
+    return { result, unit, assertion };
+  }
+
+  test("the reply prints the refusal marker but records the delivery: fail", async () => {
+    const { unit, assertion } = await gradeRecordFinal('DECISION: {"phase":"3-close","close":"unfinished","delivery":"delivered"}');
+    expect(assertion.grade).toBe("fail");
+    expect(assertion.evidence.detail).toContain("delivery=");
+    expect(unit.grade).toBe("fail");
+    // The reserved-token assertions still hold: the prose refusal is present.
+    expect(unit.grading!.assertions.find((a) => a.kind === "final_contains")!.grade).toBe("pass");
+  });
+
+  test("a reply with no record — or an unparseable one — is unverified, never pass", async () => {
+    const absent = await gradeRecordFinal(null);
+    expect(absent.assertion.grade).toBe("unverified");
+    expect(absent.unit.grade).toBe("unverified");
+    expect(absent.result.exit).toBe(2);
+
+    const malformed = await gradeRecordFinal("DECISION: {not json");
+    expect(malformed.assertion.grade).toBe("unverified");
+    expect(malformed.unit.grade).toBe("unverified");
+  });
+
+  test("a record that agrees with the refusal passes", async () => {
+    const { unit, assertion, result } = await gradeRecordFinal('DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}');
+    expect(assertion.grade).toBe("pass");
+    expect(unit.grade).toBe("pass");
+    expect(result.exit).toBe(0);
   });
 });

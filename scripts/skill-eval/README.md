@@ -117,8 +117,30 @@ Provenance: cases adapted from
 `.cursor/skills/mstar-routing-eval/assets/routing-evals.json` (v27) cite the
 seed case id; new cases carry an explicit note. Assertions use mechanical
 kinds (`final_contains`, `final_not_contains`, `tool_read_contains`,
-`tool_read_not_contains`, `diff_paths_within`, `thread_reused`); semantic
+`tool_read_not_contains`, `diff_paths_within`, `thread_reused`,
+`grouped_facts_final`, `decision_record`); semantic
 grades still require reviewer rationale at grading time (Task 2+, Spec A1).
+
+**`decision_record` — the deterministic decision oracle.**
+Substring assertions cannot see a contradiction: a reply can print the
+reserved refusal marker and state the forbidden decision in prose, and
+`final_contains` / `final_not_contains` still pass. The runner's zero-model-call
+contract (header above) rules out a judge, so a case that forbids a decision
+demands one machine-readable record instead:
+
+- Framing: **exactly one** line in the final message that starts with
+  `DECISION:` followed by a single-line JSON object of scalar fields, e.g.
+  `DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}`. Two
+  record lines, zero record lines, invalid JSON, or a non-object payload are
+  malformed.
+- Spec: `{"fields": {<field>: [<allowed value>, …]}}`. Every listed field must
+  be present with one of its allowed values.
+- Grades: **fail** when a recorded field is missing or outside its allowed set
+  (the contradiction), **unverified** — never pass — when the record is absent
+  or malformed, **pass** only when the record satisfies the spec. This is the
+  same honesty rule `grouped_facts_final` applies.
+- A case that adopts it must require the record in its fixture AGENTS.md
+  protocol line, as the close cases that forbid a decision do.
 
 **Corpus v2 assertion contract.**
 Corpus v1's `final_contains` literals were English prose while every prompt is
