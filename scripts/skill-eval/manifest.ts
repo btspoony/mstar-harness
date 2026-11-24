@@ -91,8 +91,8 @@ export type AssertionKind = (typeof ASSERTION_KINDS)[number];
 /**
  * Framing of the machine-readable decision record a `decision_record` case
  * requires in `turn.artifacts.final`: exactly one line that starts with this
- * prefix, followed by a single-line JSON object of scalar fields. Exactly one
- * such line is required — zero lines or more than one is malformed.
+ * prefix, followed by a single-line JSON object whose values are strings.
+ * Exactly one such line is required — zero lines or more than one is malformed.
  */
 export const DECISION_RECORD_PREFIX = "DECISION:";
 

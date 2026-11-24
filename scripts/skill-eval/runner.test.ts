@@ -2634,4 +2634,35 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
       expect(unit.grade, body).toBe("unverified");
     }
   });
+
+  test("an empty record is a recorded decision missing every field: fail, not unverified", async () => {
+    for (const body of ["{}", "{ }"]) {
+      const { unit, assertion, result } = await gradeRecordFinal(`DECISION: ${body}`);
+      expect(assertion.grade, body).toBe("fail");
+      expect(assertion.evidence.detail, body).toContain("phase is missing");
+      expect(assertion.evidence.detail, body).toContain("close is missing");
+      expect(assertion.evidence.detail, body).toContain("delivery is missing");
+      expect(unit.grade, body).toBe("fail");
+      expect(result.exit, body).toBe(1);
+    }
+  });
+
+  test("a colon inside a key or a value is not a field separator", async () => {
+    const { unit, assertion } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked",":reason":":waiting"}',
+    );
+    expect(assertion.grade).toBe("pass");
+    expect(unit.grade).toBe("pass");
+    const valueColon = await gradeRecordFinal('DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked","note":"a:b"}');
+    expect(valueColon.assertion.grade).toBe("pass");
+  });
+
+  test("a forbidden phrase inside a record field fails the same way as in prose", async () => {
+    const { unit, assertion } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked","note":"the iteration is delivered"}',
+    );
+    expect(assertion.grade).toBe("fail");
+    expect(assertion.evidence.detail).toContain("forbidden prose phrase");
+    expect(unit.grade).toBe("fail");
+  });
 });

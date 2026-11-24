@@ -1751,13 +1751,18 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
 }
 
 const JSON_STRING = String.raw`"(?:[^"\\]|\\.)*"`;
-/** Flat `{"key":"value",…}` — scalar only, so `JSON.parse` cannot hide a nested
- * extra. See scripts/skill-eval/README.md § decision_record. */
-const DECISION_RECORD_SHAPE = new RegExp(String.raw`^\{\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*(?:,\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*)*\}$`);
+/** Flat `{"key":"value",…}` — string values only, so `JSON.parse` cannot hide a
+ * nested extra. An empty object is admitted on purpose: it is a recorded
+ * decision missing every declared field, so it grades `fail`, not `malformed`.
+ * See scripts/skill-eval/README.md § decision_record. */
+const DECISION_RECORD_SHAPE = new RegExp(
+  String.raw`^\{\s*(?:${JSON_STRING}\s*:\s*${JSON_STRING}\s*(?:,\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*)*)?\}$`,
+);
 /** see scripts/skill-eval/README.md § decision_record — `JSON.parse` keeps only the
- * last value of a repeated key, so a key count above the parsed key count is a repeat. */
+ * last value of a repeated key, so a key count above the parsed key count is a repeat.
+ * Whole pairs are matched so a colon inside a key or a value is not a separator. */
 function countRecordKeys(body: string): number {
-  return [...body.matchAll(new RegExp(`${JSON_STRING}\\s*:`, "g"))].length;
+  return [...body.matchAll(new RegExp(`${JSON_STRING}\\s*:\\s*${JSON_STRING}`, "g"))].length;
 }
 
 /** see scripts/skill-eval/README.md § decision_record */

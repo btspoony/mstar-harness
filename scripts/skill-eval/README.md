@@ -129,7 +129,8 @@ contract (header above) rules out a judge, so a case that forbids a decision
 demands one machine-readable record instead:
 
 - Framing: **exactly one** line in the final message that starts with
-  `DECISION:` followed by a single-line JSON object of scalar fields, e.g.
+  `DECISION:` followed by a single-line JSON object whose values are strings
+  (record shape below), e.g.
   `DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}`. Two
   record lines, zero record lines, invalid JSON, or a non-object payload are
   malformed.
@@ -141,6 +142,9 @@ demands one machine-readable record instead:
   case** — never a proximity window, never a semantic/Judge call — matched
   case-insensitively against the final message with whitespace runs normalised
   to one space. Any listed phrase present → **fail**, even when every field is right.
+  The scan covers the whole final message — the `DECISION:` line included, so a
+  forbidden literal hidden in an extra record field fails the same way it does
+  in prose.
   The list is **per-case and bilingual**: corpus prompts are Chinese and models
   answer in the prompt's language, so every adopting case lists its English
   literals *and* the Chinese equivalents of the same forbidden decision.
@@ -153,7 +157,9 @@ demands one machine-readable record instead:
 - Record shape: the payload is a **flat object of string values only**. A nested
   or non-string value, or a key repeated inside the object (`JSON.parse` would
   keep only the last), is malformed — it may never be read as the surviving
-  last value.
+  last value. An empty object is *not* malformed: `DECISION: {}` is a recorded
+  decision that carries no field, so it grades **fail** with one missing-field
+  violation per declared field.
 - Grades: **fail** when a recorded field is missing or outside its allowed set
   (the contradiction), or when a `forbidProse` phrase appears in the final;
   **unverified** — never pass — when the record is absent or malformed,
