@@ -8767,6 +8767,133 @@ describe("remote outbox qc fixes", () => {
     expect((await dispatchRemoteIntent(cache.context, mergedId)).kind).toBe("permit");
   }, 30_000);
 
+  test("the taken-over refusal names the actionable tail of a depth-2 resolution chain", async () => {
+    const cache = await outboxCache("outbox-taken-over-tail");
+    const conflictedId = "00000000-0000-4000-8000-000000000861";
+    const fork = await conflictedJournal(cache, conflictedId);
+    const repairId = "00000000-0000-4000-8000-000000000862";
+    const repair = await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, repairId, fork.heads),
+    });
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, conflictedId, fork.heads)));
+    const second = journalFork(cache.fixture);
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, attemptId, repair.requestHash, {
+        kind: "conflict",
+        expectedHeads: fork.heads,
+        observedHeads: second.heads,
+        observedRecords: second.records,
+      }),
+    );
+    const leafId = "00000000-0000-4000-8000-000000000863";
+    await prepareRemoteResolution(cache.context, repairId, {
+      operationId: leafId,
+      operator: "operator-one",
+      reason: "merge the second fork",
+      event: journalEvent(cache.fixture, leafId, second.heads),
+    });
+    const otherId = "00000000-0000-4000-8000-000000000864";
+    const attemptResolve = () =>
+      refusalOf(() =>
+        prepareRemoteResolution(cache.context, conflictedId, {
+          operationId: otherId,
+          operator: "operator-two",
+          reason: "another review of the original fork",
+          event: journalEvent(cache.fixture, otherId, fork.heads),
+        }),
+      );
+
+    // invariant: A -> B(conflict) -> C(enqueued): the refusal names C's concrete id and its
+    // dispatch step, never a resolve of B or of A (the parent this command addressed).
+    const taken = await attemptResolve();
+    expect(taken.code).toBe("remote.operation-conflict");
+    expect(taken.message).toContain(`outbox-dispatch --harness <abs> --operation ${leafId} --input`);
+    expect(taken.message).not.toContain(`outbox-resolve --harness <abs> --operation ${repairId}`);
+    expect(taken.message).not.toContain(`outbox-resolve --harness <abs> --operation ${conflictedId}`);
+
+    // invariant: With the leaf abandoned, its PARENT B is the actionable row: the refusal names
+    // B with the resolve step and never names the withdrawn leaf.
+    await abandonRemoteIntent(cache.context, { operationId: leafId, reason: "withdrawn review" });
+    const afterAbandon = await attemptResolve();
+    expect(afterAbandon.message).toContain(`outbox-resolve --harness <abs> --operation ${repairId} --input`);
+    expect(afterAbandon.message).not.toContain(`--operation ${leafId}`);
+
+    // invariant: A confirmed leaf settles the whole chain: the conflict rows are settled and the
+    // pending listing never shows them.
+    const settledId = "00000000-0000-4000-8000-000000000865";
+    const settled = await prepareRemoteResolution(cache.context, repairId, {
+      operationId: settledId,
+      operator: "operator-one",
+      reason: "merge the second fork",
+      event: journalEvent(cache.fixture, settledId, second.heads),
+    });
+    const settledAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, settledId, forkObservationFor(cache, repairId, second.heads)),
+    );
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, settledId, settledAttempt, settled.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "bbbbbbbb-cccc-4ddd-8eee-fffffffff861",
+        event: journalEvent(cache.fixture, settledId, second.heads),
+      }),
+    );
+    const pending = await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId);
+    expect(pending.intents.map((entry) => entry.operationId)).not.toContain(conflictedId);
+    expect(pending.intents.map((entry) => entry.operationId)).not.toContain(repairId);
+  }, 30_000);
+
+  test("a damaged resolution chain falls back to the cache rebuild route", async () => {
+    const cache = await outboxCache("outbox-taken-over-damaged");
+    const conflictedId = "00000000-0000-4000-8000-000000000871";
+    const fork = await conflictedJournal(cache, conflictedId);
+    const repairId = "00000000-0000-4000-8000-000000000872";
+    await prepareRemoteResolution(cache.context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(cache.fixture, repairId, fork.heads),
+    });
+    const otherId = "00000000-0000-4000-8000-000000000873";
+    const attemptResolve = () =>
+      refusalOf(() =>
+        prepareRemoteResolution(cache.context, conflictedId, {
+          operationId: otherId,
+          operator: "operator-two",
+          reason: "another review of the original fork",
+          event: journalEvent(cache.fixture, otherId, fork.heads),
+        }),
+      );
+    const severLink = (resolvedBy: string): void => {
+      const db = new DatabaseSync(cache.dbPath);
+      // why: the damaged link is exactly a foreign-key violation, so the probe writes it with the
+      // check disabled the way a corrupted cache would have gotten there.
+      db.exec("pragma foreign_keys = off");
+      try {
+        db.prepare("update remote_outbox set resolved_by = ? where operation_id = ?").run(resolvedBy, conflictedId);
+      } finally {
+        db.close();
+      }
+    };
+
+    // invariant: A missing link cannot name a row; the rebuild route is the only named recovery.
+    severLink("00000000-0000-4000-8000-0000000008ff");
+    const missing = await attemptResolve();
+    expect(missing.code).toBe("remote.operation-conflict");
+    expect(missing.message).toContain("damaged");
+    expect(missing.message).toContain("cache rebuild");
+
+    // invariant: A cycle is the same damaged route, never an invented step.
+    severLink(conflictedId);
+    const cycle = await attemptResolve();
+    expect(cycle.message).toContain("damaged");
+  }, 30_000);
+
   test("an outbox resolution must merge the same subject and keep both branches", async () => {
     const cache = await outboxCache("outbox-resolution-subject");
     const conflictedId = "00000000-0000-4000-8000-000000000821";

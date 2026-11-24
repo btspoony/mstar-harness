@@ -4667,19 +4667,43 @@ function repairedForks(db: StoreDb, operationId: string): Set<string> {
 /** note: One outbox row's state and its `resolved_by` link, as a resolution-chain walk needs them. */
 type ResolutionLink = Readonly<{ state: string; resolvedBy: string | null }>;
 
-/** note: The live chain's terminal confirmed repair id, or null when it reaches no confirmation. */
-function settledRepair(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): string | null {
+/**
+ * note: The one chain walk BOTH the settle rule and the taken-over refusal use. It follows each
+ * conflicted row's own `resolvedBy` resolution and names where it ends: a confirmed repair (the
+ * chain settled the fork), the first ACTIONABLE row (a conflicted row with no live successor, or
+ * the parent of an abandoned repair), or damage (a cycle or a missing link) no step can settle.
+ */
+type ChainTail =
+  | Readonly<{ kind: "settled"; repair: string }>
+  | Readonly<{ kind: "actionable"; operationId: string; state: string }>
+  | Readonly<{ kind: "damaged" }>;
+
+function chainTail(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): ChainTail {
   const visited = new Set<string>();
   let cursor: string | null = operationId;
+  // note: The parent of an abandoned repair is itself the actionable conflict row.
+  let parent = operationId;
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
     const link = chain.get(cursor);
-    if (link === undefined) return null;
-    if (link.state === "confirmed") return cursor;
-    if (link.state !== "conflict") return null;
-    cursor = link.resolvedBy;
+    if (link === undefined) return { kind: "damaged" };
+    if (link.state === "confirmed") return { kind: "settled", repair: cursor };
+    if (link.state === "conflict") {
+      if (link.resolvedBy === null) return { kind: "actionable", operationId: cursor, state: link.state };
+      parent = cursor;
+      cursor = link.resolvedBy;
+      continue;
+    }
+    if (link.state === "abandoned") return { kind: "actionable", operationId: parent, state: "conflict" };
+    return { kind: "actionable", operationId: cursor, state: link.state };
   }
-  return null;
+  return { kind: "damaged" };
+}
+
+/** note: The live chain's terminal confirmed repair id, or null when it reaches no confirmation. */
+function settledRepair(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): string | null {
+  const tail = chainTail(chain, operationId);
+  return tail.kind === "settled" ? tail.repair : null;
 }
 
 /**
@@ -5062,15 +5086,51 @@ export async function prepareRemoteResolution(
       );
     }
     if (original.resolvedBy !== null) {
-      const linked = intentRow(db, original.resolvedBy);
-      if (linked.state !== "abandoned") {
+      // note: A missing or unreadable link is DAMAGE the chain walk refuses below, not an intent-not-found.
+      const linkedState = (() => {
+        try {
+          return intentRow(db, original.resolvedBy).state;
+        } catch {
+          return "missing";
+        }
+      })();
+      if (linkedState !== "abandoned") {
+        // note: The refusal names the row the SAME walk the settle rule follows ends at: the chain
+        // tail is the row an operator can settle NOW, not the parent this command addressed.
+        const tail = chainTail(outboxChain(db, original.generation, original.projectKey), conflicted);
+        const step =
+          tail.kind === "actionable"
+            ? tail.state === "conflict"
+              ? `record a reviewed replacement of THAT row with \`mstar store collaboration remote outbox-resolve ` +
+                `--harness <abs> --operation ${tail.operationId} --input <file|->\` - a resolve only enqueues the repair - ` +
+                `then dispatch it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ` +
+                `<new-uuid> --input <file|->\` and record its confirming receipt`
+              : tail.state === "enqueued"
+                ? `dispatch it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ` +
+                  `${tail.operationId} --input <file|->\` (or withdraw it with \`mstar store collaboration remote ` +
+                  `outbox-abandon --harness <abs> --operation ${tail.operationId} --reason <text>\`)`
+                : `inspect it with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+                  `${tail.operationId}\`, then record that attempt's evidence with \`mstar store collaboration remote ` +
+                  `outbox-receipt --harness <abs> --input <file|->\` or \`mstar store collaboration remote ` +
+                  `outbox-reconcile --harness <abs> --input <file|->\``
+            : tail.kind === "settled"
+              ? `its chain ends at the confirmed repair ${tail.repair}, which holds the fork; inspect it with ` +
+                `\`mstar store collaboration remote outbox-show --harness <abs> --operation ${tail.repair}\``
+              : `its chain is damaged - a cycle or a missing link - so no row it names is settleable in place and ` +
+                `the cache rebuild is the route: ${REMOTE_CACHE_REBUILD_ROUTE}`;
+        const named =
+          tail.kind === "actionable"
+            ? `its live resolution chain (each conflicted row's own resolvedBy link) reaches ${tail.operationId}, which ` +
+              `is ${tail.state}, and that is the row an operator can settle now - not ${conflicted} this command ` +
+              `addressed: ${step}. `
+            : `${step}. `;
         throw new StoreError(
           "remote.operation-conflict",
-          `Operation ${conflicted} is already taken over by resolution ${original.resolvedBy}, which is ` +
-            `${linked.state}; one live reviewed resolution per fork is admitted. Inspect it with ` +
-            `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, and abandon it ` +
-            `before submitting another. Nothing was enqueued.`,
-          { operationId: conflicted, resolvedBy: original.resolvedBy, resolvedByState: linked.state },
+          `Operation ${conflicted} is already taken over: ${named}One live reviewed resolution per fork is admitted. ` +
+            `Nothing was enqueued.`,
+          tail.kind === "actionable"
+            ? { operationId: conflicted, resolvedBy: original.resolvedBy, actionable: tail.operationId, actionableState: tail.state }
+            : { operationId: conflicted, resolvedBy: original.resolvedBy },
         );
       }
       // invariant: An abandoned repair is a withdrawn review. Its row, `resolves` edge, reason and
