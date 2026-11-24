@@ -495,7 +495,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   // same-named local checkout only earns the deletion when its HEAD contains
   // the candidate tip — a stale namesake makes `git branch -d` refuse a
   // branch the recorded base proves merged, so the main checkout decides.
-  const deleteBranchRow = async (row: { ref: string }, tolerateRefusal = false): Promise<void> => {
+  const deleteBranchRow = async (row: { ref: string }): Promise<void> => {
     const target = targets.find((candidate) => candidate.kind === "local-branch" && candidate.ref === row.ref);
     const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === target?.owner?.workflowId);
     const base = target?.owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
@@ -504,7 +504,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
       ? ((await processReply(invocation, ["git", "merge-base", "--is-ancestor", target?.tip ?? row.ref, "HEAD"], sameNamed)).exitCode === 0 ? sameNamed : main.root)
       : sameNamed ?? main.root;
     const reply = await processReply(invocation, ["git", "branch", "-d", row.ref], deletionCwd);
-    if (reply.exitCode !== 0 && (!tolerateRefusal || reply.signal !== null)) throw new Error(reply.stderr.trim() || `git branch -d ${row.ref} exited ${reply.exitCode}`);
+    if (reply.exitCode !== 0) throw new Error(reply.stderr.trim() || `git branch -d ${row.ref} exited ${reply.exitCode}`);
   };
   const deleteRemoteRow = async (row: { ref: string }): Promise<void> => {
     const target = targets.find((candidate) => candidate.kind === "remote-branch" && candidate.ref === row.ref);
@@ -512,11 +512,11 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   };
   // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
   // destructive waves: pass 2 removes ordinary branches and remote branches;
-  // layer refs stay candidates until the final pass, which keeps the re-probe
-  // live through the last destructive wave (no base list is carried). Pass 3
-  // re-plans against a fresh probe and removes the layer refs plus every
-  // still-removable candidate; the deferred worktrees go last because
-  // layer-ref deletions can still need them as merge-evidence checkouts.
+  // layer refs stay candidates until the final branch pass, which keeps the
+  // re-probe live through the last branch wave (no base list is carried).
+  // Pass 3 re-plans against a fresh probe and removes every still-removable
+  // candidate; the deferred worktrees go last because branch deletions can
+  // still need them as merge-evidence checkouts.
   const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
   if (refreshed.status !== "ok") return refreshed;
   const secondData = refreshed.data;
@@ -530,18 +530,27 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   const finalPlan = isPlainObject(finalData) && Array.isArray(finalData.decisions) ? finalData.decisions as CleanupDecision[] : [];
   if (isPlainObject(finalData) && Array.isArray(finalData.probeNotes)) probeNotes.push(...finalData.probeNotes.filter((note): note is string => typeof note === "string"));
   for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "remove") await deleteBranchRow(row);
-  for (const row of finalPlan) if (row.kind === "remote-branch" && row.verdict === "remove" && LAYER_REF.test(row.ref.replace(/^origin\//, ""))) await deleteRemoteRow(row);
+  for (const row of finalPlan) if (row.kind === "remote-branch" && row.verdict === "remove") await deleteRemoteRow(row);
+  let removedDeferred = false;
   for (const row of secondPlan) if (row.kind === "worktree" && row.verdict === "remove" && deferred.has(row.ref)) {
     await git(invocation, ["worktree", "remove", row.ref], main.root);
+    removedDeferred = true;
   }
   // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a
-  // deferred worktree's own branch is refused checked-out until the worktree
-  // is gone; after the removal `git branch -d` is the judge: a branch the
-  // checkout proved merged deletes, and a refusal retains the branch (never a
-  // squash inference) instead of aborting the run.
-  const freedBranches = new Set(records.filter((wt) => deferred.has(wt.path)).map((wt) => wt.branch).filter((branch): branch is string => branch !== null));
-  for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "refuse" && row.reason === "cleanup.refuse.checked-out" && freedBranches.has(row.ref)) {
-    await deleteBranchRow(row, true);
+  // deferred worktree's own branch was refused checked-out while the checkout
+  // stood; apply executes only `remove` rows, so the post-removal re-plan —
+  // never `git branch -d` against a stale plan — decides: a fresh `remove`
+  // deletes, every other verdict retains the branch and reports that row.
+  let postPlan: CleanupDecision[] = [];
+  if (removedDeferred) {
+    const postRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+    if (postRefresh.status !== "ok") return postRefresh;
+    const postData = postRefresh.data;
+    postPlan = isPlainObject(postData) && Array.isArray(postData.decisions) ? postData.decisions as CleanupDecision[] : [];
+    if (isPlainObject(postData) && Array.isArray(postData.probeNotes)) probeNotes.push(...postData.probeNotes.filter((note): note is string => typeof note === "string"));
+    for (const row of postPlan) if (row.kind === "worktree" && row.verdict === "remove") await git(invocation, ["worktree", "remove", row.ref], main.root);
+    for (const row of postPlan) if (row.kind === "local-branch" && row.verdict === "remove") await deleteBranchRow(row);
+    for (const row of postPlan) if (row.kind === "remote-branch" && row.verdict === "remove") await deleteRemoteRow(row);
   }
-  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan, ...finalPlan], probeNotes: [...new Set(probeNotes)] });
+  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan, ...finalPlan, ...postPlan], probeNotes: [...new Set(probeNotes)] });
 }

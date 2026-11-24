@@ -1126,12 +1126,12 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
       // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
       // unmerged integration branch itself retains (no squash inference).
-      // At re-plan time the deferred integration worktree is still present, so
-      // the branch refuses checked-out in every pass; after the deferred
-      // removal the freed-branch wave lets `git branch -d` judge it in the
-      // main checkout, whose refusal retains it — the retained end state is
-      // identical either way.
-      expect(decisionRows(applied).join("\n")).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      // The deferred worktree stood through the branch waves, so earlier
+      // passes refuse checked-out; the post-removal re-plan is the last row
+      // and honestly reports unmerged — apply never executes a non-remove row.
+      const rows = decisionRows(applied).join("\n");
+      expect(rows).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      expect(rows).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.unmerged");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
@@ -1148,6 +1148,51 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
       expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).toBe("");
       expect(worktreeList(fx.root)).toHaveLength(1);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a deferred worktree's merged branch that is an open PR's base is retained, never deleted past the planner", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md —
+    // Greptile P1 #833: the freed branch is merged, so `git branch -d` would
+    // delete it — but every plan verdict is refuse (checked-out while the
+    // deferred worktree stands, then open-pr-base on the post-removal
+    // re-plan), and --apply executes only `remove` rows.
+    const fx = await terminalIntegrationFixture("mstar-cleanup-deferred-base-");
+    const shim = installGhShim(fx.root);
+    try {
+      git(["remote", "add", "origin", "https://github.com/acme/tools.git"], fx.root);
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md —
+      // merge the integration branch into main: `git branch -d` would succeed
+      // on it, so only the planner's refusal protects it.
+      git(["merge", "-q", "--no-ff", "-m", "merge integration", "iteration/wf-9"], fx.root);
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an
+      // unmerged layer ref keeps the open-PR probe live through every pass;
+      // its commit lands in a temp worktree so `git add` never sweeps the
+      // main checkout's untracked store.db into a tracked blob.
+      git(["branch", "iteration-stack/wf-9/s01"], fx.root);
+      const layerWt = join(fx.root, "wt-layer");
+      git(["worktree", "add", "-q", layerWt, "iteration-stack/wf-9/s01"], fx.root);
+      writeFileSync(join(layerWt, "layer.txt"), "layer\n");
+      git(["add", "-A"], layerWt);
+      git(["commit", "-q", "-m", "layer work"], layerWt);
+      git(["worktree", "remove", layerWt], fx.root);
+      const applied = runCli(["worktree", "cleanup", "--workflow", "wf-9", "--harness", fx.root, "--apply"], fx.root, {
+        ...shim.env,
+        MSTAR_GH_PR_LIST: JSON.stringify([{ baseRefName: "iteration/wf-9", headRefName: "feature/next" }]),
+      });
+      expect(applied.exitCode, applied.stdout + applied.stderr).toBe(0);
+      // see skills/mstar-branch-worktree/references/worktree-cleanup.md —
+      // both worktrees and the merged plan branch were removed by `remove`
+      // rows; the deferred worktree's branch survives on a refuse row.
+      expect(worktreeList(fx.root)).toHaveLength(1);
+      expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
+      const rows = decisionRows(applied).join("\n");
+      expect(rows).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.checked-out");
+      expect(rows).toContain("refuse | local-branch | iteration/wf-9 | cleanup.refuse.open-pr-base");
+      expect(rows).not.toContain("remove | local-branch | iteration/wf-9");
+      expect(git(["for-each-ref", "refs/heads/iteration/wf-9"], fx.root)).not.toBe("");
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
