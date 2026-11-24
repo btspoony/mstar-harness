@@ -1,6 +1,6 @@
 ---
 category: Added
-packages: commands
+packages: commands,engine
 ---
 
 - **`mstar pr-review post` routes through a named publisher adapter:** the new `--provider <id>` option (default `github`) selects the registered forge publisher that resolves the PR, fetches the head-pinned diff and posts the review; an unregistered id refuses with `pr-review.post.unsupported-provider` naming the registered ids, and a forge no adapter serves follows the documented project-tooling path in `pr-delivery.md` or STOPs — never a hand-post. The engine URL parser now accepts any forge host (`<scheme>://<host>/{owner}/{repo}/pull/{n}`) and `ReviewPostPlan` carries the host.

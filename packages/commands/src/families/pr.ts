@@ -197,11 +197,14 @@ export type ReviewPostFailure =
   | { cause: "unauthorized"; detail: string }
   | { cause: "wrong-target"; detail: string }
   | { cause: "diff-unavailable"; detail: string }
-  | { cause: "unknown-outcome"; detail: string; commitId: string };
+  | { cause: "unknown-outcome"; detail: string; commitId: string; probe: string };
 
 export interface ReviewPublisher {
+  // `resolve` returns the raw pr-view fields — planReviewPost is the only URL
+  // and head validator, so a malformed view keeps its plan error, and a
+  // resolved URL pointing at another PR is the command's wrong-target.
   resolve(input: { pr: number }, context: InvocationContext):
-    Promise<MergeGateOutcome<{ head: string; base: string; host: string; owner: string; repo: string }>>;
+    Promise<MergeGateOutcome<{ url: string; head: string; base: string }>>;
   diff(input: { host: string; owner: string; repo: string; base: string; head: string }, context: InvocationContext):
     Promise<{ ok: true; value: string } | { ok: false; failure: ReviewPostFailure }>;
   postReview(input: { host: string; owner: string; repo: string; pr: number; commitId: string;
@@ -236,22 +239,14 @@ const githubReviewPublisher: ReviewPublisher = {
     if (viewResult.exitCode !== 0 || viewResult.signal !== null) return { ok: false, refusal: unauthorized(viewResult.stderr || "GitHub authentication/target lookup failed") };
     const parsedView: unknown = JSON.parse(viewResult.stdout);
     const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
-    const url = typeof record.url === "string" ? record.url : "";
-    const head = typeof record.headRefOid === "string" ? record.headRefOid : "";
-    const base = typeof record.baseRefOid === "string" ? record.baseRefOid : "";
-    // why: an unparseable view or a missing head leaves planReviewPost nothing
-    // to plan, so it is refused at the same transport boundary as a failed
-    // lookup — the URL grammar matches the engine's, any forge host included.
-    const target = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+?)\/pull\/(\d+)\/?$/.exec(url);
-    if (target === null || !/^[0-9a-f]{7,40}$/.test(head)) return { ok: false, refusal: unauthorized("pr view returned no resolvable repository url/head") };
-    if (Number(target[4]) !== pr) {
-      return { ok: false, refusal: refusalEnvelope({
-        command: reviewPostId, status: "refused", code: `${reviewPostId}.wrong-target`, exitCode: 1,
-        message: `resolved PR ${target[4]} does not match requested PR ${pr}`,
-        recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>.",
-      }) };
-    }
-    return { ok: true, value: { head, base, host: target[1]!, owner: target[2]!, repo: target[3]! } };
+    // The raw view fields go back untouched: planReviewPost is the only URL
+    // and head validator, so a malformed view reports its plan error, not an
+    // auth refusal that misnames the cause.
+    return { ok: true, value: {
+      url: typeof record.url === "string" ? record.url : "",
+      head: typeof record.headRefOid === "string" ? record.headRefOid : "",
+      base: typeof record.baseRefOid === "string" ? record.baseRefOid : "",
+    } };
   },
   async diff({ owner, repo, base, head }, context) {
     const result = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`]);
@@ -268,10 +263,10 @@ const githubReviewPublisher: ReviewPublisher = {
     });
     const response = await spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], payload);
     if (response.exitCode !== 0 || response.signal !== null) {
-      // why: the command's 422 fold probe scans this detail (stderr covers
-      // "HTTP 422", stdout covers a {"status":422} body), while the
-      // unknown-outcome message it prints keeps today's stderr-or-fallback text.
-      return { ok: false, failure: { cause: "unknown-outcome", detail: response.stderr || response.stdout || "gh api review post failed", commitId } };
+      // why: `detail` is the message fragment the command prints (stderr, or
+      // the same fallback as before), while `probe` carries both streams so
+      // the command's 422 fold sees exactly the text it scanned before.
+      return { ok: false, failure: { cause: "unknown-outcome", detail: response.stderr || "gh api review post failed", commitId, probe: `${response.stderr}\n${response.stdout}` } };
     }
     let reviewUrl = response.stdout.trim();
     try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* preserve successful response text */ }

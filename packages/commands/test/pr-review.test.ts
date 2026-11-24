@@ -280,7 +280,7 @@ describe("pr-review command family", () => {
     const postedInput: { pr?: number; commitId?: string; body?: string; comments?: readonly unknown[] } = {};
     const fixturePublisher: ReviewPublisher = {
       async resolve({ pr }) {
-        return { ok: true, value: { head: "abcdef0123456", base: "1234567", host: "forge.example", owner: "acme", repo: "proj" } };
+        return { ok: true, value: { url: "https://forge.example/acme/proj/pull/42", head: "abcdef0123456", base: "1234567" } };
       },
       async diff() { throw new Error("fixture publisher has no diff"); },
       async postReview(input) {
@@ -297,7 +297,20 @@ describe("pr-review command family", () => {
     expect(postedInput).toMatchObject({ pr: 42, commitId: "abcdef0123456", body: "Review summary" });
     expect(postedInput.comments).toEqual([{ path: "src/a.ts", line: 3, side: "RIGHT", body: "Finding" }]);
     expect(calls).toHaveLength(0);
+
+    // why: the reachable wrong-target is a resolved URL naming another PR,
+    // so the command's plan check refuses before the publisher posts.
+    registerReviewPublisher("fixture-other", {
+      ...fixturePublisher,
+      async resolve() {
+        return { ok: true, value: { url: "https://forge.example/acme/proj/pull/41", head: "abcdef0123456", base: "1234567" } };
+      },
+    });
+    const wrongTarget = await command("pr-review.post").execute({ pr: "42", bodyFile, provider: "fixture-other" }, context);
+    expect(wrongTarget).toMatchObject({ status: "refused", code: "pr-review.post.wrong-target", exitCode: 1 });
+    expect(wrongTarget.status === "ok" ? "" : wrongTarget.message).toContain("resolved PR 41 does not match requested PR 42");
   });
+
 
   test("post passes a contiguous range anchor through, and omits it for a single line", async () => {
     const { cwd, context, calls } = fixture();

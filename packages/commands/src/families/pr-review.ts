@@ -444,14 +444,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       }
       const resolved = await publisher.resolve({ pr: Number(input.pr) }, context);
       if (!resolved.ok) return resolved.refusal;
-      const { head, base, host, owner, repo } = resolved.value;
-      const plan = planReviewPost(
-        { url: `https://${host}/${owner}/${repo}/pull/${Number(input.pr)}`, headRefOid: head },
-        { body, comments },
-      );
+      const { url, head, base } = resolved.value;
+      const plan = planReviewPost({ url, headRefOid: head }, { body, comments });
       if (plan.pr !== Number(input.pr)) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
+      const [owner = "", repo = ""] = plan.ownerRepo.split("/", 2);
       // why: GitHub accepts `start_line` + `line` only when both ends sit in
       // one diff hunk, so a cross-hunk range would 422-fold the whole review
       // (suggestion included) — verify the anchor against the SAME head the
@@ -459,7 +457,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (plan.inlineComments.some((comment) => comment.start_line !== undefined)) {
         const unavailable = (cause: string) => refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor at ${plan.commitId}: ${cause}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
         if (!/^[0-9a-f]{7,40}$/.test(base)) return unavailable("pr view returned no baseRefOid");
-        const diff = await publisher.diff({ host, owner, repo, base, head: plan.commitId }, context);
+        const diff = await publisher.diff({ host: plan.host, owner, repo, base, head: plan.commitId }, context);
         if (!diff.ok) return unavailable(diff.failure.detail);
         const problem = rangeHunkProblem(diff.value, plan.inlineComments);
         if (problem !== null) {
@@ -469,11 +467,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       // The 422 fold-retry is a decision about what to send, so it stays here:
       // the publisher only ever sees a complete review payload.
       const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => publisher.postReview(
-        { host, owner, repo, pr: plan.pr, commitId: plan.commitId, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, comments: kept },
+        { host: plan.host, owner, repo, pr: plan.pr, commitId: plan.commitId, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, comments: kept },
         context,
       );
       let response = await send(plan.inlineComments, []);
-      if (!response.ok && /HTTP\s+422|"status"\s*:\s*422/.test(response.failure.detail) && plan.inlineComments.length) response = await send([], plan.inlineComments);
+      if (!response.ok && /HTTP\s+422|"status"\s*:\s*422/.test("probe" in response.failure ? response.failure.probe : response.failure.detail) && plan.inlineComments.length) response = await send([], plan.inlineComments);
       if (!response.ok) {
         const postFailure: ReviewPostFailure = response.failure;
         if (postFailure.cause === "unknown-outcome") {
