@@ -10,6 +10,7 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
+ * see docs/knowledge/best-practices/mcp-published-surface-measurement.md
  * why: the folded published surface — every folded tool's description plus its
  * input JSON schema, read back from `tools/list` — is a deliberate product
  * budget, not a measurement to re-pin: `tools/list` is paid on every request of

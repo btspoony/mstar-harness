@@ -46,6 +46,7 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     });
   }
   const { code, details, recovery } = engineErrorFacts(error);
+  // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
   // why: the shared fallback only says "correct and rerun"; a missing provider
   // executable is repaired by installing the tool that binary belongs to, and
   // the exempted prover cannot see that cause. The install hint keys off
@@ -53,6 +54,7 @@ const failure = (error: unknown): CommandEnvelope<never> => {
   if (code === "process.not-found") {
     const executable = /executable not found in \$PATH: (\S+)/.exec(message)?.[1];
     const install = executable === "gh" ? "the GitHub CLI" : `${executable ?? "the provider"} executable`;
+    // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
     // reachability: manual — the recovery interpolates the missing executable's own name into one fixed `mstar pr merge-gate` instruction, and every substitution the linter cannot prove is a binary name, not a command path.
     return refusalEnvelope({
       command: id, status: "refused", code, exitCode: 1, message,
@@ -141,6 +143,7 @@ const githubProvider: MergeGateProvider = {
     // why: `gh pr view` and `gh api` may select different hosts when the
     // environment sets one for each, so the host that served the PR is the
     // only host the thread scan may read.
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     const target = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(url);
     if (target === null || !/^[0-9a-f]{7,40}$/.test(head)) return { ok: false, refusal: unavailable("pr view returned no resolvable repository url/head") };
     if (Number(target[4]) !== pr) {
@@ -163,6 +166,7 @@ const githubProvider: MergeGateProvider = {
 mergeGateProviders.set("github", githubProvider);
 
 async function mergeGate(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
+  // see skills/mstar-use-cli/references/checks-and-lints.md
   // why: a provider resolves the repository from its working directory, so an
   // undeclared workspace would read the HOST checkout's pull request.
   const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the pull request whose review threads are read" });
@@ -173,6 +177,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
   const providerId = input.provider ?? "github";
   const provider = mergeGateProviders.get(providerId);
   if (provider === undefined) {
+    // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
     // reachability: manual — the interpolation lists registered provider ids (names, not command paths); the runnable retry is the literal `mstar pr merge-gate --pr <n> --provider <id>` this recovery names.
     return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unsupported-provider`, exitCode: 1,
@@ -181,6 +186,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       recovery: `Rerun with a registered provider id (${[...mergeGateProviders.keys()].join(", ")}). Run mstar pr merge-gate --pr <n> --provider <id>.`,
     });
   }
+  // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
   // why: a truncated or paginated response is not an access failure; each such
   // refusal builds its own literal recovery below, because the envelope's
   // declared retry must name the action that can change that outcome.

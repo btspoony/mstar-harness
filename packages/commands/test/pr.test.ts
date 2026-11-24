@@ -154,6 +154,7 @@ describe("pr merge-gate", () => {
     ];
     const threadCalls: Array<{ owner: string; repo: string; pr: number; after: string | null }> = [];
     let pageHead = head;
+    // see skills/mstar-use-cli/references/checks-and-lints.md
     // why: the gate must ask the named adapter for the head and every thread
     // page; a fixture proves the seam drives the same pinning, digest and
     // refusal path without any spawn.
@@ -181,6 +182,7 @@ describe("pr merge-gate", () => {
     const allowed = await gate.execute({ pr: "7", provider: "fixture", confirm }, context);
     expect(allowed).toMatchObject({ status: "ok" });
 
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // why: a head the provider reports differently on the next scan makes the
     // confirmed enumeration stale, so the seam must refuse the same way.
     pageHead = "9999999999999";
