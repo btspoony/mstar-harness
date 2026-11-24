@@ -2400,6 +2400,14 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
   test("a blank line separates the block", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text: "the Phase\n\n4 step\n" }]).hits).toEqual([]);
   });
+
+  test("a split hit that needs a code span or an entity is still reported", () => {
+    for (const text of ["Phase\n`4` begins\n", "Phase\n&#52; begins\n"]) {
+      const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain("split across the line break");
+    }
+  });
 });
 
 describe("checkRetiredStageNames — fence tracking", () => {

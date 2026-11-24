@@ -1704,14 +1704,15 @@ function decodeXmlEntities(text: string): string {
  * reader sees, not Markdown). */
 export function findRetiredStageSpellings(line: string, inFence = false, markup = true): string[] {
   const hits: string[] = [];
-  // A render-equivalent spelling may be written as `&#52;`; decode before any
-  // shape is judged, on the Markdown path as well as in a diagram.
-  let rest = decodeXmlEntities(line);
+  // why: span recognition must see the source form. A decoded `&lt;code&gt;`
+  // renders as literal angle brackets, not as an HTML code element.
+  let rest = line;
   const stripProbes = (inner: string): string => inner.replace(PROBE_PATTERN, " ");
   if (inFence) {
-    rest = stripProbes(rest);
+    rest = stripProbes(decodeXmlEntities(rest));
   } else if (!markup) {
     // Literal text: nothing here is a code span, so a probe is prose.
+    rest = decodeXmlEntities(rest);
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   } else {
     // A span keeps its position: only the probe literals leave it, so a stage
@@ -1721,6 +1722,9 @@ export function findRetiredStageSpellings(line: string, inFence = false, markup 
     rest = rest.replace(HTML_CODE, (_match, inner: string) => stripProbes(inner));
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   }
+  // A render-equivalent spelling may be written as `&#52;`; decode before the
+  // spelling rules read the text.
+  rest = decodeXmlEntities(rest);
   for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
   for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
   // Section citations are removed before a stage run is read, so `Phase 3 §3.4`
@@ -1789,16 +1793,19 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       continue;
     }
-    // why: an evaluated prompt may carry a stage number as a `\uXXXX` escape
-    // in JSON and still reach the model as the rendered character.
+    // why: an evaluated prompt may carry a stage number as an escape and still
+    // reach the model as the rendered character.
     const decodeEscapes = (line: string): string =>
       file.rel.endsWith(".json")
-        ? line.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+        ? line
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+            .replace(/\\[nrt]/g, " ")
         : line;
     // why: a fence closes only on its own delimiter character, at least as
-    // long as the opener, with nothing after it — a tilde line inside a
-    // backtick fence is content, not a close.
-    let fence: { char: string; len: number } | null = null;
+    // long as the opener, with nothing after it, and only inside the quote
+    // container it opened in — a tilde line inside a backtick fence is content,
+    // not a close, and leaving the blockquote ends the fence.
+    let fence: { char: string; len: number; quote: string } | null = null;
     // why: Markdown renders adjacent prose lines as one block, so a name split
     // across a line break is judged on the joined pair as well.
     let previous = "";
@@ -1810,38 +1817,57 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
     file.text.split("\n").forEach((line, index) => {
       // A fence may sit inside a blockquote; its `> ` prefix is not content.
       const delimiter = line.match(/^(\s*(?:>\s*)*)(`{3,}|~{3,})(.*)$/);
+      const quote = delimiter ? (delimiter[1].match(/(?:>\s*)+/)?.[0] ?? "") : "";
       const text = decodeEscapes(line);
       if (fence !== null) {
-        previous = "";
         const closes =
-          delimiter !== null && delimiter[2][0] === fence.char && delimiter[2].length >= fence.len && delimiter[3].trim() === "";
+          delimiter !== null &&
+          quote === fence.quote &&
+          delimiter[2][0] === fence.char &&
+          delimiter[2].length >= fence.len &&
+          delimiter[3].trim() === "";
         if (closes) {
           fence = null;
+          previous = "";
           return;
         }
-        for (const hit of findRetiredStageSpellings(text, true)) report(`${index + 1} "${hit}"`);
-        return;
+        if (fence.quote === "" || line.startsWith(fence.quote)) {
+          previous = "";
+          for (const hit of findRetiredStageSpellings(text, true)) report(`${index + 1} "${hit}"`);
+          return;
+        }
+        // The blockquote ended; the fence cannot continue outside it.
+        fence = null;
       }
       if (delimiter !== null) {
         previous = "";
-        fence = { char: delimiter[2][0], len: delimiter[2].length };
+        fence = { char: delimiter[2][0], len: delimiter[2].length, quote };
         // An info string after the opening fence is prose a reader can see.
         for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(`${index + 1} "${hit}"`);
         return;
       }
       const lineHits = findRetiredStageSpellings(text, false);
       for (const hit of lineHits) report(`${index + 1} "${hit}"`);
-      // why: a following bullet is a new block element, not part of the
-      // sentence above it, and its `-` would read as a stage-list separator.
-      const blockStarts = /^\s*(?:[-*+]|\d+\.)\s/.test(text);
-      if (previous !== "" && text.trim() !== "" && !blockStarts) {
-        const joined = `${previous} ${text}`;
+      // why: a block element starts its own block — a bullet, or a heading,
+      // table or quote line — so its leading character is not a stage separator.
+      const blockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(text);
+      const previousBlockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(previous);
+      if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
+        // Normalize both lines the same way the matcher does, so a hit that
+        // only exists after a code span or an entity is unwrapped is still
+        // found, and measure the boundary on that normalized text.
+        const normalize = (value: string): string =>
+          decodeXmlEntities(value)
+            .replace(/`([^`\n]*)`/g, (_match, inner: string) => inner)
+            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner);
+        const previousNorm = normalize(previous);
+        const joined = `${previousNorm} ${normalize(text)}`;
         for (const hit of findRetiredStageSpellings(joined, false)) {
           if (lineHits.includes(hit)) continue;
           // Only a match that reaches past the join boundary belongs to the
           // current line; a hit wholly inside the previous line was reported there.
           const at = joined.indexOf(hit);
-          if (at >= 0 && at + hit.length > previous.length) report(`${index + 1} "${hit}" (split across the line break)`);
+          if (at >= 0 && at + hit.length > previousNorm.length) report(`${index + 1} "${hit}" (split across the line break)`);
         }
       }
       previous = text.trim() === "" ? "" : text;
