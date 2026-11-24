@@ -4881,6 +4881,56 @@ describe("remote outbox lifecycle", () => {
     });
   });
 
+  test("the pending listing reports every unsettled state and never a settled row", async () => {
+    const cache = await outboxCache("outbox-pending-states");
+    // note: One live checkout serializes sends, so a single cache cannot reach an unconfirmed row and
+    // a conflict row through the product verbs at the same time. A cache that arrived from another
+    // checkout can hold any combination, and this listing is the read that settlement starts from.
+    const ids = [
+      "00000000-0000-4000-8000-000000000171",
+      "00000000-0000-4000-8000-000000000172",
+      "00000000-0000-4000-8000-000000000173",
+      "00000000-0000-4000-8000-000000000174",
+      "00000000-0000-4000-8000-000000000175",
+    ] as const;
+    for (const operationId of ids) {
+      await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, operationId));
+    }
+    // note: Abandoning is the public settlement that exists before a dispatch; the remaining states
+    // are the durable column values a move aside or another checkout can leave behind.
+    expect((await abandonRemoteIntent(cache.context, { operationId: ids[4], reason: "fixture retires it" })).state).toBe(
+      "abandoned",
+    );
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      db.prepare("update remote_outbox set state = 'unconfirmed', attempt_id = ? where operation_id = ?").run(
+        "00000000-0000-4000-8000-00000000017f",
+        ids[1],
+      );
+      db.prepare("update remote_outbox set state = 'conflict' where operation_id = ?").run(ids[2]);
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run(ids[3]);
+    } finally {
+      db.close();
+    }
+
+    const listing = await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId);
+    expect(listing).toMatchObject({ version: 1, projectId: SELECTED_PROJECT.localProjectId, generation: 3 });
+    // invariant: Every unsettled state is listed in the stable (createdAt, operationId) order, and each
+    // entry carries the state the operator settles it from: an id alone does not say what a row needs.
+    expect(listing.intents.map((intent) => [intent.operationId, intent.state, intent.kind, intent.target])).toEqual([
+      [ids[0], "enqueued", "issue-replace", MSTAR_ISSUE],
+      [ids[1], "unconfirmed", "issue-replace", MSTAR_ISSUE],
+      [ids[2], "conflict", "issue-replace", MSTAR_ISSUE],
+    ]);
+    // invariant: A settled row is never listed, and the listing is a read: the settled rows keep their
+    // own recorded states, unchanged by being listed.
+    const listed = listing.intents.map((intent) => intent.operationId);
+    expect(listed).not.toContain(ids[3]);
+    expect(listed).not.toContain(ids[4]);
+    expect(outboxStateOf(cache.dbPath, ids[3])).toBe("confirmed");
+    expect(outboxStateOf(cache.dbPath, ids[4])).toBe("abandoned");
+  });
+
   test("an absent, ambiguous or mismatched observation never confirms an attempt", async () => {
     const cache = await outboxCache("outbox-receipt");
     const operationId = "00000000-0000-4000-8000-000000000201";

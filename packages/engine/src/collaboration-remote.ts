@@ -2542,11 +2542,18 @@ export type RemoteIntent = Readonly<{
   updatedAt: string;
 }>;
 
-/** note: A pending summary: enough to order and select an intent, never a send permit. */
+/**
+ * note: The states a row holds while it still needs settlement - exactly what the listing reports.
+ * A `confirmed` or `abandoned` row is settled and never listed.
+ */
+const REMOTE_UNSETTLED_STATES = ["enqueued", "unconfirmed", "conflict"] as const;
+type RemoteUnsettledState = (typeof REMOTE_UNSETTLED_STATES)[number];
+
+/** note: A pending summary: enough to order, select and settle an intent, never a send permit. */
 export type RemotePendingIntent = Readonly<{
   operationId: string;
   projectId: string;
-  state: "enqueued";
+  state: RemoteUnsettledState;
   requestHash: string;
   target: string | null;
   kind: RemoteEventChange["kind"];
@@ -3118,8 +3125,10 @@ function intentOf(
 }
 
 /**
- * `outbox-pending`: the current binding's `enqueued` intents only, FIFO by
- * `(createdAt, operationId)`, as summaries without a send permit or an attempt id.
+ * `outbox-pending`: every unsettled intent of the current binding - `enqueued`, `unconfirmed` or
+ * `conflict` - FIFO by `(createdAt, operationId)`, as summaries carrying their state, and without a
+ * send permit or an attempt id. It is a read: no send right is implied by listing, and a settled
+ * (`confirmed` or `abandoned`) row is never listed.
  */
 export async function readPendingIntents(context: StoreContext, projectId: string): Promise<RemotePendingIntents> {
   const project = text(projectId, "projectId");
@@ -3136,11 +3145,11 @@ export async function readPendingIntents(context: StoreContext, projectId: strin
   try {
     const rows = handle.db
       .prepare(
-        "select operation_id, request_hash, request_json, created_at from remote_outbox " +
-          "where generation = ? and project_key = ? and state = 'enqueued' " +
+        "select operation_id, request_hash, request_json, created_at, state from remote_outbox " +
+          `where generation = ? and project_key = ? and state in (${REMOTE_UNSETTLED_STATES.map(() => "?").join(", ")}) ` +
           "order by created_at, operation_id",
       )
-      .all(generation, project) as Array<Record<string, unknown>>;
+      .all(generation, project, ...REMOTE_UNSETTLED_STATES) as Array<Record<string, unknown>>;
     return {
       version: 1,
       projectId: project,
@@ -3162,6 +3171,8 @@ function pendingIntentOf(row: Record<string, unknown>, project: string): RemoteP
   if (typeof row.operation_id !== "string" || typeof row.request_hash !== "string" || typeof row.created_at !== "string") {
     return unreadable();
   }
+  const state = row.state;
+  if (typeof state !== "string" || !REMOTE_UNSETTLED_STATES.includes(state as RemoteUnsettledState)) return unreadable();
   let parsed: unknown;
   try {
     parsed = JSON.parse(typeof row.request_json === "string" ? row.request_json : "");
@@ -3175,7 +3186,7 @@ function pendingIntentOf(row: Record<string, unknown>, project: string): RemoteP
   return {
     operationId: row.operation_id,
     projectId: project,
-    state: "enqueued",
+    state: state as RemoteUnsettledState,
     requestHash: row.request_hash,
     target: isRecord(parsed) && typeof parsed.target === "string" ? parsed.target : null,
     kind: kind as RemoteEventChange["kind"],
