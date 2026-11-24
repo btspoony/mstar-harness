@@ -1,10 +1,10 @@
 # ADR: Milestone planned effort is a count of standard sessions
 
-Status: implemented — the 2026-11-24 milestone-effort iteration changed the store, the command contract and every surface together, and only that change makes the decision real.
+Status: implemented — the store, the command contract and every surface changed together, and only that change makes the decision real.
 
 Date: 2026-11-24
 
-Scope: project milestones on the combined store and the collaboration lane; the iteration compass table's own date column is another record and is out of scope.
+Scope: project milestones on the combined store and the collaboration lane; the compass table's own date column is another record and is out of scope.
 
 ## Problem
 
