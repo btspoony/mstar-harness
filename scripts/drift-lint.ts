@@ -1644,9 +1644,12 @@ const STAGE_RUN =
 /** An inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
 const INLINE_CODE = /`([^`\n]*)`/g;
-/** A diagram text node or label; the value is decoded before it is judged. */
-const SVG_NODE = /<(?:text|title)\b[^>]*>([\s\S]*?)<\/(?:text|title)>/gi;
+/** A diagram text node or label; the value is decoded before it is judged.
+ * `desc` is reader-visible too (tooltip and screen-reader text). */
+const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
+/** An HTML code element; render-equivalent to a backtick span. */
+const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
 /** why: a diagram may spell a stage as a numeric character reference, which
  * renders as the stage number; decode before matching. */
 function decodeXmlEntities(text: string): string {
@@ -1666,17 +1669,22 @@ function decodeXmlEntities(text: string): string {
  * stage name in backticks is still a retired stage name. */
 export function findRetiredStageSpellings(line: string, inFence = false): string[] {
   const hits: string[] = [];
-  let rest = line;
+  // A render-equivalent spelling may be written as `&#52;`; decode before any
+  // shape is judged, on the Markdown path as well as in a diagram.
+  let rest = decodeXmlEntities(line);
+  const stripProbes = (inner: string): string => {
+    let content = inner;
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) content = content.split(literal).join(" ");
+    return content;
+  };
   if (inFence) {
-    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) rest = rest.split(literal).join("");
+    rest = stripProbes(rest);
   } else {
     // A span keeps its position: only the probe literals leave it, so a stage
-    // run written across prose and backticks is still one run.
-    rest = rest.replace(INLINE_CODE, (_match, inner: string) => {
-      let content = inner;
-      for (const literal of RETIRED_STAGE_MACHINE_LITERALS) content = content.split(literal).join(" ");
-      return content;
-    });
+    // run written across prose and backticks is still one run. `<code>` is the
+    // render-equivalent HTML form and is judged the same way.
+    rest = rest.replace(INLINE_CODE, (_match, inner: string) => stripProbes(inner));
+    rest = rest.replace(HTML_CODE, (_match, inner: string) => stripProbes(inner));
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   }
   for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
@@ -1727,37 +1735,42 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
     // long as the opener, with nothing after it — a tilde line inside a
     // backtick fence is content, not a close.
     let fence: { char: string; len: number } | null = null;
+    // why: Markdown renders adjacent prose lines as one block, so a name split
+    // across a line break is judged on the joined pair as well.
+    let previous = "";
+    const report = (row: string): void => {
+      hits.push(
+        `Guard 16 retired-stage-name: ${file.rel}:${row} - the iteration delivery has no stages 4-6; name the procedure instead`,
+      );
+    };
     file.text.split("\n").forEach((line, index) => {
       const delimiter = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
       if (fence !== null) {
+        previous = "";
         const closes =
           delimiter !== null && delimiter[2][0] === fence.char && delimiter[2].length >= fence.len && delimiter[3].trim() === "";
         if (closes) {
           fence = null;
           return;
         }
-        for (const hit of findRetiredStageSpellings(line, true)) {
-          hits.push(
-            `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
-          );
-        }
+        for (const hit of findRetiredStageSpellings(line, true)) report(`${index + 1} "${hit}"`);
         return;
       }
       if (delimiter !== null) {
+        previous = "";
         fence = { char: delimiter[2][0], len: delimiter[2].length };
         // An info string after the opening fence is prose a reader can see.
-        for (const hit of findRetiredStageSpellings(delimiter[3], false)) {
-          hits.push(
-            `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
-          );
-        }
+        for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(`${index + 1} "${hit}"`);
         return;
       }
-      for (const hit of findRetiredStageSpellings(line, false)) {
-        hits.push(
-          `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
-        );
+      const lineHits = findRetiredStageSpellings(line, false);
+      for (const hit of lineHits) report(`${index + 1} "${hit}"`);
+      if (previous !== "" && line.trim() !== "") {
+        for (const hit of findRetiredStageSpellings(`${previous} ${line}`, false)) {
+          if (!lineHits.includes(hit)) report(`${index + 1} "${hit}" (split across the line break)`);
+        }
       }
+      previous = line.trim() === "" ? "" : line;
     });
   }
   return { filesScanned: files.length, hits };

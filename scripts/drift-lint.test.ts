@@ -2332,6 +2332,27 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
   test("a long number before a retired stage does not hide it", () => {
     expect(findRetiredStageSpellings("Phase 123 to 4").length).toBeGreaterThan(0);
   });
+
+  test("an HTML code element passes a probe like a backtick span", () => {
+    expect(findRetiredStageSpellings(`run <code>${RETIRED_STAGE_MACHINE_LITERALS[0]}</code> now`)).toEqual([]);
+    expect(findRetiredStageSpellings("the <code>Phase 4</code> step").length).toBeGreaterThan(0);
+  });
+
+  test("a numeric character reference is decoded on the markdown path", () => {
+    expect(findRetiredStageSpellings("Phase &#52; step").length).toBeGreaterThan(0);
+  });
+});
+
+describe("checkRetiredStageNames — a name split across a line break", () => {
+  test("adjacent prose lines are judged as one block", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text: "the Phase\n4 step\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blank line separates the block", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text: "the Phase\n\n4 step\n" }]).hits).toEqual([]);
+  });
 });
 
 describe("checkRetiredStageNames — fence tracking", () => {
@@ -2361,6 +2382,11 @@ describe("extractSvgText — labels, entities and nodes", () => {
 
   test("a numeric character reference renders as the stage number", () => {
     expect(extractSvgText("<text>Phase &#52;</text>").join(" ")).toContain("Phase 4");
+  });
+
+  test("a desc element is reader-visible text", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<desc>Phase 6 close</desc>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
   });
 
   test("text, title and aria-label values are read, nested markup flattened", () => {
