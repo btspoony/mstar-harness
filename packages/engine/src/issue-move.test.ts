@@ -1,10 +1,12 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { collaborationLocationOfRepoKey, resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueError, moveIssue, type CaptureInput, type IssueReceipt } from "./issue.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
@@ -62,7 +64,15 @@ function operation(operationId: string): unknown {
   return db.prepare("select 1 from collaboration_operations where operation_id = ?").get(operationId);
 }
 
+/**
+ * invariant: A destination lane is user-level, so this file's fixtures must never reach the
+ * operator's `~/.mstar`: one spy serves the whole file, installed before the first lane exists.
+ */
+const HOME = join(root, "user-home");
+let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(async () => {
+  mkdirSync(HOME, { recursive: true });
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   writeFileSync(
@@ -95,6 +105,7 @@ beforeAll(async () => {
 });
 afterAll(() => {
   db.close();
+  homeSpy?.mockRestore();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -390,4 +401,133 @@ describe("issue project move", () => {
     expect(recaptured.created).toBe(true);
     expect(recaptured.issueId).not.toBe(movedIssue.issueId);
   });
+});
+
+describe("issue move --to-authority", () => {
+  /** note: One ACTIVE destination lane of its own `repoKey`, holding the project the move names. */
+  async function destinationLane(projectId: string, suffix = ""): Promise<string> {
+    const repoKey = `github.com/acme/issue-move-dest-${projectId}${suffix}`;
+    const location = collaborationLocationOfRepoKey(repoKey, "local");
+    mkdirSync(join(location.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(location);
+    await writeCollaborationStage(location, ({ db: lane }) => {
+      lane.prepare("update collaboration_meta set authority_state = 'active' where id = 1").run();
+      lane.prepare(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values ('project', ?, ?, 'projects', ?, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(projectId, projectId, `projects/${projectId}`);
+    });
+    return repoKey;
+  }
+
+  test("the staged route carries the record to the destination authority and publishes once", async () => {
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-staged", { sourceIdentity: "review/staged", rootCauseKey: "root-staged", acceptanceKey: "accept-staged" }),
+      { actor: "project-manager", operationId: "capture-staged" },
+    );
+    const repoKey = await destinationLane("p-authority-dest");
+    const mutation = {
+      actor: "project-manager",
+      operationId: "move-to-authority",
+      expectedRevision: issue.revision,
+      expectedStoreRevision: revision(),
+    };
+    const receipt = await moveIssue(context, issue.issueId, { projectId: "p-authority-dest", reason: "another authority", toAuthority: repoKey }, mutation);
+    expect(receipt).toMatchObject({
+      operationId: "move-to-authority",
+      phase: "published",
+      resumedFrom: null,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-dest",
+      destinationIssueId: "I-000001",
+    });
+    expect(receipt.issueRef).toMatch(/^mstar:issue:/);
+    // invariant: The source record is deleted here and the destination holds the same reference.
+    expect(db.prepare("select count(*) as n from issues where id = ?").get(issue.issueId)).toEqual({ n: 0 });
+    const destination = collaborationLocationOfRepoKey(repoKey, "local");
+    const landed = await readCollaborationStage(destination, ({ db: lane }) =>
+      lane.prepare("select id, project_id, issue_ref from issues").all(),
+    );
+    expect(landed).toEqual([{ id: "I-000001", project_id: "p-authority-dest", issue_ref: receipt.issueRef }]);
+    // invariant: The same command replays; it neither publishes twice nor mints a second record.
+    expect(await moveIssue(context, issue.issueId, { projectId: "p-authority-dest", reason: "another authority", toAuthority: repoKey }, mutation))
+      .toEqual({ ...receipt, resumedFrom: "published" });
+  }, 60_000);
+
+  test("a stale store revision refuses the staged route before anything is frozen", async () => {
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-staged-stale", { sourceIdentity: "review/stale", rootCauseKey: "root-stale", acceptanceKey: "accept-stale" }),
+      { actor: "project-manager", operationId: "capture-staged-stale" },
+    );
+    const repoKey = await destinationLane("p-authority-stale");
+    const before = revision();
+    await expect(
+      moveIssue(
+        context,
+        issue.issueId,
+        { projectId: "p-authority-stale", reason: "stale", toAuthority: repoKey },
+        { actor: "project-manager", operationId: "move-staged-stale", expectedRevision: issue.revision, expectedStoreRevision: before - 1 },
+      ),
+    ).rejects.toMatchObject({ code: "milestone.revision-conflict" });
+    expect(issueRow(issue.issueId).project_id).toBe(projectA);
+    // invariant: A stale store view never reaches the freeze, so the move leaves no row at all.
+    expect(
+      db.prepare("select count(*) as n from issue_moves where operation_id = 'move-staged-stale'").get(),
+    ).toEqual({ n: 0 });
+  }, 60_000);
+
+  test("a source write during the move is refused with the partial outcome naming the move", async () => {
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-staged-fence", { sourceIdentity: "review/fenced", rootCauseKey: "root-fenced", acceptanceKey: "accept-fenced" }),
+      { actor: "project-manager", operationId: "capture-staged-fence" },
+    );
+    const repoKey = await destinationLane("p-authority-fence");
+    const { stageMove } = await import("./cross-authority-move.js");
+    await stageMove(context, {
+      operationId: "move-staged-fence",
+      actor: "project-manager",
+      sourceIssueId: issue.issueId,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-fence",
+      reason: "fenced",
+    });
+    // invariant: The lane's trigger is the fence, and the issue-domain entry restates its abort as the
+    // partial outcome naming the move, so the operator resumes that move instead of retrying a write.
+    const refused = await appendOccurrence(
+      context,
+      issue.issueId,
+      {
+        sourceIdentity: "review/fenced",
+        rootCauseKey: "root-fenced",
+        acceptanceKey: "accept-fenced",
+        occurrenceKey: "occ-during-fence",
+        sourceKind: "test",
+        location: "src/fenced.ts",
+        observedBehavior: "observed",
+        evidence: [],
+        discoveredAt: "2026-11-21T00:00:05.000Z",
+      },
+      { actor: "project-manager", operationId: "occurrence-during-fence" },
+    ).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
+    expect(refused?.code).toBe("collaboration.operation-partial");
+    expect(refused?.details).toMatchObject({ cause: "issue.move-in-progress" });
+    expect(JSON.stringify(refused?.details)).toContain("move-staged-fence");
+    expect(
+      db.prepare("select count(*) as n from occurrences where occurrence_key = 'occ-during-fence'").get(),
+    ).toEqual({ n: 0 });
+
+    // invariant: A SECOND move of the same record refuses at the ledger's own read, naming the move
+    // that already holds it: one record never has two blocking rows.
+    await expect(
+      moveIssue(
+        context,
+        issue.issueId,
+        { projectId: "p-authority-fence", reason: "second attempt", toAuthority: await destinationLane("p-authority-fence", "-two") },
+        { actor: "project-manager", operationId: "move-staged-fence-two", expectedRevision: issue.revision, expectedStoreRevision: revision() },
+      ),
+    ).rejects.toMatchObject({ code: "issue.move-in-progress", details: { operation_id: "move-staged-fence", phase: "staged" } });
+  }, 60_000);
 });

@@ -4,7 +4,8 @@
  * move row advances only along the forward set, and the source row freezes its record from
  * `staged` on through triggers stored in the lane rather than through calling code.
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,13 +17,28 @@ import {
   assertRecordWritable,
   blockingMoveFor,
   isForwardMoveTransition,
+  moveAcrossAuthorities,
+  publishMove,
   readIssueMove,
   recordIssueMove,
+  stageMove,
+  stagedMismatch,
+  switchMove,
+  verifyMove,
   type IssueMovePhase,
 } from "./cross-authority-move.js";
-import { COLLABORATION_MIGRATIONS, applyCollaborationLadder, initializeCollaborationStore } from "./collaboration-store.js";
-import { collaborationLocationOfRepoKey } from "./collaboration-identity.js";
-import { SCHEMA_VERSION_TABLE_SQL, migrationChecksum, type StoreDb } from "./store-db.js";
+import {
+  COLLABORATION_MIGRATIONS,
+  applyCollaborationLadder,
+  initializeCollaborationStore,
+  readCollaborationStage,
+  writeCollaborationStage,
+} from "./collaboration-store.js";
+import { collaborationLocationOfRepoKey, resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
+import { discardMove } from "./cross-authority-move.js";
+import { appendOccurrence, captureIssue, getIssue, linkIssue } from "./issue.js";
+import { SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-cross-authority-move-")));
 const HOME = join(ROOT, "home");
@@ -288,4 +304,510 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       upgraded.close();
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// note: The phase engine's cases: stage, verify, switch, publish and discard across two local lanes.
+// ---------------------------------------------------------------------------
+
+let engineSequence = 0;
+
+/** note: A bound source checkout: git root, its `.mstarc`, an ACTIVE execution store and its source lane. */
+async function sourceCheckout(): Promise<{ context: StoreContext; db: StoreDb; repoKey: string }> {
+  const root = join(ROOT, `source-${engineSequence++}`);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${String(engineSequence)}\n`);
+  const context: StoreContext = { harnessDir: join(root, ".mstar") };
+  mkdirSync(context.harnessDir, { recursive: true });
+  (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath) as unknown as StoreDb;
+  db.exec("pragma foreign_keys=on");
+  return { context, db, repoKey: location.repoKey };
+}
+
+/** note: One ACTIVE destination lane of its own `repoKey`, registered to accept one project. */
+async function destinationLane(projectId: string): Promise<{ repoKey: string; location: CollaborationLocation }> {
+  const repoKey = `github.com/acme/dest-${engineSequence++}`;
+  const location = collaborationLocationOfRepoKey(repoKey, "local");
+  mkdirSync(join(location.dbPath, ".."), { recursive: true, mode: 0o700 });
+  await initializeCollaborationStore(location);
+  await writeCollaborationStage(location, ({ db }) => {
+    db.prepare("update collaboration_meta set authority_state = 'active' where id = 1").run();
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+        "values ('project', ?, ?, 'projects', ?, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+    ).run(projectId, projectId, `projects/${projectId}`);
+  });
+  return { repoKey, location };
+}
+
+/** note: A captured record with two occurrences, one transition, one provenance row and a settled mirror row. */
+async function seededRecord(context: StoreContext, db: StoreDb, projectId: string): Promise<string> {
+  const receipt = await captureIssue(
+    context,
+    {
+      projectId,
+      title: "Moving finding",
+      kind: "bug",
+      severity: "high",
+      impact: "impact",
+      acceptance: "acceptance",
+      sourceIdentity: "review/move",
+      rootCauseKey: "root-move",
+      acceptanceKey: "accept-move",
+      occurrenceKey: "occ-move-1",
+      sourceKind: "test",
+      location: "src/a.ts",
+      observedBehavior: "fails",
+      evidence: ["repro"],
+      discoveredAt: "2026-11-21T00:00:00.000Z",
+    },
+    { actor: "project-manager", operationId: `capture-${String(engineSequence)}` },
+  );
+  await appendOccurrence(
+    context,
+    receipt.issueId,
+    {
+      sourceIdentity: "review/move",
+      rootCauseKey: "root-move",
+      acceptanceKey: "accept-move",
+      occurrenceKey: "occ-move-2",
+      sourceKind: "test",
+      location: "src/b.ts",
+      observedBehavior: "fails again",
+      evidence: [],
+      discoveredAt: "2026-11-21T00:00:01.000Z",
+    },
+    { actor: "project-manager", operationId: `occurrence-${String(engineSequence)}` },
+  );
+  db.prepare(
+    "insert into issue_sync_state(binding_id, direction, local_id, item_state, revision, updated_at) " +
+      "values ('linear:p', 'push', ?, 'applied', 1, '2026-11-21T00:00:00.000Z')",
+  ).run(receipt.issueId);
+  db.prepare(
+    "insert into provenance(issue_id, kind, target, source_hash, origin) values (?, 'plan', 'plan-one', 'hash', 'scoped')",
+  ).run(receipt.issueId);
+  db.prepare("update issues set revision = revision + 1 where id = ?").run(receipt.issueId);
+  return receipt.issueId;
+}
+
+/** note: Every column of the record and its children, as one comparable value: the "byte-identical" test. */
+function recordImage(db: StoreDb, issueId: string): unknown {
+  const one = (sql: string): unknown[] => db.prepare(sql).all(issueId);
+  return {
+    issue: db.prepare("select * from issues where id = ?").all(issueId),
+    occurrences: one("select * from occurrences where issue_id = ? order by id"),
+    transitions: one("select * from issue_transitions where issue_id = ? order by id"),
+    provenance: one("select * from provenance where issue_id = ? order by id"),
+    projectMoves: one("select * from issue_project_moves where issue_id = ? order by id"),
+    relations: one("select * from relations where from_issue = ? order by relation"),
+    sync: one("select * from issue_sync_state where local_id = ? order by binding_id"),
+  };
+}
+
+describe("cross-authority move phase engine", () => {
+  test("stage carries the same issue_ref and every child row into the destination lane", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      // note: An edge that stays behind must survive the staging as the target's stable reference.
+      const other = await captureIssue(
+        context,
+        {
+          projectId: "p-source",
+          title: "Stays behind",
+          kind: "risk",
+          severity: "low",
+          impact: "impact",
+          acceptance: "acceptance",
+          sourceIdentity: "review/stay",
+          rootCauseKey: "root-stay",
+          acceptanceKey: "accept-stay",
+          occurrenceKey: "occ-stay",
+          sourceKind: "test",
+          location: "src/c.ts",
+          observedBehavior: "observed",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { actor: "project-manager", operationId: "capture-stay" },
+      );
+      await linkIssue(context, issueId, { relation: "blocks", issueId: other.issueId }, {
+        actor: "project-manager",
+        operationId: "link-for-move",
+        expectedRevision: (db.prepare("select revision from issues where id = ?").get(issueId) as { revision: number }).revision,
+      });
+      const before = recordImage(db, issueId);
+
+      const staged = await stageMove(context, {
+        operationId: "move-stage",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "belongs to the other authority",
+      });
+
+      expect(staged).toBeUndefined();
+      const sourceRowNow = readIssueMove(db, "move-stage", "source");
+      const destinationRow = await readCollaborationStage(destination.location, ({ db: lane }) =>
+        readIssueMove(lane, "move-stage", "destination"),
+      );
+      expect(destinationRow).not.toBeNull();
+      // invariant: The same stable reference on both sides, and no local id of the source lane in the copy.
+      expect(destinationRow!.issueRef).toBe(sourceRowNow!.issueRef);
+      expect(destinationRow!.payloadDigest).toBe(sourceRowNow!.payloadDigest);
+      expect(destinationRow!.payloadJson).not.toContain(issueId);
+      const counts = JSON.parse(sourceRowNow!.stagedCounts) as Record<string, number>;
+      expect(counts).toEqual({
+        occurrences: 2,
+        issueTransitions: 0,
+        provenance: 2,
+        relations: 1,
+        issueProjectMoves: 0,
+        relationsLeftBehind: 0,
+      });
+      // invariant: The source record is frozen from this commit on, and every row it owned is intact.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(() => db.prepare("update issues set title = 'edited' where id = ?").run(issueId)).toThrow(
+        /issue\.move-in-progress/,
+      );
+      expect(stagedMismatch(sourceRowNow!, destinationRow!)).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a count or digest mismatch discards the move and leaves the source record untouched", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-verify-counts",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "mismatch",
+      };
+      await stageMove(context, request);
+      // note: Replace the staged counts: a copy whose rows were replaced, not added or removed.
+      await writeCollaborationStage(destination.location, ({ db: lane }) => {
+        lane.prepare("update issue_moves set staged_counts = ? where operation_id = 'move-verify-counts'").run(
+          JSON.stringify({ occurrences: 9, issueTransitions: 0, provenance: 2, relations: 1, issueProjectMoves: 0, relationsLeftBehind: 0 }),
+        );
+      });
+      const refused = await moveAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.operation-partial");
+      expect(String(refused?.message)).toContain("counts");
+      expect(refused?.details?.phase).toBe("discarded");
+      // invariant: A refused verification never switches, so the record is byte-identical and the
+      // destination row is gone; the source row is the audit of the attempt.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(readIssueMove(db, "move-verify-counts", "source")?.phase).toBe("discarded");
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) =>
+          readIssueMove(lane, "move-verify-counts", "destination"),
+        ),
+      ).toBeNull();
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a rewritten staged payload fails its own digest even when the counts still agree", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-verify-digest",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "digest",
+      };
+      await stageMove(context, request);
+      const sourceRowNow = readIssueMove(db, "move-verify-digest", "source")!;
+      const rewritten = { ...(JSON.parse(sourceRowNow.payloadJson) as Record<string, unknown>), rewritten: true };
+      const rewrittenStaged = { ...sourceRowNow, payloadJson: JSON.stringify(rewritten) };
+      expect(stagedMismatch(sourceRowNow, rewrittenStaged)).toContain("no longer hashes");
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+
+  test("switch commits the source row first, then admits the record into the destination", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-full",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "belongs to the other authority",
+      };
+      const receipt = await moveAcrossAuthorities(context, request);
+      expect(receipt.phase).toBe("published");
+      expect(receipt.resumedFrom).toBeNull();
+      // invariant: The source record and its children are gone; the move row outlives it as the audit.
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+      expect(db.prepare("select count(*) as n from occurrences where issue_id = ?").get(issueId)).toEqual({ n: 0 });
+      expect(readIssueMove(db, "move-full", "source")).toMatchObject({ phase: "published", removedSyncRows: 1 });
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      // invariant: The destination holds the SAME reference and every carried row, under its own display id.
+      const admitted = await readCollaborationStage(destination.location, ({ db: lane }) => ({
+        row: readIssueMove(lane, "move-full", "destination"),
+        issue: lane.prepare("select id, project_id, issue_ref from issues").all(),
+        occurrences: lane.prepare("select count(*) as n from occurrences").get(),
+        provenance: lane.prepare("select count(*) as n from provenance").get(),
+        projectMoves: lane.prepare("select count(*) as n from issue_project_moves").get(),
+      }));
+      expect(admitted.row).toMatchObject({ phase: "switched" });
+      expect(admitted.issue).toHaveLength(1);
+      const [moved] = admitted.issue as Array<{ id: string; project_id: string; issue_ref: string }>;
+      expect(moved).toMatchObject({ id: "I-000001", project_id: "p-dest" });
+      expect(moved!.issue_ref).toBe(receipt.issueRef);
+      expect(receipt.destinationIssueId).toBe(moved!.id);
+      expect(admitted.occurrences).toEqual({ n: 2 });
+      expect(admitted.provenance).toEqual({ n: 2 });
+      expect(admitted.projectMoves).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a source write after staged is refused by the trigger, and a switched record is not presented", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-fence",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "fence",
+      };
+      await stageMove(context, request);
+      // invariant: The fence is the TRIGGER: a write that never asks the helper still fails, and the
+      // issue-domain entry restates it as the partial outcome naming the move.
+      const refused = await appendOccurrence(
+        context,
+        issueId,
+        {
+          sourceIdentity: "review/move",
+          rootCauseKey: "root-move",
+          acceptanceKey: "accept-move",
+          occurrenceKey: "occ-during-move",
+          sourceKind: "test",
+          location: "src/d.ts",
+          observedBehavior: "observed",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:02.000Z",
+        },
+        { actor: "project-manager", operationId: "occurrence-during-move" },
+      ).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
+      expect(refused?.code).toBe("collaboration.operation-partial");
+      expect(refused?.details?.cause).toBe("issue.move-in-progress");
+      expect(JSON.stringify(refused?.details)).toContain("move-fence");
+      expect(db.prepare("select count(*) as n from occurrences where issue_id = ?").get(issueId)).toEqual({ n: 2 });
+
+      await moveAcrossAuthorities(context, request, "switched");
+      // invariant: After the switch this lane stops presenting the record and refuses its writes.
+      await expect(getIssue(context, issueId)).rejects.toMatchObject({ code: "collaboration.operation-partial" });
+      expect(() => db.prepare("update issues set title = 'edited' where id = ?").run(issueId)).toThrow(
+        /issue\.move-in-progress/,
+      );
+      const published = await moveAcrossAuthorities(context, request);
+      expect(published.phase).toBe("published");
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("publication happens once per operation id and a replay reports the same phase", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-once",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "once",
+      };
+      const first = await moveAcrossAuthorities(context, request);
+      const second = await moveAcrossAuthorities(context, request);
+      expect(second).toEqual({ ...first, resumedFrom: "published" });
+      // invariant: One publication, so the destination holds exactly one admitted record and one
+      // project-move row; a second deletion would have failed the audit row's own evidence.
+      const admitted = await readCollaborationStage(destination.location, ({ db: lane }) => ({
+        issues: lane.prepare("select count(*) as n from issues").get(),
+        moves: lane.prepare("select count(*) as n from issue_project_moves").get(),
+      }));
+      expect(admitted).toEqual({ issues: { n: 1 }, moves: { n: 1 } });
+      expect(db.prepare("select count(*) as n from issue_moves where phase = 'published'").get()).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("discard leaves the source record byte-identical and deletes the destination row", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-discard",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "abandon",
+      };
+      await stageMove(context, request);
+      expect(blockingMoveFor(db, issueId)).not.toBeNull();
+      const discarded = await discardMove(context, request);
+      expect(discarded).toMatchObject({ phase: "discarded", issueRef: (before as { issue: Array<{ issue_ref: string }> }).issue[0]!.issue_ref });
+      // invariant: "byte-identical" is column by column over the record and every child row.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) =>
+          lane.prepare("select count(*) as n from issue_moves").get(),
+        ),
+      ).toEqual({ n: 0 });
+      // note: The discarded row is the audit of the refused move and it stays.
+      expect(readIssueMove(db, "move-discard", "source")?.phase).toBe("discarded");
+      db.prepare("update issues set title = 'writable again' where id = ?").run(issueId);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("the same command resumes from every persisted phase", async () => {
+    // invariant: Each case stops the move at one boundary (a process loss is exactly "the next call
+    // did not happen"), then reissues the SAME command and reaches publication.
+    for (const stop of ["staged", "verified", "switched"] as const) {
+      const { context, db } = await sourceCheckout();
+      try {
+        const destination = await destinationLane("p-dest");
+        const issueId = await seededRecord(context, db, "p-source");
+        const request = {
+          operationId: `move-resume-${stop}`,
+          actor: "project-manager",
+          sourceIssueId: issueId,
+          destinationAuthority: destination.repoKey,
+          destinationProject: "p-dest",
+          reason: "resume",
+        };
+        const interrupted = await moveAcrossAuthorities(context, request, stop);
+        expect(interrupted.phase).toBe(stop);
+        expect(blockingMoveFor(db, issueId)?.phase).toBe(stop);
+
+        const resumed = await moveAcrossAuthorities(context, request);
+        expect(resumed.phase).toBe("published");
+        expect(resumed.resumedFrom).toBe(stop);
+        expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+        const admitted = await readCollaborationStage(destination.location, ({ db: lane }) => ({
+          row: readIssueMove(lane, request.operationId, "destination"),
+          issues: lane.prepare("select count(*) as n from issues").get(),
+        }));
+        expect(admitted.row).toMatchObject({ phase: "switched", destinationIssueId: "I-000001" });
+        expect(admitted.issues).toEqual({ n: 1 });
+      } finally {
+        db.close();
+      }
+    }
+  }, 120_000);
+
+  test("a direct update on a record with a source row in a blocking phase fails with issue.move-in-progress", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      await stageMove(context, {
+        operationId: "move-direct-update",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "direct update",
+      });
+      // invariant: The database refuses the write itself, so no calling path can write a frozen
+      // record by forgetting to ask. `update issues` is the exact statement a product writer issues.
+      expect(() => db.prepare("update issues set title = 'rewritten' where id = ?").run(issueId)).toThrow(
+        /issue\.move-in-progress/,
+      );
+      expect((db.prepare("select title from issues where id = ?").get(issueId) as { title: string }).title).toBe(
+        "Moving finding",
+      );
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("an unadmitted destination refuses publication instead of deleting the only copy", async () => {
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-unadmitted",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "unadmitted",
+      };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      await switchMove(context, request);
+      // note: The source commits `switched` first; the admission is the step that follows. Dropping the
+      // destination copy models a process loss between the two, and the zero-member window it leaves.
+      await writeCollaborationStage(destination.location, ({ db: lane }) => {
+        lane.prepare("delete from issue_moves where role = 'destination'").run();
+      });
+      const refused = await publishMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.operation-partial");
+      expect(String(refused?.message)).toContain("only copy of the record");
+      expect(refused?.details).toMatchObject({ phase: "switched" });
+      // invariant: Nothing was deleted, so the same command still has the source to finish from.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(readIssueMove(db, "move-unadmitted", "source")?.phase).toBe("switched");
+      await expect(getIssue(context, issueId)).rejects.toMatchObject({ code: "collaboration.operation-partial" });
+
+      // note: Reissuing the whole verb re-copies the payload, admits it and publishes it once.
+      const resumed = await moveAcrossAuthorities(context, request);
+      expect(resumed.phase).toBe("published");
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
 });

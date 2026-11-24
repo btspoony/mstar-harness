@@ -5,6 +5,7 @@ import {
   appendOccurrence,
   captureIssue,
   closeIssue,
+  discardMove,
   getIssue,
   showIssue,
   ISSUE_ACTION_NAMES,
@@ -56,6 +57,8 @@ const inputSchema = z.object({
   actor: z.string().optional(),
   expect: z.number().int().nonnegative().optional(),
   expectStore: z.number().int().nonnegative().optional(),
+  toAuthority: z.string().optional(),
+  discard: z.boolean().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -179,6 +182,23 @@ function issueFilter(input: IssueInput): IssueFilter {
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
   };
 }
+/**
+ * note: A move combination neither route admits, refused by code with the route that does. It names the
+ * flags rather than the engine's internals, so an operator corrects the request instead of the store.
+ */
+function unsupportedMove(flag: string, route: string): Error & { code: string; paths: string[]; details: Record<string, unknown> } {
+  const recovery =
+    `${flag} needs the staged cross-authority route: ${route}. A project reassignment inside one authority takes ` +
+    `--payload '{"projectId":"<target>","reason":"<text>"}' with --expect and --expect-store, and no authority flag.`;
+  const error = new Error(recovery) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+  error.code = "issue.scope-refused";
+  error.paths = [flag.replace(/^--/, "")];
+  // note: The family's default recovery for a scope refusal is the seat's, which is not this cause;
+  // the flag's own route is the repair, so it travels as the refusal's recovery.
+  error.details = { flag: flag.replace(/^--/, ""), supported_route: route, recovery };
+  return error;
+}
+
 function requiredId(input: IssueInput): string {
   if (input.id === undefined || input.id.trim() === "") {
     const error = new Error("issue id is required") as Error & { code: string; paths: string[] };
@@ -222,12 +242,27 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         error.paths = ["expectStore"];
         throw error;
       }
-      return await runMutation((write) => moveIssue(
-        context,
-        requiredId(input),
-        validatePayload(input, "IssueMove", "move") as IssueMove,
-        { ...write, expectedStoreRevision: expectStore },
-      ));
+      const addressed = requiredId(input);
+      const payload = validatePayload(input, "IssueMove", "move") as IssueMove;
+      // invariant: `--to-authority` selects the staged cross-authority route; without it the verb is the
+      // local project reassignment. `--discard` is the staged route's only other branch, so a
+      // combination neither route admits refuses by code with the supported route named.
+      if (input.toAuthority === undefined) {
+        if (input.discard === true) throw unsupportedMove("--discard", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        return await runMutation((write) => moveIssue(context, addressed, payload, { ...write, expectedStoreRevision: expectStore }));
+      }
+      const toAuthority = input.toAuthority.trim();
+      if (toAuthority === "") throw unsupportedMove("--to-authority", `mstar issue move --id ${addressed} --to-authority <repo-key>`);
+      return await runMutation((write) => (input.discard === true
+        ? discardMove(context, {
+            operationId: write.operationId,
+            actor: write.actor,
+            sourceIssueId: addressed,
+            destinationAuthority: toAuthority,
+            destinationProject: payload.projectId,
+            reason: payload.reason,
+          })
+        : moveIssue(context, addressed, { ...payload, toAuthority }, { ...write, expectedStoreRevision: expectStore })));
     }
     const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
     if (defaultDisposition !== undefined) {
@@ -325,6 +360,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", expectStore: "--expect-store <n>", payload: "--payload <json>",
+    toAuthority: "--to-authority <repo-key>", discard: "--discard",
   };
   const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
@@ -353,6 +389,12 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
       : {}),
     ...(verb === "move" && key === "expectStore"
       ? { help: "Exact current store revision from `mstar issue list` (`storeRevision`); a store that moved since it was read is refused." }
+      : {}),
+    ...(verb === "move" && key === "toAuthority"
+      ? { help: "Destination authority `repoKey` (`host/owner/repo`) of a staged cross-authority move; `--payload.projectId` names the destination project." }
+      : {}),
+    ...(verb === "move" && key === "discard"
+      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched." }
       : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));

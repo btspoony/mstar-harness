@@ -24,6 +24,7 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { assertPresented, frozenMoveRefusal } from "./cross-authority-move.js";
 import type {
   ProviderIssueIdentity,
   RemoteIntent,
@@ -476,7 +477,14 @@ export type IssueReopen = { reason: string };
  * triple, and any milestone membership is cleared because a milestone belongs
  * to exactly one project.
  */
-export type IssueMove = { projectId: string; reason: string };
+export type IssueMove = {
+  projectId: string;
+  reason: string;
+  /** note: The destination authority's `repoKey`; present exactly on the staged cross-authority route. */
+  toAuthority?: string;
+  /** note: Refused when supplied: the ledger's own phase decides where a move resumes. */
+  stage?: string;
+};
 
 export type IssueLink =
   | { relation: IssueRelationKind; issueId: string }
@@ -893,7 +901,16 @@ export type AuthorizedIssueMutation = MutationContext;
 async function withWrite<T>(context: StoreContext, fn: (handle: CollaborationStoreHandle) => T): Promise<T> {
   return withCollaborationWrite(context, (handle) => {
     assertIssueStoreActive(handle.db);
-    return fn(handle);
+    try {
+      return fn(handle);
+    } catch (error) {
+      // invariant: The lane's trigger is the fence, so its abort is the one refusal that reaches here
+      // without a typed error: restate it as the partial outcome it is, naming the move that froze the
+      // record. Every other failure keeps its own code.
+      const mapped = frozenMoveRefusal(handle.db, error);
+      if (mapped !== null) throw mapped;
+      throw error;
+    }
   });
 }
 
@@ -1982,6 +1999,9 @@ export async function getIssue(
         }
       | undefined;
     if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
+    // invariant: A switched record already belongs to the destination authority, so this one stops
+    // presenting it until the move publishes and deletes it.
+    assertPresented(db, id);
 
     const occurrences = (
       db
@@ -2918,15 +2938,49 @@ function refusalWithDetails(code: IssueErrorCode, message: string, details: Reco
  * BEFORE the store is opened (the public contract's refusal precedence), and
  * this route owns the transaction the body runs in.
  */
+export function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove & { toAuthority: string },
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<MoveReceipt>;
+export function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove,
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<IssueReceipt>;
 export async function moveIssue(
   context: StoreContext,
   issueId: string,
   input: IssueMove,
   mutation: MutationContext & { expectedStoreRevision: number },
-): Promise<IssueReceipt> {
+): Promise<IssueReceipt | MoveReceipt> {
   requireCaptureSeat(mutation.actor);
   requireNonblank("projectId", input.projectId);
   requireNonblank("reason", input.reason);
+  // invariant: `--to-authority` is the staged route. It carries the record and its history to another
+  // authority, so it is a different verb from a project reassignment inside one lane: the local route
+  // below keeps its own receipt shape and its own refusal precedence.
+  if (input.toAuthority !== undefined) {
+    if (input.stage !== undefined) {
+      throw new IssueError(
+        "issue.scope-refused",
+        `--stage is not an operator input; a move runs to completion and resumes from whatever phase its ledger holds.`,
+      );
+    }
+    // note: Dynamic import: this module is imported BY the move module, so a static edge would close the cycle.
+    const { moveAcrossAuthorities } = await import("./cross-authority-move.js");
+    return moveAcrossAuthorities(context, {
+      operationId: mutation.operationId,
+      actor: mutation.actor,
+      sourceIssueId: issueId,
+      destinationAuthority: requireNonblank("toAuthority", input.toAuthority),
+      destinationProject: requireNonblank("projectId", input.projectId),
+      reason: requireNonblank("reason", input.reason),
+      expectedStoreRevision: mutation.expectedStoreRevision,
+    });
+  }
   if (resolveCollaborationLocation(context).mode === "remote") {
     // invariant: A project move re-bases the portable identity and clears the project-scoped
     // milestone, so it is never an ordinary replacement: the remote path is a reviewed
@@ -2939,6 +2993,10 @@ export async function moveIssue(
   }
   return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation));
 }
+
+/** note: The receipt the staged route returns, re-exported so a transport need not import the ledger module. */
+export type { MoveReceipt } from "./cross-authority-move.js";
+type MoveReceipt = import("./cross-authority-move.js").MoveReceipt;
 
 export async function assignIssueMilestone(
   context: StoreContext,

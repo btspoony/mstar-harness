@@ -809,6 +809,81 @@ describe("issue command family", () => {
     }
   });
 
+  test("the move verb publishes --to-authority, --discard and the unsupported combinations", async () => {
+    const command = definition("issue.move");
+    // note: The staged route's two flags are declared on the one verb, so an operator reads them
+    // from `--help` and a schema reader sees the same keys the CLI accepts.
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "toAuthority", flags: "--to-authority <repo-key>" }));
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "discard", flags: "--discard" }));
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, toAuthority: "github.com/acme/elsewhere",
+    }).success).toBe(true);
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, discard: true,
+    }).success).toBe(true);
+
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-staged-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const storeRevision = (page.data as { storeRevision: number }).storeRevision;
+
+    // invariant: A flag neither route admits refuses by code and names the route that does, instead
+    // of silently treating it as the local project move.
+    const discardedLocally = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-local", discard: true,
+      payload: { projectId: "proj-b", reason: "nothing to abandon" },
+    }, context);
+    expect(discardedLocally).toMatchObject({ status: "refused", code: "issue.scope-refused", details: { paths: ["discard"] } });
+    if (discardedLocally.status === "refused") {
+      expect(discardedLocally.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
+      expect(discardedLocally.message).toEqual(expect.stringContaining("--to-authority"));
+    }
+    const blankAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-blank-authority", toAuthority: "  ",
+      payload: { projectId: "proj-b", reason: "blank authority" },
+    }, context);
+    expect(blankAuthority).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    // invariant: An unsupported authority is refused before anything is frozen, and the record's own
+    // project is untouched.
+    const unknownAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-unknown-authority",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "typo" },
+    }, context);
+    expect(unknownAuthority).toMatchObject({ status: "refused", code: "collaboration.not-initialized" });
+    if (unknownAuthority.status === "refused") {
+      expect(unknownAuthority.details?.recovery).toEqual(expect.stringContaining("mstar store init"));
+    }
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+
+    // invariant: `--discard` reaches the staged route's own abandon branch, so its refusal is that
+    // route's (an authority it cannot resolve), never the local project move's.
+    const discarded = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-authority", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon a staged move" },
+    }, context);
+    expect(discarded).toMatchObject({
+      status: "refused",
+      code: "collaboration.move-phase-invalid",
+      details: { operation_id: "move-discard-authority" },
+    });
+    // invariant: Neither refusal wrote anything: the record keeps its project and its revision.
+    const after = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(after).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+  }, 60_000);
+
   test("milestone project mismatch refusal names the cause and both alignment routes", () => {
     const envelope = milestoneFailure(
       "milestone.assign",

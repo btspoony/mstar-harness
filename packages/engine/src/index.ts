@@ -217,15 +217,26 @@ export {
 // note: One record's staged move: the source row is the ledger and the fence, and the phase set is
 // forward-only. The orchestration (stage/verify/switch/publish/discard) is not part of this surface.
 export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
+export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
 export {
   advanceIssueMove,
   assertMoveTransition,
+  assertPresented,
   assertRecordWritable,
   BLOCKING_MOVE_PHASES,
   blockingMoveFor,
+  discardMove,
+  frozenMoveRefusal,
   isForwardMoveTransition,
+  moveAcrossAuthorities,
+  publishMove,
   readIssueMove,
   recordIssueMove,
+  stageMove,
+  stagedMismatch,
+  switchMove,
+  switchedMoveFor,
+  verifyMove,
 } from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,

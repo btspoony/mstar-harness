@@ -8,10 +8,24 @@
  *
  * The block itself is NOT here: it is enforced by the lane's triggers (collaboration-store.ts
  * v4), so no calling path can write a frozen record by forgetting to ask. This module states the
- * same rule for the caller that has to explain the refusal, and `apply`-side orchestration arrives
- * with the phase engine.
+ * same rule for the caller that has to explain the refusal.
+ *
+ * The phase engine below owns the one-checkout topology (local to local): the source lane commits
+ * its verdict first, then the destination step follows from the persisted row, so a crash between
+ * the two is resumed by reissuing the same command rather than by a kept handle.
  */
-import { StoreError, nowRfc3339, type StoreDb } from "./store-db.js";
+import { createHash } from "node:crypto";
+import { collaborationLocationOfRepoKey, type CollaborationLocation } from "./collaboration-identity.js";
+import {
+  openCollaborationStore,
+  readCollaborationAuthority,
+  readCollaborationStage,
+  writeCollaborationStage,
+  type CollaborationStoreHandle,
+} from "./collaboration-store.js";
+import type { CompositeIntent } from "./collaboration-operations.js";
+import { IssueError, computeIdentityKey } from "./issue.js";
+import { StoreError, nowRfc3339, type StoreContext, type StoreDb } from "./store-db.js";
 
 /** note: One row's role: the source holds the ledger, the destination holds the staged copy. */
 export type IssueMoveRole = "source" | "destination";
@@ -254,4 +268,940 @@ export function advanceIssueMove(
     );
   }
   return current;
+}
+
+
+// ---------------------------------------------------------------------------
+// note: The phase engine: the one-checkout topology, where both sides are local/mirror lanes.
+// ---------------------------------------------------------------------------
+
+/** note: The move a caller asked for. `operationId` is the whole move's key: every phase derives its own composite id from it. */
+export type MoveRequest = Readonly<{
+  operationId: string;
+  actor: string;
+  sourceIssueId: string;
+  /** note: The destination lane's canonical `repoKey`; a key never carries a mode, so the lane's own record decides it. */
+  destinationAuthority: string;
+  destinationProject: string;
+  reason: string;
+  /** note: The source store revision the caller read; checked only when this run is the one that stages. */
+  expectedStoreRevision?: number;
+}>;
+
+/** note: The five carried row counts, plus the incoming edges that stay behind and are rewritten at publish. */
+export type MoveCounts = Readonly<{
+  occurrences: number;
+  issueTransitions: number;
+  provenance: number;
+  relations: number;
+  issueProjectMoves: number;
+  relationsLeftBehind: number;
+}>;
+
+/** note: What one run left behind, read back from the two persisted rows rather than remembered. */
+export type MoveReceipt = Readonly<{
+  operationId: string;
+  phase: IssueMovePhase;
+  issueRef: string;
+  sourceIssueId: string;
+  destinationIssueId: string | null;
+  destinationAuthority: string;
+  destinationProject: string;
+  /** note: The phase the source row already held when this run started; `null` on the run that staged it. */
+  resumedFrom: IssueMovePhase | null;
+}>;
+
+/** note: The frozen copy: every row the record owns, carrying no local id of the source lane. */
+type MoveCopy = Readonly<{
+  issue: Record<string, unknown>;
+  occurrences: Array<Record<string, unknown>>;
+  transitions: Array<Record<string, unknown>>;
+  provenance: Array<Record<string, unknown>>;
+  projectMoves: Array<Record<string, unknown>>;
+  /** note: Outgoing edges only, each as its target's `issue_ref`: the destination holds no other row of this lane. */
+  relations: Array<{ relation: string; toRef: string }>;
+}>;
+
+/** note: The canonical digest of one frozen payload: the value `payload_digest` and `stagedMismatch` compare. */
+function digestOf(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * invariant: Verification's one verdict. The destination staging must carry the source's `issue_ref`,
+ * its frozen payload digest and its carried counts, and the payload must still hash to that digest:
+ * a copy whose rows were REPLACED rather than added or removed passes a count-only check.
+ */
+export function stagedMismatch(source: IssueMoveRecord, staged: IssueMoveRecord): string | null {
+  if (source.issueRef !== staged.issueRef) {
+    return `the staged copy carries reference ${staged.issueRef}, not ${source.issueRef}`;
+  }
+  // invariant: The digest is the reviewed integrity evidence of a staged move. It is kept because a
+  // count-only check passes when a copy's rows were replaced, not added or removed.
+  if (
+    // why: this comparison is the reviewed integrity gate the spec's ablation keeps; the marker below
+    // records the integrity fact it establishes.
+    // hash-gate: authorized — The staged copy must carry the digest frozen with its source row.
+    source.payloadDigest !== staged.payloadDigest
+  ) {
+    return `the staged copy carries digest ${staged.payloadDigest}, not ${source.payloadDigest}`;
+  }
+  if (
+    // why: the staged payload must still hash to the digest recorded with it, so a rewritten copy fails.
+    // hash-gate: authorized — A staged payload that no longer hashes to its recorded digest was rewritten after the freeze.
+    digestOf(staged.payloadJson) !== staged.payloadDigest
+  ) {
+    return "the staged copy's payload no longer hashes to its recorded digest, so it was rewritten after it was frozen";
+  }
+  return source.stagedCounts === staged.stagedCounts
+    ? null
+    : `the staged copy counts ${staged.stagedCounts}, not ${source.stagedCounts}`;
+}
+
+/** note: An operation id this lane records no move under: a fresh command, not a damaged ledger. */
+function noSuchMove(operationId: string, step: string): StoreError {
+  return new StoreError(
+    "collaboration.move-phase-invalid",
+    `No cross-authority move is recorded in this authority under operation id ${JSON.stringify(operationId)}, so there is ` +
+      `nothing to ${step}. A move is never resumed, discarded or published from a guess. Nothing was modified.`,
+    {
+      operation_id: operationId,
+      recovery:
+        `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
+        `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
+        `--operation-id ${operationId}\`, then reissue that same command to resume it.`,
+    },
+  );
+}
+
+/** note: The lane's display-id allocator, exactly as every issue-producing path uses it. */
+function allocateIssueId(db: StoreDb): string {
+  const counter = db.prepare("select next_value as nextValue from issue_counter where id = 1").get() as {
+    nextValue: number;
+  };
+  db.prepare("update issue_counter set next_value = next_value + 1 where id = 1").run();
+  return `I-${String(counter.nextValue).padStart(6, "0")}`;
+}
+
+function countOf(db: StoreDb, sql: string, ...params: unknown[]): number {
+  const row = db.prepare(sql).get(...params) as { n?: unknown } | undefined;
+  return typeof row?.n === "number" ? row.n : 0;
+}
+
+/**
+ * invariant: The freeze reads the record and every row it owns in ONE snapshot, and stores no local
+ * id: `from_issue` and `issue_id` belong to the source lane and are re-allocated at admission. A
+ * relation target outside the carried set becomes its `issue_ref`, which is what the destination can
+ * still address.
+ */
+function freezeMoveCopy(db: StoreDb, issueId: string): { copy: MoveCopy; counts: MoveCounts } {
+  const issue = db
+    .prepare(
+      "select project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, " +
+        "closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, issue_ref, milestone_id " +
+        "from issues where id = ?",
+    )
+    .get(issueId) as Record<string, unknown> | undefined;
+  if (issue === undefined) throw corruptMove(`${issueId} disappeared while its move was being frozen`);
+  const occurrences = db
+    .prepare(
+      "select occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, " +
+        "evidence_json, discovered_at, recorded_at, imported from occurrences where issue_id = ? order by id asc",
+    )
+    .all(issueId) as Array<Record<string, unknown>>;
+  const transitions = db
+    .prepare(
+      "select from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, " +
+        "issue_revision from issue_transitions where issue_id = ? order by id asc",
+    )
+    .all(issueId) as Array<Record<string, unknown>>;
+  const provenance = db
+    .prepare(
+      "select kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at, origin " +
+        "from provenance where issue_id = ? order by id asc",
+    )
+    .all(issueId) as Array<Record<string, unknown>>;
+  const projectMoves = db
+    .prepare(
+      "select from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, issue_revision " +
+        "from issue_project_moves where issue_id = ? order by id asc",
+    )
+    .all(issueId) as Array<Record<string, unknown>>;
+  const relations = db
+    .prepare(
+      "select r.relation as relation, coalesce(r.to_ref, (select i.issue_ref from issues i where i.id = r.to_issue)) as toRef " +
+        "from relations r where r.from_issue = ? order by r.relation asc",
+    )
+    .all(issueId) as Array<{ relation: string; toRef: string }>;
+  return {
+    copy: { issue, occurrences, transitions, provenance, projectMoves, relations },
+    counts: {
+      occurrences: occurrences.length,
+      issueTransitions: transitions.length,
+      provenance: provenance.length,
+      relations: relations.length,
+      issueProjectMoves: projectMoves.length,
+      relationsLeftBehind: countOf(db, "select count(*) as n from relations where to_issue = ?", issueId),
+    },
+  };
+}
+
+/** note: The destination lane of one `repoKey`. Absence is a named refusal, not a silent no-op. */
+async function destinationLaneOf(repoKey: string): Promise<CollaborationLocation> {
+  let refusal: unknown = null;
+  for (const mode of ["local", "mirror"] as const) {
+    const location = collaborationLocationOfRepoKey(repoKey, mode);
+    try {
+      await readCollaborationStage(location, () => undefined);
+      return location;
+    } catch (error) {
+      const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "";
+      if (code === "collaboration.not-initialized") {
+        throw new StoreError(
+          "collaboration.not-initialized",
+          `No collaboration authority exists at ${location.dbPath} for ${repoKey}. A cross-authority move writes only an ` +
+            `existing active destination lane, so nothing was staged.`,
+          {
+            repoKey,
+            recovery:
+              `Create that authority first: run \`mstar store init\` in a checkout of ${repoKey} (or publish it with the ` +
+              `reviewed collaboration apply/activate sequence), then reissue this move with the same --operation-id.`,
+          },
+        );
+      }
+      // note: The other admitted mode is the lane's own recorded mode; anything else is the real refusal.
+      if (code !== "collaboration.stale-binding") throw error;
+      refusal = error;
+    }
+  }
+  throw refusal;
+}
+
+async function moveRowIn(context: StoreContext, operationId: string, role: IssueMoveRole): Promise<IssueMoveRecord | null> {
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    return readIssueMove(handle.db, operationId, role);
+  } finally {
+    handle.close();
+  }
+}
+
+function destinationRowIn(location: CollaborationLocation, operationId: string): Promise<IssueMoveRecord | null> {
+  return readCollaborationStage(location, ({ db }) => readIssueMove(db, operationId, "destination"));
+}
+
+/**
+ * note: Advance a row to `target` along the progress path, one legal step at a time, so a row that
+ * stopped earlier (an interrupted destination step) is brought up to date instead of refusing a
+ * transition whose FROM phase this attempt never observed.
+ */
+function advanceRowTo(db: StoreDb, operationId: string, role: IssueMoveRole, target: IssueMovePhase): IssueMovePhase {
+  const path: readonly IssueMovePhase[] = ["staged", "verified", "switched", "published"];
+  const limit = path.indexOf(target);
+  for (;;) {
+    const row = readIssueMove(db, operationId, role);
+    if (row === null) throw corruptMove(`move ${operationId} lost its ${role} row`);
+    if (row.phase === target) return row.phase;
+    const at = path.indexOf(row.phase);
+    // invariant: `discarded` is the branch, not a step on the progress path, so it is the target itself
+    // or the state machine's own refusal.
+    if (limit < 0 || at < 0) {
+      advanceIssueMove(db, { operationId, role, from: row.phase, to: target });
+      return target;
+    }
+    // invariant: A row already past the requested step keeps its phase: the destination copy outran the
+    // source's step, and re-deriving it must not walk backwards.
+    if (at > limit) return row.phase;
+    advanceIssueMove(db, { operationId, role, from: row.phase, to: path[at + 1]! });
+  }
+}
+
+/**
+ * invariant: One phase transition is one `issue-move` composite, under an id derived from the move and
+ * the target phase, so a replay after an apply-then-finalize crash replays that receipt instead of
+ * repeating the effect. A transition whose reservation is already `confirmed` is not reserved again:
+ * the recorded effect is the answer. The destination step is the caller's and runs AFTER this commit.
+ */
+async function runMoveTransition(
+  context: StoreContext,
+  request: MoveRequest,
+  phase: IssueMovePhase,
+  effect: (handle: CollaborationStoreHandle) => void,
+): Promise<void> {
+  const { advanceCollaborationRevision, reserveCompositeIntent, runCollaborationComposite } = await import(
+    "./collaboration-operations.js"
+  );
+  const { executionRootTokenOf, withExecutionTransaction } = await import("./execution-store.js");
+  const source = await readCollaborationAuthority(context);
+  const frozenPayload = JSON.stringify({
+    move: request.operationId,
+    phase,
+    issue: request.sourceIssueId,
+    destination: request.destinationAuthority,
+    project: request.destinationProject,
+  });
+  const operationId = `${request.operationId}:move-${phase}`;
+  const prepared = await withExecutionTransaction<
+    { done: true } | { done: false; intent: CompositeIntent }
+  >(context, (tx) => {
+    const recorded = tx.db
+      .prepare(
+        "select phase from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? and operation_id = ?",
+      )
+      .get(tx.storeId, tx.epoch, operationId) as { phase?: unknown } | undefined;
+    if (recorded?.phase === "confirmed") return { done: true as const };
+    const intent: CompositeIntent = {
+      key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId },
+      kind: "issue-move",
+      requestHash: digestOf(frozenPayload),
+      target: { repoKey: source.repoKey, mode: source.mode, storeId: source.storeId, epoch: source.epoch },
+      // note: a move addresses one record, never a plan row, so it reserves no plan and excludes no other writer.
+      scope: { workflowId: null, planId: null },
+      actor: request.actor,
+      expectedExecution: executionRootTokenOf(tx),
+      frozenPayload,
+    };
+    const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
+    return { done: false as const, intent: { ...intent, requestHash: reservation.requestHash } };
+  });
+  if (prepared.done) return;
+  await runCollaborationComposite<IssueMovePhase>(context, prepared.intent, {
+    apply: (handle) => {
+      effect(handle);
+      // note: one collaboration revision advance for the whole effect transaction.
+      advanceCollaborationRevision(handle);
+      return phase;
+    },
+    finalize: () => phase,
+  });
+}
+
+/** note: The pending-mirror and freeze preconditions of `stage`, stated once, inside the effect's transaction. */
+function assertStageable(db: StoreDb, request: MoveRequest): void {
+  const issue = db.prepare("select id, project_id from issues where id = ?").get(request.sourceIssueId) as
+    | { id: string; project_id: string }
+    | undefined;
+  if (issue === undefined) {
+    throw new IssueError("issue.not-found", `Issue ${request.sourceIssueId} does not exist in this authority`);
+  }
+  // note: A record another move already froze names that move instead of the trigger's bare abort.
+  assertRecordWritable(db, request.sourceIssueId);
+  const pending = countOf(
+    db,
+    "select count(*) as n from issue_sync_state where local_id = ? and item_state = 'pending'",
+    request.sourceIssueId,
+  );
+  if (pending === 0) return;
+  throw new StoreError(
+    "collaboration.cutover-not-quiescent",
+    `Issue ${request.sourceIssueId} holds ${String(pending)} pending mirror row(s); publishing this move would delete them ` +
+      `with the record and strand a delivery the provider may already hold. Nothing was staged.`,
+    {
+      issue_id: request.sourceIssueId,
+      pending_rows: pending,
+      recovery:
+        `Settle the mirror first: run \`mstar issue-sync pending --project ${issue.project_id}\` and record the outcome with ` +
+        `\`mstar issue-sync apply --project ${issue.project_id} --results <file|->\`, then reissue this move with the same ` +
+        `--operation-id.`,
+    },
+  );
+}
+
+/**
+ * note: A typed issue refusal with structured facts; `IssueError` carries its details as a field, so
+ * one helper keeps the call sites honest instead of assigning after construction.
+ */
+function issueRefusal(code: ConstructorParameters<typeof IssueError>[0], message: string, details: Record<string, unknown>): IssueError {
+  const error = new IssueError(code, message);
+  error.details = details;
+  return error;
+}
+
+/** note: The destination lane's preconditions: an active lane of that key that holds the target project. */
+function assertDestinationReady(authority: { state: string; repoKey: string }, db: StoreDb, request: MoveRequest): void {
+  if (authority.state !== "active") {
+    throw new StoreError(
+      "collaboration.not-active",
+      `The destination authority ${request.destinationAuthority} is ${authority.state}; a move admits a record only into an ` +
+        `active lane. Nothing was staged there.`,
+      {
+        repoKey: request.destinationAuthority,
+        recovery: "Publish that destination lane, then reissue this move with the same --operation-id.",
+      },
+    );
+  }
+  if (db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(request.destinationProject)) return;
+  throw issueRefusal(
+    "issue.not-found",
+    `Project ${request.destinationProject} is not a registered catalog project of ${request.destinationAuthority}, so the staged ` +
+      `copy has nowhere to land. Nothing was staged there.`,
+    {
+      projectId: request.destinationProject,
+      recovery:
+        `Register it in a checkout bound to ${request.destinationAuthority} with \`mstar catalog register --kind project ` +
+        `--id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager ` +
+        `--operation-id <operation-id>\`, then reissue this move with the same --operation-id.`,
+    },
+  );
+}
+
+/**
+ * invariant: `stage` freezes the source record and writes the source row in ONE transaction, so the
+ * lane's trigger freezes the record at the same commit; then it copies the frozen payload to the
+ * destination lane. Its preconditions run FIRST, outside any reservation: a refusal here must leave no
+ * durable decline against the operation id, because settling the cause is the documented recovery.
+ */
+export async function stageMove(context: StoreContext, request: MoveRequest): Promise<void> {
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  const staged = (await moveRowIn(context, request.operationId, "source")) !== null;
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    if (!staged) assertStageable(handle.db, request);
+    if (request.expectedStoreRevision !== undefined) {
+      const meta = handle.db.prepare("select revision from collaboration_meta where id = 1").get() as { revision?: unknown };
+      if (meta.revision !== request.expectedStoreRevision) {
+        throw new IssueError(
+          "milestone.revision-conflict",
+          `expectedStoreRevision ${request.expectedStoreRevision} does not match the source store revision ` +
+            `${String(meta.revision)}; nothing was staged.`,
+        );
+      }
+    }
+    if (!staged && handle.authority.repoKey === request.destinationAuthority) {
+      throw issueRefusal(
+        "issue.scope-refused",
+        `${request.destinationAuthority} is this record's own authority, so there is nothing to carry across one; a move needs ` +
+          `a different authority. Nothing was moved.`,
+        {
+          recovery:
+            `A project change inside one authority is \`mstar issue move --id ${request.sourceIssueId} --payload ` +
+            `'{"projectId":"<target>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision>\`.`,
+        },
+      );
+    }
+  } finally {
+    handle.close();
+  }
+  await readCollaborationStage(destination, ({ db, authority }) => assertDestinationReady(authority, db, request));
+  // invariant: Only the first run freezes and records the source row; a later run re-derives the
+  // destination copy from the row that already exists, which is how a lost staging is recovered.
+  if (!staged) await runMoveTransition(context, request, "staged", (write) => {
+    if (readIssueMove(write.db, request.operationId, "source") !== null) return;
+    // invariant: re-checked under the writer lock: a move that started between the preflight and
+    // here must not be overwritten, and the frozen copy must be the record's current bytes.
+    assertStageable(write.db, request);
+    const frozen = freezeMoveCopy(write.db, request.sourceIssueId);
+    const payloadJson = JSON.stringify(frozen.copy);
+    recordIssueMove(write.db, {
+      operationId: request.operationId,
+      role: "source",
+      requestHash: digestOf(`${request.operationId}\n${request.sourceIssueId}\n${request.destinationAuthority}`),
+      issueRef: String(frozen.copy.issue.issue_ref),
+      sourceIssueId: request.sourceIssueId,
+      destinationIssueId: null,
+      sourceAuthority: write.authority.repoKey,
+      destinationAuthority: request.destinationAuthority,
+      destinationProject: request.destinationProject,
+      phase: "staged",
+      payloadJson,
+      payloadDigest: digestOf(payloadJson),
+      stagedCounts: JSON.stringify(frozen.counts),
+      sourceStoreId: write.authority.storeId,
+      sourceEpoch: write.authority.epoch,
+      removedSyncRows: 0,
+    });
+  });
+  const row = await moveRowIn(context, request.operationId, "source");
+  if (row === null) throw corruptMove(`move ${request.operationId} staged no source row`);
+  // note: The destination copy follows the source commit; re-running this is the replay.
+  await writeCollaborationStage(destination, ({ db, authority }) => {
+    assertDestinationReady(authority, db, request);
+    if (readIssueMove(db, request.operationId, "destination") !== null) return;
+    recordIssueMove(db, {
+      operationId: request.operationId,
+      role: "destination",
+      requestHash: row.requestHash,
+      issueRef: row.issueRef,
+      sourceIssueId: row.sourceIssueId,
+      destinationIssueId: null,
+      sourceAuthority: row.sourceAuthority,
+      destinationAuthority: request.destinationAuthority,
+      destinationProject: request.destinationProject,
+      phase: "staged",
+      payloadJson: row.payloadJson,
+      payloadDigest: row.payloadDigest,
+      stagedCounts: row.stagedCounts,
+      sourceStoreId: row.sourceStoreId,
+      sourceEpoch: row.sourceEpoch,
+      removedSyncRows: 0,
+    });
+  });
+}
+
+/**
+ * invariant: Verification compares the destination staging with the source row and never advances past
+ * a mismatch: the move discards first, so the source record is byte-identical and the destination row
+ * is gone. Discarding here is the whole recovery of a refused verification.
+ */
+export async function verifyMove(context: StoreContext, request: MoveRequest): Promise<void> {
+  const source = await moveRowIn(context, request.operationId, "source");
+  if (source === null) throw noSuchMove(request.operationId, "verify");
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  const staged = await destinationRowIn(destination, request.operationId);
+  // invariant: Only a staged source is verified. A source already past `staged` was verified against
+  // this same payload, so the step it left undone is the destination copy's own advance.
+  if (source.phase === "staged") {
+    const mismatch =
+      staged === null
+        ? `the destination authority ${request.destinationAuthority} holds no staged copy of ${source.issueRef}`
+        : stagedMismatch(source, staged);
+    if (mismatch !== null) {
+      await discardMove(context, request);
+      throw new StoreError(
+        "collaboration.operation-partial",
+        `Move ${request.operationId} failed verification: ${mismatch}. It is discarded: the source record ` +
+          `${String(source.sourceIssueId)} is untouched and the destination staging is deleted.`,
+        {
+          operation_id: request.operationId,
+          issue_ref: source.issueRef,
+          phase: "discarded",
+          mismatch,
+          recovery:
+            "Reissue the move under a new --operation-id once the destination authority holds what the source carries; the " +
+            "source record was never modified.",
+        },
+      );
+    }
+    await runMoveTransition(context, request, "verified", (handle) => {
+      advanceRowTo(handle.db, request.operationId, "source", "verified");
+    });
+  }
+  await writeCollaborationStage(destination, ({ db }) => {
+    advanceRowTo(db, request.operationId, "destination", "verified");
+  });
+}
+
+/**
+ * invariant: The membership switch commits the SOURCE row first, then admits into the destination. A
+ * source row at `switched` whose admission did not land is the one window the topology accepts: a read
+ * names it (`collaboration.operation-partial`) and the same command closes it.
+ */
+export async function switchMove(context: StoreContext, request: MoveRequest): Promise<void> {
+  const source = await moveRowIn(context, request.operationId, "source");
+  if (source === null) throw noSuchMove(request.operationId, "switch");
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  const admitted = await destinationRowIn(destination, request.operationId);
+  if (source.phase === "switched" && admitted?.destinationIssueId != null) return;
+  if (source.phase !== "verified" && source.phase !== "switched") {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `Move ${request.operationId} is at phase ${source.phase}, so it cannot switch: only a verified move becomes the ` +
+        `destination's member. Nothing was modified.`,
+      {
+        operation_id: request.operationId,
+        phase: source.phase,
+        recovery: "Reissue the same move: it resumes from the phase its source row holds.",
+      },
+    );
+  }
+  await runMoveTransition(context, request, "switched", (handle) => {
+    advanceRowTo(handle.db, request.operationId, "source", "switched");
+  });
+  await writeCollaborationStage(destination, ({ db, authority }) => {
+    if (authority.state !== "active") {
+      throw new StoreError(
+        "collaboration.not-active",
+        `The destination authority ${request.destinationAuthority} is ${authority.state}; it cannot admit a record now. ` +
+          `Nothing was admitted, and the same command closes the move once that lane is active.`,
+        {
+          repoKey: request.destinationAuthority,
+          recovery: "Publish that destination lane, then reissue the same move.",
+        },
+      );
+    }
+    const row = readIssueMove(db, request.operationId, "destination");
+    if (row === null) throw corruptMove(`move ${request.operationId} lost its destination row before admission`);
+    if (row.destinationIssueId !== null) return;
+    admitMoveCopy(db, request, JSON.parse(source.payloadJson) as MoveCopy, JSON.parse(source.stagedCounts) as MoveCounts);
+  });
+}
+
+/**
+ * invariant: The destination admission is one transaction: a display id from the destination's own
+ * counter, an identity recomputed for the destination project, then the record and every carried row
+ * in foreign-key order, then the destination row's `switched` phase with the id it allocated. Both
+ * sides of an outgoing relation are stored in the shape the destination can address: a local target
+ * when the destination already holds it, a `to_ref` otherwise.
+ */
+function admitMoveCopy(db: StoreDb, request: MoveRequest, copy: MoveCopy, counts: MoveCounts): void {
+  if (counts.relations !== copy.relations.length) {
+    throw corruptMove(
+      `move ${request.operationId} recorded ${String(counts.relations)} relations but froze ${String(copy.relations.length)}`,
+    );
+  }
+  const at = nowRfc3339();
+  const issue = copy.issue;
+  const issueRef = String(issue.issue_ref);
+  const existing = db.prepare("select id from issues where issue_ref = ?").get(issueRef) as { id: string } | undefined;
+  let issueId = existing?.id ?? null;
+  if (issueId === null) {
+    const first = copy.occurrences[0];
+    if (first === undefined) {
+      throw issueRefusal(
+        "issue.ambiguous-identity",
+        `Issue ${issueRef} carries no recorded occurrence identity, so its project-scoped identity cannot be recomputed; ` +
+          `nothing was admitted.`,
+        {
+          recovery:
+            `Capture the finding in ${request.destinationProject} with \`mstar issue add\` instead of moving a record that ` +
+            `has no identity triple.`,
+        },
+      );
+    }
+    const identityKey = computeIdentityKey(
+      request.destinationProject,
+      String(first.source_identity),
+      String(first.root_cause_key),
+      String(first.acceptance_key),
+    );
+    const collision = db.prepare("select id from issues where identity_key = ?").get(identityKey) as { id: string } | undefined;
+    if (collision !== undefined) {
+      throw issueRefusal(
+        "issue.ambiguous-identity",
+        `Admitting ${issueRef} into ${request.destinationProject} would reuse the identity held by issue ${collision.id}; ` +
+          `nothing was admitted.`,
+        {
+          collidingIssueId: collision.id,
+          recovery:
+            `Read the surviving issue with \`mstar issue show --id ${collision.id}\`; retire the moved record in its favour ` +
+            `with \`mstar issue supersede\` instead of moving it here.`,
+        },
+      );
+    }
+    issueId = allocateIssueId(db);
+    const revision = Number(issue.revision) + 1;
+    db.prepare(
+      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, " +
+        "closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id, issue_ref) " +
+        "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', null, null, ?, null, ?)",
+    ).run(
+      issueId,
+      request.destinationProject,
+      issue.title,
+      issue.kind,
+      issue.severity,
+      issue.disposition,
+      issue.impact,
+      issue.acceptance,
+      issue.owner,
+      issue.registered_at,
+      issue.closed_at,
+      issue.closure_note,
+      issue.created_at,
+      at,
+      revision,
+      identityKey,
+      issueRef,
+    );
+    for (const row of copy.occurrences) {
+      db.prepare(
+        "insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, " +
+          "location, observed_behavior, evidence_json, discovered_at, recorded_at, imported) " +
+          "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(issueId, row.occurrence_key, row.source_kind, row.source_identity, row.root_cause_key, row.acceptance_key,
+        row.location, row.observed_behavior, row.evidence_json, row.discovered_at, row.recorded_at, row.imported);
+    }
+    for (const row of copy.provenance) {
+      db.prepare(
+        "insert into provenance(issue_id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, " +
+          "legacy_json, imported_at, origin) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(issueId, row.kind, row.target, row.source_hash, row.legacy_project, row.legacy_bucket, row.legacy_entry_id,
+        row.legacy_json, row.imported_at, row.origin);
+    }
+    for (const row of copy.transitions) {
+      db.prepare(
+        "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, " +
+          "evidence_json, imported, issue_revision) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(issueId, row.from_disposition, row.to_disposition, row.actor, row.occurred_at, row.recorded_at, row.reason,
+        row.evidence_json, row.imported, row.issue_revision);
+    }
+    for (const row of copy.projectMoves) {
+      db.prepare(
+        "insert into issue_project_moves(issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, " +
+          "issue_revision) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(issueId, row.from_project_id, row.to_project_id, row.actor, row.reason, row.occurred_at, row.recorded_at,
+        row.issue_revision);
+    }
+    for (const edge of copy.relations) {
+      const target = db.prepare("select id from issues where issue_ref = ?").get(edge.toRef) as { id: string } | undefined;
+      if (target === undefined) {
+        db.prepare("insert into relations(from_issue, relation, to_ref) values (?, ?, ?)").run(issueId, edge.relation, edge.toRef);
+      } else if (edge.relation === "related" && issueId > target.id) {
+        db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(target.id, edge.relation, issueId);
+      } else {
+        db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(issueId, edge.relation, target.id);
+      }
+    }
+    // note: The membership itself is one project-move row: the record's history says which project it
+    // entered, exactly as a local project move records one.
+    db.prepare(
+      "insert into issue_project_moves(issue_id, from_project_id, to_project_id, actor, reason, occurred_at, recorded_at, " +
+        "issue_revision) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(issueId, String(issue.project_id), request.destinationProject, request.actor, request.reason, at, at, revision);
+  }
+  advanceRowTo(db, request.operationId, "destination", "verified");
+  advanceIssueMove(db, {
+    operationId: request.operationId,
+    role: "destination",
+    from: "verified",
+    to: "switched",
+    destinationIssueId: issueId,
+  });
+}
+
+/**
+ * invariant: Publication happens once per operation id and is the one destructive step. The source row
+ * leaves the blocking set FIRST in the same transaction (or the lane's own trigger refuses the
+ * publication it exists to allow), then the record's incoming edges become `to_ref` edges so nothing in
+ * this lane still names a record that is leaving, then its children and the record are deleted. The
+ * count of rewritten edges is verified against the staged count: a relation that landed mid-flight
+ * rolls the whole publication back.
+ */
+export async function publishMove(context: StoreContext, request: MoveRequest): Promise<void> {
+  const source = await moveRowIn(context, request.operationId, "source");
+  if (source === null) throw noSuchMove(request.operationId, "publish");
+  if (source.phase === "published") return;
+  if (source.phase !== "switched") {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `Move ${request.operationId} is at phase ${source.phase}, so it cannot publish: only a switched move deletes its source ` +
+        `record. Nothing was modified.`,
+      {
+        operation_id: request.operationId,
+        phase: source.phase,
+        recovery: "Reissue the same move: it resumes from the phase its source row holds.",
+      },
+    );
+  }
+  // invariant: Publication deletes the only source copy, so it never runs while the destination has
+  // not admitted the record: that would lose it. A refused admission leaves the source switched and
+  // read-only, and the same command resumes the switch instead.
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  const admitted = await destinationRowIn(destination, request.operationId);
+  if (admitted?.destinationIssueId == null) {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `Move ${request.operationId} has not been admitted by ${request.destinationAuthority} yet, so publishing would delete ` +
+        `the only copy of the record. Nothing was modified.`,
+      {
+        operation_id: request.operationId,
+        phase: "switched",
+        recovery:
+          `Reissue the same move: it resumes at the destination admission and publishes once that has landed; nothing is lost.`,
+      },
+    );
+  }
+  const counts = JSON.parse(source.stagedCounts) as MoveCounts;
+  await runMoveTransition(context, request, "published", (handle) => {
+    const { db } = handle;
+    const row = readIssueMove(db, request.operationId, "source");
+    if (row === null) throw corruptMove(`move ${request.operationId} lost its source row before publication`);
+    if (row.phase === "published") return;
+    advanceIssueMove(db, { operationId: request.operationId, role: "source", from: row.phase, to: "published" });
+    const issueId = row.sourceIssueId;
+    if (issueId === null) throw corruptMove(`move ${request.operationId} recorded no source display id`);
+    // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
+    // record's stable reference, which is the unresolved shape both local readers already render.
+    const rewritten = db.prepare("update relations set to_issue = null, to_ref = ? where to_issue = ?").run(row.issueRef, issueId) as {
+      changes?: number;
+    };
+    const rewrittenCount = Number(rewritten?.changes ?? 0);
+    if (rewrittenCount !== counts.relationsLeftBehind) {
+      throw new StoreError(
+        "collaboration.operation-partial",
+        `Move ${request.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
+          `this publication rewrote ${String(rewrittenCount)}: a relation changed while the move was in flight. The publication ` +
+          `rolled back and the record is unchanged.`,
+        {
+          operation_id: request.operationId,
+          issue_id: issueId,
+          expected: counts.relationsLeftBehind,
+          rewritten: rewrittenCount,
+          recovery:
+            "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
+        },
+      );
+    }
+    db.prepare("delete from relations where from_issue = ?").run(issueId);
+    const removedSyncRows = countOf(db, "select count(*) as n from issue_sync_state where local_id = ?", issueId);
+    db.prepare("delete from issue_sync_state where local_id = ?").run(issueId);
+    db.prepare("delete from occurrences where issue_id = ?").run(issueId);
+    db.prepare("delete from issue_transitions where issue_id = ?").run(issueId);
+    db.prepare("delete from provenance where issue_id = ?").run(issueId);
+    db.prepare("delete from issue_project_moves where issue_id = ?").run(issueId);
+    db.prepare("delete from issues where id = ?").run(issueId);
+    db.prepare("update issue_moves set removed_sync_rows = ?, updated_at = ? where operation_id = ? and role = 'source'").run(
+      removedSyncRows,
+      nowRfc3339(),
+      request.operationId,
+    );
+  });
+}
+
+/**
+ * invariant: Discard is the one branch before the destination is a member, and it never touches the
+ * record: the source row leaves the blocking set and becomes `discarded`, which restores every source
+ * write. The destination staging is deleted afterwards, so a half-written copy never outlives its move.
+ */
+export async function discardMove(context: StoreContext, request: MoveRequest): Promise<MoveReceipt> {
+  const before = await moveRowIn(context, request.operationId, "source");
+  if (before === null) throw noSuchMove(request.operationId, "discard");
+  if (before.phase !== "discarded") {
+    await runMoveTransition(context, request, "discarded", (handle) => {
+      advanceRowTo(handle.db, request.operationId, "source", "discarded");
+    });
+  }
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  await writeCollaborationStage(destination, ({ db }) => {
+    db.prepare("delete from issue_moves where operation_id = ? and role = 'destination'").run(request.operationId);
+  });
+  return {
+    operationId: request.operationId,
+    phase: "discarded",
+    issueRef: before.issueRef,
+    sourceIssueId: before.sourceIssueId ?? request.sourceIssueId,
+    destinationIssueId: null,
+    destinationAuthority: request.destinationAuthority,
+    destinationProject: request.destinationProject,
+    resumedFrom: before.phase,
+  };
+}
+
+/**
+ * invariant: The one staged route. It resumes from whatever phase the source row already holds and
+ * stops at the phase the caller asked for, so the same command completes a move interrupted at any
+ * boundary. Every step is idempotent by the move's operation id.
+ */
+export async function moveAcrossAuthorities(
+  context: StoreContext,
+  request: MoveRequest,
+  target: "staged" | "verified" | "switched" | "published" = "published",
+): Promise<MoveReceipt> {
+  const before = await moveRowIn(context, request.operationId, "source");
+  // invariant: A terminal row is the move's answer, never a step to repeat: `published` already deleted
+  // the source record and `discarded` restored it, so both report the phase they hold.
+  if (before !== null && (before.phase === "published" || before.phase === "discarded")) {
+    return receiptOf(context, request, before.phase);
+  }
+  // note: Always re-derive the staging step: it records the source row once and re-creates a lost
+  // destination copy, so the same command closes a window either side of the switch.
+  await stageMove(context, request);
+  if (target !== "staged") {
+    await verifyMove(context, request);
+    if (target !== "verified") {
+      await switchMove(context, request);
+      if (target === "published") await publishMove(context, request);
+    }
+  }
+  return receiptOf(context, request, before?.phase ?? null);
+}
+
+/** note: The receipt read back from the two persisted rows; nothing here is remembered across a call. */
+async function receiptOf(
+  context: StoreContext,
+  request: MoveRequest,
+  resumedFrom: IssueMovePhase | null,
+): Promise<MoveReceipt> {
+  const source = await moveRowIn(context, request.operationId, "source");
+  if (source === null) throw noSuchMove(request.operationId, "read");
+  const destination = await destinationLaneOf(request.destinationAuthority);
+  const destinationRow = await destinationRowIn(destination, request.operationId);
+  return {
+    operationId: request.operationId,
+    phase: source.phase,
+    issueRef: source.issueRef,
+    sourceIssueId: source.sourceIssueId ?? request.sourceIssueId,
+    destinationIssueId: destinationRow?.destinationIssueId ?? null,
+    destinationAuthority: request.destinationAuthority,
+    destinationProject: source.destinationProject,
+    resumedFrom,
+  };
+}
+
+/**
+ * note: The refusal an issue write meets when the lane's own trigger froze its record. The trigger is
+ * the fence, so this reads the blocking rows it fired for and reports the abort as
+ * `collaboration.operation-partial` naming the move -- the operator then resumes or discards it
+ * instead of retrying a write that can never land.
+ */
+export function frozenMoveRefusal(db: StoreDb, cause: unknown): StoreError | null {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (!message.includes("issue.move-in-progress")) return null;
+  const rows = db
+    .prepare(
+      "select operation_id, issue_ref, source_issue_id, phase from issue_moves " +
+        "where role = 'source' and phase in ('staged','verified','switched') order by created_at",
+    )
+    .all() as Array<{ operation_id: string; issue_ref: string; source_issue_id: string | null; phase: string }>;
+  if (rows.length === 0) return null;
+  const blocking = rows.map((row) => ({
+    operation_id: row.operation_id,
+    issue_ref: row.issue_ref,
+    source_issue_id: row.source_issue_id,
+    phase: row.phase,
+  }));
+  const [only] = rows;
+  const named = rows.length === 1 && only !== undefined ? only : null;
+  return new StoreError(
+    "collaboration.operation-partial",
+    `This write met \`issue.move-in-progress\`: ` +
+      (named === null
+        ? `${String(rows.length)} cross-authority moves are in flight in this authority.`
+        : `issue ${String(named.source_issue_id)} is frozen by move ${named.operation_id} in phase ${named.phase}.`) +
+      ` A frozen record is read-only until its move publishes or is discarded, so the write was rolled back. Nothing was modified.`,
+    {
+      cause: "issue.move-in-progress",
+      blocking_moves: blocking,
+      recovery:
+        named === null
+          ? `Reissue each move named in blocking_moves (or discard it) and retry this write.`
+          : `Reissue ${describeMoveResume(named.issue_ref, named.operation_id)} to finish the move, or abandon it with ` +
+            `\`mstar issue move --id <issue-id> --to-authority <repo-key> --operation-id ${named.operation_id} --discard\`, ` +
+            `then retry this write.`,
+    },
+  );
+}
+
+/** note: The one resume command a move names, built from the row so no caller retypes its ids. */
+function describeMoveResume(issueRefOrId: string, operationId: string): string {
+  return `\`mstar issue move --id ${issueRefOrId} --to-authority <repo-key> --operation-id ${operationId}\``;
+}
+
+/** note: Whether `id` names a record this lane stopped presenting: a `switched` source row before its publication. */
+export function switchedMoveFor(db: StoreDb, issueId: string): { operationId: string } | null {
+  const blocked = blockingMoveFor(db, issueId);
+  return blocked !== null && blocked.phase === "switched" ? { operationId: blocked.operationId } : null;
+}
+
+/**
+ * invariant: A switched record has left this authority and its destination copy is the member; the
+ * source stops presenting it until publication deletes it. A read names that gap instead of serving
+ * a record two authorities could both claim.
+ */
+export function assertPresented(db: StoreDb, issueId: string): void {
+  const switched = switchedMoveFor(db, issueId);
+  if (switched === null) return;
+  throw new StoreError(
+    "collaboration.operation-partial",
+    `Issue ${issueId} already belongs to the destination authority of move ${switched.operationId}; this authority keeps it ` +
+      `only until that move publishes, so it is not presented here. Reissue the move to publish it and release the display id.`,
+    {
+      issue_id: issueId,
+      operation_id: switched.operationId,
+      phase: "switched",
+      recovery:
+        `Reissue \`mstar issue move --id <issue-id> --to-authority <repo-key> --operation-id ${switched.operationId}\` to ` +
+        `publish the move; then read the record from the destination authority.`,
+    },
+  );
 }
