@@ -40,7 +40,7 @@ function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-async function cleanupFixture(merge = true, opts: { origin?: boolean; layer?: boolean } = {}) {
+async function cleanupFixture(merge = true, opts: { origin?: boolean; layer?: boolean; integrationWorktree?: boolean } = {}) {
   const ctx = context();
   git(["init", "-q", "-b", "main"], ctx.cwd);
   git(["config", "user.name", "Process Test"], ctx.cwd);
@@ -77,7 +77,7 @@ async function cleanupFixture(merge = true, opts: { origin?: boolean; layer?: bo
     snapshot: {
       schema_version: 1, id: workflowId, type: "plan", status: "running",
       started_at: "2026-09-27T00:00:00.000Z", updated_at: "2026-09-27T00:00:00.000Z",
-      branch: { target: "main" },
+      branch: { target: "main", ...(opts.integrationWorktree ? { integration: branch } : {}) },
       plans: [{ id: "plan-smoke", title: "Smoke plan", file: "plans/plan-smoke.md", status: "Done", metadata: { working_branch: branch, worktree_path: worktree } }],
     } as never,
     expected: (await readExecutionState(storeContext)).token,
@@ -296,6 +296,32 @@ describe("process command family", () => {
     // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the unrelated merged candidate is gone; only the refused layer ref survives.
     expect(() => git(["show-ref", "--verify", `refs/heads/${branch}`], ctx.cwd)).toThrow();
     expect(git(["show-ref", "--verify", "refs/heads/iteration-stack/wf-smoke/s01"], ctx.cwd)).toBeTruthy();
+  });
+
+  test("a missing gh in a late pass with no layer refs reports an unverified probe, not a refusal", async () => {
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // post-deferred-worktree re-plan keeps the probe live while its probed-ref
+    // set is empty; an unverified probe there holds nothing back, so the note
+    // must not claim a layer-ref refusal that never happened.
+    const { ctx } = await cleanupFixture(true, { origin: true, layer: true, integrationWorktree: true });
+    ctx.effects.spawn = async (request) => {
+      if (request.argv[0] === "gh") {
+        let layerGone = false;
+        try { git(["show-ref", "--verify", "refs/heads/iteration-stack/wf-smoke/s01"], ctx.cwd); } catch { layerGone = true; }
+        if (layerGone) throw Object.assign(new Error("executable not found in $PATH: gh"), { code: "process.not-found", exitCode: 127, executable: "gh" });
+        return { exitCode: 0, signal: null, stdout: "[]", stderr: "" };
+      }
+      return spawnProcess(request);
+    };
+    const result = await definition("worktree.cleanup").execute({ workflow: "wf-smoke", harness: path.join(ctx.cwd, ".mstar"), apply: true }, ctx);
+    expect(result.status, JSON.stringify(result.data)).toBe("ok");
+    const rows = (result.data as { decisions: { reason: string }[] }).decisions;
+    expect(rows.some((row) => row.reason === "cleanup.refuse.open-pr-base")).toBe(false);
+    const probeNotes = (result.data as { probeNotes?: unknown }).probeNotes;
+    expect(Array.isArray(probeNotes)).toBe(true);
+    const notes = (probeNotes as unknown[]).filter((note): note is string => typeof note === "string");
+    expect(notes.some((note) => note.includes("refused"))).toBe(false);
+    expect(notes.join(" || ")).toContain("`gh` was not found on PATH");
   });
 
   test("a cancelled probe aborts the cleanup instead of deciding", async () => {

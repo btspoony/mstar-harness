@@ -457,7 +457,9 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
         const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
         if (invocation.signal.aborted || code === "command.cancelled") throw error;
         if (code === "process.not-found") {
-          probeNotes.push("`gh` was not found on PATH, so the open-PR probe could not run and only the layer refs were refused; install the GitHub CLI or put it on PATH, then rerun `mstar worktree cleanup` for this workflow.");
+          probeNotes.push(layerBranches.length > 0
+            ? "`gh` was not found on PATH, so the open-PR probe could not run and only the layer refs were refused; install the GitHub CLI or put it on PATH, then rerun `mstar worktree cleanup` for this workflow."
+            : "`gh` was not found on PATH, so the open-PR probe could not run in this pass and nothing was held back by it; install the GitHub CLI or put it on PATH, then rerun `mstar worktree cleanup` for this workflow.");
         }
       }
       let verified = false;
