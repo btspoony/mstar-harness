@@ -522,7 +522,9 @@ async function remoteFixture(prefix: string): Promise<{ root: string; bare: stri
       started_at: "2026-09-11",
       updated_at: "2026-09-11",
       branch: { base: mainBranch, integration: "iteration/wf-2", target: mainBranch },
-      plans: [],
+      // The plan row records the main checkout: the completed close's delivery
+      // proof reads the integration tip's ancestry on main from there.
+      plans: [row("plan-a", "Done", { metadata: { worktree_path: worktreeList(root)[0]!.path } })],
     },
     "completed",
   );
@@ -606,10 +608,15 @@ async function probeFixture(
     status: "running",
     started_at: "2026-09-11",
     updated_at: "2026-09-11",
-    // Two DISTINCT base strings resolving to the SAME commit OID: V=1.
-    branch: { base: "refs/heads/integration/wf-3", integration: "integration/wf-3", target: "refs/heads/integration/wf-3" },
+    // Two DISTINCT base strings resolving to the SAME commit OID: V=1. The
+    // iteration's delivery line IS its integration branch, so the recorded
+    // target is that same branch (bare name — deliveryRef supplies the
+    // refs/ prefix): tip === target is a trivially landed chain.
+    branch: { base: "refs/heads/integration/wf-3", integration: "integration/wf-3", target: "integration/wf-3" },
     plans: [
-      planRow("plan-a", { metadata: { working_branch: merged[0], track_branches: extraTracks } }),
+      // plan-a records the main checkout: the completed close's delivery proof
+      // reads the integration/target refs from there.
+      planRow("plan-a", { metadata: { working_branch: merged[0], track_branches: extraTracks, worktree_path: worktreeList(root)[0]!.path } }),
       planRow("plan-b", { metadata: { working_branch: "unmerged-1" } }),
     ],
   }, "completed");
@@ -955,7 +962,10 @@ async function terminalIntegrationFixture(prefix: string): Promise<{ root: strin
     branch: { base: mainBranch, integration: "iteration/wf-9", target: mainBranch },
     integration_worktree_path: intPath,
     plans: [row("plan-a", "Done", { metadata: { working_branch: "feature/done-a", worktree_path: donePath } })],
-  }, "completed");
+    // The integration line never landed on main, so the honest terminal state
+    // is `stopped` — `completed` is exactly what the delivery-merge gate now
+    // refuses, and the unmerged-branch test needs the branch to stay unmerged.
+  }, "stopped");
   return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath, context };
 }
 
