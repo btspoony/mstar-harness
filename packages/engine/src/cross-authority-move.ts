@@ -949,6 +949,9 @@ function carriedIssueImage(issue: Record<string, unknown>, destinationProject: s
  * followed by exactly that one row, and nothing else may differ.
  */
 function carriedDifferences(actual: MoveCopy, frozen: MoveCopy, destinationProject: string): string[] {
+  // why: the frozen copy is the reviewed evidence a move may be adopted from, so comparing its carried
+  // rows as canonical text is the integrity gate itself, not a convenience equality.
+  // hash-gate: authorized — The destination adopts a move only when every carried row still matches the frozen record.
   const same = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
   const differing: string[] = [];
   const actualIssue = carriedIssueImage(actual.issue, destinationProject);
@@ -1852,6 +1855,9 @@ export function moveDocumentOf(value: unknown): IssueMoveDocument {
   const operationId = text("operationId");
   const payloadJson = text("payloadJson");
   const payloadDigest = text("payloadDigest");
+  // invariant: The digest a peer hands over must describe the payload it travels with, or the document
+  // is not the frozen copy this exchange is about.
+  // hash-gate: authorized — A handoff document whose payload no longer hashes to its carried digest was rewritten in transit.
   if (digestOf(payloadJson) !== payloadDigest) {
     throw documentRefusal("carries a payload that does not hash to its recorded digest", { operationId });
   }
@@ -2042,9 +2048,13 @@ export function remoteMoveOperationId(operationId: string, step: string): string
  */
 function documentMismatch(row: IssueMoveRecord, document: IssueMoveDocument): string | null {
   if (document.issueRef !== row.issueRef) return `the handoff carries reference ${document.issueRef}, not ${row.issueRef}`;
+  // why: the handoff must carry the digest frozen with the row it claims to continue.
+  // hash-gate: authorized — The handoff must carry the digest frozen with the row it claims to continue.
   if (document.payloadDigest !== row.payloadDigest) {
     return `the handoff carries digest ${document.payloadDigest}, not ${row.payloadDigest}`;
   }
+  // why: a payload that no longer hashes to the frozen row's digest was rewritten after the freeze.
+  // hash-gate: authorized — A handoff payload that no longer hashes to the frozen row's digest was rewritten after the freeze.
   if (digestOf(document.payloadJson) !== row.payloadDigest) {
     return "the handoff's payload no longer hashes to its recorded digest, so it was rewritten after the freeze";
   }

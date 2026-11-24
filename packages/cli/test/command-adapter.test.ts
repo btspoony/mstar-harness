@@ -306,11 +306,11 @@ describe("generated CLI adapter", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
-    // The offending positional is attributed by argv position and token — the
-    // facts a three-call recovery needs — alongside the command's own usage.
-    // The issue family publishes its shared input surface on every verb, so the
-    // `move` action's `--expect-store <n>` joins `--expect <n>` in this usage
-    // line exactly as it does for the rest of the family.
+    // why: the offending positional is attributed by argv position and token — the facts a
+    // three-call recovery needs — alongside the command's own usage, and the issue family
+    // publishes its shared input surface on every verb, so `move`'s lane and cross-authority
+    // flags join `--expect <n>` here as they do for the rest of the family; `--expect-store`
+    // stays listed although only the non-`--discard` move route requires it.
     expect(details).toMatchObject({
       diagnostics: [{
         path: "argv[4]",
@@ -318,7 +318,7 @@ describe("generated CLI adapter", () => {
         token: "BADPOS",
         code: "commander.excessArguments",
         message: error.message,
-        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --payload <json>",
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --to-authority <repo-key> --discard --input <path> --out <path> --payload <json>",
         helpRoute: "mstar issue show --help",
       }],
     });

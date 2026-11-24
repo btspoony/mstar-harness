@@ -32,8 +32,14 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * (972 → 996 chars), whose collaboration-lane contract grew in 5.0. The fold's
  * own source is unchanged, so the published surface measures 33_957 and this is
  * command-contract text, not a publication-rule change.
+ *
+ * Re-taken for the cross-authority move: `mstar_issue` alone grows 1_788 → 1_878,
+ * because `issue move` publishes four new fields (`toAuthority`, `discard`,
+ * `input`, `out`) for its staged move and the two-checkout exchange. Every other
+ * family is byte-identical, the fold's own source is untouched, and the growth
+ * is the shipped command contract, so the surface measures 34_047.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_957;
+const PUBLISHED_SURFACE_CEILING_CHARS = 34_047;
 
 type PublishedTool = Readonly<{
   name: string;
