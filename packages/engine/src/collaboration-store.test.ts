@@ -9875,6 +9875,180 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
 
+  test("a confirmed repair link of another generation never settles the conflict", async () => {
+    const conflictId = "00000000-0000-4000-8000-0000000009fa";
+    const repairId = "00000000-0000-4000-8000-0000000009fb";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-foreign-generation", conflictId);
+    const db = new DatabaseSync(cache.location.dbPath);
+    try {
+      // note: A structurally valid link: the row exists, is confirmed, points back at the parent
+      // through resolves and its foreign keys resolve - only its generation is another one.
+      db.prepare(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, 'seed-commit', " +
+          "'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}')",
+      ).run(cache.generation + 1, SELECTED_PROJECT.localProjectId);
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "created_at, updated_at, resolves) values (?, ?, ?, 'seed-hash', '{}', 'confirmed', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', ?)",
+      ).run(repairId, cache.generation + 1, SELECTED_PROJECT.localProjectId, conflictId);
+      db.prepare("update remote_outbox set resolved_by = ? where operation_id = ?").run(repairId, conflictId);
+    } finally {
+      db.close();
+    }
+
+    // invariant: The parent is not settled by another generation link: the bind still refuses
+    // and nothing is replaced.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(conflictId);
+    expect(refused.message).toContain("outbox-resolve");
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+  }, 30_000);
+
+  test("a confirmed link without the reverse resolves pointer never settles the conflict", async () => {
+    const conflictId = "00000000-0000-4000-8000-0000000009fc";
+    const repairId = "00000000-0000-4000-8000-0000000009fd";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-missing-backlink", conflictId);
+    const db = new DatabaseSync(cache.location.dbPath);
+    try {
+      // note: Same generation and project, confirmed, but no reverse pointer at the parent: the
+      // id is the only thing that names this conflict, so it is not its repair.
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "created_at, updated_at) values (?, ?, ?, 'seed-hash', '{}', 'confirmed', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(repairId, cache.generation, SELECTED_PROJECT.localProjectId);
+      db.prepare("update remote_outbox set resolved_by = ? where operation_id = ?").run(repairId, conflictId);
+    } finally {
+      db.close();
+    }
+
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(conflictId);
+    expect(refused.message).toContain("outbox-resolve");
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+  }, 30_000);
+
+  test("the recovery open refuses a cache carrying a trigger on a recovery table", async () => {
+    const fixture = remoteFixture("remote-v3-guard-trigger");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    seedRemoteV3Intent(location, "00000000-0000-4000-8000-0000000009fe", "enqueued");
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      // note: A foreign cache may carry a trigger that writes a domain table from an outbox
+      // write; the surface is installed only over bytes that cannot do that.
+      db.exec(
+        "create trigger outbox_mirror after insert on remote_outbox begin " +
+          "update issues set revision = revision; end;",
+      );
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const refused = await refusalOf(() => openRemoteCacheRecovery(context, "read"));
+    expect(refused.code).toBe("collaboration.upgrade-required");
+    expect(refused.message).toContain("outbox_mirror");
+    expect(refused.message).toContain("remote_outbox");
+  }, 30_000);
+
+  test("the recovery guard allows the scalar replace() function and still refuses replace into", async () => {
+    const fixture = remoteFixture("remote-v3-guard-replace");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    seedRemoteV3Intent(location, "00000000-0000-4000-8000-0000000009ff", "enqueued");
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const recovery = await openRemoteCacheRecovery(context, "read");
+    try {
+      // invariant: A legitimate outbox statement calling replace(...) runs; only a replace
+      // statement form is refused.
+      expect(recovery.db.prepare("select replace('a-b', '-', '_') as v from remote_outbox").get()).toMatchObject({
+        v: "a_b",
+      });
+      expect(() => recovery.db.exec("replace into remote_outbox(operation_id) values ('x')")).toThrow(
+        /replace statement form/,
+      );
+    } finally {
+      recovery.close();
+    }
+  }, 30_000);
+
+  test("the unsettled refusal names exact executable commands instead of an age order", async () => {
+    const fixture = remoteFixture("remote-v3-refusal-commands");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.exec(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
+          "'seed-commit', 'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}');" +
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "created_at, updated_at) values " +
+          "('00000000-0000-4000-8000-0000000009e1', 1, 'seed-project', 'seed-hash', '{}', 'conflict', " +
+          "'2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z'), " +
+          "('00000000-0000-4000-8000-0000000009e2', 1, 'seed-project', 'seed-hash', '{}', 'unconfirmed', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z'), " +
+          "('00000000-0000-4000-8000-0000000009e3', 1, 'seed-project', 'seed-hash', '{}', 'enqueued', " +
+          "'2026-11-22T00:00:00.000Z', '2026-11-22T00:00:00.000Z');",
+      );
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    // note: A reconcile is copy-pasteable with its full command prefix.
+    expect(refused.message).toContain("mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->");
+    // note: An enqueued reviewed resolution is dispatched WITH its fork observation input.
+    expect(refused.message).toContain("outbox-dispatch --harness <abs> --operation <uuid> --input <file|->");
+    // note: A resolve only enqueues; dispatch and a confirming receipt follow. While a repair is
+    // live the same verb refuses, so the line points at the show and abandon route instead.
+    expect(refused.message).toContain("outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>");
+    expect(refused.message).toContain("only enqueues the repair");
+    expect(refused.message).toContain("record its confirming receipt");
+    expect(refused.message).toContain("refuses until that repair is withdrawn");
+    // note: An unsent enqueued row and a live repair each name their shortest honest exit.
+    expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <uuid> --reason <text>");
+    expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <repair-uuid> --reason <text>");
+    // note: No age-order promise: every listed state must be settled, and a blocked dispatch
+    // names the intent that blocks it.
+    expect(refused.message).not.toContain("oldest operation first");
+    expect(refused.message).toContain("Settle every state");
+    expect(refused.message).toContain("blocked dispatch names the intent");
+  }, 30_000);
+
   test("the recovery surface guard is fail closed over its allowlist", async () => {
     const fixture = remoteFixture("remote-v3-guard-closed");
     const commit = fixture.publish(fixture.payload());

@@ -1856,18 +1856,35 @@ async function continueExisting(location: CollaborationLocation, timeout: number
  * leaves the parent unsettled: a withdrawn review (the linked repair abandoned) blocks the
  * replacement again until a new reviewed resolution is prepared and confirmed.
  */
-function conflictRepairSettled(db: StoreDb, row: { state: string; resolved_by: unknown }): boolean {
+function conflictRepairSettled(
+  db: StoreDb,
+  row: { operation_id: string; generation: unknown; project_key: unknown; state: string; resolved_by: unknown },
+): boolean {
   if (row.state !== "conflict") return false;
+  const generation = row.generation;
+  const projectKey = row.project_key;
+  let parentId = row.operation_id;
   let cursor = typeof row.resolved_by === "string" ? row.resolved_by : null;
   const visited = new Set<string>();
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
     const linked = db
-      .prepare("select state, resolved_by from remote_outbox where operation_id = ?")
-      .get(cursor) as { state?: unknown; resolved_by?: unknown } | undefined;
+      .prepare("select generation, project_key, state, resolved_by, resolves from remote_outbox where operation_id = ?")
+      .get(cursor) as
+      | { generation?: unknown; project_key?: unknown; state?: unknown; resolved_by?: unknown; resolves?: unknown }
+      | undefined;
     if (linked === undefined || typeof linked.state !== "string") return false;
+    // invariant: An operation id alone is not a link. The hop is this conflict's repair only when
+    // the linked row is the same generation and project_key and carries the reverse
+    // `resolves` pointer at its parent; a row of another generation or project, or one without
+    // that back-pointer (a valid-shaped but wrong link in foreign or damaged cache bytes), leaves
+    // the parent unsettled. The visited set still ends a cycle.
+    if (linked.generation !== generation || linked.project_key !== projectKey || linked.resolves !== parentId) {
+      return false;
+    }
     if (linked.state === "confirmed") return true;
     if (linked.state !== "conflict") return false;
+    parentId = cursor;
     cursor = typeof linked.resolved_by === "string" ? linked.resolved_by : null;
   }
   return false;
@@ -1881,7 +1898,14 @@ async function replaceDerivedLaneBelow(
 ): Promise<RetainedLaneIdentity | undefined> {
   const dbPath = location.dbPath;
   const db = await connectAt(dbPath, "read", timeout);
-  type OutboxRow = { operation_id: string; state: string; created_at: string; resolved_by: unknown };
+  type OutboxRow = {
+    operation_id: string;
+    generation: unknown;
+    project_key: unknown;
+    state: string;
+    created_at: string;
+    resolved_by: unknown;
+  };
   let recorded: { version: number; meta: CollaborationMeta; unsettled: OutboxRow[] };
   try {
     // invariant: The outbox guard reads the SAME connection as the version probe, so the check is
@@ -1894,7 +1918,7 @@ async function replaceDerivedLaneBelow(
         ? []
         : (db
             .prepare(
-              "select operation_id, state, created_at, resolved_by from remote_outbox " +
+              "select operation_id, generation, project_key, state, created_at, resolved_by from remote_outbox " +
                 "where state not in ('confirmed','abandoned') order by created_at, operation_id",
             )
             .all() as OutboxRow[]).filter((row) => !conflictRepairSettled(db, row));
@@ -1926,17 +1950,30 @@ async function replaceDerivedLaneBelow(
     // note: The refusal names EVERY distinct unsettled state present, one line each, so a later
     // `unconfirmed` or `conflict` row behind the oldest `enqueued` one is never invisible:
     // `outbox-pending` lists only `enqueued` rows and `outbox-show` needs an operation id. Each
-    // line names that state's oldest operation id and the first step executable for THAT state.
+    // line names that state's oldest operation id and the commands that actually move THAT state:
+    // a dispatch issues only a permit, a resolve only enqueues a repair, and a receipt records
+    // evidence, so none of them is called settling on its own.
+    const cli = (verb: string): string => `mstar store collaboration remote ${verb}`;
     const firstStep = (state: string): string =>
       state === "enqueued"
-        ? "list it with \`mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>\`, " +
-          "then settle it through \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>\`"
+        ? "list it with `" + cli("outbox-pending") + " --harness <abs> --project <local-project-id>`, then dispatch an " +
+          "ordinary intent with `" + cli("outbox-dispatch") + " --harness <abs> --operation <uuid>`; a reviewed resolution " +
+          "needs its host fork observation through --input, so dispatch it as `" + cli("outbox-dispatch") +
+          " --harness <abs> --operation <uuid> --input <file|->`. A dispatch issues only a send permit: record what the " +
+          "send observed with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->`, and a row proven unsent " +
+          "can instead be abandoned with `" + cli("outbox-abandon") + " --harness <abs> --operation <uuid> --reason <text>`"
         : state === "unconfirmed"
-          ? "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, then settle it " +
-            "with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\` or " +
-            "\`outbox-reconcile --harness <abs> --input <file|->\`"
-          : "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, then settle it " +
-            "with \`mstar store collaboration remote outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>\`";
+          ? "read it with `" + cli("outbox-show") + " --harness <abs> --operation <uuid>`, then record that attempt's " +
+            "evidence with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->` or `" + cli("outbox-reconcile") +
+            " --harness <abs> --input <file|->`"
+          : "read it with `" + cli("outbox-show") + " --harness <abs> --operation <uuid>`. If it already carries a " +
+            "repair, `" + cli("outbox-resolve") + "` refuses until that repair is withdrawn: follow its resolved_by " +
+            "operation id with `" + cli("outbox-show") + " --harness <abs> --operation <repair-uuid>`, and withdraw that " +
+            "repair with `" + cli("outbox-abandon") + " --harness <abs> --operation <repair-uuid> --reason <text>` before " +
+            "preparing another. With no live repair, prepare one with `" + cli("outbox-resolve") +
+            " --harness <abs> --operation <conflicted-uuid> --input <file>` - a resolve only enqueues the repair - then " +
+            "dispatch it with `" + cli("outbox-dispatch") + " --harness <abs> --operation <new-uuid> --input <file|->` and " +
+            "record its confirming receipt with `" + cli("outbox-receipt") + " --harness <abs> --input <file|->`";
     const lines: string[] = [];
     const named = new Set<string>();
     for (const row of recorded.unsettled) {
@@ -1949,7 +1986,9 @@ async function replaceDerivedLaneBelow(
       "remote.effect-pending",
       `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); such an
         intent may already have taken effect at the provider, so the cache is not replaced. Settle every state
-        below, oldest operation first, then rerun the same bind:
+        listed below, then rerun the same bind. The lines are in row-age order, which is not a dispatch order: a
+        newer unconfirmed or conflict intent blocks an older dispatch, and a blocked dispatch names the intent
+        that blocks it:
         ${lines.join("\n        ")}
         Nothing was replaced.`,
       { oldestOperationId: oldest.operation_id, unsettledCount: recorded.unsettled.length },
@@ -4027,9 +4066,15 @@ async function openRemoteCacheAdmission(
     handle.close();
     throw error;
   }
-  return recovery
-    ? { db: recoverySurfaceDb(handle.db), authority: handle.authority, close: handle.close }
-    : handle;
+  if (!recovery) return handle;
+  // invariant: The surface is installed only after its isolation is proven on these exact bytes.
+  try {
+    assertRecoverySurfaceIsolated(handle.db);
+  } catch (error) {
+    handle.close();
+    throw error;
+  }
+  return { db: recoverySurfaceDb(handle.db), authority: handle.authority, close: handle.close };
 }
 
 /**
@@ -4052,13 +4097,15 @@ function recoverySurfaceRefusal(reason: string): StoreError {
 /**
  * note: The recovery surface guard is FAIL CLOSED, statement by statement, against the
  * lower-cased text: (1) any statement form that could escape the surface (pragma, attach,
- * detach, vacuum, create, drop, alter, replace, temp tables) is refused; (2) any statement
- * naming none of the allowlisted surface tables is refused, so an unparseable or unclassifiable
- * statement never runs; and (3) any statement naming a domain table, in ANY casing, is refused.
- * Table identity is SQLite's own; this text guard is the belt over that allowlist, never a
- * substitute for it.
+ * detach, vacuum, create, drop, alter, temp tables) is refused, and so is a REPLACE statement -
+ * anchored at a statement start, so the scalar replace(...) function remains usable inside an
+ * outbox statement; (2) any statement naming none of the allowlisted surface tables is refused,
+ * so an unparseable or unclassifiable statement never runs; and (3) any statement naming a domain
+ * table, in ANY casing, is refused. Table identity is SQLite's own; this text guard is the belt
+ * over that allowlist, never a substitute for it.
  */
-const RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|replace|temp)\b/;
+const RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|temp)\b/;
+const RECOVERY_FORBIDDEN_REPLACE = /(?:^|;)\s*replace\s+into\b/;
 
 function recoverySurfaceGuard(sql: string): void {
   const text = sql.toLowerCase();
@@ -4067,10 +4114,45 @@ function recoverySurfaceGuard(sql: string): void {
     if (REMOTE_CACHE_RECOVERY_TABLES.has(table)) continue;
     if (new RegExp(`\\b${table}\\b`).test(text)) throw recoverySurfaceRefusal(`the domain table "${table}"`);
   }
+  if (RECOVERY_FORBIDDEN_REPLACE.test(text)) throw recoverySurfaceRefusal("a replace statement form");
   const forbidden = RECOVERY_FORBIDDEN_FORM.exec(text);
   if (forbidden !== null) throw recoverySurfaceRefusal(`a ${forbidden[1]} statement form`);
   if (![...REMOTE_CACHE_RECOVERY_TABLES].some((table) => new RegExp(`\\b${table}\\b`).test(text))) {
     throw recoverySurfaceRefusal("a statement over no recovery-surface table");
+  }
+}
+
+/**
+ * invariant: The recovery surface is installed only over cache bytes whose own database objects
+ * cannot reach a table it does not serve. The cache is derived state and may be foreign, so the
+ * check runs on sqlite_master, not on the text of whatever statement a caller later writes: a
+ * trigger on a recovery table is refused (it could write a domain table from an outbox write),
+ * and so is a view that names a table outside the recovery allowlist, or a trigger that touches
+ * the surface and names one. Triggers that only read domain tables stay legal: the surface never
+ * writes those tables, so they never fire.
+ */
+function assertRecoverySurfaceIsolated(db: StoreDb): void {
+  const tables: string[] = [];
+  for (const row of db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>) {
+    if (typeof row.name === "string" && !row.name.startsWith("sqlite_")) tables.push(row.name.toLowerCase());
+  }
+  const outside = tables.filter((table) => !REMOTE_CACHE_RECOVERY_TABLES.has(table));
+  const objects = db
+    .prepare("select type, name, tbl_name, sql from sqlite_master where type in ('trigger','view')")
+    .all() as Array<{ type?: unknown; name?: unknown; tbl_name?: unknown; sql?: unknown }>;
+  for (const row of objects) {
+    const type = typeof row.type === "string" ? row.type : "";
+    const name = typeof row.name === "string" ? row.name : "";
+    const table = typeof row.tbl_name === "string" ? row.tbl_name.toLowerCase() : "";
+    const body = (typeof row.sql === "string" ? row.sql : "").toLowerCase();
+    if (type === "trigger" && REMOTE_CACHE_RECOVERY_TABLES.has(table)) {
+      throw recoverySurfaceRefusal(`the trigger "${name}" on the recovery table "${table}"`);
+    }
+    if (type === "trigger" && ![...REMOTE_CACHE_RECOVERY_TABLES].some((t) => new RegExp(`\\b${t}\\b`).test(body))) {
+      continue;
+    }
+    const reached = outside.find((t) => new RegExp(`\\b${t}\\b`).test(body));
+    if (reached !== undefined) throw recoverySurfaceRefusal(`the ${type} "${name}" reaching the table "${reached}"`);
   }
 }
 
