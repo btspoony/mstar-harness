@@ -218,6 +218,14 @@ export {
 // forward-only. The orchestration (stage/verify/switch/publish/discard) is not part of this surface.
 export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
 export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
+// note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
+// `local`/`remote` boundary.
+export type {
+  ExchangeReceipt,
+  IssueMoveDocument,
+  IssueMoveDocumentPhase,
+  ObservedMoveSubject,
+} from "./cross-authority-move.js";
 export {
   advanceIssueMove,
   assertMoveTransition,
@@ -225,11 +233,19 @@ export {
   assertRecordWritable,
   BLOCKING_MOVE_PHASES,
   blockingMoveFor,
+  blockingMoveForRef,
   discardMove,
   frozenMoveRefusal,
+  exchangeLocalDestination,
+  exchangeLocalToRemote,
+  moveAcrossByDocument,
+  exchangeRemoteDestination,
+  exchangeRemoteSource,
   isForwardMoveTransition,
   moveAcrossAuthorities,
+  moveDocumentOf,
   publishMove,
+  remoteMoveOperationId,
   readIssueMove,
   recordIssueMove,
   stageMove,

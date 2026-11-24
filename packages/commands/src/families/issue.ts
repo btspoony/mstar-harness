@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   appendOccurrence,
@@ -8,6 +8,8 @@ import {
   closeIssue,
   discardMove,
   getIssue,
+  moveAcrossByDocument,
+  moveDocumentOf,
   showIssue,
   ISSUE_ACTION_NAMES,
   ISSUE_ACTIONS,
@@ -23,6 +25,7 @@ import {
   type CaptureInput,
   type ClosureEvidence,
   type IssueActionSpec,
+  type ExchangeReceipt,
   type IssueFilter,
   type IssueLink,
   type IssueMove,
@@ -60,6 +63,10 @@ const inputSchema = z.object({
   expectStore: z.number().int().nonnegative().optional(),
   toAuthority: z.string().optional(),
   discard: z.boolean().optional(),
+  /** note: The peer checkout's move document, or `-` for stdin: the two-checkout exchange's handoff. */
+  input: z.string().optional(),
+  /** note: Where this side writes the document the other checkout needs next. */
+  out: z.string().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -184,6 +191,73 @@ function issueFilter(input: IssueInput): IssueFilter {
   };
 }
 /**
+ * note: One exchange document for the two-checkout move: an absolute path, or `-` for stdin. An
+ * unreadable path or a body that is not a JSON object refuses before any store work, exactly as the
+ * outbox lane's own document reader does.
+ */
+async function readMoveDocument(invocation: InvocationContext, value: string, flag: string): Promise<unknown> {
+  let raw: string;
+  if (value === "-") raw = await invocation.effects.readInput();
+  else if (!path.isAbsolute(value)) {
+    const error = new Error(`${flag} must be an absolute path or -`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  } else {
+    try {
+      raw = readFileSync(value, "utf8");
+    } catch (error) {
+      const failure = new Error(`${flag} ${value} cannot be read: ${error instanceof Error ? error.message : String(error)}`) as Error & { code: string; paths: string[] };
+      failure.code = "issue.invalid-payload";
+      failure.paths = [flag.replace(/^--/, "")];
+      throw failure;
+    }
+  }
+  if (raw.trim() === "") {
+    const error = new Error(`${flag} received no content; pass a move document`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    const error = new Error(`${flag} is not valid JSON`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  }
+}
+
+/**
+ * invariant: The handoff is written create-only, and a failure to write it never rewrites the
+ * operation's outcome: the move already committed, so the receipt discloses the reporting failure
+ * instead of reporting the move as failed.
+ */
+function publishMoveDocument(
+  out: string,
+  document: unknown,
+): { out: string | null; documentError: { code: string; message: string } | null } {
+  const target = path.resolve(out);
+  try {
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    return { out: target, documentError: null };
+  } catch (error) {
+    return {
+      out: null,
+      documentError: {
+        code: "issue.move-document-not-written",
+        message:
+          (error as { code?: unknown })?.code === "EEXIST"
+            ? `A file already exists at ${target}; a handoff is create-only and never overwrites an existing document. The move itself completed as reported.`
+            : `The handoff could not be written at ${target} (${error instanceof Error ? error.message : String(error)}). The move itself completed as reported.`,
+      },
+    };
+  }
+}
+
+/**
  * note: A move combination neither route admits, refused by code with the route that does. It names the
  * flags rather than the engine's internals, so an operator corrects the request instead of the store.
  */
@@ -254,6 +328,35 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       }
       const toAuthority = input.toAuthority.trim();
       if (toAuthority === "") throw unsupportedMove("--to-authority", `mstar issue move --id ${addressed} --to-authority <repo-key>`);
+      // invariant: `--input`/`--out` select the two-checkout exchange. A checkout writes only the lane
+      // its own mode selects, so a move across a mode boundary is two halves that hand each other
+      // documents; the same command resumes from whatever phase its own ledger row holds.
+      if (input.input !== undefined || input.out !== undefined) {
+        const write = mutation(input);
+        assertIssueWriteSeat(write.actor);
+        const handoff = input.input === undefined ? null : moveDocumentOf(await readMoveDocument(invocation, input.input, "--input"));
+        const receipt: ExchangeReceipt = await moveAcrossByDocument(context, {
+          operationId: write.operationId,
+          actor: write.actor,
+          sourceIssueId: addressed,
+          destinationAuthority: toAuthority,
+          destinationProject: payload.projectId,
+          reason: payload.reason,
+          ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
+          expectedStoreRevision: expectStore,
+        }, handoff);
+        const published = input.out === undefined || receipt.document === null
+          ? { out: null, documentError: null }
+          : publishMoveDocument(input.out, receipt.document);
+        // invariant: `operationId` stays the caller's move id, so the provider intent a step froze is
+        // reported beside it: it is the operation `outbox-dispatch`/`outbox-receipt` address.
+        return ok(id, {
+          ...receipt,
+          out: published.out,
+          ...(published.documentError === null ? {} : { documentError: published.documentError }),
+          operationId: write.operationId,
+        });
+      }
       if (input.discard === true) {
         // invariant: Discard unfreezes a record, so it is an issue write: the same capture seat that
         // authorizes the move authorizes abandoning it, checked before the store is touched.
@@ -367,7 +470,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", expectStore: "--expect-store <n>", payload: "--payload <json>",
-    toAuthority: "--to-authority <repo-key>", discard: "--discard",
+    toAuthority: "--to-authority <repo-key>", discard: "--discard", input: "--input <path>", out: "--out <path>",
   };
   const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
@@ -376,8 +479,13 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const commandInput = z.object({
     ...inputSchema.shape,
     id: requiresIssueId ? z.string().min(1) : z.string().optional(),
+    // invariant: `--expect` is the record's revision CAS on every route that reads a local record. The
+    // two-checkout exchange's destination half addresses a record it does not hold, so it carries no
+    // revision to compare: only there is the flag optional, and the requirement below states when.
     expect: expectedRevisionVerbs[verb] === true
-      ? z.number().int().nonnegative()
+      ? verb === "move"
+        ? z.number().int().nonnegative().optional()
+        : z.number().int().nonnegative()
       : z.number().int().nonnegative().optional(),
     expectStore: verb === "move"
       ? z.number().int().nonnegative()
@@ -388,7 +496,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "actor" || (key === "id" && requiresIssueId))) ||
       (verb === "show" && key === "id") ||
-      (expectedRevisionVerbs[verb] === true && key === "expect") ||
+      (expectedRevisionVerbs[verb] === true && key === "expect" && verb !== "move") ||
       (verb === "move" && key === "expectStore"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
@@ -403,6 +511,12 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     ...(verb === "move" && key === "discard"
       ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched." }
       : {}),
+    ...(verb === "move" && key === "input"
+      ? { help: "The peer checkout's move document (absolute path, or - for stdin) for the two-checkout exchange; its shape publishes as payloadSchemas.inputDocument." }
+      : {}),
+    ...(verb === "move" && key === "out"
+      ? { help: "Absolute path where this side writes the handoff document the other checkout needs next; create-only." }
+      : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));
   const isMutation = payloadType[verb] !== undefined;
@@ -414,7 +528,13 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         { name: "payload", ownership: "caller" as const, route, required: true, condition: { field: "file", present: false }, constraint: `payload shape: mstar schema ${payloadType[verb]}` },
         { name: "file", ownership: "caller" as const, route, required: true, condition: { field: "payload", present: false }, constraint: "absolute JSON file alternative to payload" },
         ...(expectedRevisionVerbs[verb] === true
-          ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write" }]
+          ? [{
+              name: "expect", ownership: "caller" as const, route, tokenKind: "revision" as const,
+              // invariant: `issue move`'s destination half addresses a record another authority holds, so it
+              // has no revision to compare; every other route reads the record it writes and requires it.
+              ...(verb === "move" ? { required: true, condition: { field: "input", present: false } } : { required: true }),
+              constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write",
+            }]
           : []),
         ...(verb === "move"
           ? [{ name: "expectStore", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write" }]

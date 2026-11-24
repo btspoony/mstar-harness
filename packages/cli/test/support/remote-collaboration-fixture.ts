@@ -15,7 +15,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { remoteEventHead, type RemoteEvent } from "@mstar-harness/engine";
@@ -109,6 +109,10 @@ export type RemoteSandbox = Readonly<{
   runJson(args: readonly string[]): SandboxCommand;
   /** note: Write one host document under THIS sandbox's own directory. */
   writeJson(name: string, value: unknown): string;
+  /** note: A fresh absolute path under this sandbox for a handoff document the CLI writes with `--out`. */
+  outPath(name: string): string;
+  /** note: The handoff document this sandbox wrote, parsed; a missing file is the assertion's own failure. */
+  readOut(path: string): Record<string, unknown>;
   status(): SandboxCommand;
   bind(check: ScopeCheckDocument): SandboxCommand;
   init(): SandboxCommand;
@@ -291,6 +295,9 @@ export class RemoteCollaborationFixture {
   private readonly origin: string;
   private readonly bare: string;
   private readonly publisher: string;
+  private readonly localBare: string;
+  private readonly localPublisher: string;
+  private localSequence = 0;
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
   /** note: The provider records a lookup can observe; `send` appends and `withheld` holds the rest. */
@@ -314,16 +321,33 @@ export class RemoteCollaborationFixture {
 
   /** note: `repoKey` is derived from the synthetic canonical HTTPS origin. */
   readonly repoKey: string;
+  /** note: The SECOND origin's key: the `local` lane a two-checkout move addresses as its destination. */
+  readonly localRepoKey: string;
 
   constructor(name: string) {
     this.root = realpathSync(mkdtempSync(join(tmpdir(), `mstar-${name}-`)));
     const slug = `${name}-${String(Date.now())}-${String(Math.floor(Math.random() * 1e6))}`;
     this.repoKey = `github.com/remote-collab/${slug}`;
+    this.localRepoKey = `github.com/local-collab/${slug}`;
     this.origin = `https://${this.repoKey}.git`;
     this.bare = join(this.root, "origin.git");
     this.publisher = join(this.root, "publisher");
     mkdirSync(this.bare, { recursive: true });
     fixtureGit(this.root, ["init", "-q", "--bare", this.bare]);
+    // note: The SECOND origin. A `remote` checkout cannot write a `local` lane, so the two-checkout
+    // move's other half runs in a clone of this origin, whose `.mstarc` declares local mode.
+    this.localBare = join(this.root, "local-origin.git");
+    this.localPublisher = join(this.root, "local-publisher");
+    mkdirSync(this.localBare, { recursive: true });
+    fixtureGit(this.root, ["init", "-q", "--bare", this.localBare]);
+    mkdirSync(this.localPublisher, { recursive: true });
+    fixtureGit(this.localPublisher, ["init", "-q", "-b", TRACKED_BRANCH]);
+    fixtureGit(this.localPublisher, ["config", "user.name", "Local Selector"]);
+    fixtureGit(this.localPublisher, ["config", "user.email", "local@example.test"]);
+    writeFileSync(join(this.localPublisher, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${this.localRepoKey}\n`);
+    fixtureGit(this.localPublisher, ["add", ".mstarc"]);
+    fixtureGit(this.localPublisher, ["commit", "-q", "-m", "declare local collaboration"]);
+    fixtureGit(this.localPublisher, ["push", "-q", this.localBare, `HEAD:refs/heads/${TRACKED_BRANCH}`]);
     mkdirSync(this.publisher, { recursive: true });
     fixtureGit(this.publisher, ["init", "-q", "-b", TRACKED_BRANCH]);
     fixtureGit(this.publisher, ["config", "user.name", "Remote Selector"]);
@@ -341,7 +365,20 @@ export class RemoteCollaborationFixture {
 
   /** note: One fresh clone of the tracked branch, with its own workspace, `HOME` and host inputs. */
   sandbox(name: string): RemoteSandbox {
-    const dir = join(this.root, `sandbox-${name}-${String(this.sandboxSequence++)}`);
+    return this.checkout(name, "remote", this.bare, this.origin);
+  }
+
+  /**
+   * note: One fresh clone of the SECOND origin, whose `.mstarc` declares `local` mode. It is the
+   * destination half of a local-to-remote move and the destination half of a remote-to-local one:
+   * the checkout whose lane the record lands in.
+   */
+  localSandbox(name: string): RemoteSandbox {
+    return this.checkout(name, "local", this.localBare, `https://${this.localRepoKey}.git`);
+  }
+
+  private checkout(name: string, lane: "remote" | "local", bare: string, origin: string): RemoteSandbox {
+    const dir = join(this.root, `sandbox-${lane}-${name}-${String(this.sandboxSequence++)}`);
     const repo = join(dir, "repo");
     const home = join(dir, "home");
     mkdirSync(dir, { recursive: true });
@@ -356,8 +393,8 @@ export class RemoteCollaborationFixture {
       "--branch",
       TRACKED_BRANCH,
       "-c",
-      `url.${this.bare}.insteadOf=${this.origin}`,
-      this.origin,
+      `url.${bare}.insteadOf=${origin}`,
+      origin,
       repo,
     ], home);
     fixtureGit(repo, ["config", "user.name", `Sandbox ${name}`], home);
@@ -393,6 +430,8 @@ export class RemoteCollaborationFixture {
       run,
       runJson,
       writeJson,
+      outPath: (outName) => join(hosts, `${String(hostSequence++)}-${outName}.json`),
+      readOut: (outPath) => JSON.parse(readFileSync(outPath, "utf8")) as Record<string, unknown>,
       status: () => runJson([...remote, "status", "--harness", harness]),
       bind: (check) =>
         runJson([

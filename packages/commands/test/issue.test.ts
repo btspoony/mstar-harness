@@ -941,12 +941,32 @@ describe("issue command family", () => {
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
     }
     for (const verb of ["triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"]) {
+      // invariant: `issue move`'s destination half of the two-checkout exchange addresses a record
+      // another authority holds, so its revision CAS is required only when no handoff is supplied;
+      // every other route reads the record it writes and requires it unconditionally.
+      const conditional = verb === "move"
+        ? { condition: { field: "input", present: false } }
+        : {};
       expect(definition(`issue.${verb}`).requirements).toContainEqual(
-        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
+        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show"), ...conditional }),
       );
       const missingCas = definition(`issue.${verb}`).input.safeParse({
         id: "I-000001", actor: "project-manager", payload: {},
       });
+      if (verb === "move") {
+        // note: the move verb's own admission requires the CAS unless a handoff names the record.
+        const conditionalRequired = definition(`issue.${verb}`).requirements.filter(
+          (entry) => entry.required === true && entry.condition !== undefined,
+        );
+        expect(conditionalRequired).toContainEqual(
+          expect.objectContaining({ name: "expect", condition: { field: "input", present: false } }),
+        );
+        // note: `--expect-store` stays required on this verb, so the CAS-free shape is proved with it.
+        expect(definition(`issue.${verb}`).input.safeParse({
+          id: "I-000001", actor: "project-manager", expectStore: 0, payload: {},
+        }).success).toBe(true);
+        continue;
+      }
       expect(missingCas.success).toBe(false);
     }
   });

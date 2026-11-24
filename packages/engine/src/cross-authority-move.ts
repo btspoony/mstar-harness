@@ -14,13 +14,21 @@
  * its verdict first, then the destination step follows from the persisted row, so a crash between
  * the two is resumed by reissuing the same command rather than by a kept handle.
  */
-import { createHash } from "node:crypto";
-import { collaborationLocationOfRepoKey, type CollaborationLocation } from "./collaboration-identity.js";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
+  collaborationLocationOfRepoKey,
+  resolveCollaborationLocation,
+  type CollaborationLocation,
+} from "./collaboration-identity.js";
+import {
+  ISSUE_REF_PATTERN,
   openCollaborationStore,
+  openRemoteCache,
   readCollaborationAuthority,
   readCollaborationStage,
   withCollaborationWrite,
+  withRemoteCacheWrite,
   writeCollaborationStage,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
@@ -208,6 +216,25 @@ export function assertRecordWritable(db: StoreDb, sourceIssueId: string): void {
       `the record a member. Nothing was modified.`,
     { issue_id: sourceIssueId, operation_id: blocked.operationId, phase: blocked.phase },
   );
+}
+
+/**
+ * note: The same fence addressed the way a remote lane can: by the record's stable reference. A
+ * `remote` source has no `issues` row, so its ledger row is the only place its display id would be,
+ * and there is none; the reference is what both sides of a two-checkout move address.
+ */
+export function blockingMoveForRef(
+  db: StoreDb,
+  issueRef: string,
+): Readonly<{ operationId: string; phase: IssueMovePhase }> | null {
+  const row = db
+    .prepare(
+      "select operation_id, phase from issue_moves where role = 'source' and issue_ref = ? " +
+        "and phase in ('staged','verified','switched')",
+    )
+    .get(issueRef) as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  return { operationId: moveText(row.operation_id, "operation_id"), phase: phaseOf(row.phase) };
 }
 
 /** note: Record one side's first row. A duplicate `(operation_id, role)` is the caller's replay. */
@@ -593,6 +620,10 @@ function advanceRowTo(db: StoreDb, operationId: string, role: IssueMoveRole, tar
  * the target phase, so a replay after an apply-then-finalize crash replays that receipt instead of
  * repeating the effect. A transition whose reservation is already `confirmed` is not reserved again:
  * the recorded effect is the answer. The destination step is the caller's and runs AFTER this commit.
+ *
+ * note: The two-checkout exchange does not run through this frame. Its remote half is a provider
+ * event whose confirmation belongs to the host, so there the ledger row and the frozen intent's own
+ * operation id are the idempotency records (see `stageRemoteAuthority` and `tombstoneRemoteAuthority`).
  */
 async function runMoveTransition(
   context: StoreContext,
@@ -737,7 +768,9 @@ function moveResumeCommand(db: StoreDb, row: IssueMoveRecord): string {
  */
 function assertBoundRequest(db: StoreDb, row: IssueMoveRecord, request: MoveRequest): void {
   const recorded = {
-    sourceIssueId: row.sourceIssueId,
+    // note: A remote source has no display id, so its record is addressed by the reference it keeps;
+    // the binding compares the address the operator must pass either way.
+    sourceIssueId: row.sourceIssueId ?? row.issueRef,
     destinationAuthority: row.destinationAuthority,
     destinationProject: row.destinationProject,
     actor: row.actor,
@@ -1436,44 +1469,53 @@ export async function publishMove(context: StoreContext, request: MoveRequest): 
     if (row === null) throw corruptMove(`move ${request.operationId} lost its source row before publication`);
     if (row.phase === "published") return;
     advanceIssueMove(db, { operationId: request.operationId, role: "source", from: row.phase, to: "published" });
-    const issueId = row.sourceIssueId;
-    if (issueId === null) throw corruptMove(`move ${request.operationId} recorded no source display id`);
-    // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
-    // record's stable reference, which is the unresolved shape both local readers already render.
-    const rewritten = db.prepare("update relations set to_issue = null, to_ref = ? where to_issue = ?").run(row.issueRef, issueId) as {
-      changes?: number;
-    };
-    const rewrittenCount = Number(rewritten?.changes ?? 0);
-    if (rewrittenCount !== counts.relationsLeftBehind) {
-      throw new StoreError(
-        "collaboration.operation-partial",
-        `Move ${request.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
-          `this publication rewrote ${String(rewrittenCount)}: a relation changed while the move was in flight. The publication ` +
-          `rolled back and the record is unchanged.`,
-        {
-          operation_id: request.operationId,
-          issue_id: issueId,
-          expected: counts.relationsLeftBehind,
-          rewritten: rewrittenCount,
-          recovery:
-            "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
-        },
-      );
-    }
-    db.prepare("delete from relations where from_issue = ?").run(issueId);
-    const removedSyncRows = countOf(db, "select count(*) as n from issue_sync_state where local_id = ?", issueId);
-    db.prepare("delete from issue_sync_state where local_id = ?").run(issueId);
-    db.prepare("delete from occurrences where issue_id = ?").run(issueId);
-    db.prepare("delete from issue_transitions where issue_id = ?").run(issueId);
-    db.prepare("delete from provenance where issue_id = ?").run(issueId);
-    db.prepare("delete from issue_project_moves where issue_id = ?").run(issueId);
-    db.prepare("delete from issues where id = ?").run(issueId);
-    db.prepare("update issue_moves set removed_sync_rows = ?, updated_at = ? where operation_id = ? and role = 'source'").run(
-      removedSyncRows,
-      nowRfc3339(),
-      request.operationId,
-    );
+    removeSourceRecord(db, row, counts);
   });
+}
+
+/**
+ * invariant: The one destructive body: the record's incoming edges become `to_ref` edges, then its
+ * children and the record are deleted. The rewritten count is verified against the staged count, so
+ * a relation that landed mid-flight rolls the whole publication back. Shared by the one-checkout
+ * publication and the two-checkout exchange, which differ only in how they proved the destination.
+ */
+function removeSourceRecord(db: StoreDb, row: IssueMoveRecord, counts: MoveCounts): void {
+  const issueId = row.sourceIssueId;
+  // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
+  // record's stable reference, which is the unresolved shape both local readers already render.
+  const rewritten = db.prepare("update relations set to_issue = null, to_ref = ? where to_issue = ?").run(row.issueRef, issueId) as {
+    changes?: number;
+  };
+  const rewrittenCount = Number(rewritten?.changes ?? 0);
+  if (rewrittenCount !== counts.relationsLeftBehind) {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `Move ${row.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
+        `this publication rewrote ${String(rewrittenCount)}: a relation changed while the move was in flight. The publication ` +
+        `rolled back and the record is unchanged.`,
+      {
+        operation_id: row.operationId,
+        issue_id: issueId,
+        expected: counts.relationsLeftBehind,
+        rewritten: rewrittenCount,
+        recovery:
+          "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
+      },
+    );
+  }
+  db.prepare("delete from relations where from_issue = ?").run(issueId);
+  const removedSyncRows = countOf(db, "select count(*) as n from issue_sync_state where local_id = ?", issueId);
+  db.prepare("delete from issue_sync_state where local_id = ?").run(issueId);
+  db.prepare("delete from occurrences where issue_id = ?").run(issueId);
+  db.prepare("delete from issue_transitions where issue_id = ?").run(issueId);
+  db.prepare("delete from provenance where issue_id = ?").run(issueId);
+  db.prepare("delete from issue_project_moves where issue_id = ?").run(issueId);
+  db.prepare("delete from issues where id = ?").run(issueId);
+  db.prepare("update issue_moves set removed_sync_rows = ?, updated_at = ? where operation_id = ? and role = 'source'").run(
+    removedSyncRows,
+    nowRfc3339(),
+    row.operationId,
+  );
 }
 
 /**
@@ -1666,4 +1708,1060 @@ export function assertPresented(db: StoreDb, issueId: string): void {
         `Reissue \`${moveResumeCommand(db, row)}\` to publish the move, then read the record from ${row.destinationAuthority}.`,
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// note: The two-checkout exchange (T2). A checkout writes only the lane its own mode selects, so a
+// record crossing a `local`/`remote` boundary is two halves that exchange documents. Every step is
+// derived from the ledger row the acting side writes, never from a kept handle, so the same command
+// completes a move interrupted at any boundary.
+// ---------------------------------------------------------------------------
+
+/** note: The document phases, and the side that EMITS each one. */
+const DOCUMENT_PHASE = {
+  request: "source",
+  staged: "destination",
+  switch: "source",
+  admission: "destination",
+} as const;
+
+export type IssueMoveDocumentPhase = keyof typeof DOCUMENT_PHASE;
+
+/**
+ * invariant: The exchange document is a pure function of the ledger row that emitted it, so a
+ * reissued command re-derives it instead of remembering it. It carries the frozen copy with its
+ * digest and counts: the receiving checkout verifies against the bytes this one froze rather than
+ * trusting a file it was handed.
+ */
+export type IssueMoveDocument = Readonly<{
+  version: 1;
+  phase: IssueMoveDocumentPhase;
+  operationId: string;
+  issueRef: string;
+  sourceAuthority: string;
+  destinationAuthority: string;
+  destinationProject: string;
+  actor: string;
+  reason: string;
+  payloadJson: string;
+  payloadDigest: string;
+  stagedCounts: string;
+  sourceIssueId: string | null;
+  destinationIssueId: string | null;
+}>;
+
+function documentRefusal(detail: string, details: Record<string, unknown> = {}): StoreError {
+  return new StoreError("remote.input-invalid", `The move document ${detail}; nothing was read.`, details);
+}
+
+/**
+ * invariant: An exchange document arrives from the other checkout as a file, so every field is proved
+ * before anything acts on it — including that its payload still hashes to the digest it carries, which
+ * is what makes it the same frozen copy and not a rewritten one.
+ */
+export function moveDocumentOf(value: unknown): IssueMoveDocument {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw documentRefusal("must be a JSON object");
+  const body = value as Record<string, unknown>;
+  const text = (field: string): string => {
+    const raw = body[field];
+    if (typeof raw !== "string" || raw.trim() === "") throw documentRefusal(`carries no ${field}`, { field });
+    return raw;
+  };
+  const nullable = (field: string): string | null => {
+    const raw = body[field];
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== "string") throw documentRefusal(`carries a non-string ${field}`, { field });
+    return raw;
+  };
+  const phases = Object.keys(DOCUMENT_PHASE) as IssueMoveDocumentPhase[];
+  if (body.version !== 1 || !phases.includes(body.phase as IssueMoveDocumentPhase)) {
+    throw documentRefusal(`must carry version 1 and one of phases ${phases.join(", ")}`, {
+      version: body.version ?? null,
+      phase: body.phase ?? null,
+    });
+  }
+  const issueRef = text("issueRef");
+  if (!ISSUE_REF_PATTERN.test(issueRef)) throw documentRefusal("carries a malformed issueRef", { issueRef });
+  const operationId = text("operationId");
+  const payloadJson = text("payloadJson");
+  const payloadDigest = text("payloadDigest");
+  if (digestOf(payloadJson) !== payloadDigest) {
+    throw documentRefusal("carries a payload that does not hash to its recorded digest", { operationId });
+  }
+  const stagedCounts = text("stagedCounts");
+  try {
+    JSON.parse(stagedCounts);
+  } catch {
+    throw documentRefusal("carries stagedCounts that are not JSON", { operationId });
+  }
+  return {
+    version: 1,
+    phase: body.phase as IssueMoveDocumentPhase,
+    operationId,
+    issueRef,
+    sourceAuthority: text("sourceAuthority"),
+    destinationAuthority: text("destinationAuthority"),
+    destinationProject: text("destinationProject"),
+    actor: text("actor"),
+    reason: text("reason"),
+    payloadJson,
+    payloadDigest,
+    stagedCounts,
+    sourceIssueId: nullable("sourceIssueId"),
+    destinationIssueId: nullable("destinationIssueId"),
+  };
+}
+
+/** note: The document one side emits from its own ledger row, at the step that row's phase reached. */
+function documentOfRow(row: IssueMoveRecord, phase: IssueMoveDocumentPhase): IssueMoveDocument {
+  return {
+    version: 1,
+    phase,
+    operationId: row.operationId,
+    issueRef: row.issueRef,
+    sourceAuthority: row.sourceAuthority,
+    destinationAuthority: row.destinationAuthority,
+    destinationProject: row.destinationProject,
+    actor: row.actor,
+    reason: row.reason,
+    payloadJson: row.payloadJson,
+    payloadDigest: row.payloadDigest,
+    stagedCounts: row.stagedCounts,
+    sourceIssueId: row.sourceIssueId,
+    destinationIssueId: row.destinationIssueId,
+  };
+}
+
+/**
+ * invariant: A document is acted on only by the move it belongs to. Its operation, both authorities,
+ * the destination project, the actor, the reason and the record's reference must equal this command's
+ * request; anything else is `store.operation-conflict`, never a resume under a borrowed id.
+ */
+function assertDocumentBound(document: IssueMoveDocument, request: MoveRequest): void {
+  const differing: string[] = [];
+  if (document.operationId !== request.operationId) differing.push("operationId");
+  if (document.destinationAuthority !== request.destinationAuthority) differing.push("destinationAuthority");
+  if (document.destinationProject !== request.destinationProject) differing.push("destinationProject");
+  if (document.actor !== request.actor) differing.push("actor");
+  if (document.reason !== request.reason) differing.push("reason");
+  if (document.issueRef !== request.sourceIssueId) differing.push("sourceIssueId");
+  if (differing.length === 0) return;
+  throw issueRefusal(
+    "store.operation-conflict",
+    `The move document describes a different operation than this command carries; it differs in ${differing.join(", ")}. ` +
+      `A document is only acted on by the move it belongs to. Nothing was modified.`,
+    { operation_id: request.operationId, differing_fields: differing },
+  );
+}
+
+/** note: What one exchange run left behind, plus the document the other checkout needs next. */
+export type ExchangeReceipt = Readonly<{
+  operationId: string;
+  phase: IssueMovePhase;
+  side: IssueMoveRole;
+  issueRef: string;
+  sourceIssueId: string | null;
+  destinationIssueId: string | null;
+  destinationAuthority: string;
+  destinationProject: string;
+  /** note: The provider intent this step froze; it is the operation `outbox-dispatch` addresses. */
+  pendingOperationId: string | null;
+  /** note: The document this side hands the other; null once this side's work is finished. */
+  document: IssueMoveDocument | null;
+}>;
+
+/** note: The receipt one exchange run answers, read back from the row this side wrote. */
+function exchangeReceipt(
+  row: IssueMoveRecord,
+  side: IssueMoveRole,
+  document: IssueMoveDocument | null,
+  pendingOperationId: string | null = null,
+): ExchangeReceipt {
+  return {
+    operationId: row.operationId,
+    phase: row.phase,
+    side,
+    issueRef: row.issueRef,
+    sourceIssueId: row.sourceIssueId,
+    destinationIssueId: row.destinationIssueId,
+    destinationAuthority: row.destinationAuthority,
+    destinationProject: row.destinationProject,
+    pendingOperationId,
+    document,
+  };
+}
+
+/** note: The ledger row this checkout's own lane holds, read through whichever lane its mode selects. */
+async function ownLaneRow(context: StoreContext, operationId: string, role: IssueMoveRole): Promise<IssueMoveRecord | null> {
+  if (resolveCollaborationLocation(context).mode !== "remote") return moveRowIn(context, operationId, role);
+  const handle = await openRemoteCache(context, "read");
+  try {
+    return readIssueMove(handle.db, operationId, role);
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: Write one ledger row in this checkout's own lane, under that lane's own writer and its fence. */
+async function writeOwnLaneRow(
+  context: StoreContext,
+  apply: (db: StoreDb, lane: { repoKey: string; storeId: string; epoch: number }) => void,
+): Promise<void> {
+  if (resolveCollaborationLocation(context).mode !== "remote") {
+    await withCollaborationWrite(context, (handle) => apply(handle.db, handle.authority));
+    return;
+  }
+  await withRemoteCacheWrite(context, (handle) => apply(handle.db, handle.authority));
+}
+
+/** note: The source row this move must hold in this checkout's own lane, bound to the request. */
+async function requireOwnSourceRow(context: StoreContext, request: MoveRequest, step: string): Promise<IssueMoveRecord> {
+  const row = await ownLaneRow(context, request.operationId, "source");
+  if (row === null) throw noSuchMove(request.operationId, step);
+  await readOwnLane(context, (db) => assertBoundRequest(db, row, request));
+  return row;
+}
+
+/** note: One read on this checkout's own lane, with the handle kept open for the whole callback. */
+async function readOwnLane<T>(context: StoreContext, apply: (db: StoreDb) => T): Promise<T> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const handle = await openRemoteCache(context, "read");
+    try {
+      return apply(handle.db);
+    } finally {
+      handle.close();
+    }
+  }
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    return apply(handle.db);
+  } finally {
+    handle.close();
+  }
+}
+
+/** note: The stable outbox operation id of one move step: the same move and step always finds it. */
+export function remoteMoveOperationId(operationId: string, step: string): string {
+  const bytes = createHash("sha256").update(`move-step:${operationId}:${step}`, "utf8").digest();
+  const hex = Buffer.from(bytes.subarray(0, 16)).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * invariant: The document a peer handed over is verified against the row that froze it — reference,
+ * payload digest, the payload's own hash and the carried counts — exactly the four facts
+ * `stagedMismatch` compares between two rows. A handoff whose bytes were rewritten in transit fails
+ * here instead of being adopted.
+ */
+function documentMismatch(row: IssueMoveRecord, document: IssueMoveDocument): string | null {
+  if (document.issueRef !== row.issueRef) return `the handoff carries reference ${document.issueRef}, not ${row.issueRef}`;
+  if (document.payloadDigest !== row.payloadDigest) {
+    return `the handoff carries digest ${document.payloadDigest}, not ${row.payloadDigest}`;
+  }
+  if (digestOf(document.payloadJson) !== row.payloadDigest) {
+    return "the handoff's payload no longer hashes to its recorded digest, so it was rewritten after the freeze";
+  }
+  return document.stagedCounts === row.stagedCounts
+    ? null
+    : `the handoff counts ${document.stagedCounts}, not ${row.stagedCounts}`;
+}
+
+/** note: A failed handoff is a discarded move, never a half-done one: the source record stays untouched. */
+async function refuseDocumentMismatch(
+  context: StoreContext,
+  request: MoveRequest,
+  row: IssueMoveRecord,
+  mismatch: string,
+): Promise<never> {
+  await writeOwnLaneRow(context, (db) => {
+    advanceRowTo(db, request.operationId, "source", "discarded");
+  });
+  throw new StoreError(
+    "collaboration.operation-partial",
+    `Move ${request.operationId} failed verification against the peer's handoff: ${mismatch}. It is discarded: the source ` +
+      `record ${String(row.sourceIssueId ?? row.issueRef)} is untouched.`,
+    {
+      operation_id: request.operationId,
+      issue_ref: row.issueRef,
+      phase: "discarded",
+      mismatch,
+      recovery:
+        "Reissue the move under a new --operation-id once both checkouts carry what the source froze; the source record " +
+        "was never modified.",
+    },
+  );
+}
+
+/**
+ * invariant: Local to remote, source half (spec T2 steps 1 and 3). Without a handoff the source freezes
+ * the record, writes its `staged` row and emits the `request` document — nothing is written in the
+ * destination lane, which this checkout cannot open. With the destination's `admission` handoff it
+ * verifies that handoff against its own row, switches, and publishes once. Source writes are fenced
+ * from the `staged` commit on, by the lane's own triggers.
+ */
+export async function exchangeLocalToRemote(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument | null,
+): Promise<ExchangeReceipt> {
+  const existing = await ownLaneRow(context, request.operationId, "source");
+  if (handoff === null) {
+    if (existing !== null) return exchangeReceipt(existing, "source", documentOfRow(existing, "request"));
+    await withCollaborationWrite(context, (handle) => {
+      if (readIssueMove(handle.db, request.operationId, "source") !== null) return;
+      assertMoveBase(handle.db, request);
+      assertStageable(handle.db, request);
+      if (handle.authority.repoKey === request.destinationAuthority) {
+        throw issueRefusal(
+          "issue.scope-refused",
+          `${request.destinationAuthority} is this record's own authority, so there is nothing to carry across one. ` +
+            `Nothing was moved.`,
+          {
+            recovery:
+              `A project change inside one authority is \`mstar issue move --id ${request.sourceIssueId} --payload ` +
+              `'{"projectId":"<target>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision>\`.`,
+          },
+        );
+      }
+      const frozen = freezeMoveCopy(handle.db, request.sourceIssueId);
+      const payloadJson = JSON.stringify(frozen.copy);
+      recordIssueMove(handle.db, {
+        operationId: request.operationId,
+        role: "source",
+        requestHash: digestOf(`${request.operationId}\n${request.sourceIssueId}\n${request.destinationAuthority}`),
+        issueRef: String(frozen.copy.issue.issue_ref),
+        sourceIssueId: request.sourceIssueId,
+        destinationIssueId: null,
+        sourceAuthority: handle.authority.repoKey,
+        destinationAuthority: request.destinationAuthority,
+        destinationProject: request.destinationProject,
+        actor: request.actor,
+        reason: request.reason,
+        phase: "staged",
+        payloadJson,
+        payloadDigest: digestOf(payloadJson),
+        stagedCounts: JSON.stringify(frozen.counts),
+        sourceStoreId: handle.authority.storeId,
+        sourceEpoch: handle.authority.epoch,
+        removedSyncRows: 0,
+      });
+      handle.db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    });
+    const row = await requireOwnSourceRow(context, request, "stage");
+    return exchangeReceipt(row, "source", documentOfRow(row, "request"));
+  }
+  // note: The destination's admission handoff: verify it against the frozen row, then switch and publish.
+  const source = await requireOwnSourceRow(context, request, "switch");
+  if (handoff.phase !== "admission") {
+    throw new StoreError(
+      "collaboration.move-phase-invalid",
+      `The handoff carries phase ${handoff.phase}, but the source's next step is the destination's admission; nothing was ` +
+        `modified.`,
+      { operation_id: request.operationId, phase: handoff.phase },
+    );
+  }
+  const mismatch = documentMismatch(source, handoff);
+  if (mismatch !== null) return await refuseDocumentMismatch(context, request, source, mismatch);
+  if (source.phase === "published") return exchangeReceipt(source, "source", null);
+  if (source.phase === "staged" || source.phase === "verified") {
+    await runMoveTransition(context, request, "verified", (handle) => {
+      advanceRowTo(handle.db, request.operationId, "source", "verified");
+    });
+    await runMoveTransition(context, request, "switched", (handle) => {
+      advanceRowTo(handle.db, request.operationId, "source", "switched");
+    });
+  }
+  const counts = JSON.parse(source.stagedCounts) as MoveCounts;
+  await runMoveTransition(context, request, "published", (handle) => {
+    const row = readIssueMove(handle.db, request.operationId, "source");
+    if (row === null) throw corruptMove(`move ${request.operationId} lost its source row before publication`);
+    if (row.phase === "published") return;
+    advanceIssueMove(handle.db, { operationId: request.operationId, role: "source", from: row.phase, to: "published" });
+    removeSourceRecord(handle.db, row, counts);
+  });
+  const published = await requireOwnSourceRow(context, request, "publish");
+  return exchangeReceipt(published, "source", null);
+}
+
+/**
+ * invariant: Local to remote, destination half (spec T2 steps 2 and 3). The remote checkout writes its
+ * own `staged` row from the `request` handoff and freezes ONE `issue-create` carrying the handoff's
+ * existing `issue_ref` and complete subject; a durable enqueue answers `remote.effect-pending`. Once
+ * the host's receipt confirms that intent it verifies the confirmation holds the reference and the
+ * carried counts, writes its row `switched` and emits the `admission` document.
+ */
+export async function exchangeRemoteDestination(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument,
+): Promise<ExchangeReceipt> {
+  assertDocumentBound(handoff, request);
+  if (handoff.phase !== "request") {
+    throw new StoreError(
+      "collaboration.move-phase-invalid",
+      `The handoff carries phase ${handoff.phase}, but the destination's first step is the source's request; nothing was ` +
+        `staged.`,
+      { operation_id: request.operationId, phase: handoff.phase },
+    );
+  }
+  const row = await writeDestinationRow(context, request, handoff);
+  if (row.destinationIssueId !== null) return exchangeReceipt(row, "destination", documentOfRow(row, "admission"));
+  const { prepareRemoteIssueWrite, pendingRemoteEffect, frozenIntent } = await import("./collaboration-remote.js");
+  const copy = JSON.parse(handoff.payloadJson) as MoveCopy;
+  const operationId = remoteMoveOperationId(request.operationId, "create");
+  const outcome = await prepareRemoteIssueWrite(context, {
+    operationId,
+    kind: "issue-create",
+    issueRef: handoff.issueRef,
+    projectId: request.destinationProject,
+    next: () => remoteSubjectOfMoveCopy(copy),
+    origin: {
+      verb: "issue-move",
+      request: {
+        operationId: request.operationId,
+        issueRef: handoff.issueRef,
+        destinationAuthority: request.destinationAuthority,
+        destinationProject: request.destinationProject,
+      },
+    },
+  });
+  const intent = frozenIntent(outcome);
+  // invariant: a durable enqueue is the answer, never success: the same command completes the step
+  // once `outbox-receipt` recorded the confirmation.
+  const effect = intent.confirmed;
+  if (effect === null) throw pendingRemoteEffect(intent);
+  const counts = JSON.parse(handoff.stagedCounts) as MoveCounts;
+  const confirmed = effect.event;
+  if (confirmed.change.kind === "project-replace" || confirmed.change.issueRef !== handoff.issueRef) {
+    throw new StoreError(
+      "remote.effect-mismatch",
+      `The confirmed create does not carry reference ${handoff.issueRef}, so this move cannot admit it. Nothing was ` +
+        `switched.`,
+      { operation_id: request.operationId, issueRef: handoff.issueRef },
+    );
+  }
+  const actual = countsOfSubject(confirmed.change.mstar as unknown as Record<string, unknown>);
+  if (
+    actual.occurrences !== counts.occurrences ||
+    actual.issueTransitions !== counts.issueTransitions ||
+    actual.provenance !== counts.provenance ||
+    actual.relations !== counts.relations ||
+    actual.issueProjectMoves !== counts.issueProjectMoves
+  ) {
+    throw new StoreError(
+      "remote.effect-mismatch",
+      `The confirmed create carries ${JSON.stringify(actual)}, not the ${JSON.stringify(counts)} this move froze. ` +
+        `Nothing was switched.`,
+      { operation_id: request.operationId, issueRef: handoff.issueRef, expected: counts, actual },
+    );
+  }
+  const admitted = await markDestinationAdmitted(context, request, effect.identity.issueId);
+  return exchangeReceipt(admitted, "destination", documentOfRow(admitted, "admission"));
+}
+
+/** note: The destination row's `verified` -> `switched` advance, carrying the provider record it admitted. */
+async function markDestinationAdmitted(
+  context: StoreContext,
+  request: MoveRequest,
+  providerIssueId: string,
+): Promise<IssueMoveRecord> {
+  await writeOwnLaneRow(context, (db) => {
+    const row = readIssueMove(db, request.operationId, "destination");
+    if (row === null) throw corruptMove(`move ${request.operationId} lost its destination row before admission`);
+    if (row.destinationIssueId !== null) return;
+    advanceRowTo(db, request.operationId, "destination", "verified");
+    advanceIssueMove(db, {
+      operationId: request.operationId,
+      role: "destination",
+      from: "verified",
+      to: "switched",
+      destinationIssueId: providerIssueId,
+    });
+  });
+  const row = await ownLaneRow(context, request.operationId, "destination");
+  if (row === null) throw corruptMove(`move ${request.operationId} holds no destination row after admission`);
+  return row;
+}
+
+/**
+ * invariant: Remote to local, source half (spec T2 steps 1, 3 and 5). Without a handoff the remote
+ * source freezes the OBSERVED subject — a remote lane holds no local row — writes its `staged` row and
+ * emits the `request` document. With the local destination's `staged` handoff it verifies that
+ * handoff, freezes ONE `issue-replace` that sets the provider record to `obsolete` (a provider record
+ * is append-only, so a tombstone is the only expression of leaving), and answers
+ * `remote.effect-pending` until the host confirms it. With the `switch` handoff that arrives after the
+ * confirmation it writes `switched` and emits its own `switch` document; with the `admission` handoff
+ * it publishes.
+ */
+export async function exchangeRemoteSource(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument | null,
+): Promise<ExchangeReceipt> {
+  const existing = await ownLaneRow(context, request.operationId, "source");
+  if (handoff === null) {
+    if (existing !== null) return exchangeReceipt(existing, "source", documentOfRow(existing, "request"));
+    const observed = await observeRemoteSubject(context, request);
+    const copy = moveCopyOfRemoteSubject(observed, request.destinationProject);
+    const counts = countsOfRemoteSubject(observed);
+    const payloadJson = JSON.stringify(copy);
+    await writeOwnLaneRow(context, (db, lane) => {
+      if (readIssueMove(db, request.operationId, "source") !== null) return;
+      recordIssueMove(db, {
+        operationId: request.operationId,
+        role: "source",
+        requestHash: digestOf(`${request.operationId}\n${observed.issueRef}\n${request.destinationAuthority}`),
+        issueRef: observed.issueRef,
+        // note: a remote lane holds no display id; the reference is the address both sides use.
+        sourceIssueId: null,
+        destinationIssueId: null,
+        sourceAuthority: lane.repoKey,
+        destinationAuthority: request.destinationAuthority,
+        destinationProject: request.destinationProject,
+        actor: request.actor,
+        reason: request.reason,
+        phase: "staged",
+        payloadJson,
+        payloadDigest: digestOf(payloadJson),
+        stagedCounts: JSON.stringify(counts),
+        sourceStoreId: lane.storeId,
+        sourceEpoch: lane.epoch,
+        removedSyncRows: 0,
+      });
+    });
+    const row = await requireOwnSourceRow(context, request, "stage");
+    return exchangeReceipt(row, "source", documentOfRow(row, "request"));
+  }
+  assertDocumentBound(handoff, request);
+  const source = await requireOwnSourceRow(context, request, "switch");
+  if (source.phase === "published") return exchangeReceipt(source, "source", null);
+  if (handoff.phase === "staged") {
+    const mismatch = documentMismatch(source, handoff);
+    if (mismatch !== null) return await refuseDocumentMismatch(context, request, source, mismatch);
+    await writeOwnLaneRow(context, (db) => {
+      advanceRowTo(db, request.operationId, "source", "verified");
+    });
+    const pending = await tombstoneRemoteSource(context, request, source);
+    // note: the row is re-read: the tombstone's own confirmation advanced it to `switched`, so the
+    // receipt states the phase the ledger holds now, never the one this call happened to observe.
+    const after = await requireOwnSourceRow(context, request, "switch");
+    return exchangeReceipt(after, "source", documentOfRow(after, "switch"), pending);
+  }
+  if (handoff.phase === "admission") {
+    const verified = await requireOwnSourceRow(context, request, "publish");
+    if (verified.phase === "staged" || verified.phase === "verified") {
+      await writeOwnLaneRow(context, (db) => {
+        advanceRowTo(db, request.operationId, "source", "switched");
+      });
+    }
+    await writeOwnLaneRow(context, (db) => {
+      advanceRowTo(db, request.operationId, "source", "published");
+    });
+    const published = await requireOwnSourceRow(context, request, "publish");
+    return exchangeReceipt(published, "source", null);
+  }
+  if (handoff.phase === "switch") {
+    throw new StoreError(
+      "collaboration.move-phase-invalid",
+      `The handoff carries phase ${handoff.phase}, which the destination emits; the source waits on that side's ` +
+        `admission. Nothing was modified.`,
+      { operation_id: request.operationId, phase: handoff.phase },
+    );
+  }
+  throw new StoreError(
+    "collaboration.move-phase-invalid",
+    `The handoff carries phase ${handoff.phase}, but the source is already switched; the destination's admission is the ` +
+      `next step. Nothing was modified.`,
+    { operation_id: request.operationId, phase: handoff.phase },
+  );
+}
+
+/**
+ * invariant: The record one remote source moves, read from a complete, current observation of its
+ * project. A remote lane holds no local row, so the observed subject IS the record; the observation
+ * codes refuse when it is missing or stale, exactly as every other remote read does.
+ */
+async function observeRemoteSubject(context: StoreContext, request: MoveRequest): Promise<ObservedMoveSubject> {
+  const { openRemoteReadView, remoteIssueRead } = await import("./collaboration-remote-read.js");
+  const view = await openRemoteReadView(context);
+  const read = remoteIssueRead(view, request.sourceIssueId);
+  if (read.kind === "native") {
+    throw issueRefusal(
+      "issue.scope-refused",
+      `${request.sourceIssueId} is an unmarked native provider issue, so it carries no MStar record to move. Nothing was ` +
+        `staged.`,
+      { issueId: request.sourceIssueId },
+    );
+  }
+  const detail = read.detail;
+  return {
+    issueRef: detail.issueRef ?? request.sourceIssueId,
+    projectId: detail.projectId,
+    fields: {
+      title: detail.title,
+      kind: detail.kind,
+      severity: detail.severity,
+      disposition: detail.disposition,
+      impact: detail.impact,
+      acceptance: detail.acceptance,
+      owner: detail.owner,
+      registeredAt: detail.registeredAt,
+      closedAt: detail.closedAt,
+      closureNote: detail.closureNote,
+      createdAt: detail.createdAt,
+      updatedAt: detail.updatedAt,
+      revision: detail.revision,
+      milestoneId: detail.milestoneId,
+    },
+    occurrences: detail.occurrences as unknown as Array<Record<string, unknown>>,
+    transitions: detail.transitions as unknown as Array<Record<string, unknown>>,
+    relations: detail.relations.map((row) => ({ relation: row.relation, target: row.toIssue })),
+    provenance: detail.provenance as unknown as Array<Record<string, unknown>>,
+    projectMoves: detail.projectMoves as unknown as Array<Record<string, unknown>>,
+  };
+}
+
+/**
+ * invariant: The source tombstone. A provider record is append-only, so leaving is one `issue-replace`
+ * that closes it `obsolete` with the transition and the project-move row this move records. It is
+ * frozen BEFORE the destination admits, which is what makes the zero-member window the same one the
+ * one-checkout topology has.
+ */
+async function tombstoneRemoteSource(
+  context: StoreContext,
+  request: MoveRequest,
+  source: IssueMoveRecord,
+): Promise<string | null> {
+  const { prepareRemoteIssueWrite, pendingRemoteEffect, frozenIntent } = await import("./collaboration-remote.js");
+  const copy = JSON.parse(source.payloadJson) as MoveCopy;
+  const at = nowRfc3339();
+  const operationId = remoteMoveOperationId(request.operationId, "obsolete");
+  const outcome = await prepareRemoteIssueWrite(context, {
+    operationId,
+    kind: "issue-replace",
+    issueId: source.issueRef,
+    issueRef: source.issueRef,
+    next: (current) => {
+      const subject = current as Record<string, unknown>;
+      const fields = subject.fields as Record<string, unknown>;
+      const revision = Number(fields.revision) + 1;
+      const transition = {
+        eventId: randomUUID(),
+        fromDisposition: fields.disposition,
+        toDisposition: "obsolete",
+        actor: request.actor,
+        occurredAt: at,
+        recordedAt: at,
+        reason: request.reason,
+        evidence: { reason: request.reason, references: [`moved to ${request.destinationAuthority}/${request.destinationProject}`] },
+        issueRevision: revision,
+        imported: false,
+      };
+      return {
+        ...subject,
+        fields: { ...fields, disposition: "obsolete", closedAt: at, closureNote: request.reason, revision, updatedAt: at },
+        transitions: [...(subject.transitions as unknown[]), transition],
+        projectMoves: [
+          ...(subject.projectMoves as unknown[]),
+          {
+            eventId: randomUUID(),
+            fromProject: copy.issue.project_id,
+            toProject: request.destinationProject,
+            actor: request.actor,
+            reason: request.reason,
+            occurredAt: at,
+            issueRevision: revision,
+          },
+        ],
+      };
+    },
+    origin: {
+      verb: "issue-move",
+      request: {
+        operationId: request.operationId,
+        issueRef: source.issueRef,
+        destinationAuthority: request.destinationAuthority,
+        destinationProject: request.destinationProject,
+      },
+    },
+  });
+  const intent = frozenIntent(outcome);
+  if (intent.confirmed === null) throw pendingRemoteEffect(intent);
+  const confirmed = intent.confirmed.event;
+  if (confirmed.change.kind === "project-replace") {
+    throw new StoreError(
+      "remote.effect-mismatch",
+      `The confirmed replacement of ${source.issueRef} is a project event, not the issue tombstone this move froze. Nothing ` +
+        `was switched.`,
+      { operation_id: request.operationId, issueRef: source.issueRef },
+    );
+  }
+  if ((confirmed.change.mstar.fields as Record<string, unknown>).disposition !== "obsolete") {
+    throw new StoreError(
+      "remote.effect-mismatch",
+      `The confirmed replacement of ${source.issueRef} does not close it obsolete, so the source tombstone this move needs ` +
+        `is not what landed. Nothing was switched.`,
+      { operation_id: request.operationId, issueRef: source.issueRef },
+    );
+  }
+  await writeOwnLaneRow(context, (db) => {
+    advanceRowTo(db, request.operationId, "source", "switched");
+  });
+  return intent.operationId;
+}
+
+/**
+ * invariant: Remote to local, destination half (spec T2 steps 2 and 4). The local checkout writes its
+ * own `staged` row from the `request` handoff, verifies the handoff against that row, and emits the
+ * `staged` document — it admits nothing yet, because the source's tombstone must be confirmed first.
+ * On the source's `switch` handoff it admits the record and emits the `admission` document.
+ */
+export async function exchangeLocalDestination(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument,
+): Promise<ExchangeReceipt> {
+  assertDocumentBound(handoff, request);
+  const destination = resolveCollaborationLocation(context);
+  if (destination.repoKey !== request.destinationAuthority) {
+    throw issueRefusal(
+      "issue.scope-refused",
+      `This checkout is bound to ${destination.repoKey}, but the move addresses ${request.destinationAuthority} as its ` +
+        `destination, so it cannot admit the record here. Nothing was admitted.`,
+      { repoKey: destination.repoKey, destinationAuthority: request.destinationAuthority },
+    );
+  }
+  if (handoff.phase === "request") {
+    const row = await writeDestinationRow(context, request, handoff);
+    const mismatch = documentMismatch(row, handoff);
+    if (mismatch !== null) return await refuseDocumentMismatch(context, request, row, mismatch);
+    await writeOwnLaneRow(context, (db) => {
+      advanceRowTo(db, request.operationId, "destination", "verified");
+    });
+    const verified = await requireOwnDestinationRow(context, request);
+    return exchangeReceipt(verified, "destination", documentOfRow(verified, "staged"));
+  }
+  if (handoff.phase !== "switch") {
+    throw new StoreError(
+      "collaboration.move-phase-invalid",
+      `The handoff carries phase ${handoff.phase}, but the destination's next step is the source's switch; nothing was ` +
+        `admitted.`,
+      { operation_id: request.operationId, phase: handoff.phase },
+    );
+  }
+  const row = await requireOwnDestinationRow(context, request);
+  if (row.destinationIssueId !== null) return exchangeReceipt(row, "destination", documentOfRow(row, "admission"));
+  const mismatch = documentMismatch(row, handoff);
+  if (mismatch !== null) return await refuseDocumentMismatch(context, request, row, mismatch);
+  const copy = JSON.parse(row.payloadJson) as MoveCopy;
+  const counts = JSON.parse(row.stagedCounts) as MoveCounts;
+  const bound: MoveRequest = { ...request, actor: row.actor, reason: row.reason };
+  const admitted = await writeOwnLaneRow(context, (db) => {
+    assertAdmissible(db, bound, copy, counts);
+    admitMoveCopy(db, bound, copy, counts);
+  }).then(() => requireOwnDestinationRow(context, request));
+  return exchangeReceipt(admitted, "destination", documentOfRow(admitted, "admission"));
+}
+
+/** note: The destination row this checkout must hold, or the named refusal that it does not. */
+async function requireOwnDestinationRow(context: StoreContext, request: MoveRequest): Promise<IssueMoveRecord> {
+  const row = await ownLaneRow(context, request.operationId, "destination");
+  if (row === null) throw noSuchMove(request.operationId, "admit");
+  return row;
+}
+
+/** note: The destination row this checkout writes from a handoff, idempotent by operation id. */
+async function writeDestinationRow(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument,
+): Promise<IssueMoveRecord> {
+  await writeOwnLaneRow(context, (db, lane) => {
+    if (readIssueMove(db, request.operationId, "destination") !== null) return;
+    recordIssueMove(db, {
+      operationId: handoff.operationId,
+      role: "destination",
+      requestHash: digestOf(`${handoff.operationId}\n${handoff.issueRef}\n${handoff.sourceAuthority}`),
+      issueRef: handoff.issueRef,
+      sourceIssueId: handoff.sourceIssueId,
+      destinationIssueId: null,
+      sourceAuthority: handoff.sourceAuthority,
+      destinationAuthority: handoff.destinationAuthority,
+      destinationProject: handoff.destinationProject,
+      actor: handoff.actor,
+      reason: handoff.reason,
+      phase: "staged",
+      payloadJson: handoff.payloadJson,
+      payloadDigest: handoff.payloadDigest,
+      stagedCounts: handoff.stagedCounts,
+      // note: the source lane generation the copy was frozen under, exactly as the source recorded it.
+      sourceStoreId: handoff.sourceAuthority,
+      sourceEpoch: Math.max(1, lane.epoch),
+      removedSyncRows: 0,
+    });
+  });
+  const row = await ownLaneRow(context, request.operationId, "destination");
+  if (row === null) throw corruptMove(`move ${request.operationId} holds no destination row after writing one`);
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// note: The remote medium's two conversions. A `remote` lane holds no `issues` row, so a move there
+// speaks the provider subject vocabulary; these are the ONLY two places the two vocabularies meet,
+// and both keep the record's `issue_ref`, which is what carries the reference across the boundary.
+// ---------------------------------------------------------------------------
+
+/** note: One record as a remote source observed it: the reference it holds plus the subject's members. */
+export type ObservedMoveSubject = Readonly<{
+  projectId: string;
+  issueRef: string;
+  fields: Record<string, unknown>;
+  occurrences: readonly Record<string, unknown>[];
+  transitions: readonly Record<string, unknown>[];
+  relations: readonly Record<string, unknown>[];
+  provenance: readonly Record<string, unknown>[];
+  projectMoves: readonly Record<string, unknown>[];
+}>;
+
+/** note: An observed member as text; the provider vocabulary is the authority, not this reader's guess. */
+function observedText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+function observedNullableText(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** note: A subject member's rows, or none: a partial coverage is a gap, never missing history to invent. */
+function observedRows(observed: ObservedMoveSubject, member: keyof ObservedMoveSubject): Array<Record<string, unknown>> {
+  const value = observed[member];
+  return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [];
+}
+
+/**
+ * invariant: One observed remote subject as the local lane holds it. The inverse of
+ * `remoteSubjectOfMoveCopy`, and the ONE place a provider subject becomes a local row image, so a
+ * remote source's history lands with exactly the shape a local source's does.
+ */
+function moveCopyOfRemoteSubject(observed: ObservedMoveSubject, destinationProject: string): MoveCopy {
+  return {
+    // note: the record's own project is the one it was OBSERVED in; admission re-bases it exactly as
+    // a carried image is re-based.
+    issue: {
+      project_id: destinationProject,
+      title: observedText(observed.fields.title),
+      kind: observedText(observed.fields.kind),
+      severity: observedText(observed.fields.severity),
+      disposition: observedText(observed.fields.disposition),
+      impact: observedText(observed.fields.impact),
+      acceptance: observedText(observed.fields.acceptance),
+      owner: observedNullableText(observed.fields.owner),
+      registered_at: observedNullableText(observed.fields.registeredAt),
+      closed_at: observedNullableText(observed.fields.closedAt),
+      closure_note: observedNullableText(observed.fields.closureNote),
+      created_at: observedText(observed.fields.createdAt),
+      updated_at: observedText(observed.fields.updatedAt),
+      // note: the record's own revision crosses with it: admission advances it by one exactly as it
+      // does for a carried local image.
+      revision: typeof observed.fields.revision === "number" ? observed.fields.revision : 1,
+      issue_ref: observed.issueRef,
+    },
+    occurrences: observedRows(observed, "occurrences").map((row) => ({
+      occurrence_key: observedText(row.occurrenceKey),
+      source_kind: observedText(row.sourceKind),
+      source_identity: observedText(row.sourceIdentity),
+      root_cause_key: observedText(row.rootCauseKey),
+      acceptance_key: observedText(row.acceptanceKey),
+      location: observedText(row.location),
+      observed_behavior: observedText(row.observedBehavior),
+      evidence_json: JSON.stringify(Array.isArray(row.evidence) ? row.evidence : []),
+      discovered_at: observedNullableText(row.discoveredAt),
+      recorded_at: observedText(row.recordedAt),
+      imported: row.imported === true ? 1 : 0,
+    })),
+    transitions: observedRows(observed, "transitions").map((row) => ({
+      from_disposition: observedText(row.fromDisposition),
+      to_disposition: observedText(row.toDisposition),
+      actor: observedNullableText(row.actor),
+      occurred_at: observedNullableText(row.occurredAt),
+      recorded_at: observedText(row.recordedAt),
+      reason: observedText(row.reason),
+      evidence_json: JSON.stringify(row.evidence ?? {}),
+      imported: row.imported === true ? 1 : 0,
+      issue_revision: typeof row.issueRevision === "number" ? row.issueRevision : 0,
+    })),
+    provenance: observedRows(observed, "provenance").map((row) => ({
+      kind: observedText(row.kind),
+      target: observedText(row.target),
+      source_hash: observedText(row.sourceHash),
+      legacy_project: observedNullableText(row.legacyProject),
+      legacy_bucket: observedNullableText(row.legacyBucket),
+      legacy_entry_id: observedNullableText(row.legacyEntryId),
+      legacy_json: row.legacyRecord == null ? null : JSON.stringify(row.legacyRecord),
+      imported_at: observedNullableText(row.importedAt),
+      origin: row.origin === "unscoped" ? "unscoped" : "scoped",
+    })),
+    projectMoves: observedRows(observed, "projectMoves").map((row) => ({
+      from_project_id: observedText(row.fromProject),
+      to_project_id: observedText(row.toProject),
+      actor: observedText(row.actor),
+      reason: observedText(row.reason),
+      occurred_at: observedText(row.occurredAt),
+      recorded_at: observedText(row.occurredAt),
+      issue_revision: typeof row.issueRevision === "number" ? row.issueRevision : 0,
+    })),
+    relations: observedRows(observed, "relations").map((row) => ({
+      relation: observedText(row.relation),
+      toRef: observedText(row.target),
+    })),
+  };
+}
+
+/**
+ * invariant: The same frozen copy as the provider subject a `remote` destination freezes. Every
+ * member is one the create document's allowlist accepts, so the freeze is the reviewed shape rather
+ * than a hand-matched copy of it.
+ */
+function remoteSubjectOfMoveCopy(copy: MoveCopy): Record<string, unknown> {
+  const issue = copy.issue;
+  return {
+    fields: {
+      title: issue.title,
+      kind: issue.kind,
+      severity: issue.severity,
+      disposition: issue.disposition,
+      impact: issue.impact,
+      acceptance: issue.acceptance,
+      owner: issue.owner ?? null,
+      registeredAt: issue.registered_at ?? null,
+      closedAt: issue.closed_at ?? null,
+      closureNote: issue.closure_note ?? null,
+      createdAt: issue.created_at,
+      updatedAt: issue.updated_at,
+      revision: 1,
+      // note: a milestone is project-scoped, exactly as it is for a local admission.
+      milestoneId: null,
+    },
+    occurrences: copy.occurrences.map((row) => ({
+      eventId: randomUUID(),
+      occurrenceKey: row.occurrence_key,
+      sourceKind: row.source_kind,
+      sourceIdentity: row.source_identity,
+      rootCauseKey: row.root_cause_key,
+      acceptanceKey: row.acceptance_key,
+      location: row.location,
+      observedBehavior: row.observed_behavior,
+      evidence: JSON.parse(String(row.evidence_json ?? "[]")) as string[],
+      discoveredAt: row.discovered_at ?? null,
+      recordedAt: row.recorded_at,
+      imported: row.imported === 1,
+    })),
+    transitions: copy.transitions.map((row) => ({
+      eventId: randomUUID(),
+      fromDisposition: row.from_disposition,
+      toDisposition: row.to_disposition,
+      actor: row.actor ?? null,
+      occurredAt: row.occurred_at ?? null,
+      recordedAt: row.recorded_at,
+      reason: row.reason,
+      evidence: JSON.parse(String(row.evidence_json ?? "{}")),
+      issueRevision: row.issue_revision,
+      imported: row.imported === 1,
+    })),
+    relations: copy.relations.map((edge) => ({ relation: edge.relation, target: edge.toRef })),
+    provenance: copy.provenance.map((row) => ({
+      eventId: randomUUID(),
+      kind: row.kind,
+      target: row.target,
+      sourceHash: row.source_hash,
+      origin: row.origin,
+      legacyProject: row.legacy_project ?? null,
+      legacyBucket: row.legacy_bucket ?? null,
+      legacyEntryId: row.legacy_entry_id ?? null,
+      legacyRecord: row.legacy_json == null ? null : (JSON.parse(String(row.legacy_json)) as unknown),
+      importedAt: row.imported_at ?? null,
+    })),
+    projectMoves: copy.projectMoves.map((row) => ({
+      eventId: randomUUID(),
+      fromProject: row.from_project_id,
+      toProject: row.to_project_id,
+      actor: row.actor,
+      reason: row.reason,
+      occurredAt: row.occurred_at,
+      issueRevision: row.issue_revision,
+    })),
+  };
+}
+
+/** note: The counts one remote subject carries, in the shape `staged_counts` stores. */
+function countsOfRemoteSubject(observed: ObservedMoveSubject): MoveCounts {
+  const lengthOf = (member: keyof ObservedMoveSubject): number => observedRows(observed, member).length;
+  return {
+    occurrences: lengthOf("occurrences"),
+    issueTransitions: lengthOf("transitions"),
+    provenance: lengthOf("provenance"),
+    relations: lengthOf("relations"),
+    issueProjectMoves: lengthOf("projectMoves"),
+    // note: a `remote` source's incoming edges belong to other provider records, which this move
+    // never rewrites: the provider record becomes an `obsolete` tombstone instead.
+    relationsLeftBehind: 0,
+  };
+}
+
+/** note: The counts a confirmed provider subject actually carries, for the count comparison. */
+function countsOfSubject(subject: Record<string, unknown>): Omit<MoveCounts, "relationsLeftBehind"> {
+  const lengthOf = (member: string): number => (Array.isArray(subject[member]) ? (subject[member] as unknown[]).length : 0);
+  return {
+    occurrences: lengthOf("occurrences"),
+    issueTransitions: lengthOf("transitions"),
+    provenance: lengthOf("provenance"),
+    relations: lengthOf("relations"),
+    issueProjectMoves: lengthOf("projectMoves"),
+  };
+}
+
+/**
+ * invariant: The one entry the verb calls. Which half this checkout runs is decided by its OWN mode
+ * and by who emitted the handoff — never by a flag — because a checkout writes only the lane its mode
+ * selects. `--input` without a document means "produce the handoff this side owes"; a document means
+ * "continue with what the other side handed over".
+ *
+ * invariant: A remote-to-remote move is not admitted: the two provider records would have to be
+ * rewritten into each other's selector generation as one event, which no transition expresses.
+ */
+export async function moveAcrossByDocument(
+  context: StoreContext,
+  request: MoveRequest,
+  handoff: IssueMoveDocument | null,
+): Promise<ExchangeReceipt> {
+  const remote = resolveCollaborationLocation(context).mode === "remote";
+  if (remote && handoff === null) {
+    for (const mode of ["remote"] as const) {
+      const target = collaborationLocationOfRepoKey(request.destinationAuthority, mode);
+      if (existsSync(target.dbPath)) {
+        throw new StoreError(
+          "collaboration.mode-unavailable",
+          `${request.destinationAuthority} resolves a remote authority too, so this is a remote-to-remote move: the two ` +
+            `provider records would have to be rewritten into each other's selector generation as one event, which no ` +
+            `admitted transition expresses. Nothing was staged.`,
+          {
+            repoKey: request.destinationAuthority,
+            recovery:
+              "Move the record into a local/mirror authority instead, and address the provider through its own verbs.",
+          },
+        );
+      }
+    }
+  }
+  if (handoff === null) {
+    return remote ? exchangeRemoteSource(context, request, null) : exchangeLocalToRemote(context, request, null);
+  }
+  // invariant: which half this checkout runs is its OWN identity in the move, not the document's
+  // author: a checkout bound to the destination authority is the destination, and every other
+  // checkout is the source. That is the same fact admission proves, stated before any write.
+  const ownAuthority = resolveCollaborationLocation(context).repoKey;
+  const isDestination = ownAuthority === request.destinationAuthority;
+  if (isDestination) {
+    return remote ? exchangeRemoteDestination(context, request, handoff) : exchangeLocalDestination(context, request, handoff);
+  }
+  return remote ? exchangeRemoteSource(context, request, handoff) : exchangeLocalToRemote(context, request, handoff);
 }
