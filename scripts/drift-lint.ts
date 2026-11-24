@@ -1781,6 +1781,13 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   for (const match of text.matchAll(DATA_TEXT)) {
     segments.push({ text: decodeXmlEntities(match[1]), line: lineAt(match.index ?? 0) });
   }
+  // see scripts/drift-lint.ts § 16 — A diagram may embed HTML in a `foreignObject`; that text is reader-visible
+  // see scripts/drift-lint.ts § 16 — too, and the prose pass blanks the whole SVG, so it is read here.
+  for (const match of text.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
+    for (const line of match[1].replace(/<[^>]*>/g, " ").split(/\r\n|\n|\r/)) {
+      if (line.trim() !== "") segments.push({ text: decodeXmlEntities(line), line: lineAt(match.index ?? 0) });
+    }
+  }
   return segments;
 }
 
@@ -1964,13 +1971,26 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         splitLines(withoutBlocks).forEach((raw, index) => {
           for (const piece of raw.replace(blockTag, "\n").split("\n")) {
             const text = piece.replace(/<[^>]*>/g, " ");
-            for (const hit of findRetiredStageSpellings(text, false, false)) {
+            for (const hit of findRetiredStageSpellings(decodeXmlEntities(text), false, false)) {
               hits.push(
                 `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
               );
             }
           }
         });
+      }
+      continue;
+    }
+    if (file.rel.endsWith(".archify.json")) {
+      // see scripts/drift-lint.ts § 16 — A diagram source holds display strings, not Markdown: a backtick in a
+      // see scripts/drift-lint.ts § 16 — label is a character a reader sees, so the same string is judged literally
+      // see scripts/drift-lint.ts § 16 — here and in the rendered SVG, and neither can exempt a probe the other reports.
+      for (const value of jsonStringValues(file.text)) {
+        for (const hit of findRetiredStageSpellings(value.text, false, false)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel}:${value.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
       }
       continue;
     }
