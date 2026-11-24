@@ -1283,6 +1283,53 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
+  test("an iteration close needs the delivery line tip on the target, and proves it after the merge", async () => {
+    const fixture = await workflowFixture("iteration-unmerged", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // A real commit on the iteration's own delivery line: every fixture starts
+    // it at the target tip, so an ancestry check would otherwise pass for
+    // free. This one is divergent and not merged.
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer the target never received\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    const tip = headOf(fixture.integrationPath);
+    expect(() => execFileSync("git", ["merge-base", "--is-ancestor", tip, "main"], { cwd: fixture.repoRoot, stdio: "ignore" })).toThrow();
+
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-iteration-unmerged-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    const stated = JSON.stringify(refused.details);
+    expect(stated).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on main`);
+    expect(stated).toContain("--status stopped");
+    // The iteration stays running: a refused close writes nothing.
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The chain lands: the same close now proves the tip is on the target.
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "land the stack", INTEGRATION_BRANCH], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-iteration-merged-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the stacked delivery landed",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("an iteration whose delivery line never advanced still closes", async () => {
+    // The common shape: every fixture starts the integration branch at the
+    // target tip, so the proof is one ancestry read that succeeds.
+    const fixture = await workflowFixture("iteration-already-landed", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const closed = await workflowMutation(fixture, "op-iteration-landed-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "nothing to land",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
 
 
 });

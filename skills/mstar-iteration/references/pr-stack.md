@@ -48,7 +48,7 @@
 - Proof: every entry carries its evidence and the sealed final accepted chain is the expectation — the chain top is an ancestor of the target ref, plus per-PR merge evidence. Compare the current `branch.target` with that final accepted chain over the affected paths: a difference that removes content the final accepted chain still requires is loss — a target-side revert — so the chain is not proved and the lost change is landed again as a new layer before close; a replacement made by an accepted later layer is already part of the final accepted chain and is not loss.
 - A proof that stops on a partly merged chain returns to「Landing」for the layers still open, discloses the landed prefix and enters no close-out.
 - Proof ends when this evidence is recorded in the compass `PR stack` table. The delivery projection — the compass `delivered` marker with its `## Roadmap Position` row, the roadmap row and the milestone rollup — is written by Workflow Close Out's Projection reconciliation, because whole-chain proof is recorded, through the existing `mstar-project-governance` operations; until then the roadmap row stays at its pre-delivery state.
-- The engine verifies no iteration merge today (GitHub #819), so this proof is the coordinator's recorded duty.
+- The engine refuses a terminal close while this proof is absent: a `completed` iteration close requires the `branch.integration` tip to be an ancestor of the resolved `branch.target`, and refuses with `PHASE6_DELIVERY_MERGE_UNPROVEN` otherwise. The chain-top check proves every landed layer is on the target; the per-PR evidence and the content reconciliation above remain the coordinator's recorded duty.
 
 ## Cleanup
 
