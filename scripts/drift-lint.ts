@@ -1887,12 +1887,13 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
             ),
         );
       const joinedRendered = render(`${previous}${MARKER}${text}`).split(MARKER).join(" ");
-      // A hit that neither line renders on its own can only come from the join.
-      const previousRendered = render(previous);
-      const textRendered = render(text);
+      // A hit is split only when neither standalone line *matches* it — a
+      // substring test would hide a real `Phase 4` behind `SubPhase 4`.
+      const previousHits = findRetiredStageSpellings(render(previous), false, false);
+      const textHits = findRetiredStageSpellings(render(text), false, false);
       for (const hit of findRetiredStageSpellings(joinedRendered, false, false)) {
         if (lineHits.includes(hit)) continue;
-        if (previousRendered.includes(hit) || textRendered.includes(hit)) continue;
+        if (previousHits.includes(hit) || textHits.includes(hit)) continue;
         report(line, hit, " (split across the line break)");
       }
     }

@@ -2424,6 +2424,18 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
   });
 
+  test("a word boundary on the earlier line does not hide the split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/l.md", text: "The label is SubPhase 4; begin Phase\n4 now.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a section citation on the earlier line is not reported again as split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/m.md", text: "Phase 3 §3.4 → 4\nReview continues.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
+
   test("a wrapped name inside a non-exempt span still reports", () => {
     const text = "`Phase\n4`\n";
     const result = checkRetiredStageNames([{ rel: "skills/x/j.md", text }]);
