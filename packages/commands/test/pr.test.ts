@@ -89,7 +89,7 @@ describe("pr merge-gate", () => {
     const unreadable = await gate.execute({ pr: "42", confirm: cwd }, context);
     expect(unreadable).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(unreadable.status === "ok" ? "" : unreadable.message).toContain("cannot read the confirmation file");
-    expect(unreadable.status === "ok" ? "" : JSON.stringify(unreadable)).toContain("mstar pr merge-gate --pr <n> --confirm <file>");
+    expect(unreadable.status === "ok" ? "" : JSON.stringify(unreadable)).toContain("mstar pr merge-gate --pr <n> --provider github --confirm <file>");
     writeFileSync(confirm, "{ not json");
     const garbage = await gate.execute({ pr: "42", confirm }, context);
     expect(garbage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
@@ -138,12 +138,58 @@ describe("pr merge-gate", () => {
     expect(completed).toMatchObject({ status: "ok" });
   });
 
-  test("an unregistered provider refuses and names the registered ids", async () => {
+  test("an unregistered provider refuses: registered ids fix a typo only, an unmatched forge takes the pr-delivery path or STOPs", async () => {
     const { context } = fixture();
     const refused = await command("pr.merge-gate").execute({ pr: "42", provider: "gitlab" }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unsupported-provider", exitCode: 1 });
-    expect(refused.status === "ok" ? "" : refused.message).toContain("github");
-    expect(refused.status === "ok" ? "" : refused.message).toContain("--provider");
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string | undefined) ?? "";
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // Typo reading: the registered ids still name the correction.
+    expect(refused.status === "ok" ? "" : refused.message).toContain("gitlab");
+    expect(recovery).toContain("--provider <id>");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: github is listed to fix a typo, never as a suggestion that gh can
+    // inspect a GitLab MR — the adapter must match the target forge.
+    expect(recovery).toContain("matches the target forge");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // Forge reading: an unsupported forge enumerates with the project's own
+    // tooling per pr-delivery.md, and STOPs without a documented equivalent.
+    expect(recovery).toContain("pr-delivery.md");
+    expect(recovery).toContain("STOP");
+  });
+
+  test("the waiver retry keeps the selected provider id", async () => {
+    const { context } = fixture();
+    const head = "abcdef0123456";
+    registerMergeGateProvider("wfix", {
+      async resolve() { return { ok: true, value: { head, host: "h", owner: "o", repo: "r" } }; },
+      async threads() {
+        return { ok: true, value: { threads: [{ id: "T9", isResolved: false, isOutdated: false, path: "a.ts", line: 1, author: "x", body: "b" }], hasNextPage: false, endCursor: null, readable: true, headRefOid: head } };
+      },
+    });
+    const refused = await command("pr.merge-gate").execute({ pr: "7", provider: "wfix" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unresolved" });
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: a retry without the flag would rescan through the GitHub adapter.
+    expect(refused.status === "ok" ? "" : (refused.details?.recovery as string)).toContain("--provider wfix");
+  });
+
+  test("a missing provider executable names the tool from the error's executable field or its message", async () => {
+    const { context } = fixture();
+    const gate = command("pr.merge-gate");
+    // see packages/commands/src/effects/process.ts
+    // Field shape: the spawn adapters set `executable` on process.not-found.
+    context.effects.spawn = async () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "process.not-found", exitCode: 127, executable: "gh" }); };
+    const byField = await gate.execute({ pr: "42" }, context);
+    expect(byField).toMatchObject({ status: "refused", code: "process.not-found" });
+    expect(byField.status === "ok" ? "" : (byField.details?.recovery as string) ?? JSON.stringify(byField)).toContain("GitHub CLI");
+    // see packages/commands/src/effects/process.ts
+    // Message shape: a pre-field error still reads the name out of the
+    // normalized `executable not found in $PATH: <name>` text.
+    context.effects.spawn = async () => { throw Object.assign(new Error("executable not found in $PATH: glab"), { code: "process.not-found", exitCode: 127 }); };
+    const byMessage = await gate.execute({ pr: "42" }, context);
+    expect(byMessage).toMatchObject({ status: "refused", code: "process.not-found" });
+    expect(byMessage.status === "ok" ? "" : (byMessage.details?.recovery as string) ?? JSON.stringify(byMessage)).toContain("glab");
   });
 
   test("a registered fixture provider drives the gate without spawning", async () => {

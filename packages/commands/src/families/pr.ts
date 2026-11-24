@@ -49,10 +49,12 @@ const failure = (error: unknown): CommandEnvelope<never> => {
   // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
   // why: the shared fallback only says "correct and rerun"; a missing provider
   // executable is repaired by installing the tool that binary belongs to, and
-  // the exempted prover cannot see that cause. The install hint keys off
-  // `argv[0]`'s name, which the not-found message already carries.
+  // the exempted prover cannot see that cause. Spawn adapters name the missing
+  // binary on the shared `executable` field; the normalized CLI message text
+  // stays a fallback for an error that predates the field.
   if (code === "process.not-found") {
-    const executable = /executable not found in \$PATH: (\S+)/.exec(message)?.[1];
+    const declared = error !== null && typeof error === "object" ? (error as Record<string, unknown>).executable : undefined;
+    const executable = typeof declared === "string" ? declared : /executable not found in \$PATH: (\S+)/.exec(message)?.[1];
     const install = executable === "gh" ? "the GitHub CLI" : `${executable ?? "the provider"} executable`;
     // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
     // reachability: manual — the recovery interpolates the missing executable's own name into one fixed `mstar pr merge-gate` instruction, and every substitution the linter cannot prove is a binary name, not a command path.
@@ -183,7 +185,12 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       command: id, status: "refused", code: `${id}.unsupported-provider`, exitCode: 1,
       message: `merge-gate provider ${providerId} is not registered`,
       details: { provider: providerId, registered: [...mergeGateProviders.keys()] },
-      recovery: `Rerun with a registered provider id (${[...mergeGateProviders.keys()].join(", ")}). Run mstar pr merge-gate --pr <n> --provider <id>.`,
+      // see skills/mstar-roles/references/project-manager/pr-delivery.md
+      // why: an id that names a different forge is not a typo to correct — a
+      // registered adapter can only inspect its own forge's PR, so the
+      // recovery must route an unsupported forge to the documented
+      // project-tooling path instead of naming a GitHub adapter for a GitLab MR.
+      recovery: `If ${providerId} is a typo, rerun with a registered provider id (${[...mergeGateProviders.keys()].join(", ")}): Run mstar pr merge-gate --pr <n> --provider <id>. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, enumerate the threads with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (same owner-approval and waiver rules); when no documented equivalent exists, STOP — never merge.`,
     });
   }
   // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
@@ -238,17 +245,21 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
   let confirmation: ThreadGateConfirmation | undefined;
   if (input.confirm !== undefined) {
     const file = abs(context.cwd, input.confirm);
+    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
+    // why: each retry below re-runs this same invocation, so it must name the
+    // selected provider id — dropping it would silently switch to GitHub.
+    const retry = `mstar pr merge-gate --pr <n> --provider ${providerId} --confirm <file>`;
     if (!existsSync(file)) throw new UsageError(
       `confirmation file not found: ${file}`,
       undefined,
-      "Resolve every unresolved thread and rerun without the flag: Run mstar pr merge-gate --pr <n>. To merge with a named waiver, supply the record: Run mstar pr merge-gate --pr <n> --confirm <file>.",
+      `Resolve every unresolved thread and rerun without the flag: Run mstar pr merge-gate --pr <n> --provider ${providerId}. To merge with a named waiver, supply the record: Run ${retry}.`,
     );
     let raw: string;
     try { raw = readFileSync(file, "utf8"); } catch (error) {
       throw new UsageError(
         `cannot read the confirmation file ${file}: ${error instanceof Error ? error.message : String(error)}`,
         undefined,
-        "Pass a readable confirmation file. Run mstar pr merge-gate --pr <n> --confirm <file>.",
+        `Pass a readable confirmation file. Run ${retry}.`,
       );
     }
     let parsed: unknown;
@@ -256,7 +267,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       throw new UsageError(
         `--confirm must contain valid JSON: ${file}`,
         undefined,
-        "Fix the confirmation record. Run mstar pr merge-gate --pr <n> --confirm <file>.",
+        `Fix the confirmation record. Run ${retry}.`,
       );
     }
     const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
@@ -264,7 +275,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       throw new UsageError(
         "--confirm must be a JSON object {head: string, confirmations: number, threads: string[], digest?: string}",
         undefined,
-        "Correct the record shape. Run mstar pr merge-gate --pr <n> --confirm <file>.",
+        `Correct the record shape. Run ${retry}.`,
       );
     }
     confirmation = { head: row.head, confirmations: row.confirmations, threads: row.threads as string[], ...(typeof row.digest === "string" ? { digest: row.digest } : {}) };
@@ -272,13 +283,18 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
   const decision = decideThreadGate({ head, threads, ...(confirmation === undefined ? {} : { confirmation }) });
   const digest = threadGateDigest(decision.unresolved);
   if (decision.ok) return ok({ mergeAllowed: true, head, total: threads.length, digest, unresolved: decision.unresolved });
+  // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
+  // reachability: manual — the recovery's provider-id interpolation is a registered adapter name (validated against mergeGateProviders before this refusal can emit), not a command path; the runnable command is the literal `mstar pr merge-gate --pr <number> --provider <id> --confirm <file>` it names.
   return refusalEnvelope({
     command: id, status: "refused", code: decision.code, exitCode: 1,
     message: decision.code === "pr.merge-gate.unresolved"
       ? `${decision.unresolved.length} unresolved review thread(s) on ${head} - merge is not authorized`
       : `the confirmation record does not authorize a merge on ${head}`,
     details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems },
-    recovery: "Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --confirm <file>.",
+    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
+    // why: every emitted retry must name the adapter this run selected, or a
+    // non-default provider run would silently retry against GitHub.
+    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider ${providerId} --confirm <file>.`,
   });
 }
 
