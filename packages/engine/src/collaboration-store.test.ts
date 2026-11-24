@@ -46,6 +46,7 @@ import {
   readCollaborationBinding,
   readRemoteCacheAuthority,
   setLocalPredecessorPublicationGapForTest,
+  setRemoteCacheReplacementCommitGapForTest,
   setRemoteCacheReplacementGapForTest,
   setRemoteCacheReplacementPublishGapForTest,
   upgradeCollaborationStore,
@@ -9976,6 +9977,162 @@ describe("pre-v3 remote cache recovery", () => {
       generation,
       checks: [positiveCheck()],
     });
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "confirmed"],
+    ]);
+  }, 30_000);
+
+  test("a withdrawn repair leaves its fork unsettled, so the replacement still refuses", async () => {
+    // invariant: A repair is a REVIEWED RESOLUTION, not a settlement of its own: only a confirmed
+    // repair settles the fork it replaced. Withdrawing the repair (abandoning it) leaves the
+    // original conflict exactly as unsettled as before, and another resolution may still follow -
+    // so the replacement gate stays closed instead of publishing a v3 cache whose fork never merged.
+    const fixture = remoteFixture("remote-v3-withdrawn-repair");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A real conflicted fork with a reviewed repair prepared over it.
+    const conflictedId = "00000000-0000-4000-8000-000000000801";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptOf(await dispatchRemoteIntent(context, conflictedId)), conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000802";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+
+    // note: Back to the v3 generation, which is the shape the replacement floor covers.
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+
+    // invariant: The repair is withdrawn through the real outbox verb on those same bytes.
+    const withdrawn = await abandonRemoteIntent(context, { operationId: repairId, reason: "reviewed repair withdrawn" });
+    expect(withdrawn).toMatchObject({ state: "abandoned" });
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "abandoned"],
+    ]);
+
+    // invariant: No repair ever merged the fork, so the replacement is refused by route and the v3
+    // bytes - the only record of the fork and of the withdrawal - stay exactly in place.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain("outbox-resolve");
+    expect(detailsOf(refused)).toMatchObject({ unsettledIntents: 1 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+  }, 30_000);
+
+  test("a settlement write inside the replacement window is refused, never dropped by the rename", async () => {
+    // invariant: The final probe, the ledger comparison and the rename are one exclusive writer
+    // scope shared with `withRemoteCacheWrite`. A cooperative settlement write that begins inside
+    // that window cannot commit behind the comparison, so the successor never omits evidence that
+    // reached the predecessor: either the write is refused and the carried ledger is complete, or it
+    // committed before the window and the replacement refuses instead. Losing a committed receipt is
+    // the failure this asserts against.
+    const fixture = remoteFixture("remote-v3-concurrent-settlement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
+    // and the conflicted row still accepts appended evidence - exactly the case a receipt landing
+    // inside the replacement window could hide.
+    const conflictedId = "00000000-0000-4000-8000-000000000811";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000812";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+    const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+    confirmSeededIntent(location.dbPath, repairId, {
+      attemptId: "00000000-0000-4000-8000-000000000813",
+      requestHash: repairHash,
+      issueId: JOURNAL_ANCHOR,
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee7",
+      event: recordedEvent(location.dbPath, repairId),
+    });
+    expect(outboxReceipts(location.dbPath)).toHaveLength(2);
+
+    // note: A real settlement write arrives exactly between the comparison and the rename.
+    let settlement = "unknown";
+    setRemoteCacheReplacementCommitGapForTest(() => {
+      return recordRemoteReceipt(context, {
+        ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, { kind: "not-sent", code: "pre-send" }, {
+          generation,
+        }),
+      }).then(
+        () => {
+          settlement = "committed";
+        },
+        (error: unknown) => {
+          settlement =
+            error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+              ? error.code
+              : "failed";
+        },
+      );
+    });
+    let bound: Awaited<ReturnType<typeof bindRemoteAuthority>> | undefined;
+    try {
+      bound = await bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation,
+        checks: [positiveCheck()],
+      });
+    } finally {
+      setRemoteCacheReplacementCommitGapForTest(undefined);
+    }
+
+    // invariant: The window excludes the settlement writer entirely: it is either refused by the
+    // held lane (`store.busy`) - and then nothing was lost, because it never committed - or it
+    // committed BEFORE the comparison, which then refuses the replacement instead. Neither branch
+    // may end with a committed receipt that the successor omits.
+    expect(settlement).toBe("store.busy");
+    const successorReceipts = outboxReceipts(location.dbPath);
+    expect(successorReceipts).toHaveLength(2);
+    expect(successorReceipts.some((row) => row.outcome === "not-sent")).toBe(false);
+    // invariant: The replacement completed over the complete ledger, keeping the recorded identity.
     expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([

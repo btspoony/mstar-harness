@@ -1976,10 +1976,12 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 type OutboxSettlementLink = Readonly<{ state: string; resolvedBy: string | null }>;
 
 /**
- * note: Whether one repair chain reaches a settled terminal (`confirmed` or `abandoned`). The chain
- * is walked because a repair may itself conflict and be repaired again, and it stops at the first
- * row that is still live: an `enqueued` or `unconfirmed` repair is an outstanding send, so the fork
- * it repairs is outstanding with it.
+ * note: Whether one repair chain reaches a settled terminal. Only a CONFIRMED repair settles the
+ * fork it replaced: an `abandoned` repair is a withdrawn review, so the fork it withdrew from is
+ * still repairable and another resolution may follow - it settles nothing. The chain is walked
+ * because a repair may itself conflict and be repaired again, and it stops at the first row that is
+ * still live: an `enqueued` or `unconfirmed` repair is an outstanding send, so the fork it repairs
+ * is outstanding with it.
  */
 function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, start: string): boolean {
   const visited = new Set<string>();
@@ -1988,7 +1990,7 @@ function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, sta
     visited.add(cursor);
     const link = chain.get(cursor);
     if (link === undefined) return false;
-    if (link.state === "confirmed" || link.state === "abandoned") return true;
+    if (link.state === "confirmed") return true;
     if (link.state !== "conflict") return false;
     cursor = link.resolvedBy;
   }
@@ -2194,6 +2196,18 @@ export function setRemoteCacheReplacementPublishGapForTest(
 }
 
 /**
+ * note: The commit seam: runs INSIDE the replacement's exclusive writer scope, after the ledger
+ * comparison passed and before the rename, so a regression shows whether a settlement write that
+ * arrives there is excluded from the window instead of being lost by it.
+ */
+let remoteCacheReplacementCommitGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementCommitGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementCommitGapForTest = callback;
+}
+
+/**
  * invariant: Ensure the store's directory chain exists: every existing component must
  * already be a real directory, and creation makes the missing chain private.
  */
@@ -2277,6 +2291,15 @@ export async function initializeRemoteCacheStore(
     replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
     expectedIdentity: expected,
   });
+}
+
+/** note: The inode the canonical name holds, or `null` when the path holds nothing examinable. */
+function laneInodeOf(dbPath: string): number | null {
+  try {
+    return statSync(dbPath).ino;
+  } catch {
+    return null;
+  }
 }
 
 /** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
@@ -2446,29 +2469,53 @@ async function replaceDerivedLane(
     throw unreadable(dbPath, `its derived cache could not be preserved before replacement (${publicationCause(error)})`);
   }
   try {
-    await remoteCacheReplacementPublishGapForTest?.();
-    // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
-    // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
-    // cache another process advanced while the successor was staged.
-    const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
-    if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
-      // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
-      discardStaging(staged.stagingDir, staged.stagingPath);
-      rmSync(preservedPath, { force: true });
-      return continueExisting(location, timeout);
+    // invariant: The final probe, the ledger comparison and the rename are ONE exclusive writer
+    // scope, shared with `withRemoteCacheWrite`: the predecessor's write lock is held from before
+    // the probe until the rename has run (the replacement lock is already held around this whole
+    // function). A settlement write committed before this attempt took the write lock is therefore
+    // VISIBLE to the comparison and refuses the replacement; one that begins afterwards is refused
+    // `store.busy` with nothing written; and one that opened the predecessor before this scope but
+    // begins afterwards is refused by its own commit-time inode proof. Without the scope, a receipt
+    // committed between the comparison and the rename was dropped by the staged successor.
+    const guard = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true });
+    try {
+      // invariant: The lock transaction writes nothing, so it creates no journal of its own and its
+      // release never rewrites the successor this scope renames into place.
+      guard.exec("begin immediate");
+      // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
+      // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
+      // cache another process advanced while the successor was staged.
+      const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
+      if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
+        // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
+        discardStaging(staged.stagingDir, staged.stagingPath);
+        rmSync(preservedPath, { force: true });
+        return continueExisting(location, timeout);
+      }
+      // invariant: The carried ledger is RE-READ inside the same scope. The unsettled probe above
+      // cannot see a settled row that appeared while the successor was staged (a fork repaired to
+      // confirmation), so an equal ledger is the only proof that the evidence about to be published
+      // is the evidence on disk. A changed ledger keeps the predecessor, exactly like a moved
+      // identity.
+      if (!isDeepStrictEqual(await readSettledOutboxLedger(dbPath, timeout), carried)) {
+        discardStaging(staged.stagingDir, staged.stagingPath);
+        rmSync(preservedPath, { force: true });
+        return continueExisting(location, timeout);
+      }
+      // note: The publication seam stays immediately before the one atomic rename.
+      await remoteCacheReplacementCommitGapForTest?.();
+      await remoteCacheReplacementPublishGapForTest?.();
+      // note: A stale sidecar would otherwise be picked up by the replacement's name.
+      for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+      renameSync(staged.stagingPath, dbPath);
+    } finally {
+      try {
+        guard.exec("rollback");
+      } catch {
+        // note: connection-level failure; closing the handle releases the lock either way
+      }
+      guard.close();
     }
-    // invariant: The carried ledger is RE-READ at the publication boundary. The unsettled probe
-    // above cannot see a settled row that appeared while the successor was staged (a fork repaired
-    // to confirmation), so an equal ledger is the only proof that the evidence about to be published
-    // is the evidence on disk. A changed ledger keeps the predecessor, exactly like a moved identity.
-    if (!isDeepStrictEqual(await readSettledOutboxLedger(dbPath, timeout), carried)) {
-      discardStaging(staged.stagingDir, staged.stagingPath);
-      rmSync(preservedPath, { force: true });
-      return continueExisting(location, timeout);
-    }
-    // note: A stale sidecar would otherwise be picked up by the replacement's name.
-    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
-    renameSync(staged.stagingPath, dbPath);
   } catch (error) {
     // note: The canonical name still holds the predecessor; the preserved duplicate is dropped.
     discardStaging(staged.stagingDir, staged.stagingPath);
@@ -4130,6 +4177,13 @@ async function withWriteLane<T>(
     probe.close();
   }
 
+  // invariant: The bytes this writer commits must still be the bytes its path names. A lane
+  // replacement renames a successor over the canonical name, and a handle opened before that still
+  // addresses the PREDECESSOR inode: committing through it would write evidence into a file the
+  // published cache never carries. The inode is sampled BEFORE the open and re-proved under the
+  // write lock, immediately before commit, so any replacement in between refuses rather than loses
+  // the write.
+  const openedInode = lane === "remote-cache" ? laneInodeOf(dbPath) : null;
   // invariant: The writer never creates the database and never changes its journal mode:
   // a replacement that appears between the probe and here is refused without
   // being converted, and a vanished one cannot be recreated.
@@ -4177,6 +4231,17 @@ async function withWriteLane<T>(
       // generation while this writer waited refuses, and the effect rolls back.
       assertSelectionUnchanged(context, location);
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
+      // invariant: The canonical name still holds the inode this transaction wrote; a cache
+      // replacement that renamed a successor over it while this writer waited refuses here instead
+      // of committing evidence into the replaced predecessor. The transaction rolls back and the
+      // caller retries against the published generation.
+      if (openedInode !== null && laneInodeOf(dbPath) !== openedInode) {
+        throw new StoreError(
+          "collaboration.stale-binding",
+          `The remote cache at ${dbPath} was replaced by another generation while this write held its transaction, so the ` +
+            `bytes it wrote are not the cache this checkout now serves. Re-read the lane and retry; nothing was committed.`,
+        );
+      }
       db.exec("commit");
       return result;
     } catch (error) {
