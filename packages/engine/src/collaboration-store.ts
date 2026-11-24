@@ -35,6 +35,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import {
   AUTHORITY_REF,
   COLLABORATION_BINDING_FILE,
@@ -1971,19 +1972,138 @@ async function continueExisting(location: CollaborationLocation, timeout: number
   return authority;
 }
 
+/** note: One outbox row's state and its `resolved_by` link, as the settlement walk needs them. */
+type OutboxSettlementLink = Readonly<{ state: string; resolvedBy: string | null }>;
+
+/**
+ * note: Whether one repair chain reaches a settled terminal (`confirmed` or `abandoned`). The chain
+ * is walked because a repair may itself conflict and be repaired again, and it stops at the first
+ * row that is still live: an `enqueued` or `unconfirmed` repair is an outstanding send, so the fork
+ * it repairs is outstanding with it.
+ */
+function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, start: string): boolean {
+  const visited = new Set<string>();
+  let cursor: string | null = start;
+  while (cursor !== null && !visited.has(cursor)) {
+    visited.add(cursor);
+    const link = chain.get(cursor);
+    if (link === undefined) return false;
+    if (link.state === "confirmed" || link.state === "abandoned") return true;
+    if (link.state !== "conflict") return false;
+    cursor = link.resolvedBy;
+  }
+  return false;
+}
+
 /**
  * note: The intents whose provider outcome is still unknown. `enqueued` never left the process,
- * `unconfirmed` may have landed, and `conflict` is a provider effect this build refuses to
- * overwrite, so all three are worth preserving through a replacement.
+ * `unconfirmed` may have landed, and a `conflict` keeps counting only while its own repair chain
+ * has reached no settlement: `outbox-resolve` records the repair as a SEPARATE intent and links it
+ * with `resolved_by`, so the original row stays `conflict` for as long as it exists and its raw
+ * state would otherwise make a repaired fork block its own replacement forever.
  */
 function countUnsettledOutboxIntents(db: StoreDb, dbPath: string): number {
-  const row = db
-    .prepare("select count(*) as n from remote_outbox where state in ('enqueued','unconfirmed','conflict')")
-    .get();
-  if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
-    throw unreadable(dbPath, "its remote_outbox intent count cannot be read");
+  const rows = db.prepare("select operation_id, state, resolved_by from remote_outbox").all() as Array<{
+    operation_id?: unknown;
+    state?: unknown;
+    resolved_by?: unknown;
+  }>;
+  const chain = new Map<string, OutboxSettlementLink>();
+  for (const row of rows) {
+    if (typeof row.operation_id !== "string" || typeof row.state !== "string") {
+      throw unreadable(dbPath, "its remote_outbox intent ledger cannot be read");
+    }
+    chain.set(row.operation_id, {
+      state: row.state,
+      resolvedBy: typeof row.resolved_by === "string" ? row.resolved_by : null,
+    });
   }
-  return row.n;
+  let unsettled = 0;
+  for (const link of chain.values()) {
+    if (link.state === "enqueued" || link.state === "unconfirmed") unsettled += 1;
+    else if (link.state === "conflict" && (link.resolvedBy === null || !settlementReached(chain, link.resolvedBy))) {
+      unsettled += 1;
+    }
+  }
+  return unsettled;
+}
+
+/** note: One carried row, column by column, in the order its insert binds them. */
+type CarriedRow = ReadonlyArray<string | number | null>;
+
+/** note: The settled outbox ledger one replacement carries into its successor. */
+type CarriedOutboxLedger = Readonly<{
+  bindings: readonly CarriedRow[];
+  intents: readonly CarriedRow[];
+  receipts: readonly CarriedRow[];
+}>;
+
+/** note: The declared column order of each carried row, so a row is read positionally and unambiguously. */
+const CARRIED_BINDING_COLUMNS =
+  "generation, project_key, selector_commit, provider, workspace_id, team_id, provider_project_id, " +
+  "journal_issue_id, writer_id, verified_at, verification_json";
+const CARRIED_INTENT_COLUMNS =
+  "operation_id, generation, project_key, request_hash, request_json, execution_key_json, state, attempt_id, " +
+  "created_at, updated_at, abandon_reason, resolves, resolved_by";
+const CARRIED_RECEIPT_COLUMNS = "operation_id, receipt_hash, source, outcome, evidence_json, recorded_at";
+
+/**
+ * invariant: A replacement keeps the SETTLED outbox ledger. A confirmed intent's receipt is what a
+ * prepared execution composite reads to finalize without repeating the provider effect, and an
+ * abandoned row is the durable record that no effect will land; both outlive the cache generation
+ * that froze them. Every row still in the predecessor is settled (an unsettled one refused this
+ * replacement before any byte moved), so the successor carries the whole ledger - intents, their
+ * append-only receipts, and the bindings those rows name as their foreign key.
+ *
+ * The rows are read through the ordinary refusing read connection rather than an ATTACH, so a WAL
+ * predecessor's journal is never touched by the successor's build. Reads are ordered by primary key
+ * so the carried ledger is reproducible.
+ */
+async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise<CarriedOutboxLedger> {
+  const db = await connectAt(dbPath, "read", timeout);
+  try {
+    const tables = tableNamesOn(db);
+    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [] };
+    const rows = (sql: string): CarriedRow[] =>
+      (db.prepare(sql).all() as Array<Record<string, string | number | null>>).map((row) => Object.values(row));
+    return {
+      bindings: rows(
+        `select ${CARRIED_BINDING_COLUMNS} from remote_bindings b where exists ` +
+          `(select 1 from remote_outbox o where o.generation = b.generation and o.project_key = b.project_key) ` +
+          `order by generation, project_key`,
+      ),
+      intents: rows(`select ${CARRIED_INTENT_COLUMNS} from remote_outbox order by operation_id`),
+      receipts: tables.has("remote_outbox_receipts")
+        ? rows(`select ${CARRIED_RECEIPT_COLUMNS} from remote_outbox_receipts order by operation_id, receipt_hash`)
+        : [],
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** note: Write one carried outbox ledger into the successor's own (fresh) tables, at commit. */
+function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
+  if (carried.intents.length === 0) return;
+  // why: the intents cite each other through `resolves`/`resolved_by` in either order, so their
+  // foreign keys are proven once the whole carried ledger is in place, at commit.
+  db.exec("pragma defer_foreign_keys = ON");
+  const copy = (sql: string, rows: readonly CarriedRow[]): void => {
+    const insert = db.prepare(sql);
+    for (const row of rows) insert.run(...row);
+  };
+  copy(
+    "insert into remote_bindings(" + CARRIED_BINDING_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    carried.bindings,
+  );
+  copy(
+    "insert into remote_outbox(" + CARRIED_INTENT_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    carried.intents,
+  );
+  copy(
+    "insert into remote_outbox_receipts(" + CARRIED_RECEIPT_COLUMNS + ") values (?, ?, ?, ?, ?, ?)",
+    carried.receipts,
+  );
 }
 
 /**
@@ -2168,12 +2288,17 @@ type StagedStore = Readonly<{ stagingDir: string; stagingPath: string; authority
 /**
  * invariant: Build the complete successor in a private staging directory before it can be named:
  * every supported migration applied in order, the retained (or a fresh) identity recorded, the
- * bytes admitted as this build's own complete store, and the journal folded into one database file.
+ * settled predecessor ledger carried, the bytes admitted as this build's own complete store, and
+ * the journal folded into one database file.
+ *
+ * `carried` is the predecessor's settled outbox ledger, read before the build; writing it here
+ * keeps the copy in the SAME transaction that creates the tables it lands in.
  */
 async function stageCompleteStore(
   location: CollaborationLocation,
   retained: RetainedLaneIdentity | undefined,
   timeout: number,
+  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [] },
 ): Promise<StagedStore> {
   const dbPath = location.dbPath;
   const dir = dirname(dbPath);
@@ -2221,6 +2346,7 @@ async function stageCompleteStore(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
           "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', ?, 0, 0, ?)",
       ).run(location.repoKey, location.mode, retained?.storeId ?? randomUUID(), retained?.epoch ?? 1, at);
+      if (carried.intents.length > 0) carrySettledOutbox(db, carried);
       db.exec("commit");
     } catch (error) {
       try {
@@ -2305,7 +2431,12 @@ async function replaceDerivedLane(
   const dbPath = location.dbPath;
   const retained = await replaceDerivedLaneBelow(location, below, timeout, expected);
   if (retained === undefined) return continueExisting(location, timeout);
-  const staged = await stageCompleteStore(location, retained, timeout);
+  // invariant: The successor carries the predecessor's settled outbox ledger. `replaceDerivedLaneBelow`
+  // proved above that no row is unsettled, so every carried row is an outcome (or an abandonment)
+  // whose evidence a prepared composite still reads; the re-probe below discards this staging if the
+  // bytes it was copied from advanced in the meantime.
+  const carried = await readSettledOutboxLedger(dbPath, timeout);
+  const staged = await stageCompleteStore(location, retained, timeout, carried);
   const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
   try {
     // note: Create-only, so a preserved image of other bytes is never overwritten.
@@ -2322,6 +2453,15 @@ async function replaceDerivedLane(
     const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
     if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
       // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
+      discardStaging(staged.stagingDir, staged.stagingPath);
+      rmSync(preservedPath, { force: true });
+      return continueExisting(location, timeout);
+    }
+    // invariant: The carried ledger is RE-READ at the publication boundary. The unsettled probe
+    // above cannot see a settled row that appeared while the successor was staged (a fork repaired
+    // to confirmation), so an equal ledger is the only proof that the evidence about to be published
+    // is the evidence on disk. A changed ledger keeps the predecessor, exactly like a moved identity.
+    if (!isDeepStrictEqual(await readSettledOutboxLedger(dbPath, timeout), carried)) {
       discardStaging(staged.stagingDir, staged.stagingPath);
       rmSync(preservedPath, { force: true });
       return continueExisting(location, timeout);
