@@ -17,7 +17,7 @@ and workflow-wide serial integration safety remain required.
 Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree safety gate
 starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start`'s integration-branch step, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
-**Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
+**Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**merge-ready loop** 的 PR 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`mstar-roles/references/project-manager/pr-delivery.md`**「Fix boundary」。
 
 This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, PM Acceptance, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
 
@@ -43,7 +43,7 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 
 | 宿主会话 | 工具 | 最小集合 |
 |----------|------|---------|
-| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**PM Acceptance**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.2 第 1–5 项全 `[x]`，即 merge-ready） |
+| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**PM Acceptance**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 3 后 **`delivery-chain`**（open 直至「Merge-ready checklist」第 1–5 项全 `[x]`，即 merge-ready） |
 
 SSOT = ACTIVE store.db 执行行 + `{PLAN_DIR}/` authored plans；todos 只追踪本轮下一步。
 
@@ -218,7 +218,7 @@ After successful real integration and row Done, recover the owned merged feature
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose]
 ```
 
-- 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
+- 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Workflow Close Out）。
 - 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
 - Cleanup never releases exclusion or advances state; direct complete owns that transaction. Ownership remains in row source metadata and retained track Assignments, not presence/absence of historical lease fields. Standalone plans use `branch.target` as evidence base and require terminal close before physical cleanup.
 - **禁止**为让 cleanup 通过而推进/终结父迭代或改执行状态；受保护行保持 `refuse` 是正确行为，不是失败。

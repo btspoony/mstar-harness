@@ -94,11 +94,11 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 /iteration-drive
 ```
 
-**Purpose** — drive the active iteration to completion: Phase 2 Autonomous Execute → Phase 3 iteration-close → Phase 4 Create PR → Phase 5 PR merge-ready → Phase 6 post-merge close. Done is Phase 6 §6.1–§6.4 complete; neither the close, nor an open PR, nor a merged PR is Done by itself.
+**Purpose** — drive the active iteration to completion: Phase 2 Autonomous Execute → Phase 3 iteration-close → Phase 4 Create PR → Phase 5 PR merge-ready → Phase 6 post-merge close. Done is the Phase 6 close complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff); neither the close, nor an open PR, nor a merged PR is Done by itself.
 
 **When/arguments** — resume or advance an already locked iteration, with no arguments. Reject every nonempty argument shape before boot; never reinterpret unsupported input as whole-iteration authorization. PM stays in the primary session; a leaf receiving this command refuses it.
 
-**Defined in** — [`commands/iteration-drive.md`](../commands/iteration-drive.md); phase route and transition gates → `mstar-iteration` (`references/phase-2-worktree-lease.md`, `references/phase-3-iteration-close.md`, `references/phase-4-5-pr-delivery.md`, `references/phase-6-post-merge-close.md`); Phase 5 helper-skill discovery → `references/phase5-helper-discovery.md`.
+**Defined in** — [`commands/iteration-drive.md`](../commands/iteration-drive.md); phase route and transition gates → `mstar-iteration` (`references/phase-2-worktree-lease.md`, `references/phase-3-iteration-close.md`, `mstar-roles/references/project-manager/pr-delivery.md`, `mstar-roles/references/project-manager/workflow-close.md`); helper-skill discovery → `references/pr-helper-discovery.md`.
 
 ### Direct row operations
 
@@ -123,7 +123,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /iteration-loop [direction] [scale]
 ```
 
-**Purpose** — the whole lifecycle Phase 1→6 with minimal human intervention: code-first research and an **autonomous** direction lock (no `grill-me`), then the same execute → close → PR → merge-ready → post-merge close chain. Done is Phase 6 §6.1–§6.4 complete.
+**Purpose** — the whole lifecycle Phase 1→6 with minimal human intervention: code-first research and an **autonomous** direction lock (no `grill-me`), then the same execute → close → PR → merge-ready → post-merge close chain. Done is the Phase 6 close complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff).
 
 **When** — unattended or cloud runs that should not wait on a direction dialogue. `/iteration-start` locks interactively and `/iteration-drive` resumes an already locked iteration.
 

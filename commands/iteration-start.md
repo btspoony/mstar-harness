@@ -1,6 +1,6 @@
 ---
 name: iteration-start
-description: "Start a new harness iteration — research, interactive direction lock, retained design prototype and confirmation, compass/plans, selected specialist Review & Edit, PM lock, integration branch — then auto-continue Phase 2→6 unless `pause` is given."
+description: "Start a new harness iteration — research, interactive direction lock, retained design prototype and confirmation, compass/plans, selected specialist Review & Edit, PM lock, integration branch — then auto-continue Phase 2 and Phase 3, then PR delivery → merge-ready → Workflow Close Out unless `pause` is given."
 agent: project-manager
 input: "[direction] [pause]"
 ---
@@ -11,7 +11,7 @@ Phase 1 of a new iteration. **Phase 1 is complete only when the current prototyp
 
 ## Args
 
-`/iteration-start [direction] [pause]` — a token exactly `pause` (case-insensitive) stops after Phase 1 (lock + integration worktree) so `/iteration-drive` can resume later; the remaining tokens join into `direction`, a free-text hint that narrows the candidates and seeds `grill-me` **without** locking the direction. Without `pause`, auto-continue into Phase 2→6.
+`/iteration-start [direction] [pause]` — a token exactly `pause` (case-insensitive) stops after Phase 1 (lock + integration worktree) so `/iteration-drive` can resume later; the remaining tokens join into `direction`, a free-text hint that narrows the candidates and seeds `grill-me` **without** locking the direction. Without `pause`, auto-continue into Phase 2 and Phase 3, then PR delivery → merge-ready → Workflow Close Out.
 
 ## Boot
 
@@ -24,7 +24,7 @@ Phase 1 of a new iteration. **Phase 1 is complete only when the current prototyp
 3. **Phase 1 completion checklist** — print the §1.6 checklist in full; clear its pre-integration items before step 5, then mark the integration item once the branch push in step 5 has happened.
 4. **Assignment preflight** before every role invoke → **`mstar-iteration/references/command-shared-invariants.md`**.
 5. **Integration branch** → **`mstar-iteration/references/phase-2-worktree-lease.md`** §2.3 checklist steps 1–7; branch anchors live in the compass frontmatter and the ACTIVE workflow, and the plan header records the actual `Main worktree branch`.
-6. **Continue**: no `pause` → execute **`iteration-drive`** for Phase 2→6. With `pause` → stop here and say `/iteration-drive` resumes.
+6. **Continue**: no `pause` → execute **`iteration-drive`** for Phase 2 and Phase 3, then PR delivery → merge-ready → Workflow Close Out. With `pause` → stop here and say `/iteration-drive` resumes.
 
 ## Report
 

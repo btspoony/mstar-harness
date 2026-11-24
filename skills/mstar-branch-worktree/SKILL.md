@@ -236,11 +236,11 @@ Before QC dispatch and PM Acceptance, record implementation-aligned `Review cwd 
 - 已推送分支的任何 history rewrite：先 `git fetch` 记录远端**精确 OID**，发布用 `--force-with-lease=<branch>:<observed-oid>`；**禁止**裸 `--force`。
 - Rewrite 推送后：重新 fetch heads；rewrite 前的 review threads / approvals / check 结果**不再是当前证据** — merge 结论前须重审（commit hash 与 inline-comment anchor 已失效）。
 - 证据最窄原则（audit / PM Acceptance record 场景）：选择会在目标回归上失败的**最窄**检查；不因「push 在即」重跑已通过的检查。
-- 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-iteration` §5.1a。
+- 本节只管 rewrite / lease / 证据失效面；CI / review 波次 push 门禁（时序）SSOT → `mstar-roles/references/project-manager/pr-delivery.md`「Push cadence」。
 
 ## Worktree / branch cleanup（merge 后回收）
 
-Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`; Phase-6 close → `mstar-iteration/references/phase-6-post-merge-close.md` §6.4. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
+Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`; Phase-6 close → `mstar-roles/references/project-manager/workflow-close.md`「Cleanup handoff」. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
 
 ## Workflow
 

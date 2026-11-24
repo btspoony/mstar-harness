@@ -1,6 +1,6 @@
-# Phase 5 helper skill discovery（babysit / greploop）
+# PR helper discovery（babysit / greploop）
 
-> Loaded from **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5（via the iteration command layer；route-map row "Phase 5 helper discovery"）before the first merge-ready loop pass. Search for optional **non-`mstar-*`** helper skills；first readable `SKILL.md` wins per name. Does **not** enter `mstar-*` load order.
+> Optional **command-layer** helper discovery used while a PR is driven to merge-ready；the caller loads it before the first merge-ready loop pass. Search for optional **non-`mstar-*`** helper skills；first readable `SKILL.md` wins per name. Helpers never enter the `mstar-*` load order.
 
 ## Search paths（示例，按宿主扩展）
 
@@ -21,4 +21,4 @@
 
 **No greploop / repo without Greptile**: skip greploop entirely — babysit/`*-babysit` or fallback only。
 
-**All modes** share the §5.2 exit checklist（CI + reviews + mergeable）。**Attached bot is mandatory**：挂载了 review bot 时其通过线是必需门（Greptile 5/5、mstar-inspector `mstar-inspector review` check `success`，由 helper 或手工达成均可）；未挂载 bot 时该面记 `N/A`，不阻塞（§5.1b）——**唯一例外是 `pr_merge_policy: reviewed-bot`**：该 policy 下 bot 面就是授权来源，无 bot 属配置失效而非 `N/A`，且任何 helper 都不得代替 bot 的 verdict 或另起本地 review loop。Helper 只覆盖 CI 与 reviews 两维：§5.2 第 7 项 merge authorization 与第 8 项 merge 完成不由任何 helper 判定，`mstar-pr-loop` 亦不代替 §5.3。
+**All modes** share the merge-ready checklist（`mstar-roles/references/project-manager/pr-delivery.md`「Merge-ready checklist」；CI + reviews + mergeable）。**Attached bot is mandatory**：挂载了 review bot 时其通过线是必需门（Greptile 5/5、mstar-inspector `mstar-inspector review` check `success`，由 helper 或手工达成均可）；未挂载 bot 时该面记 `N/A`，不阻塞（`pr-delivery.md`「Review paths and surfaces」）——**唯一例外是 `pr_merge_policy: reviewed-bot`**：该 policy 下 bot 面就是授权来源，无 bot 属配置失效而非 `N/A`，且任何 helper 都不得代替 bot 的 verdict 或另起本地 review loop。Helper 只覆盖 CI 与 reviews 两维：`pr-delivery.md`「Merge-ready checklist」第 7 项 merge authorization 与第 8 项 merge 完成不由任何 helper 判定，`mstar-pr-loop` 亦不代替「Merge authorization」。

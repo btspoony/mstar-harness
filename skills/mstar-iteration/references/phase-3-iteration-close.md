@@ -68,7 +68,7 @@ At close, review the local ignored per-edit attribution record for this iteratio
 
 **Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
 
-PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；然后进入 **Phase 4**（见 `references/phase-4-5-pr-delivery.md`）：
+PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`；然后进入 **PR delivery**（见 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」）：
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 specs/ADR promotion 完成；package specs 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 specs/ADR 均完成 store catalog 登记（或记明无提升原因）；各 plan compound disposition 已记录
