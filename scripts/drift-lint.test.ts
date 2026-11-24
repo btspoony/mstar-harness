@@ -2408,6 +2408,11 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
       expect(result.hits[0]).toContain("split across the line break");
     }
   });
+
+  test("a probe in a span on the next line stays exempt", () => {
+    const text = "Run the probe:\n`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "`.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/d.md", text }]).hits).toEqual([]);
+  });
 });
 
 describe("checkRetiredStageNames — fence tracking", () => {

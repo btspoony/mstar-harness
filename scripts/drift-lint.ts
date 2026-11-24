@@ -1853,21 +1853,23 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       const blockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(text);
       const previousBlockStarts = /^\s*(?:[-*+>#|]|\d+\.)\s/.test(previous);
       if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
-        // Normalize both lines the same way the matcher does, so a hit that
-        // only exists after a code span or an entity is unwrapped is still
-        // found, and measure the boundary on that normalized text.
+        // Normalize both lines the way the matcher does — probes inside a span
+        // leave it, other span text is judged — so a hit that only exists after
+        // unwrapping is found and an allowed probe is not invented by the join.
         const normalize = (value: string): string =>
           decodeXmlEntities(value)
-            .replace(/`([^`\n]*)`/g, (_match, inner: string) => inner)
-            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner);
+            .replace(/`([^`\n]*)`/g, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "))
+            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "));
         const previousNorm = normalize(previous);
         const joined = `${previousNorm} ${normalize(text)}`;
         for (const hit of findRetiredStageSpellings(joined, false)) {
           if (lineHits.includes(hit)) continue;
-          // Only a match that reaches past the join boundary belongs to the
-          // current line; a hit wholly inside the previous line was reported there.
+          // Only a match that starts in the earlier line and ends in the current
+          // one crosses the boundary; either side alone was reported there.
           const at = joined.indexOf(hit);
-          if (at >= 0 && at + hit.length > previousNorm.length) report(`${index + 1} "${hit}" (split across the line break)`);
+          if (at >= 0 && at < previousNorm.length && at + hit.length > previousNorm.length) {
+            report(`${index + 1} "${hit}" (split across the line break)`);
+          }
         }
       }
       previous = text.trim() === "" ? "" : text;
