@@ -613,11 +613,124 @@ const COLLABORATION_OUTBOX_SCHEMA: Migration = {
   sql: COLLABORATION_OUTBOX_V3_SQL,
 };
 
-/** note: The lane's ordered migrations: v1 is immutable, v2 and the v3 outbox are appended. */
+/**
+ * invariant: v4 `collaboration-cross-authority` - the per-record move ledger over the v3 outbox.
+ * A relation target that lives in another authority has no local issue row, so `to_issue` becomes
+ * nullable beside the new `to_ref` and exactly one of the two is set (the spec's DDL). The partial
+ * unique index deduplicates cross-authority relations because SQLite never compares two NULLs in a
+ * primary key. `issue_moves` is the ledger AND the fence: the source row blocks every write to its
+ * record from `staged` on, enforced by triggers stored here instead of by calling code.
+ */
+const COLLABORATION_MOVE_V4_SQL = `
+create table relations_cross_authority_stage(
+  from_issue text not null references issues(id),
+  relation text not null check (relation in ('related','blocks','duplicate-of','superseded-by')),
+  to_issue text references issues(id),
+  to_ref text,
+  primary key (from_issue, relation, to_issue),
+  check ((to_issue is null) <> (to_ref is null)),
+  check (from_issue is not to_issue),
+  check (relation != 'related' or to_issue is null or from_issue < to_issue)
+);
+insert into relations_cross_authority_stage(from_issue, relation, to_issue)
+  select from_issue, relation, to_issue from relations;
+drop table relations;
+alter table relations_cross_authority_stage rename to relations;
+create unique index relations_to_ref on relations(from_issue, relation, to_ref) where to_ref is not null;
+create table issue_moves(
+  operation_id text not null primary key,
+  role text not null check (role in ('source','destination')),
+  request_hash text not null,
+  issue_ref text not null,
+  source_issue_id text,
+  destination_issue_id text,
+  source_authority text not null,
+  destination_authority text not null,
+  destination_project text not null,
+  phase text not null check (phase in ('staged','verified','switched','published','discarded')),
+  payload_json text not null,
+  payload_digest text not null,
+  staged_counts text not null,
+  source_store_id text not null,
+  source_epoch integer not null check (typeof(source_epoch) = 'integer' and source_epoch > 0),
+  removed_sync_rows integer not null default 0 check (removed_sync_rows >= 0),
+  created_at text not null,
+  updated_at text not null
+);
+create index issue_moves_record on issue_moves(role, issue_ref, phase);
+create unique index issue_moves_blocking on issue_moves(issue_ref)
+  where role = 'source' and phase in ('staged','verified','switched');
+create trigger issues_move_guard_update
+before update on issues
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = old.id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issues_move_guard_delete
+before delete on issues
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = old.id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger relations_move_guard_insert
+before insert on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (new.from_issue, new.to_issue)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger relations_move_guard_update
+before update on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.from_issue, old.to_issue, new.from_issue, new.to_issue)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issue_sync_state_move_guard_insert
+before insert on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = new.local_id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issue_sync_state_move_guard_update
+before update on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.local_id, new.local_id)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+`;
+
+const COLLABORATION_MOVE_SCHEMA: Migration = {
+  version: 4,
+  name: "collaboration-cross-authority",
+  sql: COLLABORATION_MOVE_V4_SQL,
+};
+
+/** note: The lane's ordered migrations: v1 is immutable; v2, the v3 outbox and the v4 move ledger are appended. */
 export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_SCHEMA,
   COLLABORATION_REMOTE_SCHEMA,
   COLLABORATION_OUTBOX_SCHEMA,
+  COLLABORATION_MOVE_SCHEMA,
 ];
 
 /** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
@@ -662,6 +775,7 @@ const COLLABORATION_TABLES: readonly string[] = [
   "collaboration_operations",
   "cutover_publications",
   "issue_counter",
+  "issue_moves",
   "issue_project_moves",
   "issue_sync_state",
   "issue_transitions",
@@ -776,10 +890,26 @@ const COLLABORATION_OUTBOX_COLUMNS: Readonly<Record<string, readonly string[]>> 
   remote_outbox_receipts: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
 };
 
-/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
-export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+/** note: The v4 move ledger's exact columns, and the relation row that may now carry a remote target. */
+const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  relations: ["from_issue", "relation", "to_issue", "to_ref"],
+  issue_moves: [
+    "operation_id", "role", "request_hash", "issue_ref", "source_issue_id", "destination_issue_id", "source_authority",
+    "destination_authority", "destination_project", "phase", "payload_json", "payload_digest", "staged_counts",
+    "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+  ],
+};
+
+/** note: The v3 inventory: the v2 generation plus the outbox tables, before the move ledger widened `relations`. */
+const COLLABORATION_V3_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V2_COLUMNS,
   ...COLLABORATION_OUTBOX_COLUMNS,
+};
+
+/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
+export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ...COLLABORATION_V3_COLUMNS,
+  ...COLLABORATION_MOVE_COLUMNS,
 };
 
 /**
@@ -903,14 +1033,70 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
   ...COLLABORATION_KEY_LAYOUT_OUTBOX,
 ];
 
+/**
+ * note: The v4 keys. `relations.to_issue` is nullable now, so the exactly-one CHECK and the partial
+ * unique index on `to_ref` are what keep a cross-authority row a single, addressable relation; the
+ * blocking-phase index is the fence's own uniqueness.
+ */
+const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
+  {
+    table: "relations",
+    notNull: ["from_issue", "relation"],
+    primaryKey: ["from_issue", "relation", "to_issue"],
+    foreignKeys: [
+      [["from_issue", "issues", "id"]],
+      [["to_issue", "issues", "id"]],
+    ],
+    uniqueIndexes: [
+      { columns: ["from_issue", "relation", "to_ref"], where: "where to_ref is not null" },
+    ],
+    checks: ["check ((to_issue is null) <> (to_ref is null))"],
+  },
+  {
+    table: "issue_moves",
+    notNull: [
+      "operation_id", "role", "request_hash", "issue_ref", "source_authority", "destination_authority",
+      "destination_project", "phase", "payload_json", "payload_digest", "staged_counts", "source_store_id",
+      "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+    ],
+    primaryKey: ["operation_id"],
+    foreignKeys: [],
+    uniqueIndexes: [
+      {
+        columns: ["issue_ref"],
+        where: "where role = 'source' and phase in ('staged','verified','switched')",
+      },
+    ],
+    checks: [
+      "check (role in ('source','destination'))",
+      "check (phase in ('staged','verified','switched','published','discarded'))",
+    ],
+  },
+];
+
+const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
+  ...COLLABORATION_KEY_LAYOUT,
+  ...COLLABORATION_KEY_LAYOUT_MOVE,
+];
+
+/** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
+const COLLABORATION_MOVE_TABLES: readonly string[] = ["issue_moves"];
+
+const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+  (table) => !COLLABORATION_MOVE_TABLES.includes(table),
+);
+
 /** note: The v2 inventory an explicit upgrade from v2 proves before the outbox DDL runs. */
-const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_V3_TABLES.filter(
   (table) => !COLLABORATION_OUTBOX_TABLES.includes(table),
 );
 
 /** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
 const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
-  (table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table),
+  (table) =>
+    !COLLABORATION_REMOTE_TABLES.includes(table) &&
+    !COLLABORATION_OUTBOX_TABLES.includes(table) &&
+    !COLLABORATION_MOVE_TABLES.includes(table),
 );
 
 /**
@@ -1272,13 +1458,19 @@ function assertAdmittedTarget(dbPath: string): void {
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
-  assertKeyLayout(db, dbPath);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
 /** note: The exact v2 shape an upgrade from v2 proves before the v3 delta: a partial v3 refuses. */
 function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V2_TABLES, COLLABORATION_V2_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
+}
+
+/** note: The v3 shape an upgrade from v3 proves before the v4 move DDL: a partial v4 refuses. */
+function assertOutboxSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V2_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
 }
 
 /** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
@@ -1764,12 +1956,27 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 }
 
 /**
+ * note: The intents whose provider outcome is still unknown. `enqueued` never left the process,
+ * `unconfirmed` may have landed, and `conflict` is a provider effect this build refuses to
+ * overwrite, so all three are worth preserving through a replacement.
+ */
+function countUnsettledOutboxIntents(db: StoreDb, dbPath: string): number {
+  const row = db
+    .prepare("select count(*) as n from remote_outbox where state in ('enqueued','unconfirmed','conflict')")
+    .get();
+  if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
+    throw unreadable(dbPath, "its remote_outbox intent count cannot be read");
+  }
+  return row.n;
+}
+
+/**
  * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
  * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
  * singleton naming this repository and mode (and, when this checkout records one, exactly the
- * store identity that record names), and (by being below the outbox schema) no outbox work.
- * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
- * reads: the canonical name is released after the successor is staged, never before.
+ * store identity that record names), and no unsettled outbox work. Anything unreadable, foreign,
+ * newer or another generation's is never touched. This probe only reads: the canonical name is
+ * released after the successor is staged, never before.
  */
 async function replaceDerivedLaneBelow(
   location: CollaborationLocation,
@@ -1779,9 +1986,18 @@ async function replaceDerivedLaneBelow(
 ): Promise<RetainedLaneIdentity | undefined> {
   const dbPath = location.dbPath;
   const db = await connectAt(dbPath, "read", timeout);
-  let recorded: { version: number; meta: CollaborationMeta };
+  let recorded: { version: number; meta: CollaborationMeta; unsettled: number };
   try {
-    recorded = { version: validateCollaborationMigrations(readAppliedMigrations(db, false)), meta: readMeta(db) };
+    const version = validateCollaborationMigrations(readAppliedMigrations(db, false));
+    const meta = readMeta(db);
+    // invariant: A cache below the outbox schema has no outbox at all; one at or above it may
+    // hold intents whose provider outcome is still unknown, and those are the operator's only
+    // record of a send that may have landed.
+    const unsettled =
+      version < COLLABORATION_OUTBOX_SCHEMA.version || !tableNamesOn(db).has("remote_outbox")
+        ? 0
+        : countUnsettledOutboxIntents(db, dbPath);
+    recorded = { version, meta, unsettled };
   } finally {
     db.close();
   }
@@ -1799,6 +2015,21 @@ async function replaceDerivedLaneBelow(
       dbPath,
       recorded.meta,
       `this checkout's recorded cache store ${expected.storeId} epoch ${String(expected.epoch)}`,
+    );
+  }
+  if (recorded.unsettled > 0) {
+    throw new StoreError(
+      "remote.effect-pending",
+      `The remote cache at ${dbPath} holds ${String(recorded.unsettled)} outbox intent(s) whose provider outcome is still ` +
+        `unknown (enqueued, unconfirmed or conflict), so replacing it would destroy the only evidence of a send that may ` +
+        `have landed. Settle them first with ` +
+        `\`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>\`, ` +
+        `\`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, ` +
+        `\`mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->\`, ` +
+        `\`mstar store collaboration remote outbox-resolve --harness <abs> --input <file|->\` or ` +
+        `\`mstar store collaboration remote outbox-abandon --harness <abs> --operation <uuid>\`, then retry the same bind. ` +
+        `Nothing was replaced.`,
+      { unsettledIntents: recorded.unsettled },
     );
   }
   return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
@@ -1902,11 +2133,12 @@ export async function initializeRemoteCacheStore(
   expected?: RetainedLaneIdentity,
 ): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
-  // note: `remote` has existed only since v2, so every pre-current remote cache is below the outbox
-  // schema and holds no outbox work: any of them is replaced, never migrated in place. The floor is
-  // the outbox schema itself, never a later migration, so a cache that HAS an outbox is never replaced.
+  // invariant: A cache is DERIVED observation state, so any generation below this build is
+  // REPLACED by the reviewed bind instead of being refused by it - the floor is the current
+  // version, never an intermediate one. The one thing a replacement may not destroy is unsettled
+  // outbox work, which `replaceDerivedLane` probes and refuses by route before it moves any bytes.
   return createOrContinueStore(location, {
-    replaceBelowVersion: COLLABORATION_OUTBOX_SCHEMA.version,
+    replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
     expectedIdentity: expected,
   });
 }
@@ -2149,6 +2381,7 @@ export type CollaborationUpgradeReceipt = Readonly<{
 export function collaborationInventoryOf(version: number): Readonly<Record<string, readonly string[]>> {
   if (version <= 1) return COLLABORATION_COLUMNS;
   if (version < COLLABORATION_OUTBOX_SCHEMA.version) return COLLABORATION_V2_COLUMNS;
+  if (version < COLLABORATION_MOVE_SCHEMA.version) return COLLABORATION_V3_COLUMNS;
   return COLLABORATION_CURRENT_COLUMNS;
 }
 
@@ -2193,12 +2426,24 @@ export function applyCollaborationLadder(
   }
   // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
   // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
-  assertRemoteCacheSchema(db, dbPath);
-  db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+  if (appliedMax < COLLABORATION_OUTBOX_SCHEMA.version) {
+    assertRemoteCacheSchema(db, dbPath);
+    db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_OUTBOX_SCHEMA.version,
+      COLLABORATION_OUTBOX_SCHEMA.name,
+      migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The v3 shape is proven before the v4 rebuild: a move ledger or a widened
+  // `relations` under a v3 ledger row is a partial apply, refused instead of re-created.
+  assertOutboxSchema(db, dbPath);
+  db.exec(COLLABORATION_MOVE_SCHEMA.sql);
   db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-    COLLABORATION_OUTBOX_SCHEMA.version,
-    COLLABORATION_OUTBOX_SCHEMA.name,
-    migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+    COLLABORATION_MOVE_SCHEMA.version,
+    COLLABORATION_MOVE_SCHEMA.name,
+    migrationChecksum(COLLABORATION_MOVE_SCHEMA),
     nowRfc3339(),
   );
   assertCurrentSchema(db, dbPath);

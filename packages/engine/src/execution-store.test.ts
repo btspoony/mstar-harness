@@ -3155,6 +3155,36 @@ describe("execution-composite-intents: the reservation ledger", () => {
     }
   });
 
+  test("migration 22 admits the issue-move kind and keeps a prepared reservation", async () => {
+    const { context, epoch } = await freshStore("composite-intents-move");
+    const db = rawDb(storePath(context));
+    try {
+      seedExecutionGraph(db);
+      const move = (operationId: string, phase: "prepared" | "confirmed"): void => {
+        db.prepare(
+          "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+            "workflow_id, plan_id, actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+            "values ('store-1', ?, ?, 'issue-move', ?, 'wf-1', 'p-1', 'project-manager', 'token', 1, '{}', '{}', ?, ?, ?)",
+        ).run(epoch, operationId, `hash-${operationId}`, phase, TS, TS);
+      };
+      // invariant: A prepared move reservation holds the plan row exactly like any other kind, so
+      // the rebuild cannot have dropped the pending-plan exclusion on the way to `issue-move`.
+      move("move-a", "prepared");
+      expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(
+        /UNIQUE|unique/,
+      );
+      move("move-a", "confirmed");
+      // note: The kind vocabulary stays closed around the new member.
+      expect(() =>
+        db
+          .prepare("update execution_collaboration_intents set kind = 'issue-copy' where operation_id = 'move-a'")
+          .run(),
+      ).toThrow(/CHECK|check/);
+    } finally {
+      db.close();
+    }
+  });
+
   test("the reservation is keyed by execution generation, so another epoch never adopts it", async () => {
     const { context, epoch } = await freshStore("composite-intents-epoch");
     const db = rawDb(storePath(context));

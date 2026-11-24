@@ -100,6 +100,11 @@ export type StoreErrorCode =
   // refuse it because the provider, not these rows, is the authority.
   | "collaboration.mode-unavailable"
   | "collaboration.operation-partial"
+  // invariant: One record's staged move (cross-authority-move.ts, lane v4): its source row freezes
+  // the record from `staged` on, so a write to it is `issue.move-in-progress`, and a phase the
+  // state machine does not allow forward is `collaboration.move-phase-invalid`.
+  | "issue.move-in-progress"
+  | "collaboration.move-phase-invalid"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
   // note: Remote observation evidence: a scope the host could not verify, the snapshot gap a
@@ -2107,6 +2112,49 @@ create unique index execution_collaboration_intents_pending_plan
   where phase = 'prepared' and plan_id is not null;
 `;
 
+/**
+ * Migration 22 - the `issue-move` composite kind reaches the storage CHECK.
+ *
+ * Migration 21 closed `execution_collaboration_intents.kind` to the four composite kinds and a
+ * CHECK cannot be altered, so the ledger is rebuilt with `issue-move` added. The table is
+ * referenced by nothing and references nothing, so the same stage/copy/drop/rename/restore
+ * pattern the severity and disposition rebuilds use applies unchanged: rows are copied verbatim
+ * and the pending-plan index is restored, because a live `prepared` reservation is exactly what a
+ * rebuild must not lose.
+ */
+export const MIGRATION_22_SQL = `
+create table execution_collaboration_intents_v22_stage as
+  select * from execution_collaboration_intents;
+drop table execution_collaboration_intents;
+create table execution_collaboration_intents(
+  execution_store_id text not null,
+  execution_epoch integer not null check (execution_epoch > 0),
+  operation_id text not null,
+  kind text not null check (kind in ('residual-add','residual-close','execution-register','execution-import','issue-move')),
+  request_hash text not null,
+  workflow_id text,
+  plan_id text,
+  actor text not null,
+  expected_token text not null,
+  reserved_revision integer not null check (reserved_revision > 0),
+  target_json text not null,
+  frozen_payload text not null,
+  phase text not null check (phase in ('prepared','declined','confirmed')),
+  receipt_json text,
+  cause_code text,
+  cause_message text,
+  cause_details_json text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (execution_store_id, execution_epoch, operation_id)
+);
+insert into execution_collaboration_intents select * from execution_collaboration_intents_v22_stage;
+drop table execution_collaboration_intents_v22_stage;
+create unique index execution_collaboration_intents_pending_plan
+  on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
+  where phase = 'prepared' and plan_id is not null;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -2130,6 +2178,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
   { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
   { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
+  { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

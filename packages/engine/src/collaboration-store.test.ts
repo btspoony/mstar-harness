@@ -154,6 +154,7 @@ const COLLABORATION_TABLES = [
   "collaboration_operations",
   "cutover_publications",
   "issue_counter",
+  "issue_moves",
   "issue_project_moves",
   "issue_sync_state",
   "issue_transitions",
@@ -373,7 +374,7 @@ describe("collaboration store", () => {
       repoKey: "github.com/acme/staged",
       mode: "local",
       state: "staged",
-      schemaVersion: 3,
+      schemaVersion: 4,
       epoch: 1,
       revision: 0,
       catalogRevision: 0,
@@ -396,6 +397,7 @@ describe("collaboration store", () => {
       { version: 1, name: "collaboration-core" },
       { version: 2, name: "collaboration-remote-cache" },
       { version: 3, name: "collaboration-remote-outbox" },
+      { version: 4, name: "collaboration-cross-authority" },
     ]);
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
@@ -504,7 +506,7 @@ describe("collaboration store", () => {
     const writer = new DatabaseSync(location.dbPath);
     try {
       writer
-        .prepare("insert into schema_version(version, name, checksum, applied_at) values (4, 'future', 'x', ?)")
+        .prepare("insert into schema_version(version, name, checksum, applied_at) values (5, 'future', 'x', ?)")
         .run("2026-11-21T00:00:00.000Z");
       // invariant: A newer layout no longer matches this build's inventory; the verdict is
       // still the upgrade requirement, never "damaged store".
@@ -514,7 +516,7 @@ describe("collaboration store", () => {
     }
     const expected = {
       code: "store.schema-unsupported",
-      details: { storeSchemaVersion: 4, supportedSchemaMax: 3, firstUnsupportedMigration: 4 },
+      details: { storeSchemaVersion: 5, supportedSchemaMax: 4, firstUnsupportedMigration: 5 },
     };
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject(expected);
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject(expected);
@@ -1535,12 +1537,12 @@ describe("collaboration remote schema ladder", () => {
     expect(receipt).toMatchObject({
       version: 1,
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: 4,
       storeId: "v1-store",
       epoch: 1,
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
 
     const refs = issueRefs(location.dbPath);
     expect(refs.map((row) => row.id)).toEqual(["I-000001", "I-000002"]);
@@ -1559,10 +1561,10 @@ describe("collaboration remote schema ladder", () => {
 
     // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
     const replay = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(replay).toMatchObject({ fromVersion: 3, toVersion: 3, issuesBackfilled: 0 });
+    expect(replay).toMatchObject({ fromVersion: 4, toVersion: 4, issuesBackfilled: 0 });
     expect(issueRefs(location.dbPath)).toEqual(refs);
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(4);
   });
 
   test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
@@ -1625,7 +1627,7 @@ describe("collaboration remote schema ladder", () => {
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
   });
 
   test("a current lane whose recorded migration name or checksum is unknown refuses admission and replay", async () => {
@@ -1696,11 +1698,11 @@ describe("collaboration remote schema ladder", () => {
     activate(stale.dbPath);
     expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: 4,
       storeId: "v1-store",
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3, 4]);
   });
 
   test("an unbound checkout adopts an intact v1 lane, then upgrades it", async () => {
@@ -1751,8 +1753,8 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
 
     const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 3, storeId: "v1-store", issuesBackfilled: 2 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 4, storeId: "v1-store", issuesBackfilled: 2 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
     expect(issueCount(location.dbPath)).toBe(2);
   });
 
@@ -1767,12 +1769,12 @@ describe("collaboration remote schema ladder", () => {
     await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
 
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 3, storeId: "v1-store", issuesBackfilled: 0 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 4, storeId: "v1-store", issuesBackfilled: 0 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
     expect(tableNames(location.dbPath)).toEqual(COLLABORATION_TABLES);
     // invariant: The upgraded lane admits as current only when the outbox keys, state
     // vocabulary and composite binding key match the declared v3 layout.
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(4);
 
     // note: Half of the v3 delta (one outbox table without its ledger row) is a partial apply.
     const partialRepo = makeRepo("https://github.com/v3-upgrade/partial-v3.git");
@@ -2230,7 +2232,7 @@ describe("remote observation cache", () => {
 
     // invariant: `store init` requires the populated remote binding and never creates a local
     // authority in its place.
-    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 3 });
+    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 4 });
 
     // invariant: A restored local image never reauthorizes the provider. The receipt and
     // attestation are placeholders: the route refuses before either is read.
@@ -9133,6 +9135,28 @@ describe("remote outbox qc fixes", () => {
 // note: A pre-v3 remote cache is derived observation state: the reviewed bind replaces it
 // ---------------------------------------------------------------------------
 
+/**
+ * note: A real v3 REMOTE cache: the v1 body, the v2 delta, the v3 outbox and their three ledger
+ * rows, with `remote` selected. This is the generation the replacement floor now has to cover.
+ */
+function writeV3RemoteLane(location: CollaborationLocation): void {
+  writeV2RemoteLane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    const v3 = COLLABORATION_MIGRATIONS[2]!;
+    db.exec(v3.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v3.version,
+      v3.name,
+      migrationChecksum(v3),
+      "2026-11-21T00:00:00.000Z",
+    );
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: A real pre-v3 REMOTE cache: `remote` exists only since v2, so this is the oldest remote shape. */
 function writeV2RemoteLane(location: CollaborationLocation): void {
   writeV2Lane(location);
@@ -9312,5 +9336,97 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "enqueued" }));
+  }, 30_000);
+
+  test("a v3 cache with no unsettled intent is replaced by the bind, and one with an unsettled intent is refused", async () => {
+    // note: The replacement floor covers the whole generation below this build, so a v3 cache - the
+    // outbox's own generation - is replaced instead of refusing the bind that is its only recovery.
+    const cleanFixture = remoteFixture("remote-v3-clean");
+    const cleanCommit = cleanFixture.publish(cleanFixture.payload());
+    const cleanGeneration = Number(cleanFixture.payload().generation);
+    const cleanContext = contextAt(cleanFixture.repo);
+    const cleanLocation = locationAt(cleanFixture.repo);
+    writeV3RemoteLane(cleanLocation);
+    const cleanRecorded = recordedGeneration(cleanLocation);
+    writeRemoteCollaborationBinding(cleanContext, {
+      repoKey: cleanFixture.repoKey,
+      selectorCommit: cleanCommit,
+      generation: cleanGeneration,
+      ...cleanRecorded,
+    });
+    expect(ledgerVersions(cleanLocation.dbPath)).toEqual([1, 2, 3]);
+
+    const replaced = await bindRemoteAuthority(cleanContext, {
+      version: 1,
+      selectorCommit: cleanCommit,
+      generation: cleanGeneration,
+      checks: [positiveCheck()],
+    });
+    expect(replaced).toMatchObject({ generation: cleanGeneration, binding: { mode: "remote", ...cleanRecorded } });
+    expect(ledgerVersions(cleanLocation.dbPath)).toEqual(REGISTRY_VERSIONS);
+
+    // invariant: A cache whose provider outcome is still unknown is the operator's only evidence of
+    // a send that may have landed, so it is refused by name and left exactly in place.
+    const frozenFixture = remoteFixture("remote-v3-frozen");
+    const frozenCommit = frozenFixture.publish(frozenFixture.payload());
+    const frozenGeneration = Number(frozenFixture.payload().generation);
+    const frozenContext = contextAt(frozenFixture.repo);
+    const frozenLocation = locationAt(frozenFixture.repo);
+    writeV3RemoteLane(frozenLocation);
+    const frozenRecorded = recordedGeneration(frozenLocation);
+    writeRemoteCollaborationBinding(frozenContext, {
+      repoKey: frozenFixture.repoKey,
+      selectorCommit: frozenCommit,
+      generation: frozenGeneration,
+      ...frozenRecorded,
+    });
+    const unsettledId = "00000000-0000-4000-8000-0000000007d1";
+    const seeded = new DatabaseSync(frozenLocation.dbPath);
+    try {
+      seeded
+        .prepare(
+          "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+            "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', ?, ?, ?, ?, ?, '{}')",
+        )
+        .run(
+          frozenGeneration,
+          SELECTED_PROJECT.localProjectId,
+          frozenCommit,
+          SELECTED_PROJECT.workspaceId,
+          SELECTED_PROJECT.teamId,
+          SELECTED_PROJECT.projectId,
+          SELECTED_PROJECT.journalIssueId,
+          new Date(Date.now() - 1_000).toISOString(),
+        );
+      seeded
+        .prepare(
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+            "created_at, updated_at) values (?, ?, ?, 'frozen-hash', '{}', 'unconfirmed', ?, ?)",
+        )
+        .run(
+          unsettledId,
+          frozenGeneration,
+          SELECTED_PROJECT.localProjectId,
+          "2026-11-21T00:00:00.000Z",
+          "2026-11-21T00:00:00.000Z",
+        );
+    } finally {
+      seeded.close();
+    }
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(frozenContext, {
+        version: 1,
+        selectorCommit: frozenCommit,
+        generation: frozenGeneration,
+        checks: [positiveCheck()],
+      }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain("outbox-dispatch");
+    expect(refused.message).toContain("outbox-receipt");
+    expect(outboxRows(frozenLocation.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "unconfirmed" }),
+    );
+    expect(ledgerVersions(frozenLocation.dbPath)).toEqual([1, 2, 3]);
   }, 30_000);
 });

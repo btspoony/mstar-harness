@@ -88,7 +88,11 @@ export {
   resolveRepoRoot,
 } from "./mstarc.js";
 export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
-export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+export {
+  CollaborationIdentityError,
+  collaborationLocationOfRepoKey,
+  resolveCollaborationLocation,
+} from "./collaboration-identity.js";
 // note: The collaboration lane's own store: independent staged schema, create-only
 // publication and active-only handles. No execution table or method.
 export type {
@@ -210,6 +214,19 @@ export {
   applyCollaborationCutover,
   planCollaborationCutover,
 } from "./collaboration-cutover.js";
+// note: One record's staged move: the source row is the ledger and the fence, and the phase set is
+// forward-only. The orchestration (stage/verify/switch/publish/discard) is not part of this surface.
+export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
+export {
+  advanceIssueMove,
+  assertMoveTransition,
+  assertRecordWritable,
+  BLOCKING_MOVE_PHASES,
+  blockingMoveFor,
+  isForwardMoveTransition,
+  readIssueMove,
+  recordIssueMove,
+} from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
