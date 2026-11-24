@@ -2328,6 +2328,10 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
     expect(findRetiredStageSpellings("Phase 14 shipped")).toEqual([]);
     expect(findRetiredStageSpellings("Phases 12 to 14")).toEqual([]);
   });
+
+  test("a long number before a retired stage does not hide it", () => {
+    expect(findRetiredStageSpellings("Phase 123 to 4").length).toBeGreaterThan(0);
+  });
 });
 
 describe("checkRetiredStageNames — fence tracking", () => {
@@ -2409,7 +2413,8 @@ describe("readRetiredStageCorpus — Guard 16 scope", () => {
       write(ownProcess, "Phase 4\n");
       write("scripts/notes.md", "Phase 4\n");
       write("assets/diagram.svg", "<text>Phase 4</text>\n");
-      const tracked = new Set([skill, ownProcess, "scripts/notes.md", "assets/diagram.svg"]);
+      write("assets/nested/diagram.svg", "<text>Phase 4</text>\n");
+      const tracked = new Set([skill, ownProcess, "scripts/notes.md", "assets/diagram.svg", "assets/nested/diagram.svg"]);
       const read = readRetiredStageCorpus(dir, tracked);
       expect(read.readFailures).toEqual([]);
       expect(read.files.map((file) => file.rel).sort()).toEqual([skill, "assets/diagram.svg"].sort());

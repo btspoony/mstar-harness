@@ -1635,12 +1635,12 @@ const RETIRED_SECTION_WORD = /\b(?:policy|section)\s+[56]\.\d+/gi;
 /** why: a stage number is the whole number, so `Phase 14` is not stage 4. */
 const isRetiredStage = (digits: string): boolean => digits === "4" || digits === "5" || digits === "6";
 /** A compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
-const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]{1,2})\b/gi;
+const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]+)\b/gi;
 /** A stage run after `phase(s)`: numbers joined only by list separators, so a
  * sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
  * does not read as a list. */
 const STAGE_RUN =
-  /\bphases?\s*[:：]?\s*([0-9]{1,2}(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]{1,2})*)/gi;
+  /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
 /** An inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
 const INLINE_CODE = /`([^`\n]*)`/g;
@@ -1779,8 +1779,8 @@ export function readRetiredStageCorpus(
     const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
     if (!inRoot && !RETIRED_STAGE_FILES.includes(rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
-    // The diagram root is text only as SVG; anything else under assets/ is an image.
-    if (rel.startsWith("assets/") && !rel.endsWith(".svg")) continue;
+    // The diagram addition is `assets/*.svg`: a nested SVG is not the diagram face.
+    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.svg$/.test(rel)) continue;
     if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
     if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
     try {
