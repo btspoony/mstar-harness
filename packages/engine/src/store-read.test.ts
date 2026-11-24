@@ -1809,6 +1809,45 @@ describe("remote read boundary", () => {
     return { fixture, context, commit, check };
   }
 
+  test("a milestone document carrying target or an invalid effortSessions is refused, and a valid effortSessions is admitted", async () => {
+    const { context, commit, check } = await boundScope("remote-milestone-effort");
+    const refusal = async (label: string, mutate: (snapshot: RemoteSnapshot) => void) => {
+      const snapshot = structuredClone(completeSnapshot(check));
+      mutate(snapshot);
+      try {
+        await ingestRemoteObservation(context, submission(commit, check, snapshot, 1));
+        throw new Error(`expected ${label} to be refused`);
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      }
+    };
+
+    const retired = await refusal("a target field", (snapshot) => {
+      (snapshot.project.milestones[0] as Record<string, unknown>).target = "2026-12-01";
+    });
+    expect(retired.code).toBe("remote.input-invalid");
+    expect(retired.message).toBe(
+      `[${retired.code}] submission.snapshot.project.milestones[0].target: \"target\" is retired; submit \"effortSessions\" as null or an integer of at least 1 (a count of standard sessions). Nothing was written.`,
+    );
+
+    for (const [label, mutate] of [
+      ["a missing effortSessions", (s: RemoteSnapshot) => { delete (s.project.milestones[0] as Record<string, unknown>).effortSessions; }],
+      ["a non-integer effortSessions", (s: RemoteSnapshot) => { s.project.milestones[0].effortSessions = 1.5; }],
+      ["a below-1 effortSessions", (s: RemoteSnapshot) => { s.project.milestones[0].effortSessions = 0; }],
+    ] as const) {
+      const error = await refusal(label, mutate);
+      expect(error.code).toBe("remote.input-invalid");
+      expect(error.message).toContain("submission.snapshot.project.milestones[0].effortSessions:");
+    }
+
+    const admitted = structuredClone(completeSnapshot(check));
+    admitted.project.milestones[0].effortSessions = 3;
+    expect(await ingestRemoteObservation(context, submission(commit, check, admitted, 1))).toBeDefined();
+    const cleared = structuredClone(completeSnapshot(check));
+    cleared.project.milestones[0].effortSessions = null;
+    expect(await ingestRemoteObservation(context, submission(commit, check, cleared, 2))).toBeDefined();
+  });
+
   /** note: Two selected projects bound; only A is observed, so a test chooses B's evidence. */
   async function twoProjectBind(name: string) {
     const fixture = createRemoteScope(ROOT, name);
