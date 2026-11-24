@@ -4,7 +4,7 @@
 
 | Caller | Route inputs |
 |---|---|
-| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.target` and `integration_worktree_path` — mirrored in the compass frontmatter; the head is always a layer ref in `iteration-stack/<iteration-id>/sNN` and never `branch.integration`, and the base is `branch.target` for the first open layer or the live predecessor layer ref for every other layer, per `mstar-iteration/references/pr-stack.md`; the compass `pr_merge_policy` selects the review path and the compass `PR stack` table records the chain. |
+| Iteration | The anchors recorded on the ACTIVE workflow execution row — `branch.target` and `integration_worktree_path` — mirrored in the compass frontmatter; for a stack the head is always a layer ref in `iteration-stack/<iteration-id>/sNN` and never `branch.integration`, while an iteration that already has an aggregate PR finishes that PR per `mstar-iteration/references/pr-stack.md`「Rollout」, and the base is `branch.target` for the first open layer or the live predecessor layer ref for every other layer, per `mstar-iteration/references/pr-stack.md`; the compass `pr_merge_policy` selects the review path and the compass `PR stack` table records the chain. |
 | Standalone development | Its registered delivery branch and target. |
 | Report-only | None: a report-only workflow has no PR and does not enter this file. |
 
@@ -12,13 +12,13 @@
 
 ## Stacked PRs (iteration only)
 
-An iteration is delivered as a chain of stacked PRs, never as one aggregate PR: each PR's head is a layer ref and its base is its live predecessor layer, or `branch.target` for the first open layer — `branch.integration` is never an iteration PR's head — `mstar-iteration/references/pr-stack.md` owns slicing, order, tracking, prefix approval, per-layer reconciliation and whole-chain proof, while everything else on this page applies per PR (publish, push cadence, review paths and surfaces, merge-ready, authorization, head reconciliation, the conversation gate). The single-PR predicates below stay whole for a standalone development PR and for a chain's last layer.
+A stack delivers an iteration as a chain of stacked PRs, never as one aggregate PR: every stacked layer PR's head is a layer ref and its base is its live predecessor layer, or `branch.target` for the first open layer — `branch.integration` is never a stacked layer's head — and an iteration that already has an aggregate PR finishes it per `mstar-iteration/references/pr-stack.md`「Rollout」 instead of converting it. That file owns slicing, order, tracking, prefix approval, per-layer reconciliation and whole-chain proof, while everything else on this page applies per PR (publish, push cadence, review paths and surfaces, merge-ready, authorization, head reconciliation, the conversation gate). The single-PR predicates below stay whole for a standalone development PR and for a chain's last layer.
 
 ## Publish the PR
 
 1. 打印 **`## PR delivery`**
 2. Resolve base：iteration → 首个 open layer（无论是否已有 merged prefix）用 ACTIVE workflow 执行行 `branch.target`（compass frontmatter 镜像），其余 layer 用 live predecessor layer ref；standalone → registered target。base 缺失或 predecessor 不可核实 → **STOP**，问用户
-3. 创建 PR：iteration 的 head 永远是该 PR 的 layer ref `iteration-stack/<iteration-id>/sNN`（final close-delta layer 同样如此；`branch.integration` 从不作 PR head），base 按 step 2；standalone → registered delivery branch → registered target
+3. 创建 PR：iteration 的 head 永远是该 PR 的 layer ref `iteration-stack/<iteration-id>/sNN`（final close-delta layer 同样如此；`branch.integration` 从不作 stacked layer 的 PR head，已开的聚合 PR 走「Rollout」），base 按 step 2；standalone → registered delivery branch → registered target
 4. **Iteration:** PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
 5. **Iteration:** PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `reviewed-bot` / `owner-gated`）—— reviewer 据此知道本 PR 的 review 由本地 loop 还是挂载的 bot 提供，以及是否被期待给出 merge 批准
 6. Follow the shared public PR body interface → `mstar-roles/references/project-manager/pr-description.md`; item 4 above is that interface's residual disclosure applied to the iteration's plans, and item 5 is iteration-only.
@@ -30,7 +30,7 @@ An iteration is delivered as a chain of stacked PRs, never as one aggregate PR: 
 - **Iteration.** 修复在 PR head（该 PR 的 layer ref）上 push；**禁止**另开替代分支
 - **Checkout / worktree（HARD，iteration）**：本 loop 是 PR 级 **hotfix** loop。产品修复在从**该 PR 的 layer ref** 出的独立 **fix feature worktree** 上编辑、commit；review 后由**该 PR 的单一 pusher** fast-forward 或 merge 到该 layer ref，再按 「Push cadence」 push。禁止在 layer ref、integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
   Hotfix commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
-- **Coordinator integration.** `branch.integration` 由 coordinator 在 checkpoint 串行写入（integration worktree，路径取 ACTIVE workflow 执行行 `integration_worktree_path`），并向受影响的上层 layer 传播 → `mstar-iteration/references/pr-stack.md`（Propagation）。它是 integration 的写入点，不是任何 PR 的 head 或修复位置。
+- **Coordinator integration.** `branch.integration` 由 coordinator 在 checkpoint 串行写入（integration worktree，路径取 ACTIVE workflow 执行行 `integration_worktree_path`），并向受影响的上层 layer 传播 → `mstar-iteration/references/pr-stack.md`（Propagation）。它是 integration 的写入点，不是任何 stacked layer 的 head 或修复位置（聚合 PR 的修复边界按 `mstar-iteration/references/pr-stack.md`「Rollout」）。
 - **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges the reviewed fix onto that PR's layer ref.
 - **Standalone development.** The fix is committed on the registered delivery branch in its dedicated worktree and pushed under 「Push cadence」, never the primary checkout (fix sites table → `mstar-pr-loop/SKILL.md`); the hotfix identity rule above still applies.
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
