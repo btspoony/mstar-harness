@@ -1946,6 +1946,30 @@ function conflictRepairSettled(
   return false;
 }
 
+/**
+ * note: The one published route out of a cache whose bytes an in-place settlement cannot honor.
+ * A single text because three refusals publish it (the damaged-link branch, the laundering
+ * branch and the receipt guard in collaboration-remote.ts), and because the cache can hold OTHER
+ * unsettled intents - including a permitted send whose provider outcome is unknown. Stopping a
+ * checkout proves nothing about those effects, so nothing may be deleted before they are settled
+ * and the bytes recording them are retained: a fresh bind never restores an attempt id, a frozen
+ * request or a receipt.
+ */
+export const REMOTE_CACHE_REBUILD_ROUTE =
+  "rebuild the derived cache through the ordinary bootstrap - stop every checkout of this repository that has " +
+  "the cache bound (the cache is user-level, not per checkout); settle every other unsettled intent that cache " +
+  "holds through the outbox verbs its own state line names, before anything is removed, because stopping a " +
+  "checkout proves nothing about a permitted send whose outcome is unknown at the provider, and the file holds " +
+  "the only attempt ids, frozen requests and receipts that settling such an intent needs; for anything still " +
+  "unsettled or unreadable, keep the cache file as evidence - move it aside under a retained name instead of " +
+  "deleting it, since it is the only record of an effect that may already have happened at the provider and a " +
+  "fresh bind never restores it; then confirm the checked selector and this checkout's binding satisfy a fresh " +
+  "reviewed bind, and if they do not, correct the selector and keep the retained copy until they do, deleting " +
+  "nothing; only then remove the name the checkout " +
+  "reads (or confirm it is gone), run `mstar store collaboration remote status`, and perform a fresh reviewed " +
+  "remote bind - and the pending intent's record is not preserved by the rebuild itself: the retained copy " +
+  "preserves it, and an operator can inspect it later.";
+
 async function replaceDerivedLaneBelow(
   location: CollaborationLocation,
   below: number,
@@ -2049,11 +2073,7 @@ async function replaceDerivedLaneBelow(
     // that is `confirmed` AND holds its recorded receipt never reaches this branch: the settle
     // rule dropped its parent row, so an unblocked bind needs no line. A link this scope cannot
     // honor is named as damaged, never as an absent one: `outbox-resolve` refuses while it stands.
-    const rebuild =
-      "rebuild the derived cache through the ordinary bootstrap - stop every checkout of this repository that has " +
-      "the cache bound (the cache is user-level, not per checkout), remove the cache file, run " +
-      "\\`mstar store collaboration remote status\\`, then perform a fresh reviewed remote bind - and the " +
-      "pending intent's record is not preserved.";
+    const rebuild = REMOTE_CACHE_REBUILD_ROUTE;
     const conflictStep = (repair: ConflictRepairHop): string => {
       if (repair.kind === "damaged") {
         return shown("<uuid>") + ". Its recorded resolvedBy link is damaged - the operation it names is missing, " +

@@ -9995,9 +9995,24 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("recorded state contradicts its recorded evidence");
     expect(refused.message).toContain("rebuild the derived cache through the ordinary bootstrap");
     expect(refused.message).toContain("stop every checkout of this repository that has the cache bound");
-    expect(refused.message).toContain("run \\\`mstar store collaboration remote status\\\`");
+    expect(refused.message).toContain("settle every other unsettled intent that cache holds through the outbox verbs its own state line names");
+    expect(refused.message).toContain("keep the cache file as evidence - move it aside under a retained name instead of deleting it");
+    expect(refused.message).not.toContain("remove the cache file");
+    expect(refused.message).toContain("run `mstar store collaboration remote status`");
     expect(refused.message).toContain("fresh reviewed remote bind");
-    expect(refused.message).toContain("the pending intent's record is not preserved");
+    expect(refused.message).toContain("the pending intent's record is not preserved by the rebuild itself");
+    expect(refused.message).toContain("the retained copy preserves it, and an operator can inspect it later");
+    // invariant: The destructive order cannot come back: the route settles the cache's OTHER
+    // intents, retains the bytes as evidence, proves the rebind, and only then removes the name.
+    const route = [
+      "settle every other unsettled intent",
+      "keep the cache file as evidence",
+      "confirm the checked selector and this checkout's binding satisfy a fresh reviewed bind",
+      "remove the name the checkout reads",
+      "mstar store collaboration remote status",
+    ].map((step) => refused.message.indexOf(step));
+    for (const at of route) expect(at).toBeGreaterThan(-1);
+    expect([...route].sort((left, right) => left - right)).toEqual(route);
     // invariant: The parent conflict stays unsettled: no laundered confirmation unblocked it.
     const stillRefused = await refusalOf(bind);
     expect(stillRefused.code).toBe("remote.effect-pending");
@@ -10328,8 +10343,17 @@ describe("pre-v3 remote cache recovery", () => {
         // resolve refuses while that link stands, so the outbox-resolve route is not offered for it.
         repairState: "enqueued",
         damaged: true,
-        exact: ["Its recorded resolvedBy link is damaged", "rebuild the derived cache through the ordinary bootstrap"],
-        absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector", "stop this checkout"],
+        exact: [
+          "Its recorded resolvedBy link is damaged",
+          "rebuild the derived cache through the ordinary bootstrap",
+          "stop every checkout of this repository that has the cache bound",
+          "settle every other unsettled intent that cache holds through the outbox verbs its own state line names",
+          "keep the cache file as evidence - move it aside under a retained name instead of deleting it",
+          "confirm the checked selector and this checkout's binding satisfy a fresh reviewed bind",
+          "remove the name the checkout reads (or confirm it is gone)",
+          "the retained copy preserves it, and an operator can inspect it later",
+        ],
+        absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector", "stop this checkout", "remove the cache file"],
       },
       {
         // invariant: A confirmed repair holding only a conflict receipt is the laundering shape the
@@ -10342,11 +10366,15 @@ describe("pre-v3 remote cache recovery", () => {
           "recorded state contradicts its recorded evidence",
           "rebuild the derived cache through the ordinary bootstrap",
           "stop every checkout of this repository that has the cache bound",
-          "run \\\`mstar store collaboration remote status\\\`",
+          "settle every other unsettled intent that cache holds through the outbox verbs its own state line names",
+          "keep the cache file as evidence - move it aside under a retained name instead of deleting it",
+          "confirm the checked selector and this checkout's binding satisfy a fresh reviewed bind",
+          "run `mstar store collaboration remote status`",
           "fresh reviewed remote bind",
-          "the pending intent's record is not preserved",
+          "the pending intent's record is not preserved by the rebuild itself",
+          "the retained copy preserves it, and an operator can inspect it later",
         ],
-        absentInConflictLine: ["outbox-resolve", "outbox-receipt", "record that receipt with", "stop this checkout"],
+        absentInConflictLine: ["outbox-resolve", "outbox-receipt", "record that receipt with", "stop this checkout", "remove the cache file"],
       },
     ];
     for (const [index, entry] of cases.entries()) {

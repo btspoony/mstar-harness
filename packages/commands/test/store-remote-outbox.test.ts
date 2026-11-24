@@ -476,6 +476,47 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(queued).toMatchObject({ status: "ok" });
 
+    // invariant: The public recovery for a refused receipt names the cache rebuild for the cause
+    // the laundering guard refuses, never a resubmission of that same receipt.
+    const waiting = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: "13131313-1313-4313-8313-131313131313",
+    }, fixture.repo)) as { projectId: string; generation: number; requestHash: string; binding: { selectorCommit: string } };
+    const unsent = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("unsent-receipt", {
+        version: 1,
+        generation: waiting.generation,
+        projectId: waiting.projectId,
+        selectorCommit: waiting.binding.selectorCommit,
+        operationId: "13131313-1313-4313-8313-131313131313",
+        attemptId: "18181818-1818-4818-8818-181818181818",
+        requestHash: waiting.requestHash,
+        observedAt: new Date().toISOString(),
+        outcome: { kind: "unconfirmed", reason: "no-response" },
+      }),
+    }, fixture.repo);
+    expect(unsent).toMatchObject({ status: "refused", code: "remote.dispatch-refused", exitCode: 1 });
+    const recovery = String(unsent.details?.recovery ?? "");
+    expect(recovery).toContain("already holds a recorded conflict receipt never accepts a confirmation");
+    expect(recovery).toContain("only the cache rebuild settles it");
+    expect(recovery).toContain("settle every other unsettled intent that cache holds");
+    expect(recovery).toContain("keep the cache file as evidence under a retained name instead of deleting it");
+    expect(recovery).toContain("confirm the checked selector and this checkout's binding satisfy a fresh reviewed bind");
+    expect(recovery).toContain("mstar store collaboration remote status --harness <abs>");
+    expect(recovery).toContain("perform a fresh reviewed remote bind");
+    expect(recovery).not.toContain("then resubmit the receipt");
+    // the guard's own sequence: settle, retain, prove the rebind, and only then remove the name.
+    const steps = [
+      "settle every other unsettled intent",
+      "keep the cache file as evidence",
+      "confirm the checked selector",
+      "remove the name the checkout reads",
+      "mstar store collaboration remote status",
+    ].map((step) => recovery.indexOf(step));
+    for (const at of steps) expect(at).toBeGreaterThan(-1);
+    expect([...steps].sort((left, right) => left - right)).toEqual(steps);
+
     const refused = await invoke("store.collaboration.remote.outbox-abandon", {
       harness: fixture.harness,
       operation: OPERATIONS.adopt,

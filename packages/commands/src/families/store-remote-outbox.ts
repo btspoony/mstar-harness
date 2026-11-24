@@ -90,6 +90,19 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 /**
+ * note: The cache rebuild route, mirroring the engine's own text: a cache whose bytes an in-place
+ * settlement cannot honor may hold OTHER unsettled intents - including a permitted send whose
+ * provider outcome is unknown - so the operator settles those, retains the file as evidence,
+ * proves a fresh reviewed bind is admissible, and only then removes the name the checkout reads.
+ */
+const CACHE_REBUILD_ROUTE =
+  "settle every other unsettled intent that cache holds (outbox-pending lists them, and outbox-show, " +
+  "outbox-dispatch, outbox-receipt, outbox-abandon, outbox-resolve and outbox-reconcile move each state), keep " +
+  "the cache file as evidence under a retained name instead of deleting it, confirm the checked selector and " +
+  "this checkout's binding satisfy a fresh reviewed bind, then remove the name the checkout reads, run " +
+  "mstar store collaboration remote status --harness <abs>, and perform a fresh reviewed remote bind";
+
+/**
  * note: The exact supported route for one refusal, by cause and by the verb that refused it. A
  * document refusal is resubmitted to the verb that reads THAT document: a resolution is not
  * a receipt, and reconciliation is not a receipt either. Texts stay literal because the
@@ -108,10 +121,13 @@ function recoveryFor(code: string, verb: OutboxVerb): string {
       return "The named intent is not dispatchable in its recorded state. Read it with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; an enqueued reviewed resolution still needs the host fork observation through mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->, an uncertain send is reconciled under its original binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->, and a moved base needs a fresh observation before a new intent. Never reuse a dispatched operation id.";
     }
     if (verb === "outbox-receipt") {
-      return "The receipt names an attempt id or a state this intent does not hold. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then resubmit the receipt for that exact attempt with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->. Evidence of another send never settles this attempt.";
+      // note: A row whose state says confirmed while only a conflict receipt is recorded never
+      // accepts a confirmation, so resubmitting the receipt is a guaranteed refusal: that cause
+      // is settled only by the cache rebuild, and the recovery names it instead of the resend.
+      return "The receipt names an attempt id or a state this intent does not hold. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>. A row that already holds a recorded conflict receipt never accepts a confirmation, so a resubmission is refused there and only the cache rebuild settles it: " + CACHE_REBUILD_ROUTE + ". For any other cause, resubmit the receipt for that exact attempt with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->; evidence of another send never settles this attempt.";
     }
     if (verb === "outbox-reconcile") {
-      return "Reconciliation is read-only evidence for a dispatched attempt under its original binding. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then resubmit under that binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->; a pre-send not-sent proof is only the original host's own receipt, recorded with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->.";
+      return "Reconciliation is read-only evidence for a dispatched attempt under its original binding. Read the recorded attempt with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>. A row that already holds a recorded conflict receipt never accepts a confirmation, so a reconciliation is refused there and only the cache rebuild settles it: " + CACHE_REBUILD_ROUTE + ". For any other cause, resubmit under that binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->; a pre-send not-sent proof is only the original host's own receipt, recorded with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->.";
     }
     return "Read the intent's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid> and correct the named precondition; an operation id is never regenerated to make a write succeed.";
   }
