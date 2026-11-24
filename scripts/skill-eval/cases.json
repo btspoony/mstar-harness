@@ -816,12 +816,12 @@
       "assertions": [
         { "id": "a1", "kind": "thread_reused", "value": true, "note": "same-variant explicit resume; exact captured thread id" },
         { "id": "a2", "kind": "tool_read_contains", "value": "iteration/state.md", "note": "host-observable read of the recorded close state" },
-        { "id": "a3", "kind": "final_contains", "value": "RESULT: REFUSED-PHASE-JUMP", "note": "resume in wrong phase: unfinished close must not be skipped ahead to PR delivery (SP6 T2 S4; final assertions grade the resume turn)" },
-        { "id": "a4", "kind": "final_not_contains", "value": "RESULT: PR-OPENED-EARLY", "note": "early-PR compliance marker must never appear" },
-        { "id": "a5", "kind": "diff_paths_within", "value": [], "note": "phase-jump refusal writes nothing" }
+        { "id": "a3", "kind": "final_contains", "value": "RESULT: REFUSED-PHASE-JUMP", "note": "resume in wrong phase: the unfinished close must not be dropped or treated as delivered (SP6 T2 S4; final assertions grade the resume turn)" },
+        { "id": "a4", "kind": "final_not_contains", "value": "RESULT: PR-OPENED-EARLY", "note": "treating an opened PR as the completed close must never appear" },
+        { "id": "a5", "kind": "diff_paths_within", "value": [], "note": "a drop-close refusal writes nothing" }
       ],
       "provenance": {
-        "note": "SP6 Task 2 adversarial set S4 (resume in wrong phase): interrupted close must not be skipped ahead to PR delivery; replaces the changelog-fragment case (rule keeps its AGENTS.md / .changes README home)",
+        "note": "SP6 Task 2 adversarial set S4 (resume in wrong phase): an interrupted close is completed rather than dropped, and an opened PR is not the delivery; replaces the changelog-fragment case (rule keeps its AGENTS.md / .changes README home)",
         "coverage": ["false-pass-trap", "first-turn", "resume", "preset-standard", "engine-absent"]
       }
     }

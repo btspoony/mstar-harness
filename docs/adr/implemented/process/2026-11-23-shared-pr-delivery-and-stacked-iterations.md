@@ -7,7 +7,7 @@ Date: 2026-11-23
 
 An iteration delivered through one aggregate pull request opened after iteration close made three things worse at once. The close could not be verified against landed work, because the work was still in a branch no merge had proved. A single PR concentrated every review wave and CI run at the end, so a late failure invalidated the whole delivery and the coordinator had nothing merge-ready while work continued. And because close was the gate before the PR, a plan-level fix could only be exercised by reopening the delivery after the fact.
 
-Splitting the prompt surface made a second problem visible: stage numbers after close named references that the shared delivery line replaced. The iteration-only path owned `Phase 4` to `Phase 6`, while an independent development plan reached PR delivery and close with no stage number at all — two spellings of one procedure, drifting apart.
+Splitting the prompt surface made a second problem visible: the iteration-only path named its stages after close by number, but the shared delivery line replaced those stages, while an independent development plan reached PR delivery and close with no stage number at all — two spellings of one procedure, drifting apart.
 
 ## Decision
 
@@ -31,6 +31,6 @@ Development does not wait for review. The main line keeps developing and opening
 
 ## Consequences
 
-Each layer costs its own CI run and review wave, so an iteration with N layers pays roughly N times the review latency; the mitigation is that the layers open during execution and merge independently, so the latency overlaps the work instead of following it. A layered stack makes authorization bookkeeping heavier: an owner-gated approval names the PR, the head and the observed base, and a retarget with an unchanged head is covered only when the equivalent retarget was stated up front. The proof obligation moves to whole-chain proof, which every layer's merge and the close-delta layer must satisfy before the iteration is called delivered.
+Each layer costs its own CI run and review wave, so an iteration with N layers pays roughly N times the review latency; the mitigation is that the layers open during execution and merge independently, so the latency overlaps the work instead of following it. A layered stack makes authorization bookkeeping heavier: an owner-gated approval names the PR, the head and the observed base, and a retarget with an unchanged head is covered only when the equivalent retarget was stated up front. The proof obligation moves to whole-chain proof: every required layer merge, including a nonempty close-delta layer, lands before that proof, and only the proof completes the iteration. The distinct completion predicates of a standalone development plan are unchanged and remain governed by their own record ([the standalone-development completion decision](../architecture/2026-09-17-standalone-development-completion.md)).
 
 The engine still speaks the old vocabulary internally (`--phase 6`, the `PHASE6_*` codes, the `phase-4-pr-delivery` reference name) as read-only compatibility probes; the prompt surface names none of them as a stage. The follow-ups that close the gap are tracked as engine issues: an iteration close that needs no merge proof of its own, a phase gate that models a linear stage list, and a cleanup path that does not recognize layer branches.
