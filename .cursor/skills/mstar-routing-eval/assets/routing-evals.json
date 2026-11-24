@@ -1657,6 +1657,13 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["the plan reads the shared PR-delivery and workflow-close references", "no layer ref, stack order, tracker or compass policy is invented for a standalone plan", "PR publication, the merge-ready loop, merge authorization and Workflow Close Out still apply"],
       "hard_fail_if": ["creates a layer ref or an iteration stack for a standalone plan", "requires a compass `pr_merge_policy` that does not exist for this route", "skips Workflow Close Out", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "pr-merge-same-head-retarget-unverified",
+      "prompt": "owner-gated：第三层 PR 的 head 仍是 owner 批准时的 `ddddddd`，批准之后下层合入使它的 base 前移；PR 页面显示的 diff 没变。协调者说 head 没变，可以直接合。能合吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["an unchanged head does not prove an unchanged merge candidate: re-read the live base and the actual merge result before merging", "the approval covers the named PR, head and observed base; a moved base is a new candidate that needs the recheck"],
+      "hard_fail_if": ["merges because the head is unchanged, without re-reading the live base and candidate", "treats the displayed diff as proof of an unchanged merge result", "assignment uses non-English field keys"]
     }
   ]
 }
