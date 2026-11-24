@@ -1776,8 +1776,122 @@ export function extractSvgText(text: string): string[] {
 /**
  * Guard 16 — the rule is stated once, in this file's header (item 16). A
  * Markdown line is judged with its fenced state; an `.svg` file is judged on
- * the text a reader sees, and a `.json` file on its full text.
+ * the text a reader sees; a `.json` file is judged value by value.
  */
+/** why: a JSON value is a document of its own. Scanning the serialized wire
+ * text as one Markdown stream would let a fence opened in one field hide a
+ * probe in the next, so each string value is decoded and scanned separately,
+ * keeping the source line of its first row for the diagnostic. */
+export function jsonStringValues(text: string): Array<{ text: string; line: number }> {
+  const lineStarts: number[] = [0];
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
+  const lineAt = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid] <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+  const values: Array<{ text: string; line: number }> = [];
+  for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    const decoded = match[1]
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+      .replace(/\\([nrt])/g, (_m, code: string) => (code === "t" ? "\t" : "\n"))
+      .replace(/\\\//g, "/")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+    values.push({ text: decoded, line: lineAt(match.index ?? 0) });
+  }
+  return values;
+}
+
+/** Scan one prose document: fence state, quote container and the cross-line
+ * join reset per document, so one JSON value cannot inherit another's fence. */
+function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string, hits: string[]): void {
+  const report = (row: number, hit: string, note = ""): void => {
+    hits.push(
+      `Guard 16 retired-stage-name: ${rel}:${row} "${hit}"${note} - the iteration delivery has no stages 4-6; name the procedure instead`,
+    );
+  };
+  // why: quote membership is decided by the parsed `>` prefix, not by raw
+  // whitespace, so a permitted indent does not drop a quoted fence.
+  const quoteOf = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
+  // why: a fence closes only on its own delimiter character, at least as long
+  // as the opener, with nothing after it, and only inside the quote container
+  // it opened in; an unquoted fence keeps a leading `>` as literal content.
+  let fence: { char: string; len: number; quote: string } | null = null;
+  // why: Markdown renders adjacent prose lines as one block, so a name split
+  // across a line break is judged on the joined pair as well.
+  let previous = "";
+  for (const { text, line } of rows) {
+    const delimiter = text.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
+    const quote = quoteOf(text);
+    if (fence !== null) {
+      const sameContainer = fence.quote === "" || quote === fence.quote;
+      const closes =
+        sameContainer &&
+        delimiter !== null &&
+        delimiter[2][0] === fence.char &&
+        delimiter[2].length >= fence.len &&
+        delimiter[3].trim() === "";
+      if (closes) {
+        fence = null;
+        previous = "";
+        continue;
+      }
+      if (sameContainer) {
+        previous = "";
+        for (const hit of findRetiredStageSpellings(text, true)) report(line, hit);
+        continue;
+      }
+      // The blockquote ended; the fence cannot continue outside it.
+      fence = null;
+    }
+    if (delimiter !== null) {
+      previous = "";
+      fence = { char: delimiter[2][0], len: delimiter[2].length, quote };
+      // An info string after the opening fence is prose a reader can see.
+      for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(line, hit);
+      continue;
+    }
+    const lineHits = findRetiredStageSpellings(text, false);
+    for (const hit of lineHits) report(line, hit);
+    // why: a block element starts its own block — a bullet, a heading of any
+    // level, a table or quote line, a fence — so its leading character is not
+    // a stage separator.
+    const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
+    const blockStarts = blockStart.test(text);
+    const previousBlockStarts = blockStart.test(previous);
+    if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
+      // Recognize spans on the joined SOURCE first (a Markdown code span may
+      // cross one line break, rendering it as a space), strip the probes they
+      // contain, then decode to rendered text and match without a second span
+      // pass. `&#96;` stays a character because source spans are found first.
+      const render = (value: string): string =>
+        decodeXmlEntities(
+          value
+            .replace(/`([^`]*)`/g, (_match, inner: string) => inner.replace(/\s+/g, " ").replace(PROBE_PATTERN, " "))
+            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner.replace(/\s+/g, " ").replace(PROBE_PATTERN, " ")),
+        );
+      const previousNorm = render(previous);
+      const joined = render(`${previous}\n${text}`);
+      for (const hit of findRetiredStageSpellings(joined, false, false)) {
+        if (lineHits.includes(hit)) continue;
+        // Only a match that starts in the earlier line and ends in the current
+        // one crosses the boundary; either side alone was reported there.
+        const at = joined.indexOf(hit);
+        if (at >= 0 && at < previousNorm.length && at + hit.length > previousNorm.length) {
+          report(line, hit, " (split across the line break)");
+        }
+      }
+    }
+    previous = text.trim() === "" ? "" : text;
+  }
+}
+
 export function checkRetiredStageNames(files: Array<{ rel: string; text: string }>): RetiredStageResult {
   const hits: string[] = [];
   for (const file of files) {
@@ -1793,94 +1907,12 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       continue;
     }
-    // why: an evaluated prompt may carry a stage number or a block boundary as
-    // an escape and still reach the model as the rendered character; decode the
-    // whole text first so an escaped newline stays a newline.
-    const decodeJsonText = (text: string): string =>
-      text
-        .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-        .replace(/\\([nrt])/g, (_match, code: string) => (code === "t" ? "\t" : "\n"))
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, "\\");
-    const sourceLines = file.rel.endsWith(".json") ? decodeJsonText(file.text).split("\n") : file.text.split("\n");
-    // why: quote membership is decided by the parsed `>` prefix, not by raw
-    // whitespace, so a permitted indent does not drop a quoted fence.
-    const quoteOf = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
-    // why: a fence closes only on its own delimiter character, at least as
-    // long as the opener, with nothing after it, and only inside the quote
-    // container it opened in — a tilde line inside a backtick fence is content,
-    // not a close, and leaving the blockquote ends the fence.
-    let fence: { char: string; len: number; quote: string } | null = null;
-    // why: Markdown renders adjacent prose lines as one block, so a name split
-    // across a line break is judged on the joined pair as well.
-    let previous = "";
-    const report = (row: string): void => {
-      hits.push(
-        `Guard 16 retired-stage-name: ${file.rel}:${row} - the iteration delivery has no stages 4-6; name the procedure instead`,
-      );
-    };
-    sourceLines.forEach((line, index) => {
-      // A fence may sit inside a blockquote; its `> ` prefix is not content.
-      const delimiter = line.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
-      const quote = quoteOf(line);
-      const text = line;
-      if (fence !== null) {
-        const closes =
-          delimiter !== null &&
-          quote === fence.quote &&
-          delimiter[2][0] === fence.char &&
-          delimiter[2].length >= fence.len &&
-          delimiter[3].trim() === "";
-        if (closes) {
-          fence = null;
-          previous = "";
-          return;
-        }
-        if (quote === fence.quote) {
-          previous = "";
-          for (const hit of findRetiredStageSpellings(text, true)) report(`${index + 1} "${hit}"`);
-          return;
-        }
-        // The blockquote ended; the fence cannot continue outside it.
-        fence = null;
-      }
-      if (delimiter !== null) {
-        previous = "";
-        fence = { char: delimiter[2][0], len: delimiter[2].length, quote };
-        // An info string after the opening fence is prose a reader can see.
-        for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(`${index + 1} "${hit}"`);
-        return;
-      }
-      const lineHits = findRetiredStageSpellings(text, false);
-      for (const hit of lineHits) report(`${index + 1} "${hit}"`);
-      // why: a block element starts its own block — a bullet, a heading of any
-      // level, a table or quote line, a fence — so its leading character is not
-      // a stage separator.
-      const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
-      const blockStarts = blockStart.test(text);
-      const previousBlockStarts = blockStart.test(previous);
-      if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
-        // Unwrap spans on the source form first (so a `&#96;` is a character, not
-        // a delimiter), then decode to the rendered text and match that without
-        // running span recognition a second time.
-        const stripSpans = (value: string): string =>
-          value
-            .replace(/`([^`\n]*)`/g, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "))
-            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner.replace(PROBE_PATTERN, " "));
-        const previousNorm = decodeXmlEntities(stripSpans(previous));
-        const joined = `${previousNorm} ${decodeXmlEntities(stripSpans(text))}`;
-        for (const hit of findRetiredStageSpellings(joined, false, false)) {
-          if (lineHits.includes(hit)) continue;
-          // Only a match that starts in the earlier line and ends in the current
-          // one crosses the boundary; either side alone was reported there.
-          const at = joined.indexOf(hit);
-          if (at >= 0 && at < previousNorm.length && at + hit.length > previousNorm.length) {
-            report(`${index + 1} "${hit}" (split across the line break)`);
-          }
-        }
-      }
-      previous = text.trim() === "" ? "" : text;
-    });
+    const groups: Array<Array<{ text: string; line: number }>> = file.rel.endsWith(".json")
+      ? jsonStringValues(file.text).map((value) =>
+          value.text.split("\n").map((text, offset) => ({ text, line: value.line + offset })),
+        )
+      : [file.text.split("\n").map((text, index) => ({ text, line: index + 1 }))];
+    for (const group of groups) scanProseRows(group, file.rel, hits);
   }
   return { filesScanned: files.length, hits };
 }

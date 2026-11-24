@@ -2424,6 +2424,11 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
   });
 
+  test("a code span whose delimiters straddle the join stays exempt", () => {
+    const text = "Use \`--phase\n6\` here.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/h.md", text }]).hits).toEqual([]);
+  });
+
   test("an entity-rendered backtick does not become a code span across the join", () => {
     const text = "Use &#96;--phase\n6&#96; here.\n";
     const result = checkRetiredStageNames([{ rel: "skills/x/g.md", text }]);
@@ -2432,6 +2437,17 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
 
   test("a level-two heading is not joined to its paragraph", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/f.md", text: "## Phase 2\n-4 °C is the minimum.\n" }]).hits).toEqual([]);
+  });
+
+  test("a fence in one json value does not hide a probe in the next", () => {
+    const probe = RETIRED_STAGE_MACHINE_LITERALS[0];
+    const text = `{"fixture":"Example:\\n\`\`\`\\n${probe}\\n\`\`\`","prompt":"Run ${probe} now."}`;
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a leading quote mark inside an unquoted fence is literal content", () => {
+    const text = ["```text", "> transcript line", RETIRED_STAGE_MACHINE_LITERALS[0], "```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/i.md", text }]).hits).toEqual([]);
   });
 });
 
