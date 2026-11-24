@@ -24,6 +24,7 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { assertPresented, frozenMoveRefusal } from "./cross-authority-move.js";
 import type {
   ProviderIssueIdentity,
   RemoteIntent,
@@ -377,7 +378,10 @@ export type IssueTransition = {
 export type IssueRelation = {
   fromIssue: string;
   relation: string;
-  toIssue: string;
+  /** note: `null` while the target lives in another authority; `toRef` names it then. */
+  toIssue: string | null;
+  /** note: The unresolved target's stable reference (`null` on a local relation; absent on a remote read). */
+  toRef?: string | null;
   /** The other end's title — the prototype's `Title` column. `null` when it has none. */
   title: string | null;
 };
@@ -476,7 +480,14 @@ export type IssueReopen = { reason: string };
  * triple, and any milestone membership is cleared because a milestone belongs
  * to exactly one project.
  */
-export type IssueMove = { projectId: string; reason: string };
+export type IssueMove = {
+  projectId: string;
+  reason: string;
+  /** note: The destination authority's `repoKey`; present exactly on the staged cross-authority route. */
+  toAuthority?: string;
+  /** note: Refused when supplied: the ledger's own phase decides where a move resumes. */
+  stage?: string;
+};
 
 export type IssueLink =
   | { relation: IssueRelationKind; issueId: string }
@@ -893,7 +904,16 @@ export type AuthorizedIssueMutation = MutationContext;
 async function withWrite<T>(context: StoreContext, fn: (handle: CollaborationStoreHandle) => T): Promise<T> {
   return withCollaborationWrite(context, (handle) => {
     assertIssueStoreActive(handle.db);
-    return fn(handle);
+    try {
+      return fn(handle);
+    } catch (error) {
+      // invariant: The lane's trigger is the fence, so its abort is the one refusal that reaches here
+      // without a typed error: restate it as the partial outcome it is, naming the move that froze the
+      // record. Every other failure keeps its own code.
+      const mapped = frozenMoveRefusal(handle.db, error);
+      if (mapped !== null) throw mapped;
+      throw error;
+    }
   });
 }
 
@@ -1406,7 +1426,7 @@ export async function captureIssue(
   input: CaptureInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertCaptureRequest(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return captureIssueRemote(context, input, mutation);
@@ -1608,7 +1628,7 @@ export async function appendOccurrence(
   input: OccurrenceInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   const cols = occurrenceColumns(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
     const at = nowRfc3339();
@@ -1955,7 +1975,7 @@ export async function getIssue(
     const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
       .prepare(
-        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?`,
+        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key, issue_ref from issues where id = ?`,
       )
       .get(id) as
       | {
@@ -1979,9 +1999,13 @@ export async function getIssue(
           external_id: string | null;
           url: string | null;
           identity_key: string;
+          issue_ref: string;
         }
       | undefined;
     if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
+    // invariant: A switched record already belongs to the destination authority, so this one stops
+    // presenting it until the move publishes and deletes it.
+    assertPresented(db, id);
 
     const occurrences = (
       db
@@ -2052,7 +2076,7 @@ export async function getIssue(
     // did not.
     const relations = db
       .prepare(
-        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue, r.to_ref as toRef,
                 (select i.title from issues i
                    where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
            from relations r where r.from_issue = ? or r.to_issue = ?`,
@@ -2132,6 +2156,7 @@ export async function getIssue(
       externalId: issue.external_id,
       url: issue.url,
       identityKey: issue.identity_key,
+      issueRef: issue.issue_ref,
       occurrences,
       transitions,
       relations,
@@ -2217,7 +2242,12 @@ export function issueWriteSeat(role: string): string {
   return COORDINATOR_SEAT;
 }
 
-function requireCaptureSeat(actor: string): void {
+/**
+ * note: The seat every issue write needs. It is exported because the staged move's discard branch
+ * is a public entry in its own module: authorizing it there with a second copy of this rule is how
+ * the two would drift apart.
+ */
+export function assertIssueWriteSeat(actor: string): void {
   const seat = requireNonblank("actor", actor);
   if (seat !== CAPTURE_SEAT) {
     throw new IssueError(
@@ -2467,7 +2497,7 @@ export async function triageIssue(
   patch: IssueTriage,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("reason", patch.reason);
   assertIssueTriageVocabulary(patch);
   if (resolveCollaborationLocation(context).mode === "remote") {
@@ -2658,7 +2688,7 @@ export async function closeIssue(
   evidence: ClosureEvidence,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertTerminalDisposition(disposition);
   assertClosureAuthority(disposition, evidence);
   if (resolveCollaborationLocation(context).mode === "remote") {
@@ -2706,7 +2736,7 @@ export async function reopenIssue(
   payload: IssueReopen,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("reason", payload.reason);
   if (resolveCollaborationLocation(context).mode === "remote") {
     const at = nowRfc3339();
@@ -2918,15 +2948,50 @@ function refusalWithDetails(code: IssueErrorCode, message: string, details: Reco
  * BEFORE the store is opened (the public contract's refusal precedence), and
  * this route owns the transaction the body runs in.
  */
+export function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove & { toAuthority: string },
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<MoveReceipt>;
+export function moveIssue(
+  context: StoreContext,
+  issueId: string,
+  input: IssueMove,
+  mutation: MutationContext & { expectedStoreRevision: number },
+): Promise<IssueReceipt>;
 export async function moveIssue(
   context: StoreContext,
   issueId: string,
   input: IssueMove,
   mutation: MutationContext & { expectedStoreRevision: number },
-): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+): Promise<IssueReceipt | MoveReceipt> {
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("projectId", input.projectId);
   requireNonblank("reason", input.reason);
+  // invariant: `--to-authority` is the staged route. It carries the record and its history to another
+  // authority, so it is a different verb from a project reassignment inside one lane: the local route
+  // below keeps its own receipt shape and its own refusal precedence.
+  if (input.toAuthority !== undefined) {
+    if (input.stage !== undefined) {
+      throw new IssueError(
+        "issue.scope-refused",
+        `--stage is not an operator input; a move runs to completion and resumes from whatever phase its ledger holds.`,
+      );
+    }
+    // note: Dynamic import: this module is imported BY the move module, so a static edge would close the cycle.
+    const { moveAcrossAuthorities } = await import("./cross-authority-move.js");
+    return moveAcrossAuthorities(context, {
+      operationId: mutation.operationId,
+      actor: mutation.actor,
+      sourceIssueId: issueId,
+      destinationAuthority: requireNonblank("toAuthority", input.toAuthority),
+      destinationProject: requireNonblank("projectId", input.projectId),
+      reason: requireNonblank("reason", input.reason),
+      expectedRevision: mutation.expectedRevision,
+      expectedStoreRevision: mutation.expectedStoreRevision,
+    });
+  }
   if (resolveCollaborationLocation(context).mode === "remote") {
     // invariant: A project move re-bases the portable identity and clears the project-scoped
     // milestone, so it is never an ordinary replacement: the remote path is a reviewed
@@ -2940,13 +3005,17 @@ export async function moveIssue(
   return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation));
 }
 
+/** note: The receipt the staged route returns, re-exported so a transport need not import the ledger module. */
+export type { MoveReceipt } from "./cross-authority-move.js";
+type MoveReceipt = import("./cross-authority-move.js").MoveReceipt;
+
 export async function assignIssueMilestone(
   context: StoreContext,
   issueId: string,
   input: { projectId: string; milestoneId: string | null; reason: string },
   mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   if (typeof input.projectId !== "string" || !input.projectId.trim() || typeof input.reason !== "string" || !input.reason.trim()) {
     throw new IssueError("milestone.invalid-input", "projectId and reason must be nonblank");
   }
@@ -3124,7 +3193,7 @@ function linkIssueOnWithOrigin(
     if (other === issueId) {
       throw new IssueError("issue.scope-refused", "Self-edges are not allowed");
     }
-    const otherRow = db.prepare("select id from issues where id = ?").get(other) as { id: string } | undefined;
+    const otherRow = db.prepare("select id, issue_ref from issues where id = ?").get(other) as { id: string; issue_ref: string } | undefined;
     if (!otherRow) throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
     let from = issueId;
     let to = other;
@@ -3145,6 +3214,16 @@ function linkIssueOnWithOrigin(
       };
       recordOperation(db, mutation.operationId, hash, receipt, at);
       return receipt;
+    }
+    // invariant: An unresolved edge to this target is the same relation in the other spelling;
+    // resolution on arrival should have localised it, so the verb resolves it itself rather than
+    // writing a second edge to the same record. The stale row is stored from THIS issue — the local
+    // one — whatever the canonical order of the resolved row turns out to be, so the lookup uses it.
+    const stale = db
+      .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_ref = ?")
+      .get(issueId, link.relation, otherRow.issue_ref) as { ok: number } | undefined;
+    if (stale) {
+      db.prepare("delete from relations where from_issue = ? and relation = ? and to_ref = ?").run(issueId, link.relation, otherRow.issue_ref);
     }
     db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(from, link.relation, to);
   } else {
@@ -3181,7 +3260,7 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return queueRemoteIssueWrite(context, {
@@ -3210,7 +3289,7 @@ export async function linkIssueScoped(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return queueRemoteIssueWrite(context, {

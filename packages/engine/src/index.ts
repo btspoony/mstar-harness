@@ -88,7 +88,11 @@ export {
   resolveRepoRoot,
 } from "./mstarc.js";
 export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
-export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+export {
+  CollaborationIdentityError,
+  collaborationLocationOfRepoKey,
+  resolveCollaborationLocation,
+} from "./collaboration-identity.js";
 // note: The collaboration lane's own store: independent staged schema, create-only
 // publication and active-only handles. No execution table or method.
 export type {
@@ -210,6 +214,28 @@ export {
   applyCollaborationCutover,
   planCollaborationCutover,
 } from "./collaboration-cutover.js";
+// note: One record's staged move: the source row is the ledger and the fence, and the phase set is
+// forward-only. The published surface is the two routes a transport calls — `moveAcrossAuthorities`
+// for the one-checkout topology, `moveAcrossByDocument` for the two-checkout exchange, `discardMove`
+// to abandon a move, and `moveDocumentOf` to parse the handoff a peer wrote. The phase engine
+// (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), the per-lane exchange halves and the ledger
+// primitives stay internal to the module.
+export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
+export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
+// note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
+// `local`/`remote` boundary.
+export type {
+  ExchangeReceipt,
+  IssueMoveDocument,
+  IssueMoveDocumentPhase,
+  ObservedMoveSubject,
+} from "./cross-authority-move.js";
+export {
+  discardMove,
+  moveAcrossAuthorities,
+  moveAcrossByDocument,
+  moveDocumentOf,
+} from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
@@ -868,6 +894,7 @@ export {
   appendOccurrence,
   assertIssueLinkVocabulary,
   assertIssueTriageVocabulary,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
   computeIdentityKey,
