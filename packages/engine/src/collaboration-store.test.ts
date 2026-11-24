@@ -10434,4 +10434,73 @@ describe("pre-v3 remote cache recovery", () => {
     ).toBe("admitted");
     expect(ledgerRows(freshLane.dbPath)).toEqual(freshLedger);
   }, 30_000);
+
+  test("an expired access check behind an unsettled v3 intent is refreshable on that generation", async () => {
+    // invariant: The replacement that upgrades a v3 cache refuses while one intent's provider outcome is
+    // unknown, and the settlement verbs re-prove a CURRENT access check. Refusing the observation that
+    // refreshes that check left the operator with no order at all: no refresh, so no settlement, so no
+    // replacement. The observation writes only tables v3 carries unchanged, so it is admitted there.
+    const fixture = remoteFixture("v3-repair-order");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, { ...observation(positiveCheck()), selectorCommit: commit, generation });
+    // note: The state an interrupted settlement leaves behind: the cache is a v3 generation again, its
+    // one intent has no known provider outcome, and the check a dispatch must re-prove has expired.
+    downgradeToV3(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
+      // note: the downgrade rewrites the cache to its v3 generation, so the observation row a refresh
+      // advances is re-seeded at the revision that generation left behind.
+      db.prepare(
+        "insert into remote_observations(generation, project_key, revision, as_of, completeness, code, snapshot_json, received_at) " +
+          "values (?, ?, 1, null, 'unavailable', null, null, '2026-11-21T00:00:00.000Z')",
+      ).run(generation, SELECTED_PROJECT.localProjectId);
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+          "state, attempt_id, created_at, updated_at, abandon_reason, resolves, resolved_by) " +
+          "values (?, ?, ?, ?, ?, null, 'conflict', null, ?, ?, null, null, null)",
+      ).run(
+        "repair-conflict",
+        generation,
+        SELECTED_PROJECT.localProjectId,
+        "request-hash",
+        "{}",
+        "2026-11-21T00:00:00.000Z",
+        "2026-11-21T00:00:00.000Z",
+      );
+    } finally {
+      db.close();
+    }
+    const ledgerBefore = ledgerRows(location.dbPath);
+
+    // invariant: The replacement refuses those bytes, by route, while that intent is unsettled.
+    const blocked = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(blocked.code).toBe("remote.effect-pending");
+    // invariant: The lane was not replaced by that attempt.
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
+
+    // invariant: The supported first step now exists: refreshing the check on this generation.
+    const refreshed = await ingestRemoteObservation(context, {
+      ...observation(positiveCheck(), { expectRevision: 1 }),
+      selectorCommit: commit,
+      generation,
+    });
+    expect(refreshed).toMatchObject({ projectId: SELECTED_PROJECT.localProjectId, revision: 2 });
+    const bound = new DatabaseSync(location.dbPath);
+    try {
+      const row = bound.prepare("select verified_at from remote_bindings").get() as { verified_at?: unknown };
+      expect(Date.now() - Date.parse(String(row.verified_at))).toBeLessThan(61_000);
+    } finally {
+      bound.close();
+    }
+    // invariant: The refresh wrote no schema: the lane is still the v3 generation whose ledger refuses
+    // the replacement until its intent is settled.
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
+  }, 30_000);
 });

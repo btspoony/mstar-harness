@@ -27,10 +27,12 @@ import {
   getIssue,
   initializeStore,
   linkIssue,
+  listIssues,
   moveAcrossAuthorities,
   moveIssue,
   openCollaborationStore,
   queryDashboard,
+  queryOpenIssueRollup,
   registerCatalogEntity,
   reopenIssue,
   resolveCollaborationLocation,
@@ -409,6 +411,14 @@ describe("criterion 7 — cross-authority move", () => {
     const notPresented = await refusalOf(getIssue(source, issueId));
     expect(notPresented.code).toBe("collaboration.operation-partial");
     expect(String(notPresented.details?.recovery ?? notPresented.message)).toContain(request.operationId);
+    // invariant: A switched record belongs to the destination authority until its move publishes, so
+    // this one neither LISTS nor COUNTS it: returning it claimed a member two authorities both held.
+    const listed = await listIssues(source, { disposition: "open" });
+    expect(listed.items.map((item) => item.id)).not.toContain(issueId);
+    expect(listed.total).toBe(0);
+    const rollup = await withStoreRead(source, queryOpenIssueRollup());
+    expect(rollup.data.totalOpen).toBe(0);
+    expect(rollup.data.recent.map((item) => item.id)).not.toContain(issueId);
     // … and a source write is still refused: the switch did not release the fence.
     const fenced = await refusalOf(
       appendOccurrence(source, issueId, blockedOccurrence("stops_after_switch", `occ-after-switch-${String(sequence)}`), {

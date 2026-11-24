@@ -6,7 +6,7 @@ import {
   assertIssueWriteSeat,
   captureIssue,
   closeIssue,
-  discardMove,
+  discardAcrossAuthorities,
   getIssue,
   moveAcrossByDocument,
   moveDocumentOf,
@@ -355,7 +355,9 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         // authorizes the move authorizes abandoning it, checked before the store is touched.
         const write = mutation(input);
         assertIssueWriteSeat(write.actor);
-        const receipt = await discardMove(context, {
+        // invariant: the discard route is chosen by the lanes this checkout can open: a one-checkout
+        // move releases both halves at once, a two-checkout exchange releases the half it holds here.
+        const receipt = await discardAcrossAuthorities(context, {
           operationId: write.operationId,
           actor: write.actor,
           sourceIssueId: addressed,
@@ -541,16 +543,16 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
       (expectedRevisionVerbs[verb] === true && key === "expect" && verb !== "move"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
-      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
+      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token. Compared by the run that stages the move; a --input run continues the recorded operation." }
       : {}),
     ...(verb === "move" && key === "expectStore"
-      ? { help: "Exact current store revision from `mstar issue list` (`storeRevision`); a store that moved since it was read is refused. Required unless `--discard`, which honours the record's revision instead." }
+      ? { help: "Exact current store revision of the lane this run stages in: `storeRevision` from `mstar issue list` there. Compared by the run that stages a move (its own lane's revision); a --input run continues the recorded operation. Not an input of `--discard`." }
       : {}),
     ...(verb === "move" && key === "toAuthority"
       ? { help: "Destination authority `repoKey` (`host/owner/repo`) of a staged cross-authority move; `--payload.projectId` names the destination project." }
       : {}),
     ...(verb === "move" && key === "discard"
-      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched." }
+      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched. A one-checkout move releases both lanes in one run; a two-checkout exchange releases the half this checkout holds, so each side runs it once." }
       : {}),
     ...(verb === "move" && key === "input"
       ? { help: "The peer checkout's move document (absolute path, or - for stdin) for the two-checkout exchange; its shape publishes as payloadSchemas.inputDocument." }

@@ -24,7 +24,7 @@ import {
   type CompleteCollaborationObservation,
 } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { assertPresented, frozenMoveRefusal } from "./cross-authority-move.js";
+import { SWITCHED_NOT_PRESENTED_SQL, assertPresented, frozenMoveRefusal } from "./cross-authority-move.js";
 import type {
   ProviderIssueIdentity,
   RemoteIntent,
@@ -1841,6 +1841,9 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
     );
     params.push(filter.query, filter.query);
   }
+  // invariant: A switched record belongs to the destination authority, so this list neither returns
+  // nor counts it: the same rule `assertPresented` states for a detail read.
+  clauses.push(SWITCHED_NOT_PRESENTED_SQL);
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 

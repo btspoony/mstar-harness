@@ -2085,6 +2085,10 @@ export async function ingestRemoteObservation(
 
   const outcome = await withRemoteCacheWrite(context, ({ db }) =>
     recordObservation(db, submission, negative, snapshotValue, unsafe),
+    // note: An observation is the ONLY way to refresh the access check a settlement re-proves, so it is
+    // admitted on a v3 cache exactly as the settlement verbs are: refusing it there left an expired
+    // check behind an unsettled intent with no route forward (the replacement refuses while it is unsettled).
+    { settleOutbox: true },
   );
 
   // invariant: The invalidation is durable BEFORE its refusal is reported: a caller that saw

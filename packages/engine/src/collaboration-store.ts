@@ -3703,10 +3703,12 @@ export type RemoteCacheAdmission = Readonly<{
   previousDuringDraining?: boolean;
   /**
    * note: Admit the cache's own OUTBOX generation (v3) instead of refusing it as an upgrade
-   * requirement. Only the verbs that settle an already-frozen intent pass this: they read
-   * `remote_outbox` and `remote_outbox_receipts`, which exist unchanged in that generation, so the
-   * operator can resolve a send whose provider outcome is unknown before the bind replaces the
-   * cache. Every other read and write stays refused.
+   * requirement. The verbs that settle an already-frozen intent pass this — and so does the
+   * observation that refreshes the access check their dispatch re-proves: without it an expired check
+   * behind an unsettled v3 intent could never be refreshed, because the replacement that would upgrade
+   * the lane refuses while that intent is unsettled. Both write only `remote_bindings`,
+   * `remote_observations` and the outbox tables, which exist unchanged in that generation. Every other
+   * read and write stays refused.
    */
   settleOutbox?: boolean;
 }>;

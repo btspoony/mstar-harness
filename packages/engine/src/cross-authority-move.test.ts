@@ -16,6 +16,7 @@ import {
   assertMoveTransition,
   assertRecordWritable,
   blockingMoveFor,
+  exchangeLocalToRemote,
   isForwardMoveTransition,
   moveAcrossAuthorities,
   publishMove,
@@ -243,6 +244,17 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       // does not silently release its source; the record thaws at `published`.
       recordIssueMove(db, { ...sourceRow("mstar:issue:22222222-2222-4222-8222-222222222222", "switched", "move-two"), sourceIssueId: "I-000002" });
       expect(blockingMoveFor(db, "I-000002")).toEqual({ operationId: "move-two", phase: "switched" });
+      // invariant: The refusal names the phase the row HOLDS as the one a discard starts from.
+      // `published` is terminal and admits no discard, so naming it as the recovery phase sent an
+      // operator at a transition that can never succeed.
+      let switchedRefusal = "";
+      try {
+        assertRecordWritable(db, "I-000002");
+      } catch (error) {
+        switchedRefusal = error instanceof Error ? error.message : String(error);
+      }
+      expect(switchedRefusal).toContain("discard it from switched");
+      expect(switchedRefusal).not.toContain("published");
       expect(() => db.prepare("update issues set title = 'edited' where id = 'I-000002'").run()).toThrow(
         /issue\.move-in-progress/,
       );
@@ -539,6 +551,35 @@ describe("cross-authority move phase engine", () => {
         /issue\.move-in-progress/,
       );
       expect(stagedMismatch(sourceRowNow!, destinationRow!)).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a terminal source row answers its receipt, never a re-emitted request document", async () => {
+    // invariant: Re-emitting a `request` for a finished move let the peer stage — and recreate — a
+    // record this lane had already published or set aside. A terminal row owes the peer no document.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-terminal-document",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "leave this authority",
+      };
+      const staged = await exchangeLocalToRemote(context, request, null);
+      expect(staged.phase).toBe("staged");
+      expect(staged.document).not.toBeNull();
+      for (const phase of ["published", "discarded"] as const) {
+        db.prepare("update issue_moves set phase = ? where operation_id = ? and role = 'source'").run(phase, request.operationId);
+        const replay = await exchangeLocalToRemote(context, request, null);
+        expect(replay.phase).toBe(phase);
+        expect(replay.document).toBeNull();
+      }
     } finally {
       db.close();
     }
@@ -1792,7 +1833,13 @@ describe("cross-authority move package surface", () => {
     // primitives are internal to the module, so a later change cannot grow the public surface by
     // accident and no comment has to deny what the block publishes.
     const surface = (await import("./index.js")) as unknown as Record<string, unknown>;
-    for (const name of ["discardMove", "moveAcrossAuthorities", "moveAcrossByDocument", "moveDocumentOf"]) {
+    for (const name of [
+      "discardAcrossAuthorities",
+      "discardMove",
+      "moveAcrossAuthorities",
+      "moveAcrossByDocument",
+      "moveDocumentOf",
+    ]) {
       expect(typeof surface[name]).toBe("function");
     }
     for (const name of [
