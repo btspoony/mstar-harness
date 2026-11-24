@@ -1709,12 +1709,18 @@ const PROBE_PATTERN = new RegExp(
   ].join("|"),
   "g",
 );
-/** see scripts/drift-lint.ts § 16 — an HTML code element; render-equivalent to a backtick span. */
-const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
+/** see scripts/drift-lint.ts § 16 — the unquoted remainder of a tag: a `>` inside a quoted attribute is
+ * part of the tag, so it can never end it. Every tag matcher below is built from this one body. */
+const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+/** see scripts/drift-lint.ts § 16 — an element name ends at whitespace, `/` or `>`. A `\b` boundary also
+ * accepts a hyphen, so `<li-item>` would read as the block element `<li>`. */
+const NAME_END = `(?=[\\s/>])`;
 /** see scripts/drift-lint.ts § 16 — one token of element body text: a whole tag (a `>` inside a quoted
  * attribute is part of the tag, not the label) or the text between two tags or comment boundaries. */
-const TAG = /<(?:[^>"']|"[^"]*"|'[^']*')*>/;
-const TAG_OR_TEXT = /<(?:[^>"']|"[^"]*"|'[^']*')*>|[^\0<]+/g;
+const TAG = new RegExp(`<${TAG_BODY}>`, "g");
+const TAG_OR_TEXT = new RegExp(`<${TAG_BODY}>|[^\\0<]+`, "g");
+/** see scripts/drift-lint.ts § 16 — an HTML code element; render-equivalent to a backtick span. */
+const HTML_CODE = new RegExp(`<code${NAME_END}${TAG_BODY}>([\\s\\S]*?)</code>`, "gi");
 /** see scripts/drift-lint.ts § 16 — the one element list both prose passes read: block-level elements,
  * separate controls and embedded blocks break a text run, while an inline element is dropped without
  * adding whitespace. */
@@ -1726,13 +1732,13 @@ const BLOCK_ELEMENTS = [
   "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "tr", "ul", "video",
 ].join("|");
 /** see scripts/drift-lint.ts § 16 — the `foreignObject` pass tests a single tag token against the list. */
-const BLOCK_TAG = new RegExp(`^</?(?:${BLOCK_ELEMENTS})\\b`, "i");
+const BLOCK_TAG = new RegExp(`^</?(?:${BLOCK_ELEMENTS})${NAME_END}`, "i");
 /** see scripts/drift-lint.ts § 16 — the HTML prose pass splits a page on the same list. */
-const BLOCK_ELEMENT = new RegExp(`</?(?:${BLOCK_ELEMENTS})\\b[^>]*>`, "gi");
+const BLOCK_ELEMENT = new RegExp(`</?(?:${BLOCK_ELEMENTS})${NAME_END}${TAG_BODY}>`, "gi");
 /** see scripts/drift-lint.ts § 16 — why: `<br>` renders a line break inside a run, which a reader sees as
  * whitespace, so it joins its neighbours with one space instead of ending the run; `br` sits in the list
  * above, so a pass that tests this first keeps that meaning. */
-const BR_TAG = /^<br\b/i;
+const BR_TAG = new RegExp(`^<br${NAME_END}`, "i");
 /** see scripts/drift-lint.ts § 16 — an SVG element that embeds HTML the reader sees as ordinary prose. */
 const FOREIGN_OBJECT = /<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi;
 /** see scripts/drift-lint.ts § 16 — why: a diagram may spell a stage as a numeric character reference, which
@@ -2103,20 +2109,17 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         // Each block is judged whole, on the one element list `BLOCK_TAG` also reads.
         const blockTag = BLOCK_ELEMENT;
         // see scripts/drift-lint.ts § 16 — the first character of the rendered text, so the diagnostic
-        // names the line that text starts on rather than the line its opening tag sits on.
+        // names the line that text starts on rather than the line its opening tag sits on. Tag spans come
+        // from the same quote-aware matcher as the SVG pass, so a `>` inside an attribute value cannot end
+        // a tag early and leave its tail to be judged as prose on the tag's line.
         const firstContent = (slice: string): number => {
-          let index = 0;
-          while (index < slice.length) {
-            if (slice[index] === "<") {
-              const close = slice.indexOf(">", index);
-              if (close >= 0) {
-                index = close + 1;
-                continue;
-              }
-            }
-            if (!/\s/.test(slice[index])) return index;
-            index += 1;
+          let at = 0;
+          for (const tag of slice.matchAll(TAG)) {
+            const start = tag.index ?? 0;
+            for (; at < start; at += 1) if (!/\s/.test(slice[at])) return at;
+            at = start + tag[0].length;
           }
+          for (; at < slice.length; at += 1) if (!/\s/.test(slice[at])) return at;
           return -1;
         };
         let cursor = 0;
@@ -2137,7 +2140,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           if (start >= 0) {
             // see scripts/drift-lint.ts § 16 — collapsed whitespace is the rendered spacing; a backtick
             // is a character in HTML, so the block is literal text and only `<code>` exempts.
-            const rendered = decodeXmlEntities(piece.replace(/<[^>]*>/g, "").replace(/\s+/g, " "));
+            const rendered = decodeXmlEntities(piece.replace(TAG, "").replace(/\s+/g, " "));
             for (const hit of findRetiredStageSpellings(rendered, false, false)) {
               hits.push(
                 `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + start)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
@@ -2149,7 +2152,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         const tail = source.slice(at);
         const tailStart = firstContent(tail);
         if (tailStart >= 0) {
-          const rendered = decodeXmlEntities(tail.replace(/<[^>]*>/g, "").replace(/\s+/g, " "));
+          const rendered = decodeXmlEntities(tail.replace(TAG, "").replace(/\s+/g, " "));
           for (const hit of findRetiredStageSpellings(rendered, false, false)) {
             hits.push(
               `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + tailStart)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,

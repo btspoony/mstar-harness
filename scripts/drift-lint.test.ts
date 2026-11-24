@@ -2622,6 +2622,25 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
   });
 
+  test("a quoted `>` in an attribute does not move the reported line", () => {
+    const html = '<html><body>\n<p data-x="a>b"\n>Then Phase 5 closes it.</p>\n</body></html>';
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":3 ");
+  });
+
+  test("an element whose name extends a block name joins instead of splitting", () => {
+    const cases = [
+      { rel: "assets/workflow.html", text: "<html><body><p>Phase <li-item>4</li-item> delivery closes it.</p></body></html>" },
+      { rel: "assets/x.svg", text: "<svg><foreignObject><p>Phase <li-item>4</li-item> delivery</p></foreignObject></svg>" },
+    ];
+    for (const file of cases) {
+      const result = checkRetiredStageNames([file]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
   test("an html block reports the line its text starts on", () => {
     const html = "<html><body>\n<p>\n  Then Phase\n  4 delivery\n</p></body></html>";
     const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
