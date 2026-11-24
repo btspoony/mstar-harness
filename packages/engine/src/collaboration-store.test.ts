@@ -9989,7 +9989,15 @@ describe("pre-v3 remote cache recovery", () => {
     );
     expect(refused.code).toBe("remote.dispatch-refused");
     expect(refused.message).toContain("already holds a recorded conflict receipt");
-    expect(refused.message).toContain("outbox-resolve");
+    // invariant: The row is not state 'conflict', so outbox-resolve would refuse it too: the only
+    // live route is the ordinary bootstrap rebuild, naming every bound checkout, not just this one.
+    expect(refused.message).not.toContain("outbox-resolve");
+    expect(refused.message).toContain("recorded state contradicts its recorded evidence");
+    expect(refused.message).toContain("rebuild the derived cache through the ordinary bootstrap");
+    expect(refused.message).toContain("stop every checkout of this repository that has the cache bound");
+    expect(refused.message).toContain("run \\\`mstar store collaboration remote status\\\`");
+    expect(refused.message).toContain("fresh reviewed remote bind");
+    expect(refused.message).toContain("the pending intent's record is not preserved");
     // invariant: The parent conflict stays unsettled: no laundered confirmation unblocked it.
     const stillRefused = await refusalOf(bind);
     expect(stillRefused.code).toBe("remote.effect-pending");
@@ -10238,6 +10246,7 @@ describe("pre-v3 remote cache recovery", () => {
     conflictId: string,
     repairId: string,
     repairState: RemoteIntentState,
+    options: Readonly<{ conflictReceipt?: boolean }> = {},
   ): void {
     writeV3RemoteLane(location);
     const db = new DatabaseSync(location.dbPath);
@@ -10255,6 +10264,14 @@ describe("pre-v3 remote cache recovery", () => {
           "'2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', null);" +
           "update remote_outbox set resolved_by = '" + repairId + "' where operation_id = '" + conflictId + "';",
       );
+      if (options.conflictReceipt === true) {
+        // note: The recorded conflict receipt beside the tampered confirmed state is the shape the
+        // laundering guard refuses a confirmation onto; the hint must not route back to it.
+        db.prepare(
+          "insert into remote_outbox_receipts(operation_id, receipt_hash, source, outcome, evidence_json, recorded_at) " +
+            "values (?, 'seed-receipt-hash', 'receipt', 'conflict', '{}', '2026-11-21T00:00:00.000Z')",
+        ).run(repairId);
+      }
     } finally {
       db.close();
     }
@@ -10264,6 +10281,7 @@ describe("pre-v3 remote cache recovery", () => {
     const cases: Array<{
       repairState: RemoteIntentState;
       damaged?: boolean;
+      conflictReceipt?: boolean;
       exact: string[];
       absentInConflictLine?: string[];
     }> = [
@@ -10311,7 +10329,24 @@ describe("pre-v3 remote cache recovery", () => {
         repairState: "enqueued",
         damaged: true,
         exact: ["Its recorded resolvedBy link is damaged", "rebuild the derived cache through the ordinary bootstrap"],
-        absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector"],
+        absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector", "stop this checkout"],
+      },
+      {
+        // invariant: A confirmed repair holding only a conflict receipt is the laundering shape the
+        // guard refuses a receipt onto: the hint names the rebuild route (every bound checkout),
+        // never a confirmation receipt or outbox-resolve.
+        repairState: "confirmed",
+        conflictReceipt: true,
+        exact: [
+          "its repair is marked confirmed but holds only a recorded conflict receipt",
+          "recorded state contradicts its recorded evidence",
+          "rebuild the derived cache through the ordinary bootstrap",
+          "stop every checkout of this repository that has the cache bound",
+          "run \\\`mstar store collaboration remote status\\\`",
+          "fresh reviewed remote bind",
+          "the pending intent's record is not preserved",
+        ],
+        absentInConflictLine: ["outbox-resolve", "outbox-receipt", "record that receipt with", "stop this checkout"],
       },
     ];
     for (const [index, entry] of cases.entries()) {
@@ -10322,7 +10357,7 @@ describe("pre-v3 remote cache recovery", () => {
       const location = locationAt(fixture.repo);
       const conflictId = "00000000-0000-4000-8000-000000000b0" + String(index);
       const repairId = "00000000-0000-4000-8000-000000000c0" + String(index);
-      seedConflictRepair(location, conflictId, repairId, entry.repairState);
+      seedConflictRepair(location, conflictId, repairId, entry.repairState, { conflictReceipt: entry.conflictReceipt === true });
       if (entry.damaged === true) {
         // note: Same generation and project, but no reverse resolves pointer: the link is broken,
         // and the linked row's own live state must never be routed as this conflict's repair.

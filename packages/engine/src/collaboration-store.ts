@@ -1857,13 +1857,21 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 type ConflictRepairHop =
   | Readonly<{ kind: "absent" }>
   | Readonly<{ kind: "damaged" }>
-  | Readonly<{ kind: "repair"; state: string; resolvedBy: string | null }>;
+  | Readonly<{
+      kind: "repair";
+      state: string;
+      resolvedBy: string | null;
+      // invariant: A confirmed repair holding only a conflict receipt is the laundering shape the
+      // settle path refuses a receipt onto; the hint must not route there.
+      launderingRefused: boolean;
+    }>;
 
 function conflictRepairHop(
   db: StoreDb,
   conflict: { generation: unknown; project_key: unknown },
   parentId: string,
   cursor: string | null,
+  receiptsPresent: boolean,
 ): ConflictRepairHop {
   if (cursor === null) return { kind: "absent" };
   const linked = db
@@ -1880,7 +1888,17 @@ function conflictRepairHop(
   if (linked.generation !== conflict.generation || linked.project_key !== conflict.project_key || linked.resolves !== parentId) {
     return { kind: "damaged" };
   }
-  return { kind: "repair", state: linked.state, resolvedBy: typeof linked.resolved_by === "string" ? linked.resolved_by : null };
+  const resolvedBy = typeof linked.resolved_by === "string" ? linked.resolved_by : null;
+  // invariant: Only the confirmed state can reach the receipt-refusing guard, and only when the
+  // confirmed receipt that would prove the state is absent while a conflict receipt stands.
+  const launderingRefused =
+    receiptsPresent &&
+    linked.state === "confirmed" &&
+    !hasConfirmedReceipt(db, cursor) &&
+    db
+      .prepare("select 1 as found from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' limit 1")
+      .get(cursor) !== undefined;
+  return { kind: "repair", state: linked.state, resolvedBy, launderingRefused };
 }
 
 /**
@@ -1910,6 +1928,7 @@ export function hasConfirmedReceipt(db: StoreDb, operationId: string): boolean {
 function conflictRepairSettled(
   db: StoreDb,
   row: { operation_id: string; generation: unknown; project_key: unknown; state: string; resolved_by: unknown },
+  receiptsPresent: boolean,
 ): boolean {
   if (row.state !== "conflict") return false;
   let parentId = row.operation_id;
@@ -1917,7 +1936,7 @@ function conflictRepairSettled(
   const visited = new Set<string>();
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
-    const hop = conflictRepairHop(db, row, parentId, cursor);
+    const hop = conflictRepairHop(db, row, parentId, cursor, receiptsPresent);
     if (hop.kind !== "repair") return false;
     if (hop.state === "confirmed") return hasConfirmedReceipt(db, cursor);
     if (hop.state !== "conflict") return false;
@@ -1970,14 +1989,14 @@ async function replaceDerivedLaneBelow(
                 "from remote_outbox where state not in ('confirmed','abandoned') order by created_at, operation_id",
             )
             .all() as OutboxRow[])
-            .filter((row) => !(receiptsPresent && conflictRepairSettled(db, row)))
+            .filter((row) => !(receiptsPresent && conflictRepairSettled(db, row, receiptsPresent)))
             // note: The link's own classification comes with the row: the refusal's route for one
             // conflict depends on it (no repair, a damaged link, or the repair's state).
             .map((row) => ({
               ...row,
               repair:
                 row.state === "conflict"
-                  ? conflictRepairHop(db, row, row.operation_id, typeof row.resolved_by === "string" ? row.resolved_by : null)
+                  ? conflictRepairHop(db, row, row.operation_id, typeof row.resolved_by === "string" ? row.resolved_by : null, receiptsPresent)
                   : ({ kind: "absent" } as const),
             }));
     recorded = {
@@ -2030,14 +2049,16 @@ async function replaceDerivedLaneBelow(
     // that is `confirmed` AND holds its recorded receipt never reaches this branch: the settle
     // rule dropped its parent row, so an unblocked bind needs no line. A link this scope cannot
     // honor is named as damaged, never as an absent one: `outbox-resolve` refuses while it stands.
+    const rebuild =
+      "rebuild the derived cache through the ordinary bootstrap - stop every checkout of this repository that has " +
+      "the cache bound (the cache is user-level, not per checkout), remove the cache file, run " +
+      "\\`mstar store collaboration remote status\\`, then perform a fresh reviewed remote bind - and the " +
+      "pending intent's record is not preserved.";
     const conflictStep = (repair: ConflictRepairHop): string => {
       if (repair.kind === "damaged") {
         return shown("<uuid>") + ". Its recorded resolvedBy link is damaged - the operation it names is missing, " +
           "belongs to another generation or project, or carries no reverse resolves pointer - so a reviewed resolve " +
-          "refuses while that link stands and no receipt or fresh reviewed bind can settle it in this scope: rebuild " +
-          "the derived cache through the ordinary bootstrap - stop this checkout's use of the cache, remove the cache " +
-          "file, run \\`mstar store collaboration remote status\\`, then perform a fresh reviewed remote bind - and " +
-          "the pending intent's record is not preserved.";
+          "refuses while that link stands and no receipt or fresh reviewed bind can settle it in this scope: " + rebuild;
       }
       if (repair.kind === "absent") {
         return shown("<uuid>") + ". It carries no live repair, so prepare one with " + resolved() +
@@ -2046,6 +2067,12 @@ async function replaceDerivedLaneBelow(
       }
       const follow = "follow the repair its resolvedBy names with " + showCommand("<repair-uuid>");
       if (repair.state === "confirmed") {
+        if (repair.launderingRefused) {
+          // invariant: A receipt submission onto this row is refused by the laundering guard, so
+          // the only live route is the same rebuild the damaged-link branch names.
+          return shown("<uuid>") + "; its repair is marked confirmed but holds only a recorded conflict receipt, so " +
+            "its recorded state contradicts its recorded evidence and this scope cannot settle it in place: " + rebuild;
+        }
         return shown("<uuid>") + "; its repair is marked confirmed but holds no recorded confirmed receipt, so that " +
           "effect is not proven and the settle rule does not count it: record that receipt with " + evidenced() +
           " (a reconcile under the original binding records the same evidence)";

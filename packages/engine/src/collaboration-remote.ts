@@ -4066,7 +4066,7 @@ async function recordReceiptEvidence(
     if (unprovenConfirmation && hasConflictReceipt(db, envelope.operationId)) {
       throw new StoreError(
         "remote.dispatch-refused",
-        `Operation ${envelope.operationId} already holds a recorded conflict receipt, so a confirmation is never recorded onto it: a state claiming confirmed without its own receipt is damaged cache bytes, and recorded evidence is never overruled - resolve the recorded fork by review (outbox-resolve) as a new intent that cites both branches. Nothing was changed.`,
+        `Operation ${envelope.operationId} already holds a recorded conflict receipt, so a confirmation is never recorded onto it: the row's recorded state contradicts its recorded evidence, so this scope cannot settle it in place - rebuild the derived cache through the ordinary bootstrap: stop every checkout of this repository that has the cache bound (the cache is user-level, not per checkout), remove the cache file, run \\\`mstar store collaboration remote status\\\`, then perform a fresh reviewed remote bind - and the pending intent's record is not preserved. Nothing was changed.`,
         { operationId: envelope.operationId },
       );
     }
