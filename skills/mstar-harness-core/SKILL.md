@@ -95,7 +95,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
 | `mstar-use-cli` | Intent-first command families, ordinary coordinator operations, three completion routes, CAS/receipts, exit/refusal codes; exact flags from source-built verb help |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
-| `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
+| `mstar-iteration` | 迭代管理：Phase 1–3（start / Autonomous Execute / iteration-close）+ 交付（PR delivery / merge-ready loop / Workflow Close Out） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
 | `mstar-engine-legacy` | Engine-absent execution-state boundary; execution state = conversation tracking (no-plan mode); no recreated file execution route |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |

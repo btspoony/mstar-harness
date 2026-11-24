@@ -17,7 +17,7 @@ Execute 到 close 全程有效（drive + loop 共有的行）：
 | Product-code edits, test authoring or QC execution (Phase 2) | Dispatch implementer/QC specialists; only bounded PM acceptance checks are direct → `mstar-roles/references/project-manager/acceptance.md` |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `mstar-host/references/parallel-dispatch.md` § Hard rules） |
-| 最后一个 plan `Done` 后跳过 iteration-close，或在该点宣称交付完成；单层「Merge-ready checklist」exit、单层 merge 或整链未证明即宣称交付完成 | 最后 1 个 plan `Done` 后先 iteration-close（§3.0→§3.5）；每层 PR 按 `mstar-roles/references/project-manager/pr-delivery.md` 逐层走到 merge，整链证明后 workflow close |
+| 最后一个 plan `Done` 后跳过 iteration-close，或在该点宣称交付完成；单层「Merge-ready checklist」exit、单层 merge 或整链未证明即宣称交付完成 | 最后 1 个 plan `Done` 后先 iteration-close（§3.0→§3.5）；每层 PR 按 `mstar-roles/references/project-manager/pr-delivery.md` 逐层走到 merge，整链证明后 Workflow Close Out |
 | PR 修复时 PM 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-doc-corpus`**。
@@ -49,13 +49,13 @@ The primary coordinator projects the entire selected iteration into the table be
 | plan-wave todos | 进入 Phase 2 | 各 plan `Done` |
 | `phase-3-iteration-close` | 仅剩 1 个非 `Done` plan | Phase 3 §3.5 exit 全 `[x]` |
 | `delivery-chain` | 首个 layer PR 发布时（execute 期间） | 每层 PR 均已 merge 且整链证明记录在 compass `PR stack` 表（第 7 项是每层 merge 前置、该层第 8 项 merged 后才可勾） |
-| `workflow-close` | 整链证明记录后 | workflow close 完成：Terminal write → Unregister → Projection reconciliation → Cleanup handoff（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
+| `workflow-close` | 整链证明记录后 | Workflow Close Out 完成：Terminal write → Unregister → Projection reconciliation → Cleanup handoff（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 
-Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 execute 入口至 whole-chain proof 与 workflow close 前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 gate 动作，不向用户例行 yes/no check-in；每层 merge 授权与 `owner-gated` 的停等 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。
+Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 execute 入口至 whole-chain proof 与 Workflow Close Out 前 PM **连续编排**，进度汇报后下一条必须是 dispatch 或下一 gate 动作，不向用户例行 yes/no check-in；每层 merge 授权与 `owner-gated` 的停等 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。
 
 **合法 STOP（仅此升级用户）**：
 

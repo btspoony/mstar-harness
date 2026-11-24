@@ -522,9 +522,9 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - omp: use `/skill:pm` (no session auto-load).
 
 2. **Run an iteration** (see [README — Iteration](README.md#iteration))
-   - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues Phase 2→6; `pause` to stop after Phase 1).
-   - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→6 re-entry).
-   - **Fast autonomous loop:** `/iteration-loop` (Phase 1→6, optional `direction` + `scale`).
+   - **Deep / first iteration:** `/iteration-start` (Phase 1 grill-me → auto-continues through execute, close and the delivery chain to Workflow Close Out; `pause` to stop after Phase 1).
+   - **Resume interrupted iteration:** `/iteration-drive` (re-entry into execute, close and the delivery chain).
+   - **Fast autonomous loop:** `/iteration-loop` (the whole lifecycle, optional `direction` + `scale`).
 
 3. **Project knowledge** — bootstrap or refresh via the `mstar-knowledge` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
 

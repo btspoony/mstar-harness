@@ -1,6 +1,6 @@
 ---
 name: mstar-iteration
-description: "Start, drive, resume or close an iteration (also without a slash command): direction lock, autonomous execution with stacked layer PRs, iteration-close, whole-chain proof and workflow close."
+description: "Start, drive, resume or close an iteration (also without a slash command): direction lock, autonomous execution with stacked layer PRs, iteration-close, whole-chain proof and Workflow Close Out."
 ---
 
 # mstar-iteration（迭代管理）
@@ -19,7 +19,7 @@ The primary coordinator owns all rows of the selected iteration and dispatches o
 
 mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done → **compound**）。Compound 是每个迭代 plan `Done` 后的交付尾义务——迭代行与独立 development plan 相同；iteration-close 只做 specs/ADR 提升与迭代收口。
 
-本 skill 管理迭代 lifecycle：direction lock → autonomous execute → iteration-close → whole-chain proof → workflow close（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
+本 skill 管理迭代 lifecycle：direction lock → autonomous execute → iteration-close → whole-chain proof → Workflow Close Out（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
 
 ```
 Phase 1: start
@@ -33,7 +33,7 @@ iteration-close (specs/ADR promotion)
      ↓
 whole-chain proof（每项 merge 证据 + final accepted content 在 `branch.target`）
      ↓
-workflow close (Terminal write → Unregister → Projection reconciliation → Cleanup handoff)
+Workflow Close Out (Terminal write → Unregister → Projection reconciliation → Cleanup handoff)
      ↓
 迭代交付完成
 ```
@@ -42,8 +42,8 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 
 - **PR delivery 是与执行并行的职责，不是 close 之后的编号阶段**：每个 review-ready layer 在 execute 期间发布 PR；发布、push cadence、review 面、merge-ready、merge 授权与 merge 核实 → `mstar-roles/references/project-manager/pr-delivery.md`（逐 PR 适用）。
 - **stack**：层级切分与 `iteration-stack/<iteration-id>/sNN` 命名、tracker、landing/propagation、compass `PR stack` 记录与整链证明 → `references/pr-stack.md`。
-- **iteration-close** 在 integration 分支收口 specs/ADR 并记录交付投影候选；per-plan knowledge compound 已在各 plan `Done` 后完成；`delivered` 投影只在整链证明之后由 workflow close 的投影对齐写入。**开 layer PR ≠ 迭代交付完成，merge-ready ≠ 生命周期已关闭**。
-- **workflow close** 在整链证明之后（terminal execution transition → DB root unregister → 投影对齐 → 显式 cleanup；细则 → `mstar-roles/references/project-manager/workflow-close.md`，cleanup 契约 → `mstar-branch-worktree`）。
+- **iteration-close** 在 integration 分支收口 specs/ADR 并记录交付投影候选；per-plan knowledge compound 已在各 plan `Done` 后完成；`delivered` 投影只在整链证明之后由 Workflow Close Out 的投影对齐写入。**开 layer PR ≠ 迭代交付完成，merge-ready ≠ 生命周期已关闭**。
+- **Workflow Close Out** 在整链证明之后（terminal execution transition → DB root unregister → 投影对齐 → 显式 cleanup；细则 → `mstar-roles/references/project-manager/workflow-close.md`，cleanup 契约 → `mstar-branch-worktree`）。
 - 一次迭代 = 一条有序 PR 链；per-plan compound 与 iteration-close 的 specs/ADR 产物随各层 PR 合入 workflow `branch.target`（ACTIVE：执行行）；final close-delta layer 仅在有非空 delta 时开。
 
 ## Phase route map（唯一路由表 — 按当前动作加载）
@@ -55,7 +55,7 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.5：entry checklist、specs/ADR promotion、roadmap、完成标记、exit checklist + commit） |
 | **PR delivery**（每层 PR 的发布、push cadence、review 面、merge-ready、merge 授权与核实） | **`mstar-roles/references/project-manager/pr-delivery.md`**（`## Publish the PR`、`## Push cadence`、`## Review paths and surfaces`、`## Merge-ready loop`、`## Merge-ready checklist`、`## Merge authorization`、`## Unresolved conversation gate`） |
 | **stack**（层级切分与命名、tracker、landing/propagation、整链证明） | **`references/pr-stack.md`**（`iteration-stack/<iteration-id>/sNN` 命名、sizing、opening、tracking、landing、propagation、compass `PR stack` 记录与整链证明） |
-| **workflow close**（整链证明后关闭 lifecycle） | **`mstar-roles/references/project-manager/workflow-close.md`**（Entry（whole-chain proof）→ Terminal write → Unregister → Projection reconciliation → Cleanup handoff：`mstar worktree cleanup`，dry-run 默认，`--apply` 才变更） |
+| **Workflow Close Out**（整链证明后关闭 lifecycle） | **`mstar-roles/references/project-manager/workflow-close.md`**（Entry（whole-chain proof）→ Terminal write → Unregister → Projection reconciliation → Cleanup handoff：`mstar worktree cleanup`，dry-run 默认，`--apply` 才变更） |
 | **PR helper discovery**（仅 command 层按需） | **`references/pr-helper-discovery.md`**（babysit / greploop 发现） |
 
 一次只加载当前 route 一行；phase 切换按下方 **Phase transition gates** 走。
@@ -67,15 +67,15 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 | **→ Phase 2**（entry / resume） | §2.0 五道闸全过（细则 → `references/phase-2-worktree-lease.md`） | 继续 Autonomous Execute per-plan loop（phase-2 reference §2.4）；主 worktree 驻留 = 记录的 **`Main worktree branch`**，integration 分支检出在专属 integration worktree | 五道闸任一 false 仍派发；branch metadata 缺失用 `main`/`master` 补位；把生命周期分支切到主 checkout |
 | **→ Phase 3** | `mstar status validate` / `mstar plan show` 所读 ACTIVE `execution_plans` 中 compass 登记的全部 plan 均为 `Done`，且 pending publication 已对账（全部 row `Done` 时不得留下未发布的 reviewed range；先按 execute/resume detail §2.0「Resume with every row Done」做 delivery-only 恢复） | 打印 `## Phase 3: iteration-close`；执行 §3.0→§3.5（`references/phase-3-iteration-close.md`）；host todo `phase-3-iteration-close` 保持 open 直至 §3.5；close commit 在 **integration worktree** 执行 | 以开 PR 替代 iteration-close；宣称迭代交付完成；仅依赖 final plan closure；在主 checkout 上 commit close 产物 |
 | **close → delivery chain** | 仅约束 **close-delta layer**：§3.5 exit checklist 全 `[x]` 且 frontmatter `status: completed` + `end_date`（执行期间开启的 layer PR 走 `references/pr-stack.md`，不受本行门控） | 每层 PR 依「Publish the PR」→「Merge-ready checklist」→「Merge authorization」逐层推进（→ `mstar-roles/references/project-manager/pr-delivery.md`）；层级顺序、tracker、landing/propagation 与整链证明 → `references/pr-stack.md`；final close-delta layer 仅在有非空 delta 时开 | 跳过 §3.1 entry checklist 或 specs/ADR catalog 登记；以单层「Merge-ready checklist」exit 或单层 merge 宣称交付完成 |
-| **→ workflow close** | 整链证明已记录（compass `PR stack` 表：每项 merge 证据 + final accepted content 在 `branch.target`；engine 不验证 iteration merge → GitHub #819） | 按 `mstar-roles/references/project-manager/workflow-close.md` 执行 Terminal write → Unregister → Projection reconciliation → Cleanup handoff；todo `workflow-close` 保持 open 直至 Cleanup handoff | 整链未证明即调用 close；interrupted / partially merged 的迭代被当作已交付；为通过 close 释放 lease 或伪造 Done/关闭 residual |
-| **→ 迭代交付完成** | workflow close 完成（`mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff） | store workflow `completed` + `ended_at`；DB 根 register（`execution_registry`）条目注销（`mstar status workflow-close --workflow <id>` 的所属 authority 形态 exit 0）；投影一致 | 「Merge-ready checklist」exit 或单层 PR merge 即宣称交付完成；为 close 释放 lease 或伪造 Done/关闭 residual |
+| **→ Workflow Close Out** | 整链证明已记录（compass `PR stack` 表：每项 merge 证据 + final accepted content 在 `branch.target`；engine 不验证 iteration merge → GitHub #819） | 按 `mstar-roles/references/project-manager/workflow-close.md` 执行 Terminal write → Unregister → Projection reconciliation → Cleanup handoff；todo `workflow-close` 保持 open 直至 Cleanup handoff | 整链未证明即调用 close；interrupted / partially merged 的迭代被当作已交付；为通过 close 释放 lease 或伪造 Done/关闭 residual |
+| **→ 迭代交付完成** | Workflow Close Out 完成（`mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff） | store workflow `completed` + `ended_at`；DB 根 register（`execution_registry`）条目注销（`mstar status workflow-close --workflow <id>` 的所属 authority 形态 exit 0）；投影一致 | 「Merge-ready checklist」exit 或单层 PR merge 即宣称交付完成；为 close 释放 lease 或伪造 Done/关闭 residual |
 | **start → integration branch** | §1.2.5 prototype checkpoint + §1.6 Review & Edit (`references/phase-1-prepare.md`) | Retained confirmed interactive HTML or reasoned autonomous prototype; formal documents aligned to that baseline; PM records product/architect include/omit rationale; actual selected roles edit sequentially, mandatory writer last; package specs/hygiene, marker closure, per-plan Prepare gates, `pr_merge_policy` recorded and user-confirmed, and compass `status: locked` | Formal authoring before prototype disposition; stale design approval; fake skip receipts; unresolved gaps hidden by omission; PM replacing specialist edits/writer; parallel shared-document editing; new knowledge or prototype-as-spec/acceptance evidence |
 
 > **Engine check:** `mstar iteration gate` is the close-boundary probe (plans Done, compass completed, close commit on the integration branch); run `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch "$(git branch --show-current)" --integration <spec_integration_branch> --target <target_branch>` (engine `evaluatePhaseGate`) against the ACTIVE execution authority (DB). Command, flags and transition names are unchanged. Verify branch probes **before** §3.5 commit; `EXIT_BRANCH_MISMATCH` / `EXIT_PR_BASE_MISMATCH` block it. During `transition: phase-3-close`, exit 1 pending §3.4 `completed` + `end_date` is expected close work pending, not permission to skip iteration-close; the exit checklist gates the delivery chain. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 **误判信号**：对话里出现 specs/ADR 提升摘要、roadmap 投影候选记录、或「所有 plan 已完成」但 **未** 打印 §3.1 / §3.5 checklist → 视为 **Phase 3 未执行**，回到 `references/phase-3-iteration-close.md` §3.0。
 
-**per-plan 状态 SSOT**：ACTIVE 为 `{HARNESS_DIR}/store.db` 的 `execution_plans` 行（Todo/InProgress/InReview/Done）；`execution_registry` 登记活跃 lifecycle。读取经 `mstar status validate` / `mstar plan show`，写入只经公共 `mstar workflow …` / `mstar plan …` 动词。workflow close 保留 workflow 终态（`completed` + `ended_at`），注销 DB 根 register 条目。`{WORKFLOW_DIR}/<id>/snapshot.json` 与根 `status.json` 仅为迁移源（由保留的 `mstar` 迁移工具 engine 内部写入），不是读写路线；这些文件（含 `sessions/*.json`）在 runtime consumer 下的读写分别被 `execution.consumer-not-ready` / `execution.direct-write-refused` 拒绝。
+**per-plan 状态 SSOT**：ACTIVE 为 `{HARNESS_DIR}/store.db` 的 `execution_plans` 行（Todo/InProgress/InReview/Done）；`execution_registry` 登记活跃 lifecycle。读取经 `mstar status validate` / `mstar plan show`，写入只经公共 `mstar workflow …` / `mstar plan …` 动词。Workflow Close Out 保留 workflow 终态（`completed` + `ended_at`），注销 DB 根 register 条目。`{WORKFLOW_DIR}/<id>/snapshot.json` 与根 `status.json` 仅为迁移源（由保留的 `mstar` 迁移工具 engine 内部写入），不是读写路线；这些文件（含 `sessions/*.json`）在 runtime consumer 下的读写分别被 `execution.consumer-not-ready` / `execution.direct-write-refused` 拒绝。
 **迭代状态**：执行状态权威在 store.db；`{ITERATION_DIR}/<id>/delivery-compass.md` frontmatter 是 authored 叙事镜像，catalog 登记身份与关系。`{ITERATION_DIR}/README.md` 仅作散文，不维护登记行。
 **迭代分支 SSOT**：ACTIVE workflow 执行行的 `branch.base`（= `iteration_base_branch`）、`branch.target`（= `target_branch`）、`branch.integration`（= `spec_integration_branch`）与 `integration_worktree_path`。compass frontmatter 镜像同名锚点。解析顺序见 phase-2 reference §2.3；默认分支门禁、例外写法与「禁止默认 `main`/`master`」→ **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库）。**`branch.base` 不是驻留事实**——主 worktree（control root）驻留分支由 PM 记录为主 plan 头的 **`Main worktree branch`**，全程不切换；integration 分支检出在专属 integration worktree。
 
@@ -85,7 +85,7 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 
 ## 2.6 Continuous execution + push 纪律（execute → whole-chain close 通用 SSOT）
 
-**Continuous execution（HARD）**：execute 入口经 whole-chain proof 与 workflow close 全程 — 不向用户做例行 yes/no check-in。
+**Continuous execution（HARD）**：execute 入口经 whole-chain proof 与 Workflow Close Out 全程 — 不向用户做例行 yes/no check-in。
 
 - **Autonomous stop point（每层 merge 授权）**：autonomous 段在每层 PR 的 **「Merge authorization」授权之后的 merge** 处交接——`owner-gated` 下该层停在 **merge-ready**（「Merge-ready checklist」第 1–5 项），等**人类 owner** 书面批准（可一次命名当前 ready prefix，条件 → `references/pr-stack.md`「Landing」）；`reviewed-auto` 与 `reviewed-bot` 下继续至「Merge authorization」谓词成立后由 PM 执行该层 merge（前者等本地 `ship it`，后者等挂载 bot 的最新 review 达门）。三种情况下授权都来自记录的 policy 与「Merge authorization」，**不是** agent 自行判断「流程已走完」
 - 不因 harness 流程问题常问「是否继续」「要不要现在启动」—— **决策、记录、dispatch**
@@ -121,7 +121,7 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 共享反递归红线全清单见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。迭代级高频陷阱（其余各 Phase 内已含对应 hard rule）：
 
 - **不要把开 layer PR 或单层 merge-ready 等同于迭代交付完成** — 每层须按 `mstar-roles/references/project-manager/pr-delivery.md`「Merge-ready checklist」走到「Merge authorization」并核实 merge
-- **不要把单层「Merge-ready checklist」exit 或单层 merge 当作生命周期终点** — 整链证明后必须 workflow close（`mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff）；禁止为通过 close 释放 lease 或伪造 Done/关闭 residual
+- **不要把单层「Merge-ready checklist」exit 或单层 merge 当作生命周期终点** — 整链证明后必须 Workflow Close Out（`mstar-roles/references/project-manager/workflow-close.md`：Terminal write → Unregister → Projection reconciliation → Cleanup handoff）；禁止为通过 close 释放 lease 或伪造 Done/关闭 residual
 - **不要在该 PR 的 CI 仍跑或 AI review 波次未结束时 push**（「Push cadence」）— 本地可提前修，push 等 idle
 - **不要在缺「Merge authorization」时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；三分支完整谓词、外部 bot 的 P1/未达标分数与 `pr_merge_policy` 缺失时的 STOP → **`mstar-roles/references/project-manager/pr-delivery.md`**「Merge authorization」；**merge 前还必须过「Unresolved conversation gate」**——未解决的 review thread（任何 merge class）须先清零，或逐条 waive 并经两次确认
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — PR 修复走 fix feature worktree，review 后 merge 回该 PR 的 layer ref（`mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」）
@@ -130,8 +130,8 @@ workflow close (Terminal write → Unregister → Projection reconciliation → 
 
 ## Workflow
 
-lifecycle 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → PM Acceptance → 串行 merge → Done → compound；其间按层发布 PR、跟踪并落地 ready prefix）→ `iteration-close`（§3.1–§3.5 specs/ADR promotion）→ `whole-chain proof`（`references/pr-stack.md`）→ `workflow close`（Terminal write → Unregister → Projection reconciliation → Cleanup handoff）。每波用 §2.1 session todos 设护栏防范围漂移；action 切换以上方 **Phase transition gates** 为准。
+lifecycle 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → PM Acceptance → 串行 merge → Done → compound；其间按层发布 PR、跟踪并落地 ready prefix）→ `iteration-close`（§3.1–§3.5 specs/ADR promotion）→ `whole-chain proof`（`references/pr-stack.md`）→ `Workflow Close Out`（Terminal write → Unregister → Projection reconciliation → Cleanup handoff）。每波用 §2.1 session todos 设护栏防范围漂移；action 切换以上方 **Phase transition gates** 为准。
 
 ## Evidence
 
-迭代交付完成 = 整链证明（compass `PR stack` 表逐项 merge 证据 + final accepted content 在 `branch.target`）**且 workflow close 完成**（store workflow `completed` + `ended_at`、DB 根 register 条目注销、投影一致；`mstar-roles/references/project-manager/workflow-close.md`）。Phase 3 完成标志 = compass frontmatter `status: completed` + `end_date`（§3.4）+ §3.5 exit checklist。authored close 证据保留在 compass / plans / specs；catalog 与执行 metadata 在 store.db，不要求单独迭代审查报告。
+迭代交付完成 = 整链证明（compass `PR stack` 表逐项 merge 证据 + final accepted content 在 `branch.target`）**且 Workflow Close Out 完成**（store workflow `completed` + `ended_at`、DB 根 register 条目注销、投影一致；`mstar-roles/references/project-manager/workflow-close.md`）。Phase 3 完成标志 = compass frontmatter `status: completed` + `end_date`（§3.4）+ §3.5 exit checklist。authored close 证据保留在 compass / plans / specs；catalog 与执行 metadata 在 store.db，不要求单独迭代审查报告。

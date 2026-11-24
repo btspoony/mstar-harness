@@ -1,10 +1,10 @@
 # Worktree / branch cleanup（merge 后回收）
 
-> **Load when:** running or interpreting `mstar worktree cleanup`, planning Phase-2 same-round or Phase-6 post-merge recovery, or deciding Done-child eligibility while a parent lifecycle is still active.
+> **Load when:** running or interpreting `mstar worktree cleanup`, planning Phase-2 same-round or Workflow Close Out recovery, or deciding Done-child eligibility while a parent lifecycle is still active.
 
 > **Owner:** sole cleanup contract body; `mstar-iteration` call sites only point here.
 
-生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Phase-6 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
+生命周期末端的物理回收（feature/integration worktree、本地/远端分支删除）的 ownership 与守卫规则**只在本节**；两条时序车道的 call site（Phase-2 同轮 / Workflow Close Out 收尾）只引用本节，不复制规则。命令（**dry-run 默认**；无 fetch / prune / 任何写入）：
 
 ```text
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose]
@@ -33,6 +33,6 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 **两条时序车道（唯一合法时机）**：
 
 1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
-2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（`mstar-roles/references/project-manager/workflow-close.md`「Terminal write」→「Unregister」→「Projection reconciliation」完成）+ PR **proved merge** 之后回收 integration worktree / 分支 / 远端残留（call site →「Cleanup handoff」）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
+2. **Workflow Close Out 收尾**（integration 面）：只在 valid terminal close（`mstar-roles/references/project-manager/workflow-close.md`「Terminal write」→「Unregister」→「Projection reconciliation」完成）+ PR **proved merge** 之后回收 integration worktree / 分支 / 远端残留（call site →「Cleanup handoff」）。close-state probe 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
 
 > **Engine check:** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（engine `planWorktreeCleanup`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
