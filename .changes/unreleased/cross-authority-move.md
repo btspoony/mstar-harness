@@ -24,12 +24,15 @@ packages: root
   neither. Both local readers answer `toIssue: null` / `toRef` / `title: null`, the row becomes a local relation in the
   transaction that admits the target, and a record frozen by a move is never a mirror push candidate. Local `issue show` and
   the `issue-detail` view now return the record's `issueRef`.
-- **Three refusal codes join the contract.** `issue.move-in-progress` is the source fence a write meets (and
-  `collaboration.move-phase-invalid` a transition that the ledger forbids) and `collaboration.move-destination-occupied` an
-  occupant under the same reference that does not already hold the frozen image.
+- **Four refusal codes join the contract.** `issue.move-in-progress` is the source fence a write meets (and
+  `collaboration.move-phase-invalid` a transition that the ledger forbids), `collaboration.move-destination-occupied` an
+  occupant under the same reference that does not already hold the frozen image, and `issue.move-document-not-written` a
+  handoff document that could not be written — reported beside the move that completed, never as its failure.
 - **`mstar issue move` gains the cross-authority surface.** `--to-authority <repo-key>` selects the staged route (without it
-  the verb keeps its local project reassignment). A destination that resolves to the record's own authority refuses
-  `issue.scope-refused` before anything is staged.
+  the verb keeps its local project reassignment), and `--input <file|->` / `--out <abs>` are the two-checkout `local`/
+  `remote` exchange, where each side writes only the lane its own mode selects. A remote-to-remote move still refuses
+  `collaboration.mode-unavailable` and a destination that resolves to the record's own authority `issue.scope-refused`, both
+  before anything is staged.
 
 <!-- CN -->
 - **所有既有协作 lane 必须推进到版本 4，execution store 新增版本 22。** lane 现携带
@@ -51,7 +54,10 @@ packages: root
   `IssueRef`；两者恰好设置一个，表会拒绝两者皆空或皆设的行。两个本地读取端都作答 `toIssue: null` / `toRef` /
   `title: null`，在准入该目标的同一事务中该行变为本地关系，被迁移冻结的记录也不会成为 mirror 推送候选。本地
   `issue show` 与 `issue-detail` 视图现返回该记录的 `issueRef`。
-- **三个拒绝码加入契约。** `issue.move-in-progress` 是写入遇到的 source 栅栏（账本禁止的转换则是
-  `collaboration.move-phase-invalid`），`collaboration.move-destination-occupied` 是同引用下并不持有既定镜像的占用者。
-- **`mstar issue move` 新增跨权威入口。** `--to-authority <repo-key>` 选择分阶段路线（不带它时该动词仍做本地项目改派）。
-  目标解析为记录自身权威的迁移以 `issue.scope-refused` 拒绝，且在任何暂存发生前完成。
+- **四个拒绝码加入契约。** `issue.move-in-progress` 是写入遇到的 source 栅栏（账本禁止的转换则是
+  `collaboration.move-phase-invalid`），`collaboration.move-destination-occupied` 是同引用下并不持有既定镜像的占用者，
+  `issue.move-document-not-written` 是无法写出的交接文档——它随已完成的迁移一并报告，绝不被当作迁移失败。
+- **`mstar issue move` 新增跨权威入口。** `--to-authority <repo-key>` 选择分阶段路线（不带它时该动词仍做本地项目改派），
+  `--input <file|->` / `--out <abs>` 是 `local`/`remote` 的双检出交换，每一侧只写自己 mode 选中的 lane。remote 到
+  remote 的迁移仍以 `collaboration.mode-unavailable` 拒绝，目标解析为记录自身权威的迁移以 `issue.scope-refused` 拒绝，
+  两者都在任何暂存发生前完成。
