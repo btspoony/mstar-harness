@@ -581,7 +581,7 @@ describe("mstar-iteration phase route map ", () => {
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
- // Iteration-close detail keeps its hard gates.
+ // see skills/mstar-iteration/references/phase-3-iteration-close.md § 3.1, § 3.5
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.1 Close entry checklist（HARD GATE）")).toBe(true);
     expect(phase3.includes("## 3.5 Close exit checklist + commit")).toBe(true);
@@ -613,26 +613,8 @@ describe("mstar-iteration phase route map ", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Adversarial phase-transition case assertions (AC5 boundary scenarios).
-// Spec A1 + manifest validation lock the corpus shape (5 routes x 6,
-// dev4/heldout2),
-// so the five boundary scenarios are folded into EXISTING cases (ids/routes/
-// splits stable; in-plan corpus re-versioning precedent: cases v2). Pins
-// (STRUCTURAL only — never substitutes for model traces, Spec A1):
-// 1. Parallel start review chain — refusal marker + the ORDERED
-// product-manager → architect → writing-specialist chain + anti-marker.
-// 2. Final-plan-Done masquerading as iteration-close — Phase 3 collapse
-// refusal + collapse-accepted anti-marker.
-// 3. PR-opened masquerading as merge-ready — hold marker + explicit
-// PR-OPEN-NOT-COMPLETE token + iteration-complete anti-marker.
-// 4. Resume in wrong phase — resume case refuses skipping an unfinished
-// close ahead to PR delivery (iteration-close → delivery chain jump).
-// 5. Overridden pause — pause honored; auto-continue anti-marker.
-// Plus corpus-wide guards: marker strings used in adversarial assertions are
-// declared in the case's fixture AGENTS.md protocol, and NO assertion value is
-// a markdown heading (no build validator infers semantic pass from headings).
-// ---------------------------------------------------------------------------
+// see scripts/skill-eval/cases.json — the five adversarial boundary hosts and
+// their structural pins.
 
 const ADVERSARIAL_CASE_IDS = [
   "pm-dev-2-refuse-gate-skip-and-main-commit",
