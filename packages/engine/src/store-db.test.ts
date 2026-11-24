@@ -807,6 +807,84 @@ describe("migration 7 - project_milestones", () => {
 });
 
 /* ------------------------------------------------------------------------ *
+ * Migration 22 replaces `project_milestones.target` with `effort_sessions`.
+ * The add/drop pair must leave the foreign key from `issues.milestone_id` and
+ * the mismatch triggers resolving, and existing targets become unestimated.
+ * ------------------------------------------------------------------------ */
+
+describe("migration 22 - milestone effort sessions", () => {
+  test("a fresh combined store creates effort_sessions and no target", async () => {
+    const dir = mkdtempSync(join(ROOT, "effort-fresh-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const columns = (handle.db.prepare("pragma table_info(project_milestones)").all() as Array<{ name?: string }>).map(
+      (column) => column.name,
+    );
+    expect(columns).toContain("effort_sessions");
+    expect(columns).not.toContain("target");
+    handle.close();
+  });
+
+  test("a store at the previous version upgrades: the milestone reads unestimated, the issue keeps its link, and the mismatch trigger still aborts", async () => {
+    const dir = mkdtempSync(join(ROOT, "effort-upgrade-"));
+    const previous = MIGRATIONS[MIGRATIONS.length - 2]!.version;
+    const db = historicalStore(dir, previous);
+    try {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values('project', 'p-one', 'Project One', 'projects', 'p-one/roadmap.md', 'now', 'now');" +
+          "insert into project_milestones(milestone_id, project_id, project_kind, name, target, status, ordinal, created_at, updated_at) " +
+          "values('m-one', 'p-one', 'project', 'Milestone One', '2026-12-01', 'planned', 0, 'now', 'now');" +
+          "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values('project', 'p-two', 'Project Two', 'projects', 'p-two/roadmap.md', 'now', 'now');" +
+          "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key, milestone_id) " +
+          "values ('I-000201', 'p-one', 'Linked issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'effort-issue', 'm-one')",
+      );
+    } finally {
+      db.close();
+    }
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    const upgraded = await openStore({ harnessDir: dir }, "read");
+    expect(upgraded.db.prepare("select effort_sessions, status from project_milestones where milestone_id='m-one'").get())
+      .toEqual({ effort_sessions: null, status: "planned" });
+    expect(upgraded.db.prepare("select milestone_id from issues where id='I-000201'").get()).toEqual({ milestone_id: "m-one" });
+    upgraded.close();
+    // why: the read handle is readonly; the trigger abort is checked on its own writer connection.
+    const writer = new DatabaseSync(join(dir, "store.db"));
+    writer.exec("pragma foreign_keys=on");
+    try {
+      expect(() =>
+        writer
+          .prepare(
+            "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key, milestone_id) " +
+              "values ('I-000202', 'p-two', 'Wrong project', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'effort-mismatch', 'm-one')",
+          )
+          .run(),
+      ).toThrow(/milestone.project-mismatch/);
+    } finally {
+      writer.close();
+    }
+  });
+
+  test("the table refuses 0, a negative count and a non-integral real", async () => {
+    const dir = mkdtempSync(join(ROOT, "effort-checks-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    handle.db
+      .prepare(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-one', 'Project One', 'projects', 'p-one/roadmap.md', 'now', 'now')",
+      )
+      .run();
+    const insert = handle.db.prepare(
+      "insert into project_milestones(milestone_id, project_id, name, effort_sessions, ordinal, created_at, updated_at) values(?, ?, ?, ?, 0, 'now', 'now')",
+    );
+    for (const value of [0, -1, 1.5]) {
+      expect(() => insert.run("m-bad-" + String(value), "p-one", "Bad", value)).toThrow();
+    }
+    expect(handle.db.prepare("select count(*) as n from project_milestones").get()).toEqual({ n: 0 });
+    handle.close();
+  });
+});
+
+/* ------------------------------------------------------------------------ *
  * Migration 12 rebuilds `issues` for the `nit` vocabulary. `issues` is the
  * parent of occurrences/provenance/relations/issue_transitions, and the
  * migration batch runs with foreign_keys=ON, so the test drives the whole path

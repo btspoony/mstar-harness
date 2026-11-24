@@ -20,16 +20,22 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  conflictRepairSettled,
+  hasConfirmedReceipt,
+  hasReceiptLedger,
   readCollaborationBinding,
+  REMOTE_CACHE_REBUILD_ROUTE,
   initializeRemoteCacheStore,
   ISSUE_REF_PATTERN,
   localPredecessorRetiredPath,
   mintIssueRef,
   openRemoteCache,
+  openRemoteCacheRecovery,
   readLocalPredecessorLane,
   retireLocalPredecessorLane,
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
+  withRemoteCacheRecoveryWrite,
   withRemoteCacheWrite,
   withRemoteCacheWriteHeld,
   assertIssueRef,
@@ -161,7 +167,7 @@ export type VerificationBatch = Readonly<{
 export type RemoteMilestone = Readonly<{
   milestoneId: string;
   name: string;
-  target: string | null;
+  effortSessions: number | null;
   status: "planned" | "active" | "delivered" | "dropped";
   ordinal: number;
   revision: number;
@@ -265,7 +271,6 @@ type ObservationHeader = Omit<ObservationSubmission, "snapshot"> & Readonly<{ sn
 const RCF3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** note: A stable history event id carries the same lowercase UUID shape as every portable key. */
 const UUID = LINEAR_ID;
@@ -635,12 +640,11 @@ function verificationBatch(value: unknown): VerificationBatch {
 
 function milestone(value: unknown, path: string): RemoteMilestone {
   const body = record(value, path);
-  const target = body.target === null ? null : text(body.target, `${path}.target`);
-  if (target !== null && !CALENDAR_DATE.test(target)) invalid(`${path}.target`, "must be YYYY-MM-DD or null");
+  if (Object.hasOwn(body, "target")) invalid(`${path}.target`, '"target" is retired; submit "effortSessions" as null or an integer of at least 1 (a count of standard sessions)');
   return {
     milestoneId: text(body.milestoneId, `${path}.milestoneId`),
     name: text(body.name, `${path}.name`),
-    target,
+    effortSessions: body.effortSessions === null ? null : positiveInteger(body.effortSessions, `${path}.effortSessions`),
     status: oneOf(body.status, ["planned", "active", "delivered", "dropped"], `${path}.status`),
     ordinal: nonNegativeInteger(body.ordinal, `${path}.ordinal`),
     revision: positiveInteger(body.revision, `${path}.revision`),
@@ -2540,11 +2544,18 @@ export type RemoteIntent = Readonly<{
   updatedAt: string;
 }>;
 
-/** note: A pending summary: enough to order and select an intent, never a send permit. */
+/**
+ * note: The states a row holds while it still needs settlement - exactly what the listing reports.
+ * A `confirmed` or `abandoned` row is settled and never listed.
+ */
+const REMOTE_UNSETTLED_STATES = ["enqueued", "unconfirmed", "conflict"] as const;
+type RemoteUnsettledState = (typeof REMOTE_UNSETTLED_STATES)[number];
+
+/** note: A pending summary: enough to order, select and settle an intent, never a send permit. */
 export type RemotePendingIntent = Readonly<{
   operationId: string;
   projectId: string;
-  state: "enqueued";
+  state: RemoteUnsettledState;
   requestHash: string;
   target: string | null;
   kind: RemoteEventChange["kind"];
@@ -3116,8 +3127,13 @@ function intentOf(
 }
 
 /**
- * `outbox-pending`: the current binding's `enqueued` intents only, FIFO by
- * `(createdAt, operationId)`, as summaries without a send permit or an attempt id.
+ * `outbox-pending`: every unsettled intent of the current binding - `enqueued`, `unconfirmed` or
+ * `conflict` - FIFO by `(createdAt, operationId)`, as summaries carrying their state, and without a
+ * send permit or an attempt id. It is a read: no send right is implied by listing, and a settled
+ * (`confirmed` or `abandoned`) row is never listed. A `conflict` row is settled by the SAME rule
+ * the cache-replacement guard applies: when its `resolvedBy` repair chain reaches a `confirmed`
+ * repair holding its recorded confirmed receipt. Listing such a parent would send the operator to
+ * `outbox-resolve`, which refuses while that live resolution stands.
  */
 export async function readPendingIntents(context: StoreContext, projectId: string): Promise<RemotePendingIntents> {
   const project = text(projectId, "projectId");
@@ -3128,25 +3144,46 @@ export async function readPendingIntents(context: StoreContext, projectId: strin
   // listing carries no send right, so it is exactly what an operator needs to reconcile.
   const draining = selection.phase === "draining" && selection.previous?.mode === "remote";
   const generation = draining ? selection.previous!.generation : selection.generation;
-  const handle = await openRemoteCache(context, "read", undefined, { previousDuringDraining: draining });
+  // note: Recovery read: admits a below-current cache whose inventory this build still declares,
+  // restricted to the outbox surface — this listing is exactly the guard's first recovery step.
+  const handle = await openRemoteCacheRecovery(context, "read", undefined, { previousDuringDraining: draining });
   try {
     const rows = handle.db
       .prepare(
-        "select operation_id, request_hash, request_json, created_at from remote_outbox " +
-          "where generation = ? and project_key = ? and state = 'enqueued' " +
+        "select operation_id, generation, project_key, state, resolved_by, request_hash, request_json, created_at " +
+          "from remote_outbox " +
+          `where generation = ? and project_key = ? and state in (${REMOTE_UNSETTLED_STATES.map(() => "?").join(", ")}) ` +
           "order by created_at, operation_id",
       )
-      .all(generation, project) as Array<Record<string, unknown>>;
+      .all(generation, project, ...REMOTE_UNSETTLED_STATES) as PendingOutboxRow[];
+    // invariant: The listing and the cache-replacement guard settle a conflict row by ONE rule, so
+    // they can never disagree about the same row: a parent whose repair chain is settled is not
+    // awaiting settlement, and offering it would route the operator to a refusing `outbox-resolve`.
+    const receiptsPresent = hasReceiptLedger(handle.db);
     return {
       version: 1,
       projectId: project,
       generation,
-      intents: rows.map((row) => pendingIntentOf(row, project)),
+      intents: rows
+        .filter((row) => !(receiptsPresent && conflictRepairSettled(handle.db, row, receiptsPresent)))
+        .map((row) => pendingIntentOf(row, project)),
     };
   } finally {
     handle.close();
   }
 }
+
+/** note: The outbox columns the settle rule and the listed summary both read. */
+type PendingOutboxRow = {
+  operation_id: string;
+  generation: unknown;
+  project_key: unknown;
+  state: string;
+  resolved_by: unknown;
+  request_hash: string;
+  request_json: string;
+  created_at: string;
+};
 
 function pendingIntentOf(row: Record<string, unknown>, project: string): RemotePendingIntent {
   const unreadable = (): never => {
@@ -3158,6 +3195,8 @@ function pendingIntentOf(row: Record<string, unknown>, project: string): RemoteP
   if (typeof row.operation_id !== "string" || typeof row.request_hash !== "string" || typeof row.created_at !== "string") {
     return unreadable();
   }
+  const state = row.state;
+  if (typeof state !== "string" || !REMOTE_UNSETTLED_STATES.includes(state as RemoteUnsettledState)) return unreadable();
   let parsed: unknown;
   try {
     parsed = JSON.parse(typeof row.request_json === "string" ? row.request_json : "");
@@ -3171,7 +3210,7 @@ function pendingIntentOf(row: Record<string, unknown>, project: string): RemoteP
   return {
     operationId: row.operation_id,
     projectId: project,
-    state: "enqueued",
+    state: state as RemoteUnsettledState,
     requestHash: row.request_hash,
     target: isRecord(parsed) && typeof parsed.target === "string" ? parsed.target : null,
     kind: kind as RemoteEventChange["kind"],
@@ -3959,6 +3998,15 @@ function invalidateConfirmedBase(db: StoreDb, generation: number, projectKey: st
   db.prepare("delete from remote_issue_identities where generation = ? and project_key = ?").run(generation, projectKey);
 }
 
+/** note: The conflict evidence a recorded fork carries: reopening never overrules it. */
+function hasConflictReceipt(db: StoreDb, operationId: string): boolean {
+  return (
+    db
+      .prepare("select 1 as found from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' limit 1")
+      .get(operationId) !== undefined
+  );
+}
+
 /**
  * `recordRemoteReceipt` / `outbox-receipt`: record what one dispatched attempt observed.
  * The receipt must address the intent's own attempt, request and binding; a confirmed effect
@@ -3985,8 +4033,10 @@ async function recordReceiptEvidence(
 ): Promise<RemoteIntentRead> {
   const envelope = receiptEnvelope(raw, source);
   // note: Q1/Q2 recovery runs under the intent's ORIGINAL binding, including a draining
-  // generation's pinned previous one; this never prepares or dispatches anything.
-  return withRemoteCacheWrite(context, (handle) => {
+  // generation's pinned previous one; this never prepares or dispatches anything. The settlement
+  // write takes the outbox recovery lane, which also admits a below-current cache this build can
+  // still prove against its own declared inventory.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, envelope.operationId);
     noSettledClaim(row, "A receipt names what one dispatched attempt observed, and this claim was never sent.");
@@ -4042,7 +4092,21 @@ async function recordReceiptEvidence(
       // invariant: The same submission replays its recorded evidence and never re-applies a state change.
       return intentRead(db, row, stored, readPermission(db, row.generation, row.projectKey));
     }
-    if (row.state !== "unconfirmed" && row.state !== "conflict") {
+    // invariant: A row whose state claims `confirmed` while no confirmed receipt is recorded holds
+    // no provable effect - damaged cache bytes, since only this transaction writes that state. The
+    // receipt that proves it is exactly what settles the intent, so recording it stays admitted.
+    const unprovenConfirmation = row.state === "confirmed" && !hasConfirmedReceipt(db, envelope.operationId);
+    // invariant: The reopening only completes a MISSING confirmation; it never overrules recorded
+    // evidence. A state column tampered to 'confirmed' beside an existing conflict receipt would
+    // otherwise launder the row into a settled parent without a second reviewed resolution.
+    if (unprovenConfirmation && hasConflictReceipt(db, envelope.operationId)) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${envelope.operationId} already holds a recorded conflict receipt, so a confirmation is never recorded onto it: the row's recorded state contradicts its recorded evidence, so this scope cannot settle it in place - ${REMOTE_CACHE_REBUILD_ROUTE} Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
+    if (row.state !== "unconfirmed" && row.state !== "conflict" && !unprovenConfirmation) {
       throw new StoreError(
         "remote.dispatch-refused",
         `Operation ${envelope.operationId} is ${row.state}; only an unconfirmed or conflicted send accepts a new receipt ` +
@@ -4211,7 +4275,7 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
   // note: The sample is the request's whole admission: the open below validates exactly this
   // pair, and disclosure compares against it instead of a second read of the v3 binding.
   await remoteIntentSampleGapForTest?.();
-  const handle = await openRemoteCache(context, "read", { location: lane.location, binding: lane.binding }, {
+  const handle = await openRemoteCacheRecovery(context, "read", { location: lane.location, binding: lane.binding }, {
     previousDuringDraining: true,
   });
   try {
@@ -4603,19 +4667,43 @@ function repairedForks(db: StoreDb, operationId: string): Set<string> {
 /** note: One outbox row's state and its `resolved_by` link, as a resolution-chain walk needs them. */
 type ResolutionLink = Readonly<{ state: string; resolvedBy: string | null }>;
 
-/** note: The live chain's terminal confirmed repair id, or null when it reaches no confirmation. */
-function settledRepair(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): string | null {
+/**
+ * note: The one chain walk BOTH the settle rule and the taken-over refusal use. It follows each
+ * conflicted row's own `resolvedBy` resolution and names where it ends: a confirmed repair (the
+ * chain settled the fork), the first ACTIONABLE row (a conflicted row with no live successor, or
+ * the parent of an abandoned repair), or damage (a cycle or a missing link) no step can settle.
+ */
+type ChainTail =
+  | Readonly<{ kind: "settled"; repair: string }>
+  | Readonly<{ kind: "actionable"; operationId: string; state: string }>
+  | Readonly<{ kind: "damaged" }>;
+
+function chainTail(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): ChainTail {
   const visited = new Set<string>();
   let cursor: string | null = operationId;
+  // note: The parent of an abandoned repair is itself the actionable conflict row.
+  let parent = operationId;
   while (cursor !== null && !visited.has(cursor)) {
     visited.add(cursor);
     const link = chain.get(cursor);
-    if (link === undefined) return null;
-    if (link.state === "confirmed") return cursor;
-    if (link.state !== "conflict") return null;
-    cursor = link.resolvedBy;
+    if (link === undefined) return { kind: "damaged" };
+    if (link.state === "confirmed") return { kind: "settled", repair: cursor };
+    if (link.state === "conflict") {
+      if (link.resolvedBy === null) return { kind: "actionable", operationId: cursor, state: link.state };
+      parent = cursor;
+      cursor = link.resolvedBy;
+      continue;
+    }
+    if (link.state === "abandoned") return { kind: "actionable", operationId: parent, state: "conflict" };
+    return { kind: "actionable", operationId: cursor, state: link.state };
   }
-  return null;
+  return { kind: "damaged" };
+}
+
+/** note: The live chain's terminal confirmed repair id, or null when it reaches no confirmation. */
+function settledRepair(chain: ReadonlyMap<string, ResolutionLink>, operationId: string): string | null {
+  const tail = chainTail(chain, operationId);
+  return tail.kind === "settled" ? tail.repair : null;
 }
 
 /**
@@ -4703,7 +4791,9 @@ export async function dispatchRemoteIntent(
         "bind first; nothing was sent.",
     );
   }
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The dispatch is the enqueued intent's own settlement route; it takes the outbox recovery
+  // lane so a below-current cache can still dispatch and settle what it holds.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, target);
     noSettledClaim(row, "Only an enqueued intent is dispatched, and this claim was already carried by the observation.");
@@ -4905,7 +4995,8 @@ export async function prepareRemoteResolution(
         `Nothing was enqueued.`,
     );
   }
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The resolution settles a conflicted intent, so it takes the outbox recovery lane.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const original = intentRow(db, conflicted);
     noSettledClaim(original, "A reviewed resolution needs a conflicted fork, and a settled claim has no fork.");
@@ -4995,15 +5086,51 @@ export async function prepareRemoteResolution(
       );
     }
     if (original.resolvedBy !== null) {
-      const linked = intentRow(db, original.resolvedBy);
-      if (linked.state !== "abandoned") {
+      // note: A missing or unreadable link is DAMAGE the chain walk refuses below, not an intent-not-found.
+      const linkedState = (() => {
+        try {
+          return intentRow(db, original.resolvedBy).state;
+        } catch {
+          return "missing";
+        }
+      })();
+      if (linkedState !== "abandoned") {
+        // note: The refusal names the row the SAME walk the settle rule follows ends at: the chain
+        // tail is the row an operator can settle NOW, not the parent this command addressed.
+        const tail = chainTail(outboxChain(db, original.generation, original.projectKey), conflicted);
+        const step =
+          tail.kind === "actionable"
+            ? tail.state === "conflict"
+              ? `record a reviewed replacement of THAT row with \`mstar store collaboration remote outbox-resolve ` +
+                `--harness <abs> --operation ${tail.operationId} --input <file|->\` - a resolve only enqueues the repair - ` +
+                `then dispatch it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ` +
+                `<new-uuid> --input <file|->\` and record its confirming receipt`
+              : tail.state === "enqueued"
+                ? `dispatch it with \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation ` +
+                  `${tail.operationId} --input <file|->\` (or withdraw it with \`mstar store collaboration remote ` +
+                  `outbox-abandon --harness <abs> --operation ${tail.operationId} --reason <text>\`)`
+                : `inspect it with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+                  `${tail.operationId}\`, then record that attempt's evidence with \`mstar store collaboration remote ` +
+                  `outbox-receipt --harness <abs> --input <file|->\` or \`mstar store collaboration remote ` +
+                  `outbox-reconcile --harness <abs> --input <file|->\``
+            : tail.kind === "settled"
+              ? `its chain ends at the confirmed repair ${tail.repair}, which holds the fork; inspect it with ` +
+                `\`mstar store collaboration remote outbox-show --harness <abs> --operation ${tail.repair}\``
+              : `its chain is damaged - a cycle or a missing link - so no row it names is settleable in place and ` +
+                `the cache rebuild is the route: ${REMOTE_CACHE_REBUILD_ROUTE}`;
+        const named =
+          tail.kind === "actionable"
+            ? `its live resolution chain (each conflicted row's own resolvedBy link) reaches ${tail.operationId}, which ` +
+              `is ${tail.state}, and that is the row an operator can settle now - not ${conflicted} this command ` +
+              `addressed: ${step}. `
+            : `${step}. `;
         throw new StoreError(
           "remote.operation-conflict",
-          `Operation ${conflicted} is already taken over by resolution ${original.resolvedBy}, which is ` +
-            `${linked.state}; one live reviewed resolution per fork is admitted. Inspect it with ` +
-            `\`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, and abandon it ` +
-            `before submitting another. Nothing was enqueued.`,
-          { operationId: conflicted, resolvedBy: original.resolvedBy, resolvedByState: linked.state },
+          `Operation ${conflicted} is already taken over: ${named}One live reviewed resolution per fork is admitted. ` +
+            `Nothing was enqueued.`,
+          tail.kind === "actionable"
+            ? { operationId: conflicted, resolvedBy: original.resolvedBy, actionable: tail.operationId, actionableState: tail.state }
+            : { operationId: conflicted, resolvedBy: original.resolvedBy },
         );
       }
       // invariant: An abandoned repair is a withdrawn review. Its row, `resolves` edge, reason and
@@ -5071,7 +5198,8 @@ export async function abandonRemoteIntent(
 ): Promise<RemoteIntentRead> {
   const operationId = linearId(input?.operationId, "operationId");
   const reason = text(input?.reason, "reason");
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The abandonment settles one intent, so it takes the outbox recovery lane.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, operationId);
     noSettledClaim(row, "An abandonment names an unpublished request, and this claim was already settled by the observation.");

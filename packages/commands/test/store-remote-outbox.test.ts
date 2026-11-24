@@ -354,12 +354,17 @@ describe("remote outbox commands", () => {
     });
     expect((shown.event as Record<string, unknown>).change).toMatchObject({ kind: "issue-adopt" });
 
-    // note: The listing reports only current-binding enqueued intents; a dispatched one is absent.
+    // note: The listing reports every unsettled row of the current binding with its state, so the
+    // dispatched attempt above is still visible to the operator who must settle it.
     const pending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
       harness: fixture.harness,
       project: IDS.projectId,
     }, fixture.repo));
-    expect(pending).toMatchObject({ version: 1, projectId: IDS.projectId, intents: [] });
+    expect(pending).toMatchObject({
+      version: 1,
+      projectId: IDS.projectId,
+      intents: [{ operationId: OPERATIONS.adopt, state: "unconfirmed", target: IDS.providerIssueId }],
+    });
 
     const unknown = await invoke("store.collaboration.remote.outbox-show", {
       harness: fixture.harness,
@@ -475,6 +480,76 @@ describe("remote outbox commands", () => {
       input: fixture.path("adopt-second", adoption),
     }, fixture.repo);
     expect(queued).toMatchObject({ status: "ok" });
+
+    // invariant: The public recovery for a refused receipt names BOTH row states behind this cause,
+    // and the read that tells them apart: a normal conflict row is settled in place, and only the
+    // damaged confirmed-beside-conflict row has no in-place settlement.
+    const waiting = dataOf(await invoke("store.collaboration.remote.outbox-show", {
+      harness: fixture.harness,
+      operation: "13131313-1313-4313-8313-131313131313",
+    }, fixture.repo)) as { projectId: string; generation: number; requestHash: string; binding: { selectorCommit: string } };
+    const unsent = await invoke("store.collaboration.remote.outbox-receipt", {
+      harness: fixture.harness,
+      input: fixture.path("unsent-receipt", {
+        version: 1,
+        generation: waiting.generation,
+        projectId: waiting.projectId,
+        selectorCommit: waiting.binding.selectorCommit,
+        operationId: "13131313-1313-4313-8313-131313131313",
+        attemptId: "18181818-1818-4818-8818-181818181818",
+        requestHash: waiting.requestHash,
+        observedAt: new Date().toISOString(),
+        outcome: { kind: "unconfirmed", reason: "no-response" },
+      }),
+    }, fixture.repo);
+    expect(unsent).toMatchObject({ status: "refused", code: "remote.dispatch-refused", exitCode: 1 });
+    const recovery = String(unsent.details?.recovery ?? "");
+    // the normal branch: the row's own state decides, and a conflict row has a settlement in place.
+    expect(recovery).toContain("Read the row's recorded state");
+    expect(recovery).toContain("a row whose state is conflict is settleable in place");
+    expect(recovery).toContain("mstar store collaboration remote outbox-resolve");
+    // the damaged branch: a state that says confirmed beside a conflict receipt has no in-place route.
+    expect(recovery).toContain("a row whose state says confirmed beside a recorded conflict receipt");
+    expect(recovery).not.toContain("only the cache rebuild settles it");
+    expect(recovery).toContain("settle every other unsettled intent that cache holds");
+    expect(recovery).toContain("keep the cache file as evidence under a retained name instead of deleting it");
+    expect(recovery).toContain("confirm the checked selector and this checkout's binding satisfy a fresh reviewed bind");
+    expect(recovery).toContain("mstar store collaboration remote status --harness <abs>");
+    expect(recovery).toContain("perform a fresh reviewed remote bind");
+    expect(recovery).not.toContain("then resubmit the receipt");
+    // the guard's own sequence: settle, retain, prove the rebind, and only then remove the name.
+    const steps = [
+      "settle every other unsettled intent",
+      "keep the cache file as evidence",
+      "confirm the checked selector",
+      "remove the name the checkout reads",
+      "mstar store collaboration remote status",
+    ].map((step) => recovery.indexOf(step));
+    for (const at of steps) expect(at).toBeGreaterThan(-1);
+    expect([...steps].sort((left, right) => left - right)).toEqual(steps);
+
+    // invariant: The reconcile verb's own refusal carries the same two branches, so a refused
+    // reconciliation never sends the operator to the rebuild for a settleable conflict either.
+    const undispatched = await invoke("store.collaboration.remote.outbox-reconcile", {
+      harness: fixture.harness,
+      input: fixture.path("reconcile-undispatched", {
+        version: 1,
+        generation: waiting.generation,
+        projectId: waiting.projectId,
+        selectorCommit: waiting.binding.selectorCommit,
+        operationId: "13131313-1313-4313-8313-131313131313",
+        attemptId: "19191919-1919-4919-8919-191919191919",
+        requestHash: waiting.requestHash,
+        observedAt: new Date().toISOString(),
+        outcome: { kind: "unconfirmed", reason: "no-response" },
+      }),
+    }, fixture.repo);
+    expect(undispatched).toMatchObject({ status: "refused", code: "remote.dispatch-refused", exitCode: 1 });
+    const reconcileRecovery = String(undispatched.details?.recovery ?? "");
+    expect(reconcileRecovery).toContain("a row whose state is conflict is settleable in place");
+    expect(reconcileRecovery).toContain("mstar store collaboration remote outbox-resolve");
+    expect(reconcileRecovery).toContain("a row whose state says confirmed beside a recorded conflict receipt");
+    expect(reconcileRecovery).not.toContain("only the cache rebuild settles it");
 
     const refused = await invoke("store.collaboration.remote.outbox-abandon", {
       harness: fixture.harness,

@@ -259,7 +259,7 @@ export function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSna
         {
           milestoneId: "milestone-1",
           name: "First delivery",
-          target: "2026-12-01",
+          effortSessions: 3,
           status: "active",
           ordinal: 0,
           revision: 1,

@@ -45,6 +45,7 @@ import {
   readAppliedMigrations,
   readCollaborationFence,
   readStoreAuthority,
+  upgradeStore,
   validateAppliedMigrations,
   type StoreContext,
 } from "./store-db.js";
@@ -168,14 +169,14 @@ const ROADMAP_CONTENT =
   "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
 
 /**
- * invariant: A real SCHEMA-20 combined source (the pre-cutover schema): collaboration rows,
- * a catalog pin with its cross-domain foreign key, a recorded session and an
- * execution row. The fence must advance it to the current schema inside its own
- * transaction.
+ * invariant: A real combined source at this iteration's PRE-CUTOVER schema (one below the
+ * current): collaboration rows, a catalog pin with its cross-domain foreign key, a recorded
+ * session and an execution row. It is upgraded through the public `upgradeStore` before
+ * planning, because a source below the cutover floor is refused.
  */
 function seedSchema20Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
   const context = contextAt(repo);
-  const db = historicalStore(context.harnessDir, 20);
+  const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
   try {
     db.exec(`
 insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
@@ -419,6 +420,16 @@ function ids(rows: Array<Record<string, unknown>>, column: string): string[] {
 }
 
 describe("collaboration cutover", () => {
+  test("a combined source below the cutover source floor is refused with the store-upgrade recovery", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-below-floor.git");
+    const context = contextAt(repo);
+    const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
+    db.close();
+    const refusal = await refusalOf(() => planCollaborationCutover(context));
+    expect(refusal.code).toBe("collaboration.cutover-required");
+    expect(refusal.message).toContain("store upgrade");
+  });
+
   test("stage copies exact keys, history, foreign keys and revisions without activating", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-stage.git");
     const source = await seedSource(repo);
@@ -1509,9 +1520,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
   test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
     const source = seedSchema20Source(repo);
+    // invariant: A source below the cutover floor must reach it through the public upgrade before
+    // planning; the seed's own schema version is derived, never pinned.
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: 20, revision: 7, catalogRevision: 3 });
+    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: MIGRATIONS.length, revision: 7, catalogRevision: 3 });
 
     const pinQuery = `select ${source.pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`;
     const before = await openStore(source.context, "read");
@@ -1533,16 +1547,16 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       cutoverOptions(source.context, manifest.source),
     );
     expect(receipt.phase).toBe("active");
-    expect(receipt.source.schemaVersion).toBe(20);
+    expect(receipt.source.schemaVersion).toBe(MIGRATIONS.length);
 
-    // note: The source advanced through migration 20 inside the fence transaction.
+    // note: The source advanced through the last migration inside the fence transaction.
     const after = await openStore(source.context, "read");
     try {
       const schema = after.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
       expect(schema.v).toBe(MIGRATIONS.length);
       expect(readCollaborationFence(after.db)).toMatchObject({
         manifestId: manifest.manifestId,
-        sourceSchemaVersion: 20,
+        sourceSchemaVersion: MIGRATIONS.length,
         sourceRevision: 7,
         sourceCatalogRevision: 3,
       });
@@ -1573,6 +1587,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
   test("a fence commit failure is reported as unconfirmed, never as unchanged", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-commit-unconfirmed.git");
     const source = seedSchema20Source(repo);
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1608,6 +1623,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
   test("a failed fence rolls the schema-20 source back and publishes nothing", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
     const source = seedSchema20Source(repo);
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1638,12 +1654,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
     ).rejects.toMatchObject({ code: "store.corrupt" });
 
-    // note: The source is readable, still at schema 19, with every row and the pin's
+    // note: The source is readable, back at its seeded pre-cutover schema, with every row and the pin's
     // foreign key intact and no fence evidence.
     const restored = await openStore(source.context, "read");
     try {
       const schema = restored.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
-      expect(schema.v).toBe(20);
+      expect(schema.v).toBe(MIGRATIONS.length);
       expect(readCollaborationFence(restored.db)).toBeNull();
       expect(restored.db.prepare(pinQuery).all()).toEqual(pinsBefore);
       expect(restored.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toHaveLength(0);

@@ -2113,6 +2113,18 @@ create unique index execution_collaboration_intents_pending_plan
   where phase = 'prepared' and plan_id is not null;
 `;
 
+/**
+ * Migration 22 - a project milestone plans in standard sessions, not a calendar date.
+ * Every existing target reads as unestimated; a date is not a measure of work.
+ */
+export const MIGRATION_22_SQL = `
+alter table project_milestones add column effort_sessions integer check (
+  effort_sessions is null or
+  (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
+);
+alter table project_milestones drop column target;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -2136,6 +2148,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
   { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
   { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
+  { version: 22, name: "milestone-effort-sessions", sql: MIGRATION_22_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
