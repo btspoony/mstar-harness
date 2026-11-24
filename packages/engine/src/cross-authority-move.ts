@@ -1360,6 +1360,23 @@ function admitMoveCopy(db: StoreDb, request: MoveRequest, copy: MoveCopy, counts
         "issue_revision) values (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(issueId, String(issue.project_id), request.destinationProject, request.actor, request.reason, at, at, revision);
   }
+  // invariant: Resolution on arrival is part of this same transaction: every unresolved edge the
+  // lane already holds to this reference localises to the admitted display id, keeping the exact
+  // shape a writer would have produced (canonical order for 'related').
+  for (const edge of db
+    .prepare("select from_issue as fromIssue, relation from relations where to_ref = ?")
+    .all(issueRef) as Array<{ fromIssue: string; relation: string }>) {
+    db.prepare("delete from relations where from_issue = ? and relation = ? and to_ref = ?").run(
+      edge.fromIssue,
+      edge.relation,
+      issueRef,
+    );
+    if (edge.relation === "related" && edge.fromIssue > issueId) {
+      db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(issueId, edge.relation, edge.fromIssue);
+    } else {
+      db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(edge.fromIssue, edge.relation, issueId);
+    }
+  }
   advanceRowTo(db, request.operationId, "destination", "verified");
   advanceIssueMove(db, {
     operationId: request.operationId,

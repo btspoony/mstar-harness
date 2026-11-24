@@ -9,8 +9,8 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding } from "./collaboration-store.js";
+import { collaborationLocationOfRepoKey, resolveCollaborationLocation } from "./collaboration-identity.js";
+import { assertIssueRef, initializeCollaborationStore, openCollaborationStore, withCollaborationWrite, writeCollaborationBinding, writeCollaborationStage } from "./collaboration-store.js";
 import { bindRemoteAuthority, ingestRemoteObservation, type RemoteSnapshot } from "./collaboration-remote.js";
 import {
   completeSnapshot,
@@ -19,6 +19,7 @@ import {
   REMOTE_IDS,
   submission,
 } from "./remote-scope.fixture.js";
+import { moveAcrossAuthorities } from "./cross-authority-move.js";
 import { readExecutionState } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -1411,7 +1412,7 @@ describe("issue dispositions, revisions, and relations", () => {
     expect(replay).toEqual(linked);
     const detail = await getIssue(context, a.issueId);
     expect(detail.relations).toHaveLength(1);
-    expect(detail.relations[0]?.fromIssue < detail.relations[0]?.toIssue).toBe(true);
+    expect(detail.relations[0]!.fromIssue < detail.relations[0]!.toIssue!).toBe(true);
     expect(detail.relations[0]?.relation).toBe("related");
   });
 
@@ -1729,4 +1730,167 @@ describe("remote issue reads", () => {
     const second = await listIssues(context, { limit: 2, offset: 1 });
     expect(second.providerIssues?.map((issue) => issue.title)).toEqual(["Whole second", "Earlier"]);
   });
+});
+
+describe("cross-authority relations", () => {
+  /**
+   * note: An ACTIVE lane of an unrelated repository, the destination of a first hop: no checkout,
+   * only the catalog project the admission needs.
+   */
+  async function bareLane(repoKey: string, projectId: string): Promise<void> {
+    const location = collaborationLocationOfRepoKey(repoKey, "local");
+    mkdirSync(join(location.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(location);
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare("update collaboration_meta set authority_state = 'active' where id = 1").run();
+      db.prepare(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values ('project', ?, ?, 'projects', ?, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(projectId, projectId, `projects/${projectId}`);
+    });
+  }
+
+  /** note: Register one project in the lane of a bound checkout (admission lands on it). */
+  async function registerLaneProject(context: StoreContext, projectId: string): Promise<void> {
+    await withCollaborationWrite(context, ({ db }) => {
+      db.prepare(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values ('project', ?, ?, 'projects', ?, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(projectId, projectId, `projects/${projectId}`);
+    });
+  }
+
+  test("an unresolved relation reads toIssue null with the target's reference, and a local one is unchanged", async () => {
+    const context = ctx("unresolved-relation-");
+    await activeIssueStore(context);
+    const a = await captureIssue(context, baseInput(), mut("cap-unres-a"));
+    const b = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "unres-b", rootCauseKey: "unres-other", title: "Staying" }),
+      mut("cap-unres-b"),
+    );
+    await linkIssue(context, a.issueId, { relation: "related", issueId: b.issueId }, { ...mut("link-local"), expectedRevision: a.revision });
+
+    const aRefRow = await readCollab(context, (db) => db.prepare("select issue_ref from issues where id = ?").get(a.issueId));
+    const aRef = (aRefRow as { issue_ref: string }).issue_ref;
+    const gone = "mstar:issue:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    // note: The row publication rewrites an edge into: the record whose reference is not in this
+    // lane is named by `to_ref` with `to_issue` null.
+    await seedCollab(context, (db) => {
+      db.prepare("insert into relations(from_issue, relation, to_ref) values (?, 'blocks', ?)").run(a.issueId, gone);
+    });
+
+    const detail = await getIssue(context, a.issueId);
+    // invariant: The detail read now names the stable reference the lane holds for this record.
+    expect(detail.issueRef).toBe(aRef);
+    expect(detail.relations).toContainEqual({ fromIssue: a.issueId, relation: "related", toIssue: b.issueId, toRef: null, title: "Staying" });
+    expect(detail.relations).toContainEqual({ fromIssue: a.issueId, relation: "blocks", toIssue: null, toRef: gone, title: null });
+  });
+
+  test("a switched source record is refused by the domain read with collaboration.operation-partial", async () => {
+    const context = ctx("switched-refusal-");
+    await activeIssueStore(context);
+    const a = await captureIssue(context, baseInput(), mut("cap-switched"));
+    const repoKey = resolveCollaborationLocation(context).repoKey;
+    const aRefRow = await readCollab(context, (db) => db.prepare("select issue_ref from issues where id = ?").get(a.issueId));
+    const aRef = (aRefRow as { issue_ref: string }).issue_ref;
+    await seedCollab(context, (db) => {
+      db.prepare(
+        "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+          "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+          "staged_counts, source_store_id, source_epoch, created_at, updated_at) " +
+          "values ('move-refusal', 'source', 'hash', ?, ?, 'I-000001', ?, 'github.com/acme/elsewhere', 'p-dest', " +
+          "'project-manager', 'moved on', 'switched', '{}', 'digest', '{}', 'store-one', 1, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(aRef, a.issueId, repoKey);
+    });
+
+    const refused = await getIssue(context, a.issueId).then(
+      () => null,
+      (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+    );
+    expect(refused?.code).toBe("collaboration.operation-partial");
+    expect(refused?.details).toMatchObject({ phase: "switched", operation_id: "move-refusal" });
+  });
+
+  test("an unresolved edge resolves in the transaction that admits its target back into the lane", async () => {
+    const context = ctx("arrival-source-");
+    await activeIssueStore(context);
+    await initializeStore(context).then((handle) => handle.close());
+
+    // note: The record that leaves, then returns.
+    const moving = await captureIssue(context, baseInput({ title: "Moving target" }), mut("cap-arrival-t"));
+    const staying = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "arrival-b", rootCauseKey: "arrival-staying", title: "Staying" }),
+      mut("cap-arrival-b"),
+    );
+    await linkIssue(context, staying.issueId, { relation: "blocks", issueId: moving.issueId }, { ...mut("link-arrival"), expectedRevision: staying.revision });
+
+    // note: The first hop's destination lane is keyed by the SECOND checkout's repository: a
+    // checkout may write only the lane it is bound to, so the checkout below is the one that
+    // moves the record back into this lane.
+    const bound = ctx("arrival-second-");
+    const boundContext: StoreContext = { harnessDir: bound.harnessDir, checkoutRoot: bound.checkoutRoot };
+    const boundLocation = resolveCollaborationLocation(boundContext);
+    const hopOne = boundLocation.repoKey;
+    await bareLane(hopOne, "p-dest");
+    await moveAcrossAuthorities(context, {
+      operationId: "move-out",
+      actor: "project-manager",
+      sourceIssueId: moving.issueId,
+      destinationAuthority: hopOne,
+      destinationProject: "p-dest",
+      reason: "to the other authority",
+    });
+
+    // invariant: Publication left the staying record's edge in the unresolved shape.
+    const unresolved = await getIssue(context, staying.issueId);
+    expect(unresolved.relations).toHaveLength(1);
+    expect(unresolved.relations[0]).toMatchObject({
+      fromIssue: staying.issueId,
+      relation: "blocks",
+      toIssue: null,
+      title: null,
+    });
+    const movingRef = unresolved.relations[0]!.toRef!;
+    expect(movingRef).toMatch(/^mstar:issue:/);
+
+    // note: The display id the hop allocated is recorded on that lane's destination row.
+    const admitted = new DatabaseSync(boundLocation.dbPath);
+    let admittedId: string;
+    try {
+      const moveRow = admitted
+        .prepare("select destination_issue_id as id from issue_moves where operation_id = 'move-out'")
+        .get() as { id: string };
+      admittedId = moveRow.id;
+    } finally {
+      admitted.close();
+    }
+    // note: The bound checkout needs the same two stores any source checkout does: its execution
+    // store for the composite, and the collaboration binding to the lane the record lives in.
+    await initializeStore(boundContext).then((handle) => handle.close());
+    activate(boundContext);
+    await registerLaneProject(context, "proj-a");
+    await moveAcrossAuthorities(boundContext, {
+      operationId: "move-back",
+      actor: "project-manager",
+      sourceIssueId: admittedId,
+      destinationAuthority: resolveCollaborationLocation(context).repoKey,
+      destinationProject: "proj-a",
+      reason: "back to the first authority",
+    });
+
+    // invariant: The same transaction that admitted the record localised the edge: it is a plain
+    // local relation now, under the new display id, with no leftover `to_ref` spelling.
+    const resolved = await getIssue(context, staying.issueId);
+    const [edge] = resolved.relations;
+    expect(resolved.relations).toHaveLength(1);
+    expect(edge?.relation).toBe("blocks");
+    expect(edge?.toIssue).not.toBeNull();
+    expect(edge?.toRef).toBeNull();
+    expect(edge?.title).toBe("Moving target");
+    expect(
+      await readCollab(context, (db) => db.prepare("select count(*) as n from relations where to_ref = ?").get(movingRef)),
+    ).toEqual({ n: 0 });
+  }, 120_000);
 });

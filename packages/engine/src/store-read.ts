@@ -80,6 +80,7 @@ import { SddScriptError } from "./sdd.js";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
+import { assertPresented } from "./cross-authority-move.js";
 import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
@@ -1250,7 +1251,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   const milestoneColumn = ", milestone_id";
   const issue = db
     .prepare(
-      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`,
+      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, issue_ref${milestoneColumn} from issues where id = ?`,
     )
     .get(id) as
     | {
@@ -1274,9 +1275,13 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
         url: string | null;
         identity_key: string;
         milestone_id: string | null;
+        issue_ref: string;
       }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
+  // invariant: The same presentation gate the domain reader applies: a switched record belongs to
+  // the destination authority until its move publishes, so this reader refuses it the same way.
+  assertPresented(db, id);
 
   const occurrences = (
     db
@@ -1346,12 +1351,12 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   // join, which is the issue this one is not.
   const relations = db
     .prepare(
-      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue, r.to_ref as toRef,
               (select i.title from issues i
                  where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
          from relations r where r.from_issue = ? or r.to_issue = ?`,
     )
-    .all(id, id, id) as Array<{ fromIssue: string; relation: string; toIssue: string; title: string | null }>;
+    .all(id, id, id) as IssueDetail["relations"];
 
   const provenance = (
     db
@@ -1425,6 +1430,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    issueRef: issue.issue_ref,
     milestoneId: issue.milestone_id ?? null,
     occurrences,
     transitions,

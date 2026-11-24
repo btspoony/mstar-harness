@@ -378,7 +378,10 @@ export type IssueTransition = {
 export type IssueRelation = {
   fromIssue: string;
   relation: string;
-  toIssue: string;
+  /** note: `null` while the target lives in another authority; `toRef` names it then. */
+  toIssue: string | null;
+  /** note: The unresolved target's stable reference (`null` on a local relation; absent on a remote read). */
+  toRef?: string | null;
   /** The other end's title — the prototype's `Title` column. `null` when it has none. */
   title: string | null;
 };
@@ -1972,7 +1975,7 @@ export async function getIssue(
     const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
       .prepare(
-        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?`,
+        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key, issue_ref from issues where id = ?`,
       )
       .get(id) as
       | {
@@ -1996,6 +1999,7 @@ export async function getIssue(
           external_id: string | null;
           url: string | null;
           identity_key: string;
+          issue_ref: string;
         }
       | undefined;
     if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
@@ -2072,7 +2076,7 @@ export async function getIssue(
     // did not.
     const relations = db
       .prepare(
-        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+        `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue, r.to_ref as toRef,
                 (select i.title from issues i
                    where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
            from relations r where r.from_issue = ? or r.to_issue = ?`,
@@ -2152,6 +2156,7 @@ export async function getIssue(
       externalId: issue.external_id,
       url: issue.url,
       identityKey: issue.identity_key,
+      issueRef: issue.issue_ref,
       occurrences,
       transitions,
       relations,
@@ -3188,7 +3193,7 @@ function linkIssueOnWithOrigin(
     if (other === issueId) {
       throw new IssueError("issue.scope-refused", "Self-edges are not allowed");
     }
-    const otherRow = db.prepare("select id from issues where id = ?").get(other) as { id: string } | undefined;
+    const otherRow = db.prepare("select id, issue_ref from issues where id = ?").get(other) as { id: string; issue_ref: string } | undefined;
     if (!otherRow) throw new IssueError("issue.not-found", `Related issue ${other} does not exist`);
     let from = issueId;
     let to = other;
@@ -3209,6 +3214,15 @@ function linkIssueOnWithOrigin(
       };
       recordOperation(db, mutation.operationId, hash, receipt, at);
       return receipt;
+    }
+    // invariant: An unresolved edge to this target is the same relation in the other spelling;
+    // resolution on arrival should have localised it, so the verb resolves it itself rather than
+    // writing a second edge to the same record.
+    const stale = db
+      .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_ref = ?")
+      .get(from, link.relation, otherRow.issue_ref) as { ok: number } | undefined;
+    if (stale) {
+      db.prepare("delete from relations where from_issue = ? and relation = ? and to_ref = ?").run(from, link.relation, otherRow.issue_ref);
     }
     db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(from, link.relation, to);
   } else {

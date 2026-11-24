@@ -142,14 +142,22 @@ export type PushOutcome = {
 /**
  * The bound project's pushable issues: local captures, never imported mirrors.
  * An imported row's 'provider' is 'linear', so the import direction can never
- * echo its own mirror back as a create.
+ * echo its own mirror back as a create. A record a cross-authority move has
+ * frozen (a source row in a blocking phase) is excluded the same way: it is
+ * read-only until the move publishes or is discarded, so a push of it could
+ * never be reconciled.
  */
 export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandidate[] {
   const projectId = projectIdOf(bindingId);
   return db
     .prepare(
       "select id as localId, title, kind, severity, disposition, impact, acceptance from issues" +
-        " where project_id = ? and provider = 'local' order by id",
+        " where project_id = ? and provider = 'local'" +
+        " and not exists (" +
+        "   select 1 from issue_moves m where m.role = 'source'" +
+        "   and m.phase in ('staged','verified','switched') and m.source_issue_id = issues.id" +
+        " )" +
+        " order by id",
     )
     .all(projectId) as PushCandidate[];
 }
