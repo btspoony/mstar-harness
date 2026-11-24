@@ -388,21 +388,38 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   }
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
-  // Open-PR-base probe: only when a layer ref is a candidate — no spawn otherwise.
+  // see skills/mstar-branch-worktree/references/worktree-cleanup.md — one
+  // base-filtered `gh pr list` per layer-ref candidate, pinned to the
+  // repository `origin` resolves to; a probe that cannot run, parse or
+  // complete under its own cap fails closed (`null`), never a partial list.
   let openPullRequestBases: CleanupFacts["openPullRequestBases"] = [];
-  if (targets.some((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch))) {
-    const gh = await processReply(invocation, ["gh", "pr", "list", "--state", "open", "--json", "baseRefName,headRefName", "--limit", "200"], main.root);
-    if (gh.exitCode === 0) {
-      try {
-        const rows = JSON.parse(gh.stdout) as unknown;
-        openPullRequestBases = Array.isArray(rows)
-          ? rows.flatMap((row) => (typeof row === "object" && row !== null && "baseRefName" in row && typeof row.baseRefName === "string" ? [row.baseRefName] : []))
-          : null;
-      } catch {
-        openPullRequestBases = null;
-      }
-    } else {
+  const layerBranches = targets.filter((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch)).map((target) => target.branch);
+  if (layerBranches.length > 0) {
+    const origin = (await gitProbe(invocation, ["remote", "get-url", "origin"], main.root)).replace(/\.git$/, "").replace(/\/+$/, "");
+    const slug = /([^/:]+)\/([^/]+)$/.exec(origin)?.[0];
+    if (slug === undefined) {
       openPullRequestBases = null;
+    } else {
+      const bases: string[] = [];
+      let verified = true;
+      for (const branch of layerBranches) {
+        const gh = await processReply(invocation, ["gh", "pr", "list", "--repo", slug, "--base", branch, "--state", "open", "--json", "baseRefName", "--limit", "100"], main.root);
+        if (gh.exitCode !== 0) { verified = false; break; }
+        try {
+          const rows = JSON.parse(gh.stdout) as unknown;
+          if (!Array.isArray(rows)) { verified = false; break; }
+          if (rows.length >= 100) { verified = false; break; }
+          for (const row of rows) {
+            if (typeof row !== "object" || row === null || !("baseRefName" in row) || typeof row.baseRefName !== "string") { verified = false; break; }
+            bases.push(row.baseRefName);
+          }
+          if (!verified) break;
+        } catch {
+          verified = false;
+          break;
+        }
+      }
+      openPullRequestBases = verified ? bases : null;
     }
   }
   const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence, openPullRequestBases };

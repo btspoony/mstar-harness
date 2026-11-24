@@ -2663,9 +2663,9 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
 
 /**
  * `gh` PATH shim: logs every child argv to a JSONL file, then answers
- * `gh pr list` from `MSTAR_GH_PR_LIST` (JSON string) or fails when
- * `MSTAR_GH_FAIL` is set. Any other gh argv exits 127 — the probe is the
- * only permitted call.
+ * `gh pr list` by base-filtering `MSTAR_GH_PR_LIST` (JSON string) and
+ * applying its `--limit`, or fails when `MSTAR_GH_FAIL` is set. Any other
+ * gh argv exits 127 — the probe is the only permitted call.
  */
 function installGhShim(home: string): { shimDir: string; logPath: string; env: Record<string, string> } {
   const shimDir = join(home, "gh-shim");
@@ -2679,7 +2679,11 @@ const argv = process.argv.slice(2);
 appendFileSync(process.env.MSTAR_GH_LOG, JSON.stringify({ cwd: process.cwd(), argv }) + "\\n");
 if (process.env.MSTAR_GH_FAIL) process.exit(1);
 if (argv[0] === "pr" && argv[1] === "list") {
-  process.stdout.write(process.env.MSTAR_GH_PR_LIST ?? "[]");
+  const at = (flag) => { const i = argv.indexOf(flag); return i === -1 ? undefined : argv[i + 1]; };
+  const rows = JSON.parse(process.env.MSTAR_GH_PR_LIST ?? "[]")
+    .filter((row) => at("--base") === undefined || row.baseRefName === at("--base"));
+  const limit = Number(at("--limit") ?? "0");
+  process.stdout.write(JSON.stringify(limit > 0 ? rows.slice(0, limit) : rows));
   process.exit(0);
 }
 process.exit(127);
@@ -2748,11 +2752,15 @@ describe("mstar worktree cleanup — iteration-stack layer refs", () => {
       // A layer ref of this workflow, merged into branch.target.
       git(["branch", "iteration-stack/iter-1/s01"], fx.root);
 
-      // Nobody's open base → eligible remove; exactly one pr list probe.
+      // Nobody's open base → eligible remove; the probe runs once per layer ref.
       const notBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
       expect(notBase.exitCode).toBe(0);
       expect(decisionRows(notBase)).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
       expect(readGhLog(shim.logPath).filter((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")).toHaveLength(1);
+      const probe = readGhLog(shim.logPath).find((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")!;
+      expect(probe.argv).toContain("--repo");
+      expect(probe.argv[probe.argv.indexOf("--repo") + 1]).toMatch(/^[^/]+\/[^/]+$/);
+      expect(probe.argv[probe.argv.indexOf("--base") + 1]).toBe("iteration-stack/iter-1/s01");
 
       // An open PR bases on the layer ref → refuse.
       const openBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, {

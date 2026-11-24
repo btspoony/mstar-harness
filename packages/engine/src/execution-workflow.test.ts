@@ -1342,8 +1342,46 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
+  test("a landed iteration closes on its recorded integration checkout once the plan worktrees are cleaned up", async () => {
+    const fixture = await workflowFixture("iteration-cleaned-plans", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // Land the delivery line on the target, then take away every plan-row
+    // worktree the snapshot still names — the documented post-Done cleanup
+    // state (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "land the stack", INTEGRATION_BRANCH], fixture.repoRoot);
+    runGit(["worktree", "remove", "--force", fixture.planPath], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-iteration-cleaned-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "landed; plan checkouts already cleaned",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
 
-
+  test("a chain landed through separate per-layer merges closes with no integration merge on the target", async () => {
+    const fixture = await workflowFixture("iteration-separate-merges", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // Each layer is merged into the target on its own: the chain top is an
+    // ancestor while the target carries no merge of the delivery line itself
+    // (see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+    writeText(join(fixture.integrationPath, "layer-1.txt"), "layer one\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "layer one lands", INTEGRATION_BRANCH], fixture.repoRoot);
+    writeText(join(fixture.integrationPath, "layer-2.txt"), "layer two\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer two"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "layer two lands", INTEGRATION_BRANCH], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-iteration-separate-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "every layer landed on its own merge",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
 });
 
   test("a report-only close reads a stored legacy fulfilment block as history and needs no rewrite", async () => {
@@ -1926,9 +1964,9 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     });
     const before = await workflowFootprint(fixture.context);
 
-    // The gate of this lifecycle produces phase-3-close; the request asks for phase-2.
-    // The refusal keeps its own verdict AND names the exact conflicting field,
-    // its current value, the requested one and the one decision left.
+    // The gate of this lifecycle produces phase-3-close and the request asks
+    // for phase-2 — see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md;
+    // the refusal names the conflicting field, both values and the one decision left.
     const refused = await refusalOf(() =>
       workflowMutation(fixture, "op-conflict-phase", {
         kind: "phase",

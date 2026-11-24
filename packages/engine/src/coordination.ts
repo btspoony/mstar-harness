@@ -1457,7 +1457,9 @@ function mergeUnproven(message: string, fix: string): ValidationResult[] {
  * target commit a delivery proof reads. Every route shares it, so the plan and
  * iteration proofs can never disagree about where they look:
  *
- * - the recorded checkouts are the plan rows' own `metadata.worktree_path`;
+ * - the recorded checkouts are the plan rows' own `metadata.worktree_path`,
+ *   with `extraCheckouts` ahead of them (the iteration route leads with its
+ *   recorded integration checkout);
  * - the target ref is resolved remote-first inside each of them, because a
  *   provider merge lands in the remote (see `deliveryRef`);
  * - a recorded checkout repointed at a different clone, where neither ref
@@ -1473,18 +1475,20 @@ function deliveryCheckoutOf(
   deliveryBranch: string,
   targetBranch: string,
   wording: DeliveryProofWording,
+  extraCheckouts: readonly string[] = [],
 ): { checkout: string; target: string } | { violations: ValidationResult[] } {
   const recorded = (snapshot.plans ?? [])
     .map((row) => (isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined))
     .filter((path): path is string => isNonEmptyString(path));
-  const readable = recorded.filter((path) => isAbsolute(path) && existsSync(path));
+  const candidates = [...extraCheckouts, ...recorded].filter(isAbsolute);
+  const readable = candidates.filter((path) => existsSync(path));
   if (readable.length === 0) {
     return {
       violations: mergeUnproven(
-        recorded.length === 0
-          ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
-          : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-        `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
+        candidates.length === 0
+          ? `Workflow '${workflowId}' records no ${wording.checkout}, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in a recorded checkout`
+          : `Workflow '${workflowId}' records checkout(s) ${candidates.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
+        `Rebuild the recorded checkout with 'git worktree add ${candidates[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${wording.record}.`,
       ),
     };
   }
@@ -1637,11 +1641,22 @@ function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResu
       `A terminal close of an iteration proves its delivery line landed, which needs both branch anchors; if the close is genuinely unprovable, ${stopped}.`,
     );
   }
-  const base = deliveryCheckoutOf(snapshot, workflowId, deliveryBranch, targetBranch, {
-    record: `an unprovable close is recorded with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`,
-    checkout: "recorded plan checkout",
-    targetTail: `; a terminal close proves the chain top itself, so ${stopped}.`,
-  });
+  // The iteration's own checkout authority is its recorded integration
+  // checkout; plan-row worktrees are only the fallback once it is gone —
+  // routine post-Done cleanup removes them (see
+  // skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f).
+  const base = deliveryCheckoutOf(
+    snapshot,
+    workflowId,
+    deliveryBranch,
+    targetBranch,
+    {
+      record: `an unprovable close is recorded with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`,
+      checkout: "recorded checkout",
+      targetTail: `; a terminal close proves the chain top itself, so ${stopped}.`,
+    },
+    isNonEmptyString(snapshot.integration_worktree_path) ? [snapshot.integration_worktree_path] : [],
+  );
   if ("violations" in base) return base.violations;
   const { checkout, target } = base;
   const tip = deliveryRef(checkout, deliveryBranch, false);
