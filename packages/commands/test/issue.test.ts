@@ -762,11 +762,17 @@ describe("issue command family", () => {
     }, { operationId: "move-project-b", actor: "project-manager" });
 
     const command = definition("issue.move");
-    expect(command.input.safeParse({
+    // invariant: `--expect-store` is a conditional requirement, so admission enforces it where the
+    // schema alone cannot: the shape without it is refused, and the shape with it is admitted.
+    const contract = getCommandSchemas(getCommandDefinitions()).find((entry) => entry.id === command.id);
+    if (contract === undefined) throw new Error("missing issue.move contract");
+    expect(admitCommandInput(command, {
       id: seed.issueId, actor: "project-manager", expect: seed.revision, payload: { projectId: "proj-b", reason: "belongs to b" },
-    }).success).toBe(false);
+    }, contract).success).toBe(false);
     expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expect", route: "cli", required: true }));
-    expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expectStore", route: "cli", required: true }));
+    expect(command.requirements).toContainEqual(expect.objectContaining({
+      name: "expectStore", route: "cli", required: true, condition: { field: "discard", present: false },
+    }));
 
     const beforeMove = await issueState(context);
     const beforePage = await definition("issue.list").execute({}, context);
@@ -867,9 +873,10 @@ describe("issue command family", () => {
     expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
 
     // invariant: `--discard` reaches the staged route's own abandon branch, so its refusal is that
-    // route's (an authority it cannot resolve), never the local project move's.
+    // route's (an authority it cannot resolve), never the local project move's. It carries the record
+    // CAS alone: the lane revision is not a base this route can compare.
     const discarded = await command.execute({
-      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      id: seed.issueId, expect: seed.revision,
       actor: "project-manager", operationId: "move-discard-authority", discard: true,
       toAuthority: "github.com/acme/never-created-authority",
       payload: { projectId: "proj-b", reason: "abandon a staged move" },
@@ -879,6 +886,33 @@ describe("issue command family", () => {
       code: "collaboration.move-phase-invalid",
       details: { operation_id: "move-discard-authority" },
     });
+    // invariant: A store base the route cannot honour is refused by code, never accepted and dropped.
+    const storeBase = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-store-base", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon with a lane base" },
+    }, context);
+    expect(storeBase).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expectStore"] } });
+    // invariant: The two-checkout flags belong to the staged route alone. Without `--to-authority`
+    // neither is read, so each refuses by code BEFORE the local project reassignment would run
+    // instead of it — a request is never answered by a different mutation than it names.
+    for (const flag of ["input", "out"] as const) {
+      const handoffOnly = await command.execute({
+        id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+        actor: "project-manager", operationId: `move-handoff-no-authority-${flag}`,
+        ...(flag === "input" ? { input: "/nonexistent/handoff.json" } : { out: "/nonexistent/handoff.json" }),
+        payload: { projectId: "proj-b", reason: "handoff without an authority" },
+      }, context);
+      expect(handoffOnly).toMatchObject({
+        status: "refused",
+        code: "issue.scope-refused",
+        details: { paths: [flag] },
+      });
+      if (handoffOnly.status === "refused") {
+        expect(handoffOnly.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
+      }
+    }
     // invariant: Neither refusal wrote anything: the record keeps its project and its revision.
     const after = await executeCommand("issue.show", { id: seed.issueId }, context);
     expect(after).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
@@ -906,12 +940,9 @@ describe("issue command family", () => {
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
     const seed = added.data as { issueId: string; revision: number };
-    const page = await definition("issue.list").execute({}, context);
-    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
-    const storeRevision = (page.data as { storeRevision: number }).storeRevision;
     const before = await issueState(context);
     const refused = await definition("issue.move").execute({
-      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      id: seed.issueId, expect: seed.revision,
       actor: "leaf-observer", operationId: "discard-without-seat", discard: true,
       toAuthority: "github.com/acme/discard-seat-destination",
       payload: { projectId: "proj-a", reason: "not my seat" },

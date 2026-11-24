@@ -215,7 +215,11 @@ export {
   planCollaborationCutover,
 } from "./collaboration-cutover.js";
 // note: One record's staged move: the source row is the ledger and the fence, and the phase set is
-// forward-only. The orchestration (stage/verify/switch/publish/discard) is not part of this surface.
+// forward-only. The published surface is the two routes a transport calls — `moveAcrossAuthorities`
+// for the one-checkout topology, `moveAcrossByDocument` for the two-checkout exchange, `discardMove`
+// to abandon a move, and `moveDocumentOf` to parse the handoff a peer wrote. The phase engine
+// (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), the per-lane exchange halves and the ledger
+// primitives stay internal to the module.
 export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
 export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
 // note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
@@ -227,32 +231,10 @@ export type {
   ObservedMoveSubject,
 } from "./cross-authority-move.js";
 export {
-  advanceIssueMove,
-  assertMoveTransition,
-  assertPresented,
-  assertRecordWritable,
-  BLOCKING_MOVE_PHASES,
-  blockingMoveFor,
-  blockingMoveForRef,
   discardMove,
-  frozenMoveRefusal,
-  exchangeLocalDestination,
-  exchangeLocalToRemote,
-  moveAcrossByDocument,
-  exchangeRemoteDestination,
-  exchangeRemoteSource,
-  isForwardMoveTransition,
   moveAcrossAuthorities,
+  moveAcrossByDocument,
   moveDocumentOf,
-  publishMove,
-  remoteMoveOperationId,
-  readIssueMove,
-  recordIssueMove,
-  stageMove,
-  stagedMismatch,
-  switchMove,
-  switchedMoveFor,
-  verifyMove,
 } from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,

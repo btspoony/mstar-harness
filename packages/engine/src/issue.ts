@@ -3217,12 +3217,13 @@ function linkIssueOnWithOrigin(
     }
     // invariant: An unresolved edge to this target is the same relation in the other spelling;
     // resolution on arrival should have localised it, so the verb resolves it itself rather than
-    // writing a second edge to the same record.
+    // writing a second edge to the same record. The stale row is stored from THIS issue — the local
+    // one — whatever the canonical order of the resolved row turns out to be, so the lookup uses it.
     const stale = db
       .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_ref = ?")
-      .get(from, link.relation, otherRow.issue_ref) as { ok: number } | undefined;
+      .get(issueId, link.relation, otherRow.issue_ref) as { ok: number } | undefined;
     if (stale) {
-      db.prepare("delete from relations where from_issue = ? and relation = ? and to_ref = ?").run(from, link.relation, otherRow.issue_ref);
+      db.prepare("delete from relations where from_issue = ? and relation = ? and to_ref = ?").run(issueId, link.relation, otherRow.issue_ref);
     }
     db.prepare("insert into relations(from_issue, relation, to_issue) values (?, ?, ?)").run(from, link.relation, to);
   } else {

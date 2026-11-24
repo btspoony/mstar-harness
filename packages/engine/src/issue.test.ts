@@ -1812,6 +1812,53 @@ describe("cross-authority relations", () => {
     expect(refused?.details).toMatchObject({ phase: "switched", operation_id: "move-refusal" });
   });
 
+  test("a canonical related swap replaces the unresolved edge stored from the local issue", async () => {
+    // invariant: `related` is stored in canonical order, but an unresolved edge is stored from whichever
+    // LOCAL issue asked for it. When the target's display id sorts lower, the canonical write swaps the
+    // sides — so the stale-edge lookup must address the ORIGINAL local issue, or it misses the row it
+    // was meant to replace and leaves both spellings of one logical relation.
+    const context = ctx("related-swap-");
+    await activeIssueStore(context);
+    const lower = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "swap-lower", rootCauseKey: "swap-lower", title: "Lower target" }),
+      mut("cap-swap-lower"),
+    );
+    const higher = await captureIssue(
+      context,
+      baseInput({ occurrenceKey: "swap-higher", rootCauseKey: "swap-higher", title: "Higher local" }),
+      mut("cap-swap-higher"),
+    );
+    // note: The canonical swap under test: the local issue we link FROM is the higher display id, so
+    // the resolved row is stored from `lower`. The unresolved row is stored from `higher`, as a local
+    // writer does when the target is not in the lane yet.
+    expect(higher.issueId > lower.issueId).toBe(true);
+    const lowerRef = (await readCollab(context, (db) =>
+      db.prepare("select issue_ref from issues where id = ?").get(lower.issueId))) as { issue_ref: string };
+    await seedCollab(context, (db) => {
+      db.prepare("insert into relations(from_issue, relation, to_ref) values (?, 'related', ?)").run(
+        higher.issueId,
+        lowerRef.issue_ref,
+      );
+    });
+
+    await linkIssue(
+      context,
+      higher.issueId,
+      { relation: "related", issueId: lower.issueId },
+      { ...mut("link-swap"), expectedRevision: higher.revision },
+    );
+
+    // invariant: One logical relation, in exactly one spelling, with no `to_ref` row left behind.
+    const detail = await getIssue(context, higher.issueId);
+    expect(detail.relations).toEqual([
+      { fromIssue: lower.issueId, relation: "related", toIssue: higher.issueId, toRef: null, title: "Lower target" },
+    ]);
+    expect(
+      await readCollab(context, (db) => db.prepare("select count(*) as n from relations where to_ref = ?").get(lowerRef.issue_ref)),
+    ).toEqual({ n: 0 });
+  });
+
   test("an unresolved edge resolves in the transaction that admits its target back into the lane", async () => {
     const context = ctx("arrival-source-");
     await activeIssueStore(context);

@@ -768,6 +768,95 @@ describe("cross-authority move phase engine", () => {
     }
   }, 60_000);
 
+  test("a discard that carries a stale record base refuses before anything is unfrozen", async () => {
+    // invariant: `--discard` reads the source record, so it honours the record CAS the verb requires:
+    // a discard on a base the caller no longer holds refuses with the local move's own code and leaves
+    // the record frozen and the ledger row exactly where it was. The lane revision is deliberately not
+    // the discard's base — a move's own phase commits advance it — so the schema and runtime require
+    // `--expect-store` only on the routes that can honour it.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-discard-stale",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "abandon",
+      };
+      await stageMove(context, request);
+      const before = recordImage(db, issueId);
+      const staleRecord = await discardMove(context, { ...request, expectedRevision: laneIssueRevision(db, issueId) + 1 }).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(staleRecord?.code).toBe("issue.revision-conflict");
+      expect(staleRecord?.details?.recovery).toEqual(expect.stringContaining("--expect"));
+      // invariant: The refusal unfroze nothing: the record is byte-identical and the row still blocks.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(readIssueMove(db, "move-discard-stale", "source")?.phase).toBe("staged");
+      expect(blockingMoveFor(db, issueId)?.phase).toBe("staged");
+      // note: The current record base discards, and it needs no lane revision to do it.
+      const discarded = await discardMove(context, { ...request, expectedRevision: laneIssueRevision(db, issueId) });
+      expect(discarded).toMatchObject({ phase: "discarded", resumedFrom: "staged" });
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      expect(recordImage(db, issueId)).toEqual(before);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("the live-intent refusal names the outbox step that works in the state it reports", async () => {
+    // invariant: The recovery a refusal publishes must be executable in the state it names. Dispatch
+    // only advances an `enqueued` row, so an `unconfirmed` operator needs the receipt or a
+    // reconciliation, and a `conflict` needs the reviewed resolution.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const issueRef = readIssueMoveReference(db, issueId);
+      const request = {
+        operationId: "move-intent-state",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "cross",
+      };
+      const recoveryOf = async (state: "enqueued" | "unconfirmed" | "conflict", operationId: string): Promise<string> => {
+        seedOutboxIntent(db, issueRef, operationId, state);
+        const refused = await moveAcrossAuthorities(context, request).then(
+          () => null,
+          (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+        );
+        expect(refused?.code).toBe("remote.effect-pending");
+        expect(refused?.details).toMatchObject({ operationId, state });
+        return String(refused?.details?.recovery ?? "");
+      };
+      const enqueued = await recoveryOf("enqueued", "intent-enqueued");
+      expect(enqueued).toContain("outbox-abandon");
+      expect(enqueued).toContain("outbox-dispatch");
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run("intent-enqueued");
+
+      const unconfirmed = await recoveryOf("unconfirmed", "intent-unconfirmed");
+      expect(unconfirmed).toContain("outbox-receipt");
+      expect(unconfirmed).toContain("outbox-reconcile");
+      // invariant: The state that already dispatched is never sent back to `outbox-dispatch`.
+      expect(unconfirmed).not.toContain("outbox-dispatch");
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run("intent-unconfirmed");
+
+      const conflict = await recoveryOf("conflict", "intent-conflict");
+      expect(conflict).toContain("outbox-resolve");
+      expect(conflict).not.toContain("outbox-dispatch");
+      // invariant: Nothing was staged under any of the three live states.
+      expect(readIssueMove(db, request.operationId, "source")).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
   test("the same command resumes from every persisted phase", async () => {
     // invariant: Each case stops the move at one boundary (a process loss is exactly "the next call
     // did not happen"), then reissues the SAME command and reaches publication.
@@ -1694,4 +1783,42 @@ describe("cross-authority move phase engine", () => {
       db.close();
     }
   }, 60_000);
+});
+
+describe("cross-authority move package surface", () => {
+  test("the package publishes the move routes it documents and keeps the phase engine internal", async () => {
+    // invariant: The export block's comment is the contract. A consumer may call the two routes, the
+    // discard and the document parser; the phase engine, the per-lane exchange halves and the ledger
+    // primitives are internal to the module, so a later change cannot grow the public surface by
+    // accident and no comment has to deny what the block publishes.
+    const surface = (await import("./index.js")) as unknown as Record<string, unknown>;
+    for (const name of ["discardMove", "moveAcrossAuthorities", "moveAcrossByDocument", "moveDocumentOf"]) {
+      expect(typeof surface[name]).toBe("function");
+    }
+    for (const name of [
+      "advanceIssueMove",
+      "assertMoveTransition",
+      "assertPresented",
+      "assertRecordWritable",
+      "blockingMoveFor",
+      "blockingMoveForRef",
+      "exchangeLocalDestination",
+      "exchangeLocalToRemote",
+      "exchangeRemoteDestination",
+      "exchangeRemoteSource",
+      "frozenMoveRefusal",
+      "isForwardMoveTransition",
+      "publishMove",
+      "readIssueMove",
+      "recordIssueMove",
+      "remoteMoveOperationId",
+      "stageMove",
+      "stagedMismatch",
+      "switchMove",
+      "switchedMoveFor",
+      "verifyMove",
+    ]) {
+      expect(surface[name]).toBeUndefined();
+    }
+  });
 });

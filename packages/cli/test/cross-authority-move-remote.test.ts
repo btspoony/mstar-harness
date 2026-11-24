@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
@@ -124,6 +125,37 @@ function generation(sandbox: RemoteSandbox): unknown {
   return sandbox.status().data.binding;
 }
 
+/**
+ * note: One sandbox's own collaboration lane, opened read-only by the test runner: the ledger row a
+ * side wrote and the generation its own store records are durable facts, never narrated by a receipt.
+ */
+function laneOf(fixture: RemoteCollaborationFixture, sandbox: RemoteSandbox): DatabaseSync {
+  return new DatabaseSync(fixture.cachePath(sandbox));
+}
+
+/** note: The generation one sandbox's own store records, which both ledger halves must name. */
+function laneGeneration(db: DatabaseSync): { storeId: string; epoch: number } {
+  const row = db.prepare("select store_id as storeId, authority_epoch as epoch from collaboration_meta where id = 1").get() as
+    | { storeId?: unknown; epoch?: unknown }
+    | undefined;
+  if (typeof row?.storeId !== "string" || typeof row.epoch !== "number") {
+    throw new Error("the sandbox lane answered no store generation");
+  }
+  return { storeId: row.storeId, epoch: row.epoch };
+}
+
+/** note: The generation one side's ledger row carries for a move; `null` before that side wrote it. */
+function moveGeneration(db: DatabaseSync, operationId: string, role: "source" | "destination"): { storeId: string; epoch: number } | null {
+  const row = db
+    .prepare("select source_store_id as storeId, source_epoch as epoch from issue_moves where operation_id = ? and role = ?")
+    .get(operationId, role) as { storeId?: unknown; epoch?: unknown } | undefined;
+  if (row === undefined) return null;
+  if (typeof row.storeId !== "string" || typeof row.epoch !== "number") {
+    throw new Error(`the ${role} ledger row of ${operationId} carries no generation`);
+  }
+  return { storeId: row.storeId, epoch: row.epoch };
+}
+
 /** note: The structured facts a refusal carries, narrowed from the envelope instead of cast. */
 function refusalDetails(command: SandboxCommand): Record<string, unknown> {
   let envelope: unknown;
@@ -179,6 +211,17 @@ describe("cross-authority move through two checkouts", () => {
         destinationAuthority: fixture.localRepoKey,
         destinationProject: "_default",
       });
+      // invariant: The document names the source lane's OWN store generation, never the repository key
+      // and never the destination's epoch: both ledger halves have to name one source generation.
+      const sourceLane = laneOf(fixture, source);
+      const sourceGeneration = laneGeneration(sourceLane);
+      try {
+        expect(request.sourceStoreId).toBe(sourceGeneration.storeId);
+        expect(request.sourceEpoch).toBe(sourceGeneration.epoch);
+        expect(moveGeneration(sourceLane, MOVE_OPERATION, "source")).toEqual(sourceGeneration);
+      } finally {
+        sourceLane.close();
+      }
 
       // invariant: A source write during the move is refused, by the move's own fence.
       const blocked = source.runJson([
@@ -281,12 +324,27 @@ describe("cross-authority move through two checkouts", () => {
       expect(admitted.data).toMatchObject({ phase: "switched", side: "destination", issueRef: FIXTURE_REF });
       expect(admitted.data.destinationIssueId).toBeTruthy();
 
+      // invariant: The destination's own ledger row names the SAME source generation the source froze,
+      // not its own epoch and not the repository key.
+      const destinationLaneNow = laneOf(fixture, destination);
+      try {
+        expect(moveGeneration(destinationLaneNow, MOVE_OPERATION, "destination")).toEqual(sourceGeneration);
+      } finally {
+        destinationLaneNow.close();
+      }
+
       // invariant: The destination reads the SAME reference and the same history counts.
       const shown = destination.runJson(["issue", "show", "--id", String(admitted.data.destinationIssueId), "--harness", destination.harness]);
       expect(shown.exitCode).toBe(0);
       expect(shown.data).toMatchObject({ issueRef: FIXTURE_REF, projectId: "_default" });
       expect((shown.data.occurrences as unknown[]).length).toBe(2);
       expect((shown.data.provenance as unknown[]).length).toBe(1);
+      // invariant: The membership row records the project the record LEFT — the OBSERVED provider
+      // project — never the destination project the record just entered.
+      expect((shown.data.projectMoves as Array<Record<string, unknown>>).at(-1)).toMatchObject({
+        fromProject: REMOTE_PROJECT.localProjectId,
+        toProject: "_default",
+      });
 
       // note: Step 5 — the source publishes.
       const published = source.runJson([
@@ -306,6 +364,82 @@ describe("cross-authority move through two checkouts", () => {
 
       // invariant: The selector generation is the SAME before and after the move.
       expect(generation(source)).toMatchObject({ state: "bound", generation: 1 });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a mismatched switch handoff discards the destination's own staged row, never the ledger as corrupt", () => {
+    // invariant: A destination-only lane holds no source row. A failed handoff verification there must
+    // discard the row THAT lane holds and answer `collaboration.operation-partial`; a source-role lookup
+    // would find nothing and report `store.corrupt`, leaving the staged copy in place.
+    const fixture = host("destination-mismatch");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const destination = localHost(fixture);
+      const moveArgs = [
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+      ];
+
+      const requestPath = source.outPath("request");
+      expect(source.runJson([...moveArgs, "--out", requestPath]).data).toMatchObject({ phase: "staged", side: "source" });
+      const stagedPath = destination.outPath("staged");
+      const verified = destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+        "--out", stagedPath,
+      ]);
+      expect(verified.result.stderr).toBe("");
+      expect(verified.data).toMatchObject({ phase: "verified", side: "destination" });
+
+      // note: The document the source would hand over, with one carried count rewritten in transit:
+      // every binding field still matches, so only the verification can tell it apart.
+      const tampered = destination.writeJson("tampered-switch", {
+        ...destination.readOut(stagedPath),
+        phase: "switch",
+        stagedCounts: JSON.stringify({
+          occurrences: 9, issueTransitions: 0, provenance: 1, relations: 0, issueProjectMoves: 0, relationsLeftBehind: 0,
+        }),
+      });
+      const refused = destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", tampered,
+      ]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.code).toBe("collaboration.operation-partial");
+      expect(refused.message).toContain("counts");
+      expect(refusalDetails(refused)).toMatchObject({ operation_id: MOVE_OPERATION, phase: "discarded" });
+
+      // invariant: THIS lane's row is the one that discarded, and no record was admitted.
+      const lane = laneOf(fixture, destination);
+      try {
+        expect(
+          lane.prepare("select phase from issue_moves where operation_id = ? and role = 'destination'").get(MOVE_OPERATION),
+        ).toEqual({ phase: "discarded" });
+        expect(lane.prepare("select count(*) as n from issues where issue_ref = ?").get(FIXTURE_REF)).toEqual({ n: 0 });
+      } finally {
+        lane.close();
+      }
     } finally {
       for (const created of fixtures.splice(0)) created.dispose();
     }
@@ -373,6 +507,18 @@ describe("cross-authority move through two checkouts", () => {
         destinationAuthority: remoteKey,
         destinationProject: REMOTE_PROJECT.localProjectId,
       });
+      // invariant: The other direction carries the same fact: a LOCAL source's own store generation
+      // crosses in the document, and the remote destination's ledger row binds that value, not the
+      // repository key and not the destination cache's epoch.
+      const localLane = laneOf(fixture, source);
+      const localGeneration = laneGeneration(localLane);
+      try {
+        expect(request.sourceStoreId).toBe(localGeneration.storeId);
+        expect(request.sourceEpoch).toBe(localGeneration.epoch);
+        expect(moveGeneration(localLane, MOVE_OPERATION, "source")).toEqual(localGeneration);
+      } finally {
+        localLane.close();
+      }
 
       // invariant: A source write during the move is refused by the lane's own TRIGGER, which the
       // issue write entries map to the partial outcome naming the move: no calling path can write a
@@ -436,6 +582,13 @@ describe("cross-authority move through two checkouts", () => {
       expect(admitted.exitCode).toBe(0);
       expect(admitted.data).toMatchObject({ phase: "switched", side: "destination", issueRef: localRef });
       expect(destination.readOut(admissionPath)).toMatchObject({ phase: "admission", issueRef: localRef });
+      // invariant: The remote destination's ledger row names the LOCAL source's generation.
+      const remoteLaneNow = laneOf(fixture, destination);
+      try {
+        expect(moveGeneration(remoteLaneNow, MOVE_OPERATION, "destination")).toEqual(localGeneration);
+      } finally {
+        remoteLaneNow.close();
+      }
 
       // note: Step 4 — the source verifies the admission, switches and publishes once.
       const published = source.runJson([
@@ -739,6 +892,8 @@ describe("cross-authority move through two checkouts", () => {
         payloadJson: "{}",
         payloadDigest: "0".repeat(64),
         stagedCounts: "{}",
+        sourceStoreId: "store-one",
+        sourceEpoch: 1,
         sourceIssueId: null,
         destinationIssueId: null,
       });

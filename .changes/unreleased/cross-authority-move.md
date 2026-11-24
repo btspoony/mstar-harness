@@ -16,7 +16,8 @@ packages: root
   `staged` → `verified` → `switched` → `published`; the source row of the new `issue_moves` ledger is both the ledger and the
   fence, so from `staged` on every `issues`, `relations` and `issue_sync_state` write to that record aborts and reaches the
   caller as `collaboration.operation-partial`. The same command resumes from whatever phase the ledger holds, `--discard`
-  abandons a move at or before `switched` and leaves the source record byte-identical, and publication happens once per
+  abandons a move at or before `switched` and leaves the source record byte-identical — it carries the record's `--expect`
+  and no `--expect-store`, which a move's own phase commits have already advanced — and publication happens once per
   operation id before deleting the source record, its children and its settled mirror rows.
 - **A relation whose target lives outside the lane is stored instead of refused.** `relations.to_issue` is nullable and
   `to_ref` holds the target's stable `IssueRef`; exactly one of the two is set, and the table refuses a row with both or
@@ -46,7 +47,8 @@ packages: root
   `staged` → `verified` → `switched` → `published`；新增 `issue_moves` 账本的 source 行既是账本又是栅栏，因此从
   `staged` 起，对该记录的任何 `issues`、`relations`、`issue_sync_state` 写入都会中止，并以
   `collaboration.operation-partial` 报告给调用方。同一命令从账本记录的任意阶段续跑，`--discard` 在 `switched` 或之前
-  放弃迁移并让 source 记录逐列不变，发布对每个 operation id 只发生一次，并在删除 source 记录、其子行与已结算的
+  放弃迁移并让 source 记录逐列不变——它只携带记录的 `--expect`，不带 `--expect-store`（迁移自身的阶段提交已推进该
+  lane revision）——发布对每个 operation id 只发生一次，并在删除 source 记录、其子行与已结算的
   mirror 行之前完成核对。
 - **目标位于 lane 之外的关系现在被存储，而不是被拒绝。** `relations.to_issue` 可空，`to_ref` 保存目标的稳定
   `IssueRef`；两者恰好设置一个，表会拒绝两者皆空或皆设的行。两个本地读取端都作答 `toIssue: null` / `toRef` /
