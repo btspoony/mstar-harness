@@ -419,6 +419,16 @@ function ids(rows: Array<Record<string, unknown>>, column: string): string[] {
 }
 
 describe("collaboration cutover", () => {
+  test("a combined source below the cutover source floor is refused with the store-upgrade recovery", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-below-floor.git");
+    const context = contextAt(repo);
+    const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
+    db.close();
+    const refusal = await refusalOf(() => planCollaborationCutover(context));
+    expect(refusal.code).toBe("collaboration.cutover-required");
+    expect(refusal.message).toContain("store upgrade");
+  });
+
   test("stage copies exact keys, history, foreign keys and revisions without activating", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-stage.git");
     const source = await seedSource(repo);

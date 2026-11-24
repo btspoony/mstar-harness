@@ -116,8 +116,9 @@ const CUTOVER_LOCK_RECOVERY_SUFFIX = ".recover";
 /** note: Bounded retries after recovering a stale lock another attempt just replaced. */
 const STALE_LOCK_ATTEMPTS = 3;
 
-/** note: The oldest source schema this build can extract (the combined store's cutover base). */
-const SOURCE_SCHEMA_FLOOR = MIGRATIONS[MIGRATIONS.length - 2]!.version;
+/** note: The oldest source schema this build can extract (the combined store's cutover base).
+ * Pinned by name, not position: an unrelated append must not move the floor. */
+const SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
 
 type Blockers = readonly Readonly<{ code: string; subject: string }>[];
 
