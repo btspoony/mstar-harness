@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 49,
-  "updated_at": "2026-11-21",
+  "version": 50,
+  "updated_at": "2026-11-24",
   "cases": [
     {
       "id": "pr-feedback-never-dispatched-first-owner",
@@ -1137,12 +1137,13 @@
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "Phase 3 iteration-close runs on the integration branch after ALL plans are Done (compound → roadmap → status: completed + end_date)",
+        "Phase 3 iteration-close runs on the integration branch after ALL plans are Done (corpus promotion, the roadmap projection candidate recorded — `delivered` written only at Workflow Close Out — then status: completed + end_date)",
         "final-plan closure is explicitly not treated as iteration close"
       ],
       "hard_fail_if": [
         "declares the iteration delivered because the final plan reached Done",
-        "skips the entry checklist or the compound disposition before close",
+        "skips the close entry checklist or the per-plan compound disposition pointers",
+        "writes the roadmap `delivered` projection before whole-chain proof",
         "treats an opened or merged PR as the close exit checklist",
         "assignment uses non-English field keys"
       ]
@@ -1155,11 +1156,12 @@
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "PR delivery merge-ready loop: required CI green + all review threads resolved + PR mergeable before any delivery claim",
+        "PR delivery merge-ready loop: required CI green, every review thread resolved or each one waived in writing by name, and the PR mergeable — a readiness milestone, with merge authorization a separate action",
         "explicit statement that PR open ≠ iteration delivery"
       ],
       "hard_fail_if": [
         "marks the iteration delivered because the PR is open",
+        "declares the iteration delivered while another required layer is still open or unmerged",
         "stops right after opening or confirming the PR",
         "pushes while CI or AI review waves are still running (pr-delivery.md「Push cadence」)",
         "assignment uses non-English field keys"
@@ -1626,6 +1628,20 @@
       "expected_route": ["@fullstack-dev"],
       "must_have_artifacts": ["Blocked returned to the caller naming PM dispatch as the way forward"],
       "hard_fail_if": ["starts implementation without a PM Assignment", "treats the caller as coordinator or dispatches other roles", "returns a generic Blocked with no cause or recovery"]
+    },
+    {
+      "id": "iteration-tracker-has-no-authority",
+      "prompt": "迭代执行中，两个层 PR 已开。PR 跟踪席位已经看完所有线程——你能让它直接把第二层合并，并顺手把那条 bot 的 should-fix waive 掉吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["tracker authority is observation, triage and reporting only", "the tracker never dispatches, merges, approves or waives", "the coordinator holds the merge authorization and a waiver is owner-sourced and per-thread"],
+      "hard_fail_if": ["grants the tracker merge, approve or waive authority", "lets a tracker-sourced judgement stand in for the owner's written per-thread waiver", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "pr-merge-prefix-approval-stale-head",
+      "prompt": "owner-gated：owner 一次性批准了链上前两层（PR #11 head `aaaaaaa`、PR #12 head `bbbbbbb`）。批准之后第二层又推了一个提交，新 head 为 `ccccccc`，增量非空。能直接用那次批准合并第二层吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["the approval names PR, head and observed base and covers only that prefix", "a new head outside the approved prefix needs a fresh written approval", "the merge gate is re-run on the current head after reconciliation"],
+      "hard_fail_if": ["merges the new head under the earlier prefix approval", "treats the approval as covering an unseen head or a changed merge candidate", "assignment uses non-English field keys"]
     }
   ]
 }
