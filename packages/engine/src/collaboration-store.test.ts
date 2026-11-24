@@ -9636,7 +9636,7 @@ describe("pre-v3 remote cache recovery", () => {
     }
   }, 30_000);
 
-  test("a cache holding intents of several states names the oldest route and points at the listing", async () => {
+  test("a cache holding intents of several states names EVERY state with its own id and first step", async () => {
     const fixture = remoteFixture("remote-v3-route-mixed");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -9666,10 +9666,15 @@ describe("pre-v3 remote cache recovery", () => {
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
     expect(refused.code).toBe("remote.effect-pending");
+    // invariant: Both states are named, each with its OWN oldest operation id and the first step
+    // executable for THAT state - a later row is never invisible behind the oldest one.
     expect(refused.message).toContain("00000000-0000-4000-8000-0000000009e1");
+    expect(refused.message).toContain("00000000-0000-4000-8000-0000000009e2");
+    expect(refused.message).toContain("state conflict: oldest operation 00000000-0000-4000-8000-0000000009e1");
+    expect(refused.message).toContain("state enqueued: oldest operation 00000000-0000-4000-8000-0000000009e2");
     expect(refused.message).toContain("outbox-resolve");
     expect(refused.message).toContain("outbox-pending");
-    expect(refused.message).toMatch(/other states/);
+    expect(refused.message).toContain("outbox-dispatch");
   }, 30_000);
 
   test("a below-current cache this build's declared inventory does not match still refuses, mutating nothing", async () => {
@@ -9701,5 +9706,197 @@ describe("pre-v3 remote cache recovery", () => {
     expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
     expect(existsSync(location.dbPath)).toBe(true);
     expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
+  }, 30_000);
+
+  /**
+   * note: A v3 REMOTE cache seeded with one real conflicted journal intent: a verified binding,
+   * a dispatched attempt and fork evidence recorded through the public receipt verb, so the
+   * settlement verbs can read, resolve, dispatch and confirm on it exactly as on a live cache.
+   */
+  function seedConflictedV3Cache(
+    name: string,
+    conflictId: string,
+  ): Promise<{
+    repoKey: string;
+    commit: string;
+    generation: number;
+    context: StoreContext;
+    location: CollaborationLocation;
+    fork: { heads: string[]; records: Array<Record<string, unknown>> };
+  }> {
+    const fixture = remoteFixture(name);
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const attempt = "aaaaaaaa-bbbb-4ccc-8ddd-aaaaaaaaaaa1";
+    const requestHash = "c".repeat(64);
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, writer_id, verified_at, verification_json) values (?, ?, ?, 'linear', " +
+          "?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        generation,
+        SELECTED_PROJECT.localProjectId,
+        commit,
+        SELECTED_PROJECT.workspaceId,
+        SELECTED_PROJECT.teamId,
+        SELECTED_PROJECT.projectId,
+        SELECTED_PROJECT.journalIssueId,
+        SELECTED_PROJECT.writerId,
+        new Date().toISOString(),
+        JSON.stringify({ outcome: { kind: "verified" }, checkedAt: new Date().toISOString() }),
+      );
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "attempt_id, created_at, updated_at) values (?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?)",
+      ).run(
+        conflictId,
+        generation,
+        SELECTED_PROJECT.localProjectId,
+        requestHash,
+        JSON.stringify(journalIntent(fixture, commit, conflictId)),
+        attempt,
+        "2026-11-21T00:00:00.000Z",
+        "2026-11-21T00:00:00.000Z",
+      );
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const fork = journalFork(fixture);
+    // invariant: The conflict state and its recorded fork are exactly what a live conflict carries,
+    // because the evidence is recorded through the same public receipt verb an operator uses.
+    return recordRemoteReceipt(
+      context,
+      receiptInput(commit, conflictId, attempt, requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+    ).then(() => ({ repoKey: fixture.repoKey, commit, generation, context, location, fork }));
+  }
+
+  test("a confirmed resolution chain unblocks the bind, which replaces the cache and keeps its identity", async () => {
+    const conflictId = "00000000-0000-4000-8000-0000000009f5";
+    const repairId = "00000000-0000-4000-8000-0000000009f6";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-chain", conflictId);
+    const bind = () =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      });
+
+    // invariant: The conflict blocks the replacement and names its own route.
+    const refused = await refusalOf(bind);
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(conflictId);
+    expect(refused.message).toContain("outbox-resolve");
+
+    // invariant: The reviewed resolution runs on the refused cache; the parent stays conflicted
+    // with the repair linked, and the bind is still refused while the repair is enqueued.
+    const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
+    const prepared = await prepareRemoteResolution(cache.context, conflictId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    expect(prepared).toMatchObject({ operationId: repairId, state: "enqueued" });
+    expect((await readRemoteIntent(cache.context, conflictId)).resolvedBy).toBe(repairId);
+    const refusedAgain = await refusalOf(bind);
+    expect(refusedAgain.code).toBe("remote.effect-pending");
+
+    // invariant: The repair is dispatched and confirmed through the public verbs on the same
+    // refused cache; the parent keeps its conflict history untouched.
+    const dispatched = await dispatchRemoteIntent(
+      cache.context,
+      repairId,
+      forkObservationFor({ commit: cache.commit, dbPath: cache.location.dbPath }, conflictId, cache.fork.heads),
+    );
+    expect(dispatched.kind).toBe("permit");
+    const repair = await readRemoteIntent(cache.context, repairId);
+    const confirmed = await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee7",
+        event: resolutionEvent,
+      }),
+    );
+    expect(confirmed).toMatchObject({ operationId: repairId, state: "confirmed" });
+    expect((await readRemoteIntent(cache.context, conflictId)).state).toBe("conflict");
+
+    // invariant: With the repair chain settled, the SAME bind replaces the cache and keeps the
+    // store identity - the exit the settle rule promises.
+    const recorded = recordedGeneration(cache.location);
+    const bound = await bind();
+    expect(bound).toMatchObject({ version: 1, generation: cache.generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect((await readRemoteCacheAuthority(cache.context)).schemaVersion).toBe(CURRENT_VERSION);
+  }, 30_000);
+
+  test("a conflict whose repair was abandoned still refuses the bind", async () => {
+    const conflictId = "00000000-0000-4000-8000-0000000009f7";
+    const repairId = "00000000-0000-4000-8000-0000000009f8";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-withdrawn", conflictId);
+    const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
+    await prepareRemoteResolution(cache.context, conflictId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    // note: The review is withdrawn: the repair is abandoned before dispatch.
+    const abandoned = await abandonRemoteIntent(cache.context, { operationId: repairId, reason: "review withdrawn" });
+    expect(abandoned).toMatchObject({ operationId: repairId, state: "abandoned" });
+
+    // invariant: An abandoned repair is no settlement: the parent conflict still blocks the bind
+    // and names its own route, so no abandoned child can satisfy the settle rule.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(conflictId);
+    expect(refused.message).toContain("outbox-resolve");
+    expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+  }, 30_000);
+
+  test("the recovery surface guard is fail closed over its allowlist", async () => {
+    const fixture = remoteFixture("remote-v3-guard-closed");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    seedRemoteV3Intent(location, "00000000-0000-4000-8000-0000000009f9", "enqueued");
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const recovery = await openRemoteCacheRecovery(context, "read");
+    try {
+      // invariant: A domain table named in ANY casing is refused, not just the exact spelling.
+      expect(() => recovery.db.prepare("select count(*) as n from ISSUES").get()).toThrow(/"issues"/);
+      // invariant: A statement naming no surface table - unclassifiable against the allowlist -
+      // is refused rather than let through.
+      expect(() => recovery.db.prepare("select count(*) as n from sqlite_master").get()).toThrow(/recovery-surface/);
+      // invariant: A statement form that could escape the surface is refused even over a surface table.
+      expect(() => recovery.db.prepare("pragma table_info(remote_outbox)").get()).toThrow(/pragma/);
+      // invariant: A legitimate outbox statement still runs.
+      expect(recovery.db.prepare("select count(*) as n from remote_outbox").get()).toMatchObject({ n: 1 });
+    } finally {
+      recovery.close();
+    }
   }, 30_000);
 });

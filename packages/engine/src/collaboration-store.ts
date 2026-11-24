@@ -1841,10 +1841,38 @@ async function continueExisting(location: CollaborationLocation, timeout: number
  * singleton naming this repository and mode (and, when this checkout records one, exactly the
  * store identity that record names), and no unsettled outbox intent - an `enqueued`,
  * `unconfirmed` or `conflict` row may already have taken effect at the provider, so replacing
- * those bytes would leave the intent only in the preserved copy.
+ * those bytes would leave the intent only in the preserved copy. A `conflict` row whose
+ * `resolved_by` chain reaches a `confirmed` repair counts as settled (conflictRepairSettled);
+ * an abandoned, missing or unsettled link still blocks.
  * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
  * reads: the canonical name is released after the successor is staged, never before.
  */
+/**
+ * note: The settle rule for one conflict row: it is settled exactly when its `resolved_by`
+ * repair chain reaches a `confirmed` repair. `abandonRemoteIntent` refuses a conflict row, so
+ * the parent itself can never be abandoned, and `prepareRemoteResolution` refuses a second
+ * resolution while the linked one is live, so the single `resolved_by` pointer names the only
+ * repair that could have confirmed. An abandoned, missing or non-confirmed link therefore
+ * leaves the parent unsettled: a withdrawn review (the linked repair abandoned) blocks the
+ * replacement again until a new reviewed resolution is prepared and confirmed.
+ */
+function conflictRepairSettled(db: StoreDb, row: { state: string; resolved_by: unknown }): boolean {
+  if (row.state !== "conflict") return false;
+  let cursor = typeof row.resolved_by === "string" ? row.resolved_by : null;
+  const visited = new Set<string>();
+  while (cursor !== null && !visited.has(cursor)) {
+    visited.add(cursor);
+    const linked = db
+      .prepare("select state, resolved_by from remote_outbox where operation_id = ?")
+      .get(cursor) as { state?: unknown; resolved_by?: unknown } | undefined;
+    if (linked === undefined || typeof linked.state !== "string") return false;
+    if (linked.state === "confirmed") return true;
+    if (linked.state !== "conflict") return false;
+    cursor = typeof linked.resolved_by === "string" ? linked.resolved_by : null;
+  }
+  return false;
+}
+
 async function replaceDerivedLaneBelow(
   location: CollaborationLocation,
   below: number,
@@ -1853,7 +1881,7 @@ async function replaceDerivedLaneBelow(
 ): Promise<RetainedLaneIdentity | undefined> {
   const dbPath = location.dbPath;
   const db = await connectAt(dbPath, "read", timeout);
-  type OutboxRow = { operation_id: string; state: string; created_at: string };
+  type OutboxRow = { operation_id: string; state: string; created_at: string; resolved_by: unknown };
   let recorded: { version: number; meta: CollaborationMeta; unsettled: OutboxRow[] };
   try {
     // invariant: The outbox guard reads the SAME connection as the version probe, so the check is
@@ -1866,10 +1894,10 @@ async function replaceDerivedLaneBelow(
         ? []
         : (db
             .prepare(
-              "select operation_id, state, created_at from remote_outbox " +
+              "select operation_id, state, created_at, resolved_by from remote_outbox " +
                 "where state not in ('confirmed','abandoned') order by created_at, operation_id",
             )
-            .all() as OutboxRow[]);
+            .all() as OutboxRow[]).filter((row) => !conflictRepairSettled(db, row));
     recorded = {
       version: validateCollaborationMigrations(readAppliedMigrations(db, false)),
       meta: readMeta(db),
@@ -1895,29 +1923,35 @@ async function replaceDerivedLaneBelow(
     );
   }
   if (recorded.unsettled.length > 0) {
+    // note: The refusal names EVERY distinct unsettled state present, one line each, so a later
+    // `unconfirmed` or `conflict` row behind the oldest `enqueued` one is never invisible:
+    // `outbox-pending` lists only `enqueued` rows and `outbox-show` needs an operation id. Each
+    // line names that state's oldest operation id and the first step executable for THAT state.
+    const firstStep = (state: string): string =>
+      state === "enqueued"
+        ? "list it with \`mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>\`, " +
+          "then settle it through \`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>\`"
+        : state === "unconfirmed"
+          ? "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, then settle it " +
+            "with \`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\` or " +
+            "\`outbox-reconcile --harness <abs> --input <file|->\`"
+          : "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, then settle it " +
+            "with \`mstar store collaboration remote outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>\`";
+    const lines: string[] = [];
+    const named = new Set<string>();
+    for (const row of recorded.unsettled) {
+      if (named.has(row.state)) continue;
+      named.add(row.state);
+      lines.push(`- state ${row.state}: oldest operation ${row.operation_id}; ${firstStep(row.state)}`);
+    }
     const oldest = recorded.unsettled[0]!;
-    // note: The first step must be executable for the OLDEST row's own state: `outbox-pending` lists
-    // only `enqueued` rows, so an `unconfirmed` or `conflict` row has to start at `outbox-show`.
-    const firstStep =
-      oldest.state === "enqueued"
-        ? "list it with \`mstar store collaboration remote outbox-pending\` and settle it through " +
-          "\`mstar store collaboration remote outbox-dispatch\`"
-        : oldest.state === "unconfirmed"
-          ? "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, " +
-            "then settle it with \`mstar store collaboration remote outbox-receipt\` or \`outbox-reconcile\`"
-          : "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, " +
-            "then settle it with \`mstar store collaboration remote outbox-resolve\`";
-    const multiState = new Set(recorded.unsettled.map((row) => row.state)).size > 1;
     throw new StoreError(
       "remote.effect-pending",
-      `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); the
-        oldest is operation ${oldest.operation_id} in state ${oldest.state}. Such an intent may already have taken
-        effect at the provider, so the cache is not replaced. Start with ${firstStep}, settle every unsettled
-        intent, and rerun the same bind.${
-          multiState
-            ? " The \`outbox-pending\` listing and \`outbox-show\` name the intents of the other states."
-            : ""
-        } Nothing was replaced.`,
+      `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); such an
+        intent may already have taken effect at the provider, so the cache is not replaced. Settle every state
+        below, oldest operation first, then rerun the same bind:
+        ${lines.join("\n        ")}
+        Nothing was replaced.`,
       { oldestOperationId: oldest.operation_id, unsettledCount: recorded.unsettled.length },
     );
   }
@@ -4008,18 +4042,35 @@ const REMOTE_CACHE_RECOVERY_TABLES: ReadonlySet<string> = new Set([
 ]);
 
 /** why: The recovery surface is an outbox escape hatch, not a current-schema substitute. */
-function recoverySurfaceRefusal(table: string): StoreError {
+function recoverySurfaceRefusal(reason: string): StoreError {
   return new StoreError(
     "collaboration.upgrade-required",
-    `The recovery open of a below-current remote cache serves only the outbox surface; "${table}" is a domain table this admission never serves. Settle every unsettled outbox intent, rerun the reviewed remote bind to replace the cache, and retry the domain verb against the current cache. Nothing was read or modified.`,
+    `The recovery open of a below-current remote cache serves only the outbox surface; ${reason} is outside this admission. Settle every unsettled outbox intent, rerun the reviewed remote bind to replace the cache, and retry the domain verb against the current cache. Nothing was read or modified.`,
   );
 }
 
-/** invariant: A recovery open's connection refuses every statement naming a table outside the surface. */
+/**
+ * note: The recovery surface guard is FAIL CLOSED, statement by statement, against the
+ * lower-cased text: (1) any statement form that could escape the surface (pragma, attach,
+ * detach, vacuum, create, drop, alter, replace, temp tables) is refused; (2) any statement
+ * naming none of the allowlisted surface tables is refused, so an unparseable or unclassifiable
+ * statement never runs; and (3) any statement naming a domain table, in ANY casing, is refused.
+ * Table identity is SQLite's own; this text guard is the belt over that allowlist, never a
+ * substitute for it.
+ */
+const RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|replace|temp)\b/;
+
 function recoverySurfaceGuard(sql: string): void {
+  const text = sql.toLowerCase();
+  // note: The domain check comes first so the refusal names the table, not the generic form.
   for (const table of COLLABORATION_TABLES) {
     if (REMOTE_CACHE_RECOVERY_TABLES.has(table)) continue;
-    if (new RegExp(`\\b${table}\\b`).test(sql)) throw recoverySurfaceRefusal(table);
+    if (new RegExp(`\\b${table}\\b`).test(text)) throw recoverySurfaceRefusal(`the domain table "${table}"`);
+  }
+  const forbidden = RECOVERY_FORBIDDEN_FORM.exec(text);
+  if (forbidden !== null) throw recoverySurfaceRefusal(`a ${forbidden[1]} statement form`);
+  if (![...REMOTE_CACHE_RECOVERY_TABLES].some((table) => new RegExp(`\\b${table}\\b`).test(text))) {
+    throw recoverySurfaceRefusal("a statement over no recovery-surface table");
   }
 }
 
