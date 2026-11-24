@@ -106,6 +106,8 @@ function focusCopy(copy: Copy): FocusCopy {
     milestonesHeading: copy.overview.milestonesHeading,
     milestoneProgress: copy.overview.milestoneProgress,
     milestoneOpenCount: copy.overview.milestoneOpenCount,
+    // The Focus rows print the same effort count the Overview rows do: one formatter.
+    milestoneEffort: copy.overview.milestoneEffort,
     absence: {
       'not-applicable': copy.state['not-applicable'],
       absent: copy.state.absent,
@@ -515,8 +517,11 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 export type MilestoneWriteChannel = {
   readonly busy: boolean
   readonly refusal: string | null
-  create(input: { name: string; target: string | null; ordinal: number }): void
-  update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void
+  create(input: { name: string; effortSessions: number | null; ordinal: number }): void
+  update(
+    milestoneId: string,
+    patch: { name?: string; effortSessions?: number | null; ordinal?: number; status?: string },
+  ): void
   assign(issueId: string, issueRevision: number, milestoneId: string | null): void
   remove(milestoneId: string): void
 }
@@ -613,21 +618,24 @@ export function createMilestoneWrites(seats: {
     get refusal(): string | null {
       return refusal
     },
-    create(input: { name: string; target: string | null; ordinal: number }): void {
+    create(input: { name: string; effortSessions: number | null; ordinal: number }): void {
       run(
-        `add:${input.name}:${input.target ?? ''}:${input.ordinal}`,
+        `add:${input.name}:${input.effortSessions ?? ''}:${input.ordinal}`,
         { expectedStoreRevision: revision },
         (operationId, expectedStoreRevision) =>
           client.milestoneAdd({
             sessionId,
             cwd,
             projectId,
-            input: { name: input.name, target: input.target, ordinal: input.ordinal },
+            input: { name: input.name, effortSessions: input.effortSessions, ordinal: input.ordinal },
             mutation: { operationId, expectedStoreRevision },
           }),
       )
     },
-    update(milestoneId: string, patch: { name?: string; target?: string | null; status?: string }): void {
+    update(
+      milestoneId: string,
+      patch: { name?: string; effortSessions?: number | null; ordinal?: number; status?: string },
+    ): void {
       run(
         `update:${milestoneId}:${JSON.stringify(patch)}`,
         { expectedStoreRevision: revision },
