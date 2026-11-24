@@ -1966,7 +1966,7 @@ export function readRetiredStageCorpus(
   return { files, readFailures };
 }
 
-/** see scripts/drift-lint.ts § 16 — Advisory inventory of oversized test suites; this never contributes failure rows. */
+/** see scripts/drift-lint.ts § 11 — Advisory inventory of oversized test suites; this never contributes failure rows. */
 export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
   try {
     const candidates: string[] = [];
