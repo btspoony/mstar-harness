@@ -2601,6 +2601,8 @@ function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): Mo
     return null;
   }
   for (const column of CARRIED_ISSUE_COLUMNS) {
+    // why: the gate script reads the marker on the line above the comparison; this line states the fact the comparison proves.
+    // hash-gate: authorized — Canonical equality is the only proof the carried copy still carries the staged field values; a differing serialization names a rewritten record.
     if (JSON.stringify(carried.issue[column] ?? null) !== JSON.stringify(staged.issue[column] ?? null)) return null;
   }
   const members: Array<keyof Omit<MoveCopy, "issue">> = ["occurrences", "transitions", "provenance", "projectMoves", "relations"];
@@ -2609,6 +2611,8 @@ function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): Mo
     const after = carried[member];
     if (!Array.isArray(before) || !Array.isArray(after) || after.length < before.length) return null;
     for (let at = 0; at < before.length; at++) {
+      // why: the gate script reads the marker on the line above the comparison; this line states the fact the comparison proves.
+      // hash-gate: authorized — Canonical equality is the only proof every staged row survives unchanged at its position; a mismatch names a rewritten, not extended, payload.
       if (JSON.stringify(after[at]) !== JSON.stringify(before[at])) return null;
     }
   }
@@ -3276,6 +3280,7 @@ export async function exchangeLocalDestination(
   // reviewed repair extends with its own rows — so a payload that outgrew the staged freeze is the
   // repaired copy, never a rewritten one. The row is re-staged to it when the handoff still proves
   // every staged row and keeps every other verified fact; anything else discards the move.
+  // hash-gate: authorized — A payload digest that differs from the staged row's is admissible only as the confirmed tombstone's extended subject; the compare routes it to the prefix-proof rather than the discard.
   if (handoff.payloadDigest !== row.payloadDigest) {
     const replaced = adoptCarriedCopy(row, handoff);
     if (replaced === null) {
