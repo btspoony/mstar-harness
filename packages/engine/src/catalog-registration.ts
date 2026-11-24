@@ -1412,7 +1412,7 @@ export async function purgeCatalogRegistration(
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the matching operation id`);
     }
-    // note: ONE identity-failure rule, shared with the pending refund the gate publishes.
+    // note: ONE identity-failure rule, shared with the pending refusal the gate publishes.
     const failure = identityFailureOf(row);
     if (!isPlainObject(failure) || failure.workflow_id !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
