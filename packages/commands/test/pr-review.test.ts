@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions, executeCommand } from "../src/index.js";
+import { registerReviewPublisher, type ReviewPublisher } from "../src/families/pr.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -244,6 +245,58 @@ describe("pr-review command family", () => {
     expect(calls).toHaveLength(2);
     expect(calls[1]!.argv).toEqual(["gh", "api", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
+  });
+
+  test("an unregistered posting provider refuses: registered ids fix a typo only, an unmatched forge takes the pr-delivery path or STOPs", async () => {
+    const { context, calls } = fixture();
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile: "body.md", provider: "nope" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.unsupported-provider", exitCode: 1 });
+    // why: the provider is refused before any file read or transport call.
+    expect(calls).toHaveLength(0);
+    expect(refused.status === "ok" ? "" : refused.message).toContain("nope");
+    const details = refused.status === "ok" ? {} : (refused.details ?? {});
+    expect(details).toMatchObject({ provider: "nope" });
+    expect(details.registered).toEqual(expect.arrayContaining(["github"]));
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string | undefined) ?? "";
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // Typo reading: the registered ids still name the correction.
+    expect(recovery).toContain("github");
+    expect(recovery).toContain("--provider <id>");
+    // why: github is listed to fix a typo, never as a suggestion that gh can
+    // post to a GitLab MR — the publisher must match the target forge.
+    expect(recovery).toContain("matches the target forge");
+    // Forge reading: an unsupported forge posts through the project's own
+    // tooling per pr-delivery.md, and STOPs without a documented equivalent.
+    expect(recovery).toContain("pr-delivery.md");
+    expect(recovery).toContain("STOP");
+  });
+
+  test("a publisher registered under a second id posts through --provider with no gh call", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 3, body: "Finding" }]));
+    const postedInput: { pr?: number; commitId?: string; body?: string; comments?: readonly unknown[] } = {};
+    const fixturePublisher: ReviewPublisher = {
+      async resolve({ pr }) {
+        return { ok: true, value: { head: "abcdef0123456", base: "1234567", host: "forge.example", owner: "acme", repo: "proj" } };
+      },
+      async diff() { throw new Error("fixture publisher has no diff"); },
+      async postReview(input) {
+        Object.assign(postedInput, { pr: input.pr, commitId: input.commitId, body: input.body, comments: input.comments });
+        return { ok: true, value: { reviewUrl: "https://forge.example/acme/proj/pull/42#review-9" } };
+      },
+    };
+    registerReviewPublisher("fixture-forge", fixturePublisher);
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings, provider: "fixture-forge" }, context);
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.status === "ok" ? result.data : {}).toMatchObject({ posted: true, comments: "posted", review_url: "https://forge.example/acme/proj/pull/42#review-9" });
+    // why: the seam carries the plan's commit and inline comments, and no
+    // `gh` transcript exists for a non-GitHub forge.
+    expect(postedInput).toMatchObject({ pr: 42, commitId: "abcdef0123456", body: "Review summary" });
+    expect(postedInput.comments).toEqual([{ path: "src/a.ts", line: 3, side: "RIGHT", body: "Finding" }]);
+    expect(calls).toHaveLength(0);
   });
 
   test("post passes a contiguous range anchor through, and omits it for a single line", async () => {

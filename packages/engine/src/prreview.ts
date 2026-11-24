@@ -1696,6 +1696,8 @@ export type ReviewInlineComment = {
  * never approve-as-merge).
  */
 export type ReviewPostPlan = {
+  /** Forge host the URL named — callers must not assume `github.com`. */
+  host: string;
   ownerRepo: string;
   pr: number;
  /** PR head SHA — the Reviews API `commit_id`. */
@@ -1710,20 +1712,20 @@ function throwPlanError(what: string, detail: string): never {
 }
 
 /**
- * Parse `owner/repo` from a GitHub PR URL
- * (`https://github.com/{owner}/{repo}/pull/{n}`) — the BASE repo that owns
+ * Parse `host`, `owner/repo` and the PR number from any forge's pull URL
+ * (`<scheme>://<host>/{owner}/{repo}/pull/{n}`) — the BASE repo that owns
  * the PR number. Fork PRs surface a different `headRepository`, which MUST
  * NOT be used (Reviews API paths are scoped to the base repo).
  */
-function parseOwnerRepoFromUrl(url: string): { ownerRepo: string; pr: number } {
-  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)\/pull\/(\d+)\/?$/.exec(url);
+function parseOwnerRepoFromUrl(url: string): { host: string; ownerRepo: string; pr: number } {
+  const match = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+?)\/pull\/(\d+)\/?$/.exec(url);
   if (match === null) {
     throwPlanError(
       "cannot parse owner/repo from url",
-      `${JSON.stringify(url)} is not a https://github.com/{owner}/{repo}/pull/{n} URL`,
+      `${JSON.stringify(url)} is not a <scheme>://<host>/{owner}/{repo}/pull/{n} URL`,
     );
   }
-  return { ownerRepo: `${match[1]}/${match[2]}`, pr: Number(match[3]) };
+  return { host: match[1]!, ownerRepo: `${match[2]}/${match[3]}`, pr: Number(match[4]) };
 }
 
 /** Validate one inline comment against § Comment posting step 2. */
@@ -1791,7 +1793,7 @@ export function planReviewPost(
   if (typeof prView.url !== "string" || prView.url === "") {
     throwPlanError("prView.url", "missing or empty - cannot resolve the base owner/repo");
   }
-  const { ownerRepo, pr } = parseOwnerRepoFromUrl(prView.url);
+  const { host, ownerRepo, pr } = parseOwnerRepoFromUrl(prView.url);
   if (typeof prView.headRefOid !== "string" || !/^[0-9a-f]{7,40}$/.test(prView.headRefOid)) {
     throwPlanError(
       "prView.headRefOid",
@@ -1802,6 +1804,7 @@ export function planReviewPost(
     throwPlanError("payload.body", "must be a non-empty review body");
   }
   return {
+    host,
     ownerRepo,
     pr,
     commitId: prView.headRefOid,
