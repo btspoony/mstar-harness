@@ -301,7 +301,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>): Promise<CommandEnvelope> {
+async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>, probeOpenPrs = false): Promise<CommandEnvelope> {
   if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
   if (input.workflow === "." || input.workflow === ".." || input.workflow.includes("/") || input.workflow.includes("\\")) throw new SddScriptError(`invalid workflow id ${JSON.stringify(input.workflow)}`, 1);
   const main = readMainWorktree(invocation.cwd);
@@ -426,17 +426,21 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
   // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an apply
-  // invocation re-plans after each deletion wave and EVERY pass re-obtains the
-  // open-PR base list: nothing is carried between passes, so a probe failure
-  // in one pass yields `null` for that pass only (refusing just the probed
-  // layer refs) and never silently reuses an earlier answer. A probe that
-  // cannot START (gh not installed, a vanished cwd) fails closed the same way
-  // — a `process.not-found` is also reported as a probe note so a missing gh
-  // is not mistaken for an open PR — while a cancellation is never swallowed.
+  // invocation re-plans after each deletion wave and EVERY destructive pass
+  // re-obtains the open-PR base list: nothing is carried between passes, so a
+  // probe failure in one pass yields `null` for that pass only (refusing just
+  // the probed layer refs) and never silently reuses an earlier answer. Once
+  // this invocation has seen a layer candidate, `probeOpenPrs` keeps the
+  // probe live through the late passes too — the last layer ref may be gone
+  // by then (post-deferred-worktree re-plan), but an open PR can still base
+  // on a branch that pass would otherwise delete. A probe that cannot START
+  // (gh not installed, a vanished cwd) fails closed the same way — a
+  // `process.not-found` is also reported as a probe note so a missing gh is
+  // not mistaken for an open PR — while a cancellation is never swallowed.
   let openPullRequestBases: CleanupFacts["openPullRequestBases"] = [];
   const probeNotes: string[] = [];
   const layerBranches = targets.filter((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch)).map((target) => target.branch);
-  if (layerBranches.length > 0) {
+  if (layerBranches.length > 0 || probeOpenPrs) {
     const origin = await gitProbe(invocation, ["remote", "get-url", "origin"], main.root);
     const slug = githubRepoOf(origin);
     if (slug === undefined) {
@@ -517,14 +521,14 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   // Pass 3 re-plans against a fresh probe and removes every still-removable
   // candidate; the deferred worktrees go last because branch deletions can
   // still need them as merge-evidence checkouts.
-  const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+  const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys, layerBranches.length > 0);
   if (refreshed.status !== "ok") return refreshed;
   const secondData = refreshed.data;
   const secondPlan = isPlainObject(secondData) && Array.isArray(secondData.decisions) ? secondData.decisions as CleanupDecision[] : [];
   if (isPlainObject(secondData) && Array.isArray(secondData.probeNotes)) probeNotes.push(...secondData.probeNotes.filter((note): note is string => typeof note === "string"));
   for (const row of secondPlan) if (row.kind === "local-branch" && row.verdict === "remove" && !LAYER_REF.test(row.ref)) await deleteBranchRow(row);
   for (const row of secondPlan) if (row.kind === "remote-branch" && row.verdict === "remove" && !LAYER_REF.test(row.ref.replace(/^origin\//, ""))) await deleteRemoteRow(row);
-  const finalRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+  const finalRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys, layerBranches.length > 0);
   if (finalRefresh.status !== "ok") return finalRefresh;
   const finalData = finalRefresh.data;
   const finalPlan = isPlainObject(finalData) && Array.isArray(finalData.decisions) ? finalData.decisions as CleanupDecision[] : [];
@@ -543,7 +547,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   // deletes, every other verdict retains the branch and reports that row.
   let postPlan: CleanupDecision[] = [];
   if (removedDeferred) {
-    const postRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+    const postRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys, layerBranches.length > 0);
     if (postRefresh.status !== "ok") return postRefresh;
     const postData = postRefresh.data;
     postPlan = isPlainObject(postData) && Array.isArray(postData.decisions) ? postData.decisions as CleanupDecision[] : [];
