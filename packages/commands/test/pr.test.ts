@@ -158,7 +158,7 @@ describe("pr merge-gate", () => {
     expect(recovery).toContain("STOP");
   });
 
-  test("the waiver retry keeps the selected provider id", async () => {
+  test("the waiver retry tells the operator to pass the selected provider id", async () => {
     const { context } = fixture();
     const head = "abcdef0123456";
     registerMergeGateProvider("wfix", {
@@ -171,7 +171,9 @@ describe("pr merge-gate", () => {
     expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unresolved" });
     // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // why: a retry without the flag would rescan through the GitHub adapter.
-    expect(refused.status === "ok" ? "" : (refused.details?.recovery as string)).toContain("--provider wfix");
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
+    expect(recovery).toContain("mstar pr merge-gate --pr <number> --provider <id> --confirm <file>");
+    expect(recovery).toContain("passing the provider id this run selected");
   });
 
   test("a missing provider executable names the tool from the error's executable field or its message", async () => {

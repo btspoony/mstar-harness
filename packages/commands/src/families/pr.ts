@@ -284,7 +284,6 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
   const digest = threadGateDigest(decision.unresolved);
   if (decision.ok) return ok({ mergeAllowed: true, head, total: threads.length, digest, unresolved: decision.unresolved });
   // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
-  // reachability: manual — the recovery's provider-id interpolation is a registered adapter name (validated against mergeGateProviders before this refusal can emit), not a command path; the runnable command is the literal `mstar pr merge-gate --pr <number> --provider <id> --confirm <file>` it names.
   return refusalEnvelope({
     command: id, status: "refused", code: decision.code, exitCode: 1,
     message: decision.code === "pr.merge-gate.unresolved"
@@ -292,9 +291,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       : `the confirmation record does not authorize a merge on ${head}`,
     details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems },
     // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
-    // why: every emitted retry must name the adapter this run selected, or a
-    // non-default provider run would silently retry against GitHub.
-    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider ${providerId} --confirm <file>.`,
+    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider <id> --confirm <file>, passing the provider id this run selected.`,
   });
 }
 
