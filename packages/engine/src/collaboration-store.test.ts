@@ -9932,6 +9932,70 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS);
   }, 30_000);
 
+  test("a tampered confirmed state never records a confirmation beside a recorded conflict receipt", async () => {
+    const conflictId = "00000000-0000-4000-8000-000000000a14";
+    const repairId = "00000000-0000-4000-8000-000000000a15";
+    const cache = await seedConflictedV3Cache("remote-v3-conflict-laundering", conflictId);
+    const bind = () =>
+      bindRemoteAuthority(cache.context, {
+        version: 1,
+        selectorCommit: cache.commit,
+        generation: cache.generation,
+        checks: [positiveCheck()],
+      });
+    const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
+    await prepareRemoteResolution(cache.context, conflictId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    const dispatched = await dispatchRemoteIntent(
+      cache.context,
+      repairId,
+      forkObservationFor({ commit: cache.commit, dbPath: cache.location.dbPath }, conflictId, cache.fork.heads),
+    );
+    const repair = await readRemoteIntent(cache.context, repairId);
+    const repairFork = journalFork({ repoKey: cache.repoKey });
+    // note: The fork evidence is recorded through the public receipt verb while the repair is
+    // live; the state column is tampered to confirmed afterwards, which is the damaged-cache
+    // shape the reopening must not let a matching confirmation launder into a settled parent.
+    const conflicted = await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
+        kind: "conflict",
+        expectedHeads: cache.fork.heads,
+        observedHeads: repairFork.heads,
+        observedRecords: repairFork.records,
+      }),
+    );
+    expect(conflicted).toMatchObject({ operationId: repairId, state: "conflict" });
+    const db = new DatabaseSync(cache.location.dbPath);
+    try {
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run(repairId);
+    } finally {
+      db.close();
+    }
+    const refused = await refusalOf(() =>
+      recordRemoteReceipt(
+        cache.context,
+        receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
+          kind: "confirmed",
+          identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+          recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeef",
+          event: resolutionEvent,
+        }),
+      ),
+    );
+    expect(refused.code).toBe("remote.dispatch-refused");
+    expect(refused.message).toContain("already holds a recorded conflict receipt");
+    expect(refused.message).toContain("outbox-resolve");
+    // invariant: The parent conflict stays unsettled: no laundered confirmation unblocked it.
+    const stillRefused = await refusalOf(bind);
+    expect(stillRefused.code).toBe("remote.effect-pending");
+    expect(stillRefused.message).toContain(conflictId);
+  }, 30_000);
+
   test("a confirmed repair link of another generation never settles the conflict", async () => {
     const conflictId = "00000000-0000-4000-8000-0000000009fa";
     const repairId = "00000000-0000-4000-8000-0000000009fb";
@@ -10246,8 +10310,8 @@ describe("pre-v3 remote cache recovery", () => {
         // resolve refuses while that link stands, so the outbox-resolve route is not offered for it.
         repairState: "enqueued",
         damaged: true,
-        exact: ["Its recorded resolvedBy link is damaged", "rebuilt from the provider through a fresh reviewed bind"],
-        absentInConflictLine: ["outbox-resolve", "outbox-reconcile"],
+        exact: ["Its recorded resolvedBy link is damaged", "rebuild the derived cache through the ordinary bootstrap"],
+        absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector"],
       },
     ];
     for (const [index, entry] of cases.entries()) {

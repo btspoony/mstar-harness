@@ -3962,6 +3962,15 @@ function invalidateConfirmedBase(db: StoreDb, generation: number, projectKey: st
   db.prepare("delete from remote_issue_identities where generation = ? and project_key = ?").run(generation, projectKey);
 }
 
+/** note: The conflict evidence a recorded fork carries: reopening never overrules it. */
+function hasConflictReceipt(db: StoreDb, operationId: string): boolean {
+  return (
+    db
+      .prepare("select 1 as found from remote_outbox_receipts where operation_id = ? and outcome = 'conflict' limit 1")
+      .get(operationId) !== undefined
+  );
+}
+
 /**
  * `recordRemoteReceipt` / `outbox-receipt`: record what one dispatched attempt observed.
  * The receipt must address the intent's own attempt, request and binding; a confirmed effect
@@ -4051,6 +4060,16 @@ async function recordReceiptEvidence(
     // no provable effect - damaged cache bytes, since only this transaction writes that state. The
     // receipt that proves it is exactly what settles the intent, so recording it stays admitted.
     const unprovenConfirmation = row.state === "confirmed" && !hasConfirmedReceipt(db, envelope.operationId);
+    // invariant: The reopening only completes a MISSING confirmation; it never overrules recorded
+    // evidence. A state column tampered to 'confirmed' beside an existing conflict receipt would
+    // otherwise launder the row into a settled parent without a second reviewed resolution.
+    if (unprovenConfirmation && hasConflictReceipt(db, envelope.operationId)) {
+      throw new StoreError(
+        "remote.dispatch-refused",
+        `Operation ${envelope.operationId} already holds a recorded conflict receipt, so a confirmation is never recorded onto it: a state claiming confirmed without its own receipt is damaged cache bytes, and recorded evidence is never overruled - resolve the recorded fork by review (outbox-resolve) as a new intent that cites both branches. Nothing was changed.`,
+        { operationId: envelope.operationId },
+      );
+    }
     if (row.state !== "unconfirmed" && row.state !== "conflict" && !unprovenConfirmation) {
       throw new StoreError(
         "remote.dispatch-refused",

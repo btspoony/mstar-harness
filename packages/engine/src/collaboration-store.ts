@@ -2034,9 +2034,10 @@ async function replaceDerivedLaneBelow(
       if (repair.kind === "damaged") {
         return shown("<uuid>") + ". Its recorded resolvedBy link is damaged - the operation it names is missing, " +
           "belongs to another generation or project, or carries no reverse resolves pointer - so a reviewed resolve " +
-          "refuses while that link stands and no receipt can settle it in place: this cache is rebuilt from the " +
-          "provider through a fresh reviewed bind once the checked selector names a new generation, and the pending " +
-          "intent's record is not preserved in place.";
+          "refuses while that link stands and no receipt or fresh reviewed bind can settle it in this scope: rebuild " +
+          "the derived cache through the ordinary bootstrap - stop this checkout's use of the cache, remove the cache " +
+          "file, run \\`mstar store collaboration remote status\\`, then perform a fresh reviewed remote bind - and " +
+          "the pending intent's record is not preserved.";
       }
       if (repair.kind === "absent") {
         return shown("<uuid>") + ". It carries no live repair, so prepare one with " + resolved() +
