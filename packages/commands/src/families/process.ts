@@ -227,6 +227,8 @@ async function setupReviewWorktree(input: Input, invocation: InvocationContext):
     throw error;
   }
 }
+/** Engine-defined layer-ref namespace (`iteration-stack/<workflow-id>/sNN`); documents the one scoped name-derived ownership exception. */
+const LAYER_REF = /^iteration-stack\/([^/]+)\/s\d+(?:\/|$)/;
 type CleanupClaim = { workflowId: string; planId?: string };
 function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", value: string): CleanupClaim[] {
   const claims: CleanupClaim[] = [];
@@ -234,6 +236,9 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
     try { return fs.realpathSync(candidate); } catch { return path.resolve(candidate); }
   };
   if (field === "branch" && snapshot.branch?.integration === value) claims.push({ workflowId: snapshot.id });
+  // A layer ref names its owning workflow; contributes no planId so the
+  // merged-evidence base stays `branch.target` and non-terminal protection applies.
+  if (field === "branch" && LAYER_REF.exec(value)?.[1] === snapshot.id) claims.push({ workflowId: snapshot.id });
   if (field === "path" && [snapshot.integration_worktree_path, (snapshot as WorkflowSnapshot & { control_worktree_path?: string }).control_worktree_path].some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value))) claims.push({ workflowId: snapshot.id });
   for (const row of snapshot.plans as unknown as Record<string, unknown>[]) {
     const meta = row.metadata as Record<string, unknown> | undefined;
@@ -383,7 +388,24 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   }
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
-  const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence };
+  // Open-PR-base probe: only when a layer ref is a candidate — no spawn otherwise.
+  let openPullRequestBases: CleanupFacts["openPullRequestBases"] = [];
+  if (targets.some((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch))) {
+    const gh = await processReply(invocation, ["gh", "pr", "list", "--state", "open", "--json", "baseRefName,headRefName", "--limit", "200"], main.root);
+    if (gh.exitCode === 0) {
+      try {
+        const rows = JSON.parse(gh.stdout) as unknown;
+        openPullRequestBases = Array.isArray(rows)
+          ? rows.flatMap((row) => (typeof row === "object" && row !== null && "baseRefName" in row && typeof row.baseRefName === "string" ? [row.baseRefName] : []))
+          : null;
+      } catch {
+        openPullRequestBases = null;
+      }
+    } else {
+      openPullRequestBases = null;
+    }
+  }
+  const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence, openPullRequestBases };
   const plan = planWorktreeCleanup(selected, facts);
   if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });
   const evidenceBaseBranches = new Set(snapshots.flatMap((snapshot) => [snapshot.branch?.integration, snapshot.branch?.target]).filter((value): value is string => Boolean(value)));

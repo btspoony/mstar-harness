@@ -2650,3 +2650,132 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
     }
   }, 60000);
 });
+
+/**
+ * `gh` PATH shim: logs every child argv to a JSONL file, then answers
+ * `gh pr list` from `MSTAR_GH_PR_LIST` (JSON string) or fails when
+ * `MSTAR_GH_FAIL` is set. Any other gh argv exits 127 — the probe is the
+ * only permitted call.
+ */
+function installGhShim(home: string): { shimDir: string; logPath: string; env: Record<string, string> } {
+  const shimDir = join(home, "gh-shim");
+  mkdirSync(shimDir, { recursive: true });
+  const logPath = join(home, "gh-log.jsonl");
+  writeFileSync(
+    join(shimDir, "gh"),
+    `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+const argv = process.argv.slice(2);
+appendFileSync(process.env.MSTAR_GH_LOG, JSON.stringify({ cwd: process.cwd(), argv }) + "\\n");
+if (process.env.MSTAR_GH_FAIL) process.exit(1);
+if (argv[0] === "pr" && argv[1] === "list") {
+  process.stdout.write(process.env.MSTAR_GH_PR_LIST ?? "[]");
+  process.exit(0);
+}
+process.exit(127);
+`,
+  );
+  chmodSync(join(shimDir, "gh"), 0o755);
+  return {
+    shimDir,
+    logPath,
+    env: {
+      PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+      MSTAR_GH_LOG: logPath,
+    },
+  };
+}
+
+function readGhLog(logPath: string): { cwd: string; argv: string[] }[] {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { cwd: string; argv: string[] });
+}
+
+/** Terminal iteration whose `branch.target` is the default branch — a layer ref is merged-evidence eligible. */
+async function layerFixture(prefix: string): Promise<{ root: string; mainBranch: string; context: StoreContext }> {
+  const home = tmpRoot(prefix);
+  const bare = join(home, "origin.git");
+  git(["init", "-q", "--bare", bare], home);
+  const root = join(home, "repo");
+  git(["clone", "-q", bare, root], home);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const mainBranch = git(["branch", "--show-current"], root);
+  git(["push", "-q", "-u", "origin", mainBranch], root);
+  const context = await activateStore(root);
+  // "stopped" is terminal without tripping the phase-6 delivery-merge gate,
+  // which only guards a `completed` iteration close.
+  await registerTerminalWorkflow(context, {
+    schema_version: 1,
+    id: "iter-1",
+    type: "iteration",
+    status: "running",
+    started_at: "2026-09-10",
+    updated_at: "2026-09-10",
+    branch: { base: mainBranch, integration: "iteration/iter-1", target: mainBranch },
+    plans: [],
+  }, "stopped");
+  return { root, mainBranch, context };
+}
+
+describe("mstar worktree cleanup — iteration-stack layer refs", () => {
+  test("no layer ref candidate spawns no gh probe; an open-PR-base layer refuses; a probe failure fails closed", async () => {
+    const fx = await layerFixture("mstar-cleanup-layer-");
+    const home = dirname(fx.root);
+    const shim = installGhShim(home);
+    try {
+      // No layer ref exists → the probe gate keeps gh unspawned.
+      const noLayer = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, shim.env);
+      expect(noLayer.exitCode).toBe(0);
+      expect(readGhLog(shim.logPath)).toEqual([]);
+
+      // A layer ref of this workflow, merged into branch.target.
+      git(["branch", "iteration-stack/iter-1/s01"], fx.root);
+
+      // Nobody's open base → eligible remove; exactly one pr list probe.
+      const notBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
+      expect(notBase.exitCode).toBe(0);
+      expect(decisionRows(notBase)).toContain("remove | local-branch | iteration-stack/iter-1/s01 | cleanup.remove.merged");
+      expect(readGhLog(shim.logPath).filter((entry) => entry.argv[0] === "pr" && entry.argv[1] === "list")).toHaveLength(1);
+
+      // An open PR bases on the layer ref → refuse.
+      const openBase = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, {
+        ...shim.env,
+        MSTAR_GH_PR_LIST: JSON.stringify([{ baseRefName: "iteration-stack/iter-1/s01", headRefName: "iteration-stack/iter-1/s02" }]),
+      });
+      expect(openBase.exitCode).toBe(0);
+      expect(decisionRows(openBase)).toContain("refuse | local-branch | iteration-stack/iter-1/s01 | cleanup.refuse.open-pr-base");
+
+      // Probe failure → the same refusal (fail closed).
+      const failed = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_FAIL: "1" });
+      expect(failed.exitCode).toBe(0);
+      expect(decisionRows(failed)).toContain("refuse | local-branch | iteration-stack/iter-1/s01 | cleanup.refuse.open-pr-base");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("a layer ref of another workflow stays foreign and still gates the probe", async () => {
+    const fx = await layerFixture("mstar-cleanup-layer-foreign-");
+    const home = dirname(fx.root);
+    const shim = installGhShim(home);
+    try {
+      git(["branch", "iteration-stack/wf-other/s01"], fx.root);
+      const dry = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
+      expect(dry.exitCode).toBe(0);
+      // Foreign under the default scope: no candidate row is printed at all.
+      expect(decisionRows(dry).join("\n")).not.toContain("iteration-stack/wf-other");
+      const all = runCli(["worktree", "cleanup", "--workflow", "iter-1", "--harness", fx.root, "--all-workflows"], fx.root, { ...shim.env, MSTAR_GH_PR_LIST: "[]" });
+      expect(all.exitCode).toBe(0);
+      expect(decisionRows(all)).toContain("refuse | local-branch | iteration-stack/wf-other/s01 | cleanup.refuse.foreign-branch");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60000);
+});

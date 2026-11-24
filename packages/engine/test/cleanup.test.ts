@@ -83,6 +83,7 @@ function lane1Facts(worktrees: ReturnType<typeof worktree>[]): CleanupFacts {
       "iteration/iter-parent": ["feature/plan-1", "iteration/iter-parent"],
     },
     remoteEvidence: [],
+    openPullRequestBases: [],
   };
 }
 
@@ -331,6 +332,7 @@ describe("planWorktreeCleanup", () => {
         "iteration/iter-parent": ["feature/plan-1", "iteration/iter-parent"],
       },
       remoteEvidence: [],
+      openPullRequestBases: [],
     };
     expect(planWorktreeCleanup(iterDone, facts)).toEqual([
       { kind: "worktree", ref: "/repo/.worktrees/iter-done", verdict: "remove", reason: "cleanup.remove.merged" },
@@ -373,6 +375,7 @@ describe("planWorktreeCleanup", () => {
         { branch: "iteration/iter-squashed", tip: TIP_OTHER, base: "main", ancestor: false, prMerged: true },
         { branch: "iteration/iter-moved", tip: TIP_MERGED, base: "main", ancestor: true, prMerged: true },
       ],
+      openPullRequestBases: [],
     };
     expect(planWorktreeCleanup(iterDone, facts)).toEqual([
       { kind: "local-branch", ref: "iteration/iter-done", verdict: "remove", reason: "cleanup.remove.merged" },
@@ -407,3 +410,77 @@ describe("planWorktreeCleanup", () => {
     expect(facts).toEqual(before);
   });
 });
+
+  test("a layer ref attributed to its naming workflow removes with branch.target evidence", () => {
+    const iterDone = snap({
+      id: "iter-done",
+      type: "iteration",
+      status: "completed",
+      ended_at: "2026-09-12",
+      branch: { base: "main", integration: "iteration/iter-done", target: "main" },
+    });
+    const facts: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true })]),
+      snapshots: [iterDone],
+      mergedLocalBranches: { main: ["main", "iteration-stack/iter-done/s01"] },
+      targets: [
+        // CLI attribution: cleanupClaims names {workflowId: "iter-done"}, no planId.
+        target({ kind: "local-branch", ref: "iteration-stack/iter-done/s01", branch: "iteration-stack/iter-done/s01", owner: { workflowId: "iter-done" } }),
+      ],
+    };
+    // No planId ⇒ mergedEvidenceBase resolves branch.target ("main"), and
+    // membership of the layer tip in main carries the remove verdict.
+    expect(planWorktreeCleanup(iterDone, facts)).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s01", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+  });
+
+  test("a branch that is an open PR's base refuses, and an unverified probe refuses the same way", () => {
+    const iterDone = snap({
+      id: "iter-done",
+      type: "iteration",
+      status: "completed",
+      ended_at: "2026-09-12",
+      branch: { base: "main", integration: "iteration/iter-done", target: "main" },
+    });
+    const layer = target({ kind: "local-branch", ref: "iteration-stack/iter-done/s02", branch: "iteration-stack/iter-done/s02", owner: { workflowId: "iter-done" } });
+    const shared: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true })]),
+      snapshots: [iterDone],
+      mergedLocalBranches: { main: ["main", "iteration-stack/iter-done/s02"] },
+      targets: [layer],
+    };
+    // Merged evidence would pass, but the open-PR-base rule fires first.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["iteration-stack/iter-done/s02"] })).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
+    ]);
+    // null = probe unverified: fail closed with the same code.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: null })).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "refuse", reason: "cleanup.refuse.open-pr-base" },
+    ]);
+    // A layer that is nobody's open base still removes.
+    expect(planWorktreeCleanup(iterDone, { ...shared, openPullRequestBases: ["feature/other"] })).toEqual([
+      { kind: "local-branch", ref: "iteration-stack/iter-done/s02", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+  });
+
+  test("the open-PR-base refusal does not apply to worktree candidates", () => {
+    const iterDone = snap({
+      id: "iter-done",
+      type: "iteration",
+      status: "completed",
+      ended_at: "2026-09-12",
+      branch: { base: "main", integration: "iteration/iter-done", target: "main" },
+    });
+    const facts: CleanupFacts = {
+      ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true }), worktree("/repo/.worktrees/iter-done", "iteration-stack/iter-done/s01")]),
+      snapshots: [iterDone],
+      openPullRequestBases: ["iteration-stack/iter-done/s01"],
+      targets: [
+        target({ kind: "worktree", ref: "/repo/.worktrees/iter-done", branch: "iteration-stack/iter-done/s01", owner: { workflowId: "iter-done" } }),
+      ],
+    };
+    expect(planWorktreeCleanup(iterDone, facts)).toEqual([
+      { kind: "worktree", ref: "/repo/.worktrees/iter-done", verdict: "remove", reason: "cleanup.remove.merged" },
+    ]);
+  });

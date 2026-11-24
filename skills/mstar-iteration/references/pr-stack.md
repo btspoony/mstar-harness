@@ -52,7 +52,7 @@
 
 ## Cleanup
 
-- The cleanup CLI does not own stack refs (GitHub #821). Stack refs are cleaned only after terminal close: before deleting any layer ref, local or remote, reconcile the actual ref and its head exactly with the ref and head witnessed in the compass `PR stack` table — a moved ref no longer matches and is not deleted — and confirm no open PR uses it as base or head. A local ref is deleted only as an ancestor of the target ref (`git branch -d`, never `-D`); a remote ref only after its PR shows merged. Any condition that fails stops the deletion and reports the residue; no force.
+- The cleanup CLI owns stack refs by their engine-defined name (GitHub #821): `iteration-stack/<workflow-id>/sNN` attributes to that workflow's cleanup, evaluates merged evidence against `branch.target`, and refuses with `cleanup.refuse.open-pr-base` while it is another open PR's base (or while the open-PR probe is unverifiable). Stack refs are cleaned only after terminal close: before deleting any layer ref, local or remote, reconcile the actual ref and its head exactly with the ref and head witnessed in the compass `PR stack` table — a moved ref no longer matches and is not deleted. A local ref is deleted only as an ancestor of the target ref (`git branch -d`, never `-D`); a remote ref only after its PR shows merged. Any condition that fails stops the deletion and reports the residue; no force.
 
 ## Rollout
 
