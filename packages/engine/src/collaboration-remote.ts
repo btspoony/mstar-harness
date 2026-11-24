@@ -161,7 +161,7 @@ export type VerificationBatch = Readonly<{
 export type RemoteMilestone = Readonly<{
   milestoneId: string;
   name: string;
-  target: string | null;
+  effortSessions: number | null;
   status: "planned" | "active" | "delivered" | "dropped";
   ordinal: number;
   revision: number;
@@ -265,7 +265,6 @@ type ObservationHeader = Omit<ObservationSubmission, "snapshot"> & Readonly<{ sn
 const RCF3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** note: A stable history event id carries the same lowercase UUID shape as every portable key. */
 const UUID = LINEAR_ID;
@@ -635,12 +634,11 @@ function verificationBatch(value: unknown): VerificationBatch {
 
 function milestone(value: unknown, path: string): RemoteMilestone {
   const body = record(value, path);
-  const target = body.target === null ? null : text(body.target, `${path}.target`);
-  if (target !== null && !CALENDAR_DATE.test(target)) invalid(`${path}.target`, "must be YYYY-MM-DD or null");
+  if (Object.hasOwn(body, "target")) invalid(`${path}.target`, '"target" is retired; submit "effortSessions" as null or an integer of at least 1 (a count of standard sessions)');
   return {
     milestoneId: text(body.milestoneId, `${path}.milestoneId`),
     name: text(body.name, `${path}.name`),
-    target,
+    effortSessions: body.effortSessions === null ? null : positiveInteger(body.effortSessions, `${path}.effortSessions`),
     status: oneOf(body.status, ["planned", "active", "delivered", "dropped"], `${path}.status`),
     ordinal: nonNegativeInteger(body.ordinal, `${path}.ordinal`),
     revision: positiveInteger(body.revision, `${path}.revision`),

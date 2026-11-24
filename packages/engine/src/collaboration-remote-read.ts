@@ -1124,7 +1124,7 @@ export function remoteMilestones(view: RemoteReadView, projectId: string, milest
         milestoneId: row.milestoneId,
         projectId,
         name: row.name,
-        target: row.target,
+        effortSessions: row.effortSessions,
         status: row.status,
         ordinal: row.ordinal,
         revision: row.revision,

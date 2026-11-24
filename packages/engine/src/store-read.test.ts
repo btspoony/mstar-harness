@@ -442,16 +442,16 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
 /** A project's milestone row, inserted directly: the read side is what this suite proves. */
 function seedMilestone(
   db: StoreDb,
-  seed: { id: string; name: string; projectId?: string; target?: string | null; status?: string; ordinal?: number },
+  seed: { id: string; name: string; projectId?: string; effortSessions?: number | null; status?: string; ordinal?: number },
 ): void {
   db.prepare(
-    "insert into project_milestones(milestone_id, project_id, name, target, status, ordinal, revision, created_at, updated_at) " +
+    "insert into project_milestones(milestone_id, project_id, name, effort_sessions, status, ordinal, revision, created_at, updated_at) " +
       "values (?, ?, ?, ?, ?, ?, 1, ?, ?)",
   ).run(
     seed.id,
     seed.projectId ?? "proj-a",
     seed.name,
-    seed.target ?? null,
+    seed.effortSessions ?? null,
     seed.status ?? "planned",
     seed.ordinal ?? 0,
     RECORDED_AT,
@@ -489,7 +489,7 @@ describe("milestone views", () => {
     await registerProject(context, "proj-b");
     await withWrite(context, (db) => {
       seedMilestone(db, { id: "M-A1", name: "A first", ordinal: 0 });
-      seedMilestone(db, { id: "M-A2", name: "A second", ordinal: 1, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-A2", name: "A second", ordinal: 1, effortSessions: 3, status: "active" });
       seedMilestone(db, { id: "M-B1", name: "B only", projectId: "proj-b", ordinal: 0 });
       // Three issues on one milestone: the join must multiply neither the
       // milestone rows nor the counts.
@@ -671,7 +671,7 @@ describe("milestone views", () => {
   test("the roadmap view carries the milestone grouping even with absent Markdown, and answers null for an unknown project", async () => {
     const { context, harness } = await projectedWorkspace("milestone-roadmap-");
     await withWrite(context, (db) => {
-      seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, effortSessions: 3, status: "active" });
       seedMilestone(db, { id: "M-2", name: "Dashboard", ordinal: 1 });
       seedIssue(db, { id: "I-1", title: "read store", milestoneId: "M-1", acceptance: "read proof" });
       seedIssue(db, { id: "I-2", title: "render", milestoneId: "M-2" });
@@ -679,8 +679,8 @@ describe("milestone views", () => {
     });
     const present = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
     expect(present.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
-    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.target, milestone.status, milestone.ordinal])).toEqual([
-      ["Read boundary", "2026-10-01", "active", 0],
+    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.effortSessions, milestone.status, milestone.ordinal])).toEqual([
+      ["Read boundary", 3, "active", 0],
       ["Dashboard", null, "planned", 1],
     ]);
     expect(present.data?.milestones.issues.map((issue) => [issue.id, issue.milestoneId])).toEqual([
