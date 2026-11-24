@@ -901,7 +901,11 @@ export type AuthorizedIssueMutation = MutationContext;
  * the DB coordination route composes into its own transaction; it never opens a
  * store or a transaction of its own.
  */
-async function withWrite<T>(context: StoreContext, fn: (handle: CollaborationStoreHandle) => T): Promise<T> {
+async function withWrite<T>(
+  context: StoreContext,
+  fn: (handle: CollaborationStoreHandle) => T,
+  recordId?: string,
+): Promise<T> {
   return withCollaborationWrite(context, (handle) => {
     assertIssueStoreActive(handle.db);
     try {
@@ -910,7 +914,7 @@ async function withWrite<T>(context: StoreContext, fn: (handle: CollaborationSto
       // invariant: The lane's trigger is the fence, so its abort is the one refusal that reaches here
       // without a typed error: restate it as the partial outcome it is, naming the move that froze the
       // record. Every other failure keeps its own code.
-      const mapped = frozenMoveRefusal(handle.db, error);
+      const mapped = frozenMoveRefusal(handle.db, error, recordId);
       if (mapped !== null) throw mapped;
       throw error;
     }
@@ -1771,7 +1775,7 @@ export async function appendOccurrence(
     };
     recordOperation(db, mutation.operationId, hash, receipt, at);
     return receipt;
-  });
+  }, issueId);
 }
 
 const LAST_ACTIVITY_SQL = `(select max(ts) from (
@@ -2530,7 +2534,7 @@ export async function triageIssue(
       },
     });
   }
-  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
+  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true), issueId);
 }
 
 /**
@@ -2731,7 +2735,7 @@ export async function closeIssue(
       },
     });
   }
-  return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
+  return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation), issueId);
 }
 export async function reopenIssue(
   context: StoreContext,
@@ -2792,7 +2796,7 @@ export async function reopenIssue(
       },
     });
   }
-  return withWrite(context, (handle) => reopenIssueOn(handle.db, issueId, payload, mutation));
+  return withWrite(context, (handle) => reopenIssueOn(handle.db, issueId, payload, mutation), issueId);
 }
 
 /**
@@ -3005,7 +3009,7 @@ export async function moveIssue(
         "project-scoped milestone, which must be reviewed as a replacement event. Nothing was changed.",
     );
   }
-  return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation));
+  return withWrite(context, (handle) => moveIssueOn(handle.db, issueId, input, mutation), issueId);
 }
 
 /** note: The receipt the staged route returns, re-exported so a transport need not import the ledger module. */
@@ -3137,7 +3141,7 @@ export async function assignIssueMilestone(
     const receipt: IssueReceipt = { issueId, revision, storeRevision: readMeta(db).revision, created: false };
     recordOperation(db, mutation.operationId, hash, receipt, at);
     return receipt;
-  });
+  }, issueId);
 }
 
 /**
@@ -3282,7 +3286,7 @@ export async function linkIssue(
       },
     });
   }
-  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
+  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation), issueId);
 }
 
 /** Internal plan-scoped writer; the file transport verifies its plan session before calling. */
@@ -3311,5 +3315,5 @@ export async function linkIssueScoped(
       },
     });
   }
-  return withWrite(context, (handle) => linkIssueOnWithOrigin(handle.db, issueId, link, mutation, undefined, "scoped"));
+  return withWrite(context, (handle) => linkIssueOnWithOrigin(handle.db, issueId, link, mutation, undefined, "scoped"), issueId);
 }

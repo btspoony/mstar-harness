@@ -723,6 +723,27 @@ when exists (
 begin
   select raise(abort, 'issue.move-in-progress');
 end;
+create trigger issue_sync_state_move_guard_delete before delete on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id = old.local_id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+
+-- invariant: A publication delete must not strip a frozen record's links early: the relation rows
+-- are the copy the destination admitted, and only the ledger's terminal phase may remove them.
+create trigger relations_move_guard_delete before delete on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.from_issue, old.to_issue)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
 `;
 
 const COLLABORATION_MOVE_SCHEMA: Migration = {

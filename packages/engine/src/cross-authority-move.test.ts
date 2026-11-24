@@ -17,6 +17,7 @@ import {
   assertRecordWritable,
   blockingMoveFor,
   exchangeLocalToRemote,
+  frozenMoveRefusal,
   isForwardMoveTransition,
   moveAcrossAuthorities,
   publishMove,
@@ -178,6 +179,31 @@ describe("cross-authority move ledger", () => {
     }
   });
 
+  test("a corrupt ledger count is refused as corrupt instead of resuming from a guessed zero", async () => {
+    // invariant: Critical 1 (review wave 3) — `source_epoch` and `removed_sync_rows` are the ledger's
+    // own counts; a coerced zero would resume a move from a base that never existed, so a
+    // non-integer or negative value is `store.corrupt`, not 0.
+    const { db } = await freshLane();
+    try {
+      recordIssueMove(db, sourceRow("mstar:issue:11111111-1111-4111-8111-111111111111", "staged"));
+      db.exec("pragma ignore_check_constraints = on");
+      db.prepare("update issue_moves set source_epoch = -1 where operation_id = 'move-one'").run();
+      expect(() => readIssueMove(db, "move-one", "source")).toThrow(/store\.corrupt.*source_epoch/);
+      db.prepare("update issue_moves set source_epoch = 1, removed_sync_rows = -1 where operation_id = 'move-one'").run();
+      expect(() =>
+        advanceIssueMove(db, { operationId: "move-one", role: "source", from: "staged", to: "verified" }),
+      ).toThrow(/store\.corrupt.*removed_sync_rows/);
+      db.exec("pragma ignore_check_constraints = off");
+      db.prepare("update issue_moves set removed_sync_rows = 0 where operation_id = 'move-one'").run();
+      // note: The un-corrupted row still advances, proving the refusal names the field, not the row.
+      expect(
+        advanceIssueMove(db, { operationId: "move-one", role: "source", from: "staged", to: "verified" }).phase,
+      ).toBe("verified");
+    } finally {
+      db.close();
+    }
+  });
+
   test("the source row blocks every write to its record from staged on", async () => {
     const { db } = await freshLane();
     try {
@@ -268,6 +294,96 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       expect(blockingMoveFor(db, "I-000001")).toBeNull();
       db.prepare("update issues set title = 'edited' where id = 'I-000001'").run();
       expect((db.prepare("select title from issues where id = 'I-000001'").get() as { title: string }).title).toBe("edited");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a frozen record refuses relation and sync-state deletes until the move leaves the fence", async () => {
+    // invariant: Critical 4 (review wave 3, I-001244) — publication deletes the record's children and
+    // its settled `issue_sync_state` rows only after the row leaves the blocking set; before that a
+    // delete would strip the record a discard must restore, so the v4 lane's own triggers refuse it.
+    const { db } = await freshLane();
+    try {
+      db.prepare(
+        "insert into relations(from_issue, relation, to_ref) values ('I-000001', 'blocks', 'mstar:issue:99999999-9999-4999-8999-999999999999')",
+      ).run();
+      db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+          "updated_at, identity_key, issue_ref) values ('I-000003', 'p-one', 'Linked finding', 'bug', 'low', 'open', " +
+          "'i', 'a', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'third-key', " +
+          "'mstar:issue:33333333-3333-4333-8333-333333333333')",
+      ).run();
+      db.prepare("insert into relations(from_issue, relation, to_issue) values ('I-000003', 'blocks', 'I-000001')").run();
+      db.prepare(
+        "insert into issue_sync_state(binding_id, direction, local_id, item_state, revision, updated_at) " +
+          "values ('linear:p', 'push', 'I-000001', 'applied', 1, '2026-11-21T00:00:00.000Z')",
+      ).run();
+      recordIssueMove(db, sourceRow("mstar:issue:11111111-1111-4111-8111-111111111111", "staged"));
+
+      // invariant: Every delete path into the fenced record aborts, on both the outgoing and the
+      // incoming side of a relation.
+      expect(() =>
+        db.prepare("delete from issue_sync_state where local_id = 'I-000001'").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      expect(() =>
+        db.prepare("delete from relations where from_issue = 'I-000001'").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      expect(() =>
+        db.prepare("delete from relations where to_issue = 'I-000001'").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      expect(db.prepare("select count(*) as n from relations").get()).toEqual({ n: 2 });
+      expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 1 });
+
+      // note: Publication's own child sweep lands only once the row is terminal, which is the order
+      // the guard preserves.
+      advanceIssueMove(db, { operationId: "move-one", role: "source", from: "staged", to: "verified" });
+      advanceIssueMove(db, { operationId: "move-one", role: "source", from: "verified", to: "switched" });
+      advanceIssueMove(db, { operationId: "move-one", role: "source", from: "switched", to: "published" });
+      db.prepare("delete from issue_sync_state where local_id = 'I-000001'").run();
+      db.prepare("delete from relations where to_issue = 'I-000001'").run();
+      expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+      expect(
+        db.prepare("select count(*) as n from relations where to_issue = 'I-000001'").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a fenced write names the record's own move while another move is in flight", async () => {
+    // invariant: Critical 5 (review wave 3) — the trigger refusal used to name the record only when
+    // exactly one move was in flight; the write's addressed record now picks its own blocking move
+    // out of several, so the operator resumes the right one.
+    const { db } = await freshLane();
+    try {
+      db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+          "updated_at, identity_key, issue_ref) values ('I-000002', 'p-one', 'Second finding', 'risk', 'low', 'open', " +
+          "'i', 'a', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'second-key', " +
+          "'mstar:issue:22222222-2222-4222-8222-222222222222')",
+      ).run();
+      recordIssueMove(db, sourceRow("mstar:issue:11111111-1111-4111-8111-111111111111", "staged"));
+      recordIssueMove(db, {
+        ...sourceRow("mstar:issue:22222222-2222-4222-8222-222222222222", "staged", "move-two"),
+        sourceIssueId: "I-000002",
+      });
+
+      const trigger = (): unknown => {
+        try {
+          db.prepare("update issues set title = 'blocked' where id = 'I-000002'").run();
+          return null;
+        } catch (error) {
+          return error;
+        }
+      };
+      const refusal = frozenMoveRefusal(db, trigger(), "I-000002");
+      expect(refusal?.message).toContain("issue I-000002 is frozen by move move-two in phase staged");
+      expect(refusal?.details?.blocking_moves).toHaveLength(2);
+
+      // note: A trigger abort for a record that carries no move still falls back to the lane list.
+      const foreign = frozenMoveRefusal(db, new Error("issue.move-in-progress"));
+      expect(foreign?.message).toContain("2 cross-authority moves are in flight");
     } finally {
       db.close();
     }

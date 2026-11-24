@@ -118,7 +118,7 @@ import type { WorkflowEntry } from "./status.js";
 import type { ResidualInput } from "./coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
-import { moveAcrossByDocument, recordIssueMove } from "./cross-authority-move.js";
+import { discardAcrossAuthorities, moveAcrossByDocument, recordIssueMove, remoteMoveOperationId, setMoveGapForTest } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -9571,6 +9571,223 @@ describe("remote move fence", () => {
       ),
     ).rejects.toMatchObject({ code: "issue.move-in-progress" });
     expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+});
+
+describe("remote move conflict settlement", () => {
+  // note: The reviewed-fork fixture for one move tombstone: the tombstone intent is frozen, sent,
+  // answered with a competing fork and left `conflict`, then `outbox-resolve` freezes the reviewed
+  // repair linked through `resolved_by`.
+  async function conflictedTombstone(cache: { commit: string; context: StoreContext; dbPath: string }, operationId: string): Promise<{
+    heads: string[];
+    tombstoneId: string;
+  }> {
+    const tombstoneId = remoteMoveOperationId(operationId, "obsolete");
+    const intent = await readRemoteIntent(cache.context, tombstoneId);
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, tombstoneId));
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    const competing = [
+      {
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01",
+        event: { ...frozen, operationId: "00000000-0000-4000-8000-00000000aaaa", parents: ["8".repeat(64)] },
+      },
+    ];
+    const heads = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, tombstoneId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: competing,
+      }),
+    );
+    return { heads, tombstoneId };
+  }
+
+  test("a repaired tombstone closes the move and blocks discard, exactly as its own confirmation would", async () => {
+    // invariant: Critical 2 (review wave 3) — a conflict is terminal for its own ROW only. Once a
+    // reviewed repair confirms the same tombstone under a different operation id, the move completes
+    // its switch through the `resolved_by` chain, and the discard refuses: the provider record is
+    // already closing, so abandoning the move would strand it.
+    const cache = await outboxCache("move-repair-obsolete");
+    const operationId = "00000000-0000-4000-8000-000000000941";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const doc = staged.document;
+    expect(doc).not.toBeNull();
+
+    const enqueued = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(enqueued?.code).toBe("remote.effect-pending");
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    const repairId = "00000000-0000-4000-8000-000000000942";
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the tombstone",
+      event: { ...frozen, operationId: repairId, parents: heads },
+    });
+    const repairAttempt = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)));
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, (await readRemoteIntent(cache.context, repairId)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee02",
+        event: recordedEvent(cache.dbPath, repairId),
+      }),
+    );
+
+    // invariant: The repaired confirmation IS the tombstone this move needed: the same exchange
+    // advances the source row to `switched` and emits the switch document under the repair's id.
+    const switched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" });
+    expect(switched.phase).toBe("switched");
+    expect(switched.pendingOperationId).toBe(repairId);
+
+    const refused = await discardAcrossAuthorities(cache.context, request).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(refused?.code).toBe("collaboration.move-phase-invalid");
+  }, 30_000);
+
+  test("a reviewed repair that keeps the record open lets the discard and never switches", async () => {
+    // invariant: Critical 2 (review wave 3) — the chain's terminal repair confirmed a DIFFERENT
+    // event that left the record live: the provider record stays authoritative here, so abandoning
+    // the move loses nothing and the exchange must not claim a tombstone that never landed.
+    const cache = await outboxCache("move-repair-open");
+    const operationId = "00000000-0000-4000-8000-000000000943";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const doc = staged.document;
+    expect(doc).not.toBeNull();
+    await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    // note: The reviewed resolution keeps the record authoritative: same carried history, but the
+    // disposition the reviewer confirmed is `open`, not the move's `obsolete`.
+    const repairId = "00000000-0000-4000-8000-000000000944";
+    if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
+    const frozenMstar = frozen.change.mstar;
+    const openEvent = {
+      ...frozen,
+      operationId: repairId,
+      parents: heads,
+      change: {
+        ...frozen.change,
+        mstar: { ...frozenMstar, fields: { ...(frozenMstar.fields as Record<string, unknown>), disposition: "open" } },
+      },
+    };
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the record",
+      event: openEvent as RemoteEvent,
+    });
+    const repairAttempt = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)));
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, (await readRemoteIntent(cache.context, repairId)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee03",
+        event: recordedEvent(cache.dbPath, repairId),
+      }),
+    );
+
+    // invariant: The repaired confirmation did not tombstone the record, so the exchange refuses
+    // the switch as the mismatch it is instead of claiming a tombstone that never landed.
+    const mismatched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(mismatched?.code).toBe("remote.effect-mismatch");
+
+    // invariant: The record never left this authority, so the discard completes instead of
+    // stranding it, and a reissued exchange refuses the switch instead of inventing a tombstone.
+    const discarded = await discardAcrossAuthorities(cache.context, request);
+    expect(discarded.phase).toBe("discarded");
+    const switched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(switched?.code).toBe("collaboration.move-phase-invalid");
+  }, 30_000);
+
+  test("a successor generation carrying the same revision sum inside the stage window refuses as stale", async () => {
+    // invariant: Critical 3 (review wave 3) — the sampled revision sum alone cannot name the
+    // observation the copy was frozen from: a rollover landing between the read and the freeze can
+    // carry the same sum under a successor generation, and only the pinned generation refuses it.
+    const cache = await outboxCache("move-same-sum-rollover");
+    const operationId = "00000000-0000-4000-8000-000000000945";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+
+    const check = positiveCheck();
+    let rolled = false;
+    setMoveGapForTest(async (point) => {
+      if (point !== "stage" || rolled) return;
+      rolled = true;
+      setMoveGapForTest(undefined);
+      // note: The successor lineage is genuine: the publish names the bound generation as its
+      // previous, so the rebind admits it and the new generation holds the same observation sum.
+      const second = cache.fixture.publish(
+        cache.fixture.payload({ generation: 4, previous: { selectorCommit: cache.commit, generation: 3, mode: "remote" }, cutover: FENCED }),
+      );
+      await bindRemoteAuthority(cache.context, { version: 1, selectorCommit: second, generation: 4, checks: [check] });
+      await ingestRemoteObservation(cache.context, observation(check, { selectorCommit: second, generation: 4 }));
+    });
+    const refused = await moveAcrossByDocument(cache.context, request, null).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(refused?.code).toBe("collaboration.observation-stale");
+    // invariant: The refusal staged nothing: the move has no row to resume under this operation id.
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      expect(db.prepare("select count(*) as n from issue_moves where operation_id = ?").get(operationId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
   }, 30_000);
 });
 

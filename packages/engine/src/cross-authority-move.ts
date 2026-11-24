@@ -101,8 +101,11 @@ function moveNullableText(value: unknown, what: string): string | null {
   return moveText(value, what);
 }
 
-function moveCount(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+function moveCount(value: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw corruptMove(`${what} is not a non-negative safe integer`);
+  }
+  return value;
 }
 
 function phaseOf(value: unknown): IssueMovePhase {
@@ -146,8 +149,8 @@ function rowToRecord(row: Record<string, unknown>): IssueMoveRecord {
     payloadDigest: moveText(row.payload_digest, "payload_digest"),
     stagedCounts: moveText(row.staged_counts, "staged_counts"),
     sourceStoreId: moveText(row.source_store_id, "source_store_id"),
-    sourceEpoch: moveCount(row.source_epoch),
-    removedSyncRows: moveCount(row.removed_sync_rows),
+    sourceEpoch: moveCount(row.source_epoch, "source_epoch"),
+    removedSyncRows: moveCount(row.removed_sync_rows, "removed_sync_rows"),
     createdAt: moveText(row.created_at, "created_at"),
     updatedAt: moveText(row.updated_at, "updated_at"),
   };
@@ -284,6 +287,9 @@ export function advanceIssueMove(
   }>,
 ): IssueMoveRecord {
   assertMoveTransition(input.from, input.to);
+  // invariant: A corrupt row is never advanced one more phase before the reader names it: the read
+  // that validates every column runs before the compare-and-set, which stays the atomic replay guard.
+  readIssueMove(db, input.operationId, input.role);
   const result = db
     .prepare(
       "update issue_moves set phase = ?, destination_issue_id = coalesce(?, destination_issue_id), updated_at = ? " +
@@ -679,6 +685,118 @@ async function runMoveTransition(
   });
 }
 
+/** note: The outbox step that actually works in one live state, shared by every pending-intent refusal. */
+function pendingIntentRecovery(operation: string, state: string): string {
+  const outbox = "mstar store collaboration remote";
+  return state === "unconfirmed"
+    ? `Settle the outbox route first: \`${outbox} outbox-receipt --harness <abs> --input <file|->\` records the provider's ` +
+        `answer for the attempt ${operation}, or \`${outbox} outbox-reconcile --harness <abs> --input <file|->\` reconciles ` +
+        `it under its original binding; reissue this move with the same --operation-id once it is settled.`
+    : state === "conflict"
+      ? `Settle the outbox route first: \`${outbox} outbox-resolve --harness <abs> --operation ${operation} --input <file>\` ` +
+        `records the reviewed resolution of the conflicted fork; reissue this move with the same --operation-id once it ` +
+        `is settled.`
+      : `Settle the outbox route first: \`${outbox} outbox-abandon --harness <abs> --operation ${operation} --reason ` +
+        `<text>\` when nothing was sent, otherwise \`${outbox} outbox-dispatch --harness <abs> --operation ${operation}\` ` +
+        `and then \`${outbox} outbox-receipt --harness <abs> --input <file|->\`; reissue this move with the same ` +
+        `--operation-id once it is settled.`;
+}
+
+/**
+ * note: What one move tombstone intent effectively settled to, following its LIVE `resolved_by`
+ * chain exactly as the composite's settlement walk does: a confirmed terminal repair, an abandoned
+ * original that will never produce an effect, or the chain's live leaf — an enqueued, uncertain,
+ * abandoned-repair or still-conflicted replacement whose state names the step that settles it. A
+ * conflict is terminal for its own row only: a reviewed repair confirms a DIFFERENT operation linked
+ * through `resolved_by`, so the raw row alone never answers whether the record left this authority.
+ */
+type TombstoneSettlement =
+  | { kind: "confirmed"; operationId: string; obsolete: boolean }
+  | { kind: "abandoned"; operationId: string }
+  | { kind: "live"; operationId: string; state: string }
+  | { kind: "none" };
+
+/** note: Whether the confirmed terminal repair closed this record `obsolete`, read from its receipt. */
+function confirmedObsolete(db: StoreDb, operationId: string): boolean {
+  const receipt = db
+    .prepare(
+      "select evidence_json from remote_outbox_receipts where operation_id = ? and outcome = 'confirmed' " +
+        "order by recorded_at, receipt_hash limit 1",
+    )
+    .get(operationId) as { evidence_json?: unknown } | undefined;
+  if (receipt === undefined || typeof receipt.evidence_json !== "string") {
+    // invariant: A confirmed state without its own readable receipt proves nothing — the composite's
+    // same rule; treating it as evidence would let a bare UPDATE settle the move.
+    throw new StoreError(
+      "collaboration.unreadable",
+      `Operation ${operationId} is confirmed but holds no readable confirmed receipt, so whether it closed the record ` +
+        `is unproven; reconcile it with \`mstar store collaboration remote outbox-reconcile --harness <abs> ` +
+        `--input <file|->\` before this move proceeds. Nothing was modified.`,
+      { operationId },
+    );
+  }
+  let evidence: unknown;
+  try {
+    evidence = JSON.parse(receipt.evidence_json);
+  } catch {
+    throw new StoreError(
+      "collaboration.unreadable",
+      `Operation ${operationId} holds a confirmed receipt the contract cannot read; nothing was modified.`,
+      { operationId },
+    );
+  }
+  const outcome = isRecordLike(evidence) ? evidence.outcome : undefined;
+  const event = isRecordLike(outcome) ? outcome.event : undefined;
+  const change = isRecordLike(event) ? event.change : undefined;
+  const mstar = isRecordLike(change) ? change.mstar : undefined;
+  const fields = isRecordLike(mstar) ? mstar.fields : undefined;
+  return (
+    isRecordLike(outcome) &&
+    outcome.kind === "confirmed" &&
+    isRecordLike(change) &&
+    change.kind === "issue-replace" &&
+    isRecordLike(fields) &&
+    fields.disposition === "obsolete"
+  );
+}
+
+/** note: An object-shaped value; the receipt's own contract validates the members this walk reads. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** note: The tombstone chain walk: from one move's outbox id to its effective settlement. */
+function tombstoneSettlement(db: StoreDb, operationId: string): TombstoneSettlement {
+  const visited = new Set<string>();
+  let cursor: string | null = operationId;
+  let fork: string | null = null;
+  for (;;) {
+    if (cursor === null) {
+      return fork === null ? { kind: "none" } : { kind: "live", operationId: fork, state: "conflict" };
+    }
+    if (visited.has(cursor)) return { kind: "live", operationId: fork ?? cursor, state: "conflict" };
+    visited.add(cursor);
+    const row = db
+      .prepare("select state, resolved_by from remote_outbox where operation_id = ?")
+      .get(cursor) as { state?: unknown; resolved_by?: unknown } | undefined;
+    if (row === undefined) return fork === null ? { kind: "none" } : { kind: "live", operationId: fork, state: "conflict" };
+    const state = typeof row.state === "string" ? row.state : null;
+    if (state === null) return { kind: "live", operationId: cursor, state: "?" };
+    if (state === "confirmed") return { kind: "confirmed", operationId: cursor, obsolete: confirmedObsolete(db, cursor) };
+    if (state === "abandoned") {
+      // invariant: An abandoned ORIGINAL never acquires a successor; an abandoned REPAIR withdraws
+      // only that repair, so the fork it addressed is the live leaf a replacement still resolves.
+      return fork === null
+        ? { kind: "abandoned", operationId: cursor }
+        : { kind: "live", operationId: fork, state: "conflict" };
+    }
+    if (state !== "conflict") return { kind: "live", operationId: cursor, state };
+    // note: An unresolved conflict's live leaf is the row itself; a linked repair is walked next.
+    fork = cursor;
+    cursor = typeof row.resolved_by === "string" ? row.resolved_by : null;
+  }
+}
+
 /**
  * note: A provider intent frozen for this record is an admitted mirror write the host may already
  * have sent; staging a move would publish the record out from under it. `confirmed` and `abandoned`
@@ -699,20 +817,7 @@ function assertNoPendingIntent(db: StoreDb, issueRef: string): void {
   const first = pending[0] ?? {};
   const operation = typeof first.operation_id === "string" ? first.operation_id : "?";
   const state = typeof first.state === "string" ? first.state : "?";
-  const outbox = "mstar store collaboration remote";
-  const recovery =
-    state === "unconfirmed"
-      ? `Settle the outbox route first: \`${outbox} outbox-receipt --harness <abs> --input <file|->\` records the provider's ` +
-        `answer for the attempt ${operation}, or \`${outbox} outbox-reconcile --harness <abs> --input <file|->\` reconciles ` +
-        `it under its original binding; reissue this move with the same --operation-id once it is settled.`
-      : state === "conflict"
-        ? `Settle the outbox route first: \`${outbox} outbox-resolve --harness <abs> --operation ${operation} --input <file>\` ` +
-          `records the reviewed resolution of the conflicted fork; reissue this move with the same --operation-id once it ` +
-          `is settled.`
-        : `Settle the outbox route first: \`${outbox} outbox-abandon --harness <abs> --operation ${operation} --reason ` +
-          `<text>\` when nothing was sent, otherwise \`${outbox} outbox-dispatch --harness <abs> --operation ${operation}\` ` +
-          `and then \`${outbox} outbox-receipt --harness <abs> --input <file|->\`; reissue this move with the same ` +
-          `--operation-id once it is settled.`;
+  const recovery = pendingIntentRecovery(operation, state);
   throw new StoreError(
     "remote.effect-pending",
     `${issueRef} holds ${String(pending.length)} pending provider intent(s) (oldest ${operation} is ${state}); staging this ` +
@@ -971,36 +1076,43 @@ function assertObservedBase(observed: ObservedMoveSubject, request: MoveRequest)
 }
 
 /**
- * invariant: A remote lane's store revision is its observation sum over the ADMITTED generation
- * only — the number `issue list` reports there, read from the same `remote_bindings` join the view
- * serves. Rows a superseded selector generation left behind are not this cache's evidence, so
- * counting them would name a base the caller never read and refuse every move after a rollover.
+ * invariant: A remote lane's observation base is the sum over the ADMITTED generation only — the
+ * number `issue list` reports there, read from the same `remote_bindings` join the view serves —
+ * together with the generation that sum was sampled under. Rows a superseded selector generation
+ * left behind are not this cache's evidence: counting them would name a base the caller never read,
+ * and a rollover whose successor carries the same sum would otherwise pass a stale copy through.
  */
-function observedStoreRevision(db: StoreDb): number {
+function observedStoreBase(db: StoreDb): { generation: number | null; revision: number } {
   const row = db
     .prepare(
-      "select coalesce(sum(o.revision), 0) as n " +
+      "select coalesce(sum(o.revision), 0) as n, max(b.generation) as generation " +
         "from remote_bindings b left join remote_observations o on o.generation = b.generation and o.project_key = b.project_key " +
         "where b.generation = (select max(generation) from remote_bindings)",
     )
-    .get() as { n?: unknown };
-  return typeof row.n === "number" ? row.n : 0;
+    .get() as { n?: unknown; generation?: unknown };
+  return {
+    generation: typeof row.generation === "number" ? row.generation : null,
+    revision: typeof row.n === "number" ? row.n : 0,
+  };
 }
 
 /**
  * invariant: The observation the copy was frozen from is re-read inside the write transaction that
  * records the row: an observation replaced in between is a base this move never saw, and freezing it
- * would carry bytes the caller's revision does not describe.
+ * would carry bytes the caller's revision does not describe. The generation is pinned beside the
+ * sum: a rollover completing in this window can carry the SAME revision sum under a successor
+ * generation, and only the pinned generation names the sample the copy was frozen from.
  */
-function assertObservationUnchanged(db: StoreDb, sampledStoreRevision: number): void {
-  const current = observedStoreRevision(db);
-  if (current === sampledStoreRevision) return;
+function assertObservationUnchanged(db: StoreDb, sampled: { generation: number | null; storeRevision: number }): void {
+  const current = observedStoreBase(db);
+  if (current.generation === sampled.generation && current.revision === sampled.storeRevision) return;
   throw new StoreError(
     "collaboration.observation-stale",
     `The observation this move read was replaced while it was being staged (store revision ` +
-      `${String(sampledStoreRevision)} is now ${String(current)}), so the copy it froze is no longer what this cache ` +
-      `holds. Nothing was staged.`,
-    { expectedStoreRevision: sampledStoreRevision, actualStoreRevision: current },
+      `${String(sampled.storeRevision)} under generation ${String(sampled.generation)} is now ${String(current.revision)} ` +
+      `under generation ${String(current.generation)}), so the copy it froze is no longer what this cache holds. ` +
+      `Nothing was staged.`,
+    { expectedStoreRevision: sampled.storeRevision, actualStoreRevision: current.revision },
   );
 }
 
@@ -1011,7 +1123,7 @@ function assertObservationUnchanged(db: StoreDb, sampledStoreRevision: number): 
  */
 function assertRemoteStoreBase(db: StoreDb, request: MoveRequest): void {
   if (request.expectedStoreRevision === undefined) return;
-  const current = observedStoreRevision(db);
+  const current = observedStoreBase(db).revision;
   if (request.expectedStoreRevision === current) return;
   throw issueRefusal(
     "milestone.revision-conflict",
@@ -1794,30 +1906,33 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
     // the provider record is already obsolete and the destination's admission is the only remaining
     // copy. An unsettled intent is refused the same way: abandoning the move while the provider may
     // still apply the tombstone would open the same window.
-    const tombstone = await readOwnLane(context, (db) =>
-      db
-        .prepare("select state from remote_outbox where operation_id = ?")
-        .get(remoteMoveOperationId(request.operationId, "obsolete")) as { state?: unknown } | undefined,
+    const settlement = await readOwnLane(context, (db) =>
+      tombstoneSettlement(db, remoteMoveOperationId(request.operationId, "obsolete")),
     );
-    if (tombstone !== undefined && tombstone.state !== "abandoned") {
-      const state = typeof tombstone.state === "string" ? tombstone.state : "?";
+    if (settlement.kind === "confirmed" && !settlement.obsolete) {
+      // invariant: A reviewed repair confirmed a DIFFERENT event for the fork this tombstone hit:
+      // the terminal replacement kept the record live, so it is still authoritative here and
+      // abandoning the move loses nothing — only a settled tombstone would strand the record.
+    } else if (settlement.kind === "abandoned" || settlement.kind === "none") {
+      // note: No tombstone effect can ever land; the record never closed.
+    } else {
+      const leaf = settlement.operationId;
+      const state = settlement.kind === "confirmed" ? "confirmed" : settlement.state;
       throw new StoreError(
         "collaboration.move-phase-invalid",
-        `Move ${request.operationId} froze its provider tombstone and that intent is ${state}: the provider record is ` +
-          `already closing and the destination's admission is the only remaining copy, so abandoning this move here ` +
-          `would strand the record. Nothing was modified.`,
+        `Move ${request.operationId} froze its provider tombstone and its effective intent ${leaf} is ${state}: the ` +
+          `provider record is already closing and the destination's admission is the only remaining copy, so abandoning ` +
+          `this move here would strand the record. Nothing was modified.`,
         {
           operation_id: request.operationId,
           phase: row.phase,
           tombstone_state: state,
           recovery:
-            state === "confirmed"
+            settlement.kind === "confirmed"
               ? "Finish the move instead: reissue it with the destination's `staged` handoff so this side emits its " +
                 "`switch` document, then admit with that document in the destination checkout."
-              : `Settle the tombstone intent first: abandon it with \`mstar store collaboration remote outbox-abandon ` +
-                `--harness <abs> --operation ${remoteMoveOperationId(request.operationId, "obsolete")} --reason <text>\` ` +
-                `when nothing was sent, otherwise dispatch it and record the provider's receipt; then reissue this ` +
-                `--discard before the destination admits the record.`,
+              : `Settle the tombstone intent first: ${pendingIntentRecovery(leaf, state)} Then reissue this --discard ` +
+                `before the destination admits the record.`,
         },
       );
     }
@@ -1912,7 +2027,7 @@ async function receiptOf(
  * `collaboration.operation-partial` naming the move -- the operator then resumes or discards it
  * instead of retrying a write that can never land.
  */
-export function frozenMoveRefusal(db: StoreDb, cause: unknown): StoreError | null {
+export function frozenMoveRefusal(db: StoreDb, cause: unknown, recordId?: string): StoreError | null {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (!message.includes("issue.move-in-progress")) return null;
   const rows = db
@@ -1926,7 +2041,10 @@ export function frozenMoveRefusal(db: StoreDb, cause: unknown): StoreError | nul
     source_issue_id: row.sourceIssueId,
     phase: row.phase,
   }));
-  const named = records.length === 1 ? records[0]! : null;
+  // invariant: The record this write addressed names its own blocking move even while OTHER moves are
+  // in flight beside it; only a write that names no record falls back to the lane-wide count.
+  const own = recordId === undefined ? null : records.find((row) => row.sourceIssueId === recordId);
+  const named = own ?? (records.length === 1 ? records[0]! : null);
   return new StoreError(
     "collaboration.operation-partial",
     `This write met \`issue.move-in-progress\`: ` +
@@ -2676,10 +2794,13 @@ export async function exchangeRemoteSource(
     const copy = moveCopyOfRemoteSubject(observed);
     const counts = countsOfRemoteSubject(observed);
     const payloadJson = JSON.stringify(copy);
+    await moveGapForTest?.("stage");
     await writeOwnLaneRow(context, (db, lane) => {
       if (readIssueMove(db, request.operationId, "source") !== null) return;
-      // note: checked inside the write transaction, so a refusal leaves no `staged` row behind.
-      assertObservationUnchanged(db, observed.storeRevision);
+      // note: checked inside the write transaction, so a refusal leaves no `staged` row behind. The
+      // sampled GENERATION travels with the sum: a rollover landing in this window can carry the
+      // same revision sum, and only the pinned generation refuses it.
+      assertObservationUnchanged(db, { generation: observed.generation, storeRevision: observed.storeRevision });
       assertNoPendingIntent(db, observed.issueRef);
       recordIssueMove(db, {
         operationId: request.operationId,
@@ -2787,8 +2908,9 @@ async function observeRemoteSubject(context: StoreContext, request: MoveRequest)
   return {
     issueRef: detail.issueRef ?? request.sourceIssueId,
     projectId: detail.projectId,
-    // note: the revision every counted remote read reports as `storeRevision`; the caller's base is
-    // compared against it, and the freeze re-proves it has not moved.
+    // note: the generation and revision every counted remote read reports: the caller's base is
+    // compared against them, and the freeze re-proves the sample has not moved.
+    generation: view.generation,
     storeRevision: view.revision,
     fields: {
       title: detail.title,
@@ -2879,28 +3001,87 @@ async function tombstoneRemoteSource(
     },
   });
   const intent = frozenIntent(outcome);
-  if (intent.confirmed === null) throw pendingRemoteEffect(intent);
-  const confirmed = intent.confirmed.event;
-  if (confirmed.change.kind === "project-replace") {
-    throw new StoreError(
-      "remote.effect-mismatch",
-      `The confirmed replacement of ${source.issueRef} is a project event, not the issue tombstone this move froze. Nothing ` +
-        `was switched.`,
-      { operation_id: request.operationId, issueRef: source.issueRef },
-    );
+  let confirmedTombstone = intent.operationId;
+  if (intent.confirmed === null) {
+    // invariant: The intent's own row is not the whole answer: a conflict is terminal for that row
+    // only, and the reviewed resolution confirms a DIFFERENT operation linked through `resolved_by`.
+    // The move follows the LIVE chain to its leaf exactly as the composite's settlement walk does, so
+    // a compatible repair still completes it and an incompatible one names the discard instead of
+    // freezing the source forever.
+    const settlement = await readOwnLane(context, (db) => tombstoneSettlement(db, operationId));
+    if (settlement.kind === "confirmed") {
+      if (!settlement.obsolete) {
+        throw new StoreError(
+          "remote.effect-mismatch",
+          `The reviewed repair ${settlement.operationId} of this move's conflicted tombstone confirmed a replacement that ` +
+            `does not close ${source.issueRef} obsolete, so the source record is still authoritative in this authority ` +
+            `and the move has no tombstone to switch on. Nothing was switched.`,
+          {
+            operation_id: request.operationId,
+            issueRef: source.issueRef,
+            resolved_by: settlement.operationId,
+            recovery:
+              "Discard the move instead: reissue it with --discard and the same --operation-id; the source record stays " +
+              "the authority's live copy because the reviewed repair kept it open.",
+          },
+        );
+      }
+      confirmedTombstone = settlement.operationId;
+    } else if (settlement.kind === "abandoned") {
+      // note: `abandoned` is settled for the outbox, so `effect-pending` cannot name it; the
+      // tombstone effect this move needed will never land, which is the mismatch family — the
+      // details and recovery say so explicitly and name the discard as the way out.
+      throw new StoreError(
+        "remote.effect-mismatch",
+        `This move's tombstone intent ${settlement.operationId} was abandoned, so its provider tombstone can never land ` +
+          `and the move has no switch to complete. Nothing was switched.`,
+        {
+          operation_id: request.operationId,
+          issueRef: source.issueRef,
+          recovery:
+            "Discard the move instead: reissue it with --discard and the same --operation-id; the abandoned intent " +
+            "left the source record the authority's live copy.",
+        },
+      );
+    } else if (settlement.kind === "live") {
+      throw new StoreError(
+        "remote.effect-pending",
+        `This move's tombstone intent is unsettled: its effective outbox operation ${settlement.operationId} is ` +
+          `${settlement.state}. Nothing was switched.`,
+        {
+          operation_id: request.operationId,
+          operationId: settlement.operationId,
+          state: settlement.state,
+          recovery: `${pendingIntentRecovery(settlement.operationId, settlement.state)}`,
+        },
+      );
+    } else {
+      throw pendingRemoteEffect(intent);
+    }
   }
-  if ((confirmed.change.mstar.fields as Record<string, unknown>).disposition !== "obsolete") {
-    throw new StoreError(
-      "remote.effect-mismatch",
-      `The confirmed replacement of ${source.issueRef} does not close it obsolete, so the source tombstone this move needs ` +
-        `is not what landed. Nothing was switched.`,
-      { operation_id: request.operationId, issueRef: source.issueRef },
-    );
+  if (intent.confirmed !== null) {
+    const confirmed = intent.confirmed.event;
+    if (confirmed.change.kind === "project-replace") {
+      throw new StoreError(
+        "remote.effect-mismatch",
+        `The confirmed replacement of ${source.issueRef} is a project event, not the issue tombstone this move froze. ` +
+          `Nothing was switched.`,
+        { operation_id: request.operationId, issueRef: source.issueRef },
+      );
+    }
+    if ((confirmed.change.mstar.fields as Record<string, unknown>).disposition !== "obsolete") {
+      throw new StoreError(
+        "remote.effect-mismatch",
+        `The confirmed replacement of ${source.issueRef} does not close it obsolete, so the source tombstone this move ` +
+          `needs is not what landed. Nothing was switched.`,
+        { operation_id: request.operationId, issueRef: source.issueRef },
+      );
+    }
   }
   await writeOwnLaneRow(context, (db) => {
     advanceRowTo(db, request.operationId, "source", "switched");
   });
-  return intent.operationId;
+  return confirmedTombstone;
 }
 
 /**
@@ -3042,6 +3223,8 @@ async function writeDestinationRow(
 export type ObservedMoveSubject = Readonly<{
   projectId: string;
   issueRef: string;
+  /** note: The selector generation the subject was read under; the freeze re-proves it still admits this cache. */
+  generation: number;
   /** note: The observation revision the copy was read at: the store revision `issue list` reports here. */
   storeRevision: number;
   fields: Record<string, unknown>;
