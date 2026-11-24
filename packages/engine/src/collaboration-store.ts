@@ -2118,9 +2118,14 @@ async function replaceDerivedLaneBelow(
           withdrawn("<repair-uuid>");
       }
       if (repair.state === "conflict") {
-        return shown("<uuid>") + "; its repair is itself a conflict, and an abandon of a conflict row is refused " +
-          "outright: follow that repair's own resolvedBy link with " + showCommand("<repair-uuid>") +
-          " and settle THAT conflict before preparing another repair";
+        // why: A conflict row itself accepts `outbox-resolve`, while its parent does not while
+        // this repair is linked and no abandon ever applies to a conflict row: the route is to
+        // settle the REPAIR row, and the parent settles once the chain reaches a confirmed repair.
+        return shown("<uuid>") + "; its repair is itself a conflict row, so prepare the reviewed replacement of " +
+          "THAT repair row with `" + cli("outbox-resolve") + " --harness <abs> --operation <repair-uuid> --input <file>`" +
+          " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +
+          " and record its confirming receipt with " + evidenced() +
+          "; the parent settles once its repair chain reaches a confirmed repair that holds its recorded receipt";
       }
       return shown("<uuid>") + ". It carries no live repair, so prepare one with " + resolved() +
         " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +

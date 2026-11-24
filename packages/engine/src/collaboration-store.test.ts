@@ -10439,15 +10439,19 @@ describe("pre-v3 remote cache recovery", () => {
         absentInConflictLine: ["outbox-reconcile"],
       },
       {
-        // note: A conflict repair is not withdrawable at all: its own resolvedBy link is the route.
+        // note: The repair row is itself a conflict, so outbox-resolve accepts IT; resolving the
+        // parent would refuse while this repair is linked, and no abandon applies to a conflict row.
+        // The parent settles only once the chain reaches a confirmed repair.
         repairState: "conflict",
         exact: [
-          "its repair is itself a conflict, and an abandon of a conflict row is refused outright: follow that " +
-            "repair's own resolvedBy link with `mstar store collaboration remote outbox-show --harness <abs> " +
-            "--operation <repair-uuid>`",
-          "and settle THAT conflict before preparing another repair",
+          "its repair is itself a conflict row, so prepare the reviewed replacement of THAT repair row with " +
+            "`mstar store collaboration remote outbox-resolve --harness <abs> --operation <repair-uuid> --input <file>`",
+          "a resolve only enqueues the repair - then dispatch it with `mstar store collaboration remote " +
+            "outbox-dispatch --harness <abs> --operation <new-uuid> --input <file|->`",
+          "record its confirming receipt with `mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->`",
+          "the parent settles once its repair chain reaches a confirmed repair that holds its recorded receipt",
         ],
-        absentInConflictLine: ["--operation <repair-uuid> --reason <text>"],
+        absentInConflictLine: ["--operation <repair-uuid> --reason <text>", "outbox-abandon", "--operation <conflicted-uuid>"],
       },
       {
         // invariant: A link this scope cannot honor is named as DAMAGED, never as an absent repair: a
