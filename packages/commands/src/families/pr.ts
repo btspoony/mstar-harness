@@ -291,7 +291,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       : `the confirmation record does not authorize a merge on ${head}`,
     details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems },
     // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
-    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider <id> --confirm <file>, passing the provider id this run selected.`,
+    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider <id> --confirm <file>, passing the provider id this invocation selected.`,
   });
 }
 

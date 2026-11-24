@@ -173,7 +173,7 @@ describe("pr merge-gate", () => {
     // why: a retry without the flag would rescan through the GitHub adapter.
     const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
     expect(recovery).toContain("mstar pr merge-gate --pr <number> --provider <id> --confirm <file>");
-    expect(recovery).toContain("passing the provider id this run selected");
+    expect(recovery).toContain("passing the provider id this invocation selected");
   });
 
   test("a missing provider executable names the tool from the error's executable field or its message", async () => {
