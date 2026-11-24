@@ -679,10 +679,44 @@ async function runMoveTransition(
   });
 }
 
-/** note: The pending-mirror and freeze preconditions of `stage`, stated once, inside the effect's transaction. */
+/**
+ * note: A provider intent frozen for this record is an admitted mirror write the host may already
+ * have sent; staging a move would publish the record out from under it. `confirmed` and `abandoned`
+ * are settled, so only the three live states refuse. One helper states it for both stage paths.
+ */
+function assertNoPendingIntent(db: StoreDb, issueRef: string): void {
+  const pending = db
+    .prepare(
+      "select operation_id, state from remote_outbox where state in ('enqueued','unconfirmed','conflict') " +
+        "and json_extract(request_json, '$.event.change.issueRef') = ? order by created_at, operation_id",
+    )
+    .all(issueRef) as Array<{ operation_id?: unknown; state?: unknown }>;
+  if (pending.length === 0) return;
+  const first = pending[0] ?? {};
+  const operation = typeof first.operation_id === "string" ? first.operation_id : "?";
+  const state = typeof first.state === "string" ? first.state : "?";
+  throw new StoreError(
+    "remote.effect-pending",
+    `${issueRef} holds ${String(pending.length)} pending provider intent(s) (oldest ${operation} is ${state}); staging this ` +
+      `move would publish the record while the provider may already hold that write. Nothing was staged.`,
+    {
+      issue_ref: issueRef,
+      pending_intents: pending.length,
+      operationId: operation,
+      state,
+      recovery:
+        `Settle the outbox route first: \`mstar store collaboration remote outbox-abandon --harness <abs> --operation ` +
+        `${operation} --reason <text>\` when nothing was sent, otherwise \`... outbox-dispatch\`, then \`... ` +
+        `outbox-receipt --input <file|->\` (and \`... outbox-resolve\` for a conflict); reissue this move with the same ` +
+        `--operation-id once it is settled.`,
+    },
+  );
+}
+
+/** note: The pending-mirror, pending-intent and freeze preconditions of `stage`, stated once, inside the effect's transaction. */
 function assertStageable(db: StoreDb, request: MoveRequest): void {
-  const issue = db.prepare("select id, project_id from issues where id = ?").get(request.sourceIssueId) as
-    | { id: string; project_id: string }
+  const issue = db.prepare("select id, project_id, issue_ref from issues where id = ?").get(request.sourceIssueId) as
+    | { id: string; project_id: string; issue_ref: string }
     | undefined;
   if (issue === undefined) {
     throw new IssueError("issue.not-found", `Issue ${request.sourceIssueId} does not exist in this authority`);
@@ -694,20 +728,22 @@ function assertStageable(db: StoreDb, request: MoveRequest): void {
     "select count(*) as n from issue_sync_state where local_id = ? and item_state = 'pending'",
     request.sourceIssueId,
   );
-  if (pending === 0) return;
-  throw new StoreError(
-    "collaboration.cutover-not-quiescent",
-    `Issue ${request.sourceIssueId} holds ${String(pending)} pending mirror row(s); publishing this move would delete them ` +
-      `with the record and strand a delivery the provider may already hold. Nothing was staged.`,
-    {
-      issue_id: request.sourceIssueId,
-      pending_rows: pending,
-      recovery:
-        `Settle the mirror first: run \`mstar issue-sync pending --project ${issue.project_id}\` and record the outcome with ` +
-        `\`mstar issue-sync apply --project ${issue.project_id} --results <file|->\`, then reissue this move with the same ` +
-        `--operation-id.`,
-    },
-  );
+  if (pending > 0) {
+    throw new StoreError(
+      "collaboration.cutover-not-quiescent",
+      `Issue ${request.sourceIssueId} holds ${String(pending)} pending mirror row(s); publishing this move would delete them ` +
+        `with the record and strand a delivery the provider may already hold. Nothing was staged.`,
+      {
+        issue_id: request.sourceIssueId,
+        pending_rows: pending,
+        recovery:
+          `Settle the mirror first: run \`mstar issue-sync pending --project ${issue.project_id}\` and record the outcome with ` +
+          `\`mstar issue-sync apply --project ${issue.project_id} --results <file|->\`, then reissue this move with the same ` +
+          `--operation-id.`,
+      },
+    );
+  }
+  assertNoPendingIntent(db, issue.issue_ref);
 }
 
 /**
@@ -2237,6 +2273,8 @@ export async function exchangeRemoteSource(
     const payloadJson = JSON.stringify(copy);
     await writeOwnLaneRow(context, (db, lane) => {
       if (readIssueMove(db, request.operationId, "source") !== null) return;
+      // note: checked inside the write transaction, so a refusal leaves no `staged` row behind.
+      assertNoPendingIntent(db, observed.issueRef);
       recordIssueMove(db, {
         operationId: request.operationId,
         role: "source",

@@ -12,6 +12,7 @@
  * `IssueRef` both sides carry, and the selector generation the move never touches.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import {
   FIXTURE_ISSUE_ID,
   REMOTE_PROJECT,
@@ -121,6 +122,19 @@ function localHost(fixture: RemoteCollaborationFixture, name = "local"): RemoteS
 /** note: The selector generation both sides observe, so a move is proved not to advance it. */
 function generation(sandbox: RemoteSandbox): unknown {
   return sandbox.status().data.binding;
+}
+
+/** note: The structured facts a refusal carries, narrowed from the envelope instead of cast. */
+function refusalDetails(command: SandboxCommand): Record<string, unknown> {
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(command.result.stdout);
+  } catch {
+    return {};
+  }
+  if (typeof envelope !== "object" || envelope === null || !("details" in envelope)) return {};
+  const details = envelope.details;
+  return typeof details === "object" && details !== null && !Array.isArray(details) ? (details as Record<string, unknown>) : {};
 }
 
 describe("cross-authority move through two checkouts", () => {
@@ -446,7 +460,86 @@ describe("cross-authority move through two checkouts", () => {
     }
   }, 240_000);
 
-  test("remote to remote still refuses collaboration.mode-unavailable", () => {
+  test("a remote record with a live provider intent refuses to stage, and stages once the intent is abandoned", () => {
+    // invariant: The spec's stage precondition, at the shipped boundary: a `remote_outbox` intent whose
+    // frozen event carries the record's reference refuses the remote source's `stage` with
+    // `remote.effect-pending`, because the provider may already hold that write. The refusal happens
+    // inside the lane's write transaction, so no `staged` row and no handoff exist afterwards.
+    const fixture = host("intent-pending");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const destination = localHost(fixture);
+      const moveArgs = [
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+      ];
+
+      // note: One ordinary remote write freezes a live `issue-replace` for this same reference.
+      const triage = source.runJson([
+        "issue", "triage",
+        "--id", FIXTURE_REF,
+        "--payload", JSON.stringify({ reason: "reclassified before the move", severity: "low" }),
+        "--expect", "2",
+        "--project", REMOTE_PROJECT.localProjectId,
+        "--actor", "project-manager",
+        "--operation-id", "22222222-2222-4222-8222-222222222222",
+      ]);
+      expect(triage.exitCode).toBe(1);
+      expect(triage.code).toBe("remote.effect-pending");
+      const triageOperation = String(refusalDetails(triage).operationId);
+
+      // invariant: The move refuses on that intent, before the source row is written.
+      const requestPath = source.outPath("request");
+      const refused = source.runJson([...moveArgs, "--out", requestPath]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.code).toBe("remote.effect-pending");
+      const details = refusalDetails(refused);
+      expect(details).toMatchObject({ issue_ref: FIXTURE_REF, pending_intents: 1, operationId: triageOperation, state: "enqueued" });
+      expect(String(details.recovery)).toContain("outbox-abandon");
+      // invariant: nothing was staged: the handoff file the stage would have written does not exist.
+      expect(existsSync(requestPath)).toBe(false);
+
+      // note: Settling the outbox route is the documented recovery, and the SAME command then stages.
+      const abandoned = source.runJson([
+        ...REMOTE, "outbox-abandon", "--harness", source.harness,
+        "--operation", triageOperation, "--reason", "superseded by the move",
+      ]);
+      expect(abandoned.result.stderr).toBe("");
+      expect(abandoned.exitCode).toBe(0);
+      expect(abandoned.data.state).toBe("abandoned");
+      const staged = source.runJson([...moveArgs, "--out", requestPath]);
+      expect(staged.result.stderr).toBe("");
+      expect(staged.exitCode).toBe(0);
+      expect(staged.data).toMatchObject({ phase: "staged", side: "source", issueRef: FIXTURE_REF });
+      expect(source.readOut(requestPath)).toMatchObject({ phase: "request", issueRef: FIXTURE_REF });
+
+      // note: the destination half still works on the row this stage wrote.
+      const verified = destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+      ]);
+      expect(verified.result.stderr).toBe("");
+      expect(verified.exitCode).toBe(0);
+      expect(verified.data).toMatchObject({ phase: "verified", side: "destination" });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a remote to remote move still refuses collaboration.mode-unavailable", () => {
     const fixture = host("remote-to-remote");
     try {
       fixture.publish(1);

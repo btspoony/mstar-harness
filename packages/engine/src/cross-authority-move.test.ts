@@ -449,6 +449,27 @@ function readIssueMoveReference(db: StoreDb, issueId: string): string {
   return columnOf(db, "select issue_ref from issues where id = ?", "issue_ref", issueId);
 }
 
+/**
+ * note: One durable provider intent for a record, planted with the binding row its foreign key
+ * requires. Only a `remote` lane ever writes these; the fixture builds the row directly so a
+ * stage precondition can be proved without a provider round trip.
+ */
+function seedOutboxIntent(db: StoreDb, issueRef: string, operationId: string, state: "enqueued" | "unconfirmed" | "conflict"): void {
+  db.prepare(
+    "insert or ignore into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+      "provider_project_id, journal_issue_id, writer_id, verified_at, verification_json) " +
+      "values (1, 'p-source', ?, 'linear', 'ws', 'team', 'provider-project', 'journal-issue', null, ?, '{}')",
+  ).run("a".repeat(40), "2026-11-21T00:00:00.000Z");
+  db.prepare(
+    "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
+      "values (?, 1, 'p-source', 'hash', ?, ?, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+  ).run(
+    operationId,
+    JSON.stringify({ event: { change: { kind: "issue-replace", issueRef } }, target: "provider-issue" }),
+    state,
+  );
+}
+
 describe("cross-authority move phase engine", () => {
   test("stage carries the same issue_ref and every child row into the destination lane", async () => {
     const { context, db } = await sourceCheckout();
@@ -940,6 +961,46 @@ describe("cross-authority move phase engine", () => {
       expect(refused?.details?.recovery).toEqual(expect.stringContaining("--expect-store"));
       expect(recordImage(db, issueId)).toEqual(before);
       expect(readIssueMove(db, "move-store-stale", "source")).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a record holding a pending provider intent refuses to stage, and stages once it is settled", async () => {
+    // invariant: The spec's stage precondition — a live `remote_outbox` intent for this record's
+    // reference refuses with `remote.effect-pending`, because the provider may already hold that
+    // write. The refusal leaves the record unfrozen and records no move row.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const issueRef = readIssueMoveReference(db, issueId);
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-intent-pending",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "cross",
+      };
+      seedOutboxIntent(db, issueRef, "intent-ahead", "enqueued");
+      const refused = await moveAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("remote.effect-pending");
+      expect(refused?.details).toMatchObject({ issue_ref: issueRef, pending_intents: 1, operationId: "intent-ahead", state: "enqueued" });
+      expect(refused?.details?.recovery).toEqual(expect.stringContaining("outbox-receipt"));
+      // invariant: Nothing was staged and nothing was frozen: no move row, identical record, writable.
+      expect(readIssueMove(db, request.operationId, "source")).toBeNull();
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(() => assertRecordWritable(db, issueId)).not.toThrow();
+      // note: A settled intent no longer refuses — only the three live states do.
+      db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run("intent-ahead");
+      const staged = await stageMove(context, request);
+      expect(staged).toBeUndefined();
+      expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
     } finally {
       db.close();
     }
