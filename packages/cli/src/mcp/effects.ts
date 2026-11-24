@@ -79,7 +79,11 @@ function spawnBounded(request: ProcessRequest): Promise<ProcessResult> {
         stdio: [request.stdin !== undefined ? "pipe" : request.stdinMode === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      reject(error);
+      // see packages/commands/src/effects/process.ts
+      // Sync ENOENT carries the same contract as the error-event path below.
+      if (error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(Object.assign(error, { code: "process.not-found", exitCode: 127, executable: request.argv[0] }));
+      } else reject(error);
       return;
     }
     const stdout: Buffer[] = [];
@@ -121,7 +125,11 @@ function spawnBounded(request: ProcessRequest): Promise<ProcessResult> {
       if (settled) return;
       settled = true;
       cleanup();
-      if (error.code === "ENOENT") reject(Object.assign(error, { code: "process.not-found", exitCode: 127 }));
+      // see packages/commands/src/effects/process.ts
+      // why: consumers read the missing binary from the shared `executable`
+      // field (the raw spawn message varies by platform), so MCP must set it
+      // the same way spawnProcess does.
+      if (error.code === "ENOENT") reject(Object.assign(error, { code: "process.not-found", exitCode: 127, executable: request.argv[0] }));
       else reject(error);
     });
     child.once("close", (exitCode, signal) => {

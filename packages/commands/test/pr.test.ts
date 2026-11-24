@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
+import { registerMergeGateProvider, type MergeGateProvider } from "../src/families/pr.js";
 import type { CommandDefinition, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -88,7 +89,7 @@ describe("pr merge-gate", () => {
     const unreadable = await gate.execute({ pr: "42", confirm: cwd }, context);
     expect(unreadable).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(unreadable.status === "ok" ? "" : unreadable.message).toContain("cannot read the confirmation file");
-    expect(unreadable.status === "ok" ? "" : JSON.stringify(unreadable)).toContain("mstar pr merge-gate --pr <n> --confirm <file>");
+    expect(unreadable.status === "ok" ? "" : JSON.stringify(unreadable)).toContain("mstar pr merge-gate --pr <n> --provider github --confirm <file>");
     writeFileSync(confirm, "{ not json");
     const garbage = await gate.execute({ pr: "42", confirm }, context);
     expect(garbage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
@@ -135,5 +136,105 @@ describe("pr merge-gate", () => {
     pages = 0;
     const completed = await gate.execute({ pr: "42", maxPages: "2" }, context);
     expect(completed).toMatchObject({ status: "ok" });
+  });
+
+  test("an unregistered provider refuses: registered ids fix a typo only, an unmatched forge takes the pr-delivery path or STOPs", async () => {
+    const { context } = fixture();
+    const refused = await command("pr.merge-gate").execute({ pr: "42", provider: "gitlab" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unsupported-provider", exitCode: 1 });
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string | undefined) ?? "";
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // Typo reading: the registered ids still name the correction.
+    expect(refused.status === "ok" ? "" : refused.message).toContain("gitlab");
+    expect(recovery).toContain("--provider <id>");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: github is listed to fix a typo, never as a suggestion that gh can
+    // inspect a GitLab MR — the adapter must match the target forge.
+    expect(recovery).toContain("matches the target forge");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // Forge reading: an unsupported forge enumerates with the project's own
+    // tooling per pr-delivery.md, and STOPs without a documented equivalent.
+    expect(recovery).toContain("pr-delivery.md");
+    expect(recovery).toContain("STOP");
+  });
+
+  test("the waiver retry tells the operator to pass the selected provider id", async () => {
+    const { context } = fixture();
+    const head = "abcdef0123456";
+    registerMergeGateProvider("wfix", {
+      async resolve() { return { ok: true, value: { head, host: "h", owner: "o", repo: "r" } }; },
+      async threads() {
+        return { ok: true, value: { threads: [{ id: "T9", isResolved: false, isOutdated: false, path: "a.ts", line: 1, author: "x", body: "b" }], hasNextPage: false, endCursor: null, readable: true, headRefOid: head } };
+      },
+    });
+    const refused = await command("pr.merge-gate").execute({ pr: "7", provider: "wfix" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unresolved" });
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: a retry without the flag would rescan through the GitHub adapter.
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
+    expect(recovery).toContain("mstar pr merge-gate --pr <number> --provider <id> --confirm <file>");
+    expect(recovery).toContain("passing the provider id this invocation selected");
+  });
+
+  test("a missing provider executable names the tool from the error's executable field or its message", async () => {
+    const { context } = fixture();
+    const gate = command("pr.merge-gate");
+    // see packages/commands/src/effects/process.ts
+    // Field shape: the spawn adapters set `executable` on process.not-found.
+    context.effects.spawn = async () => { throw Object.assign(new Error("spawn gh ENOENT"), { code: "process.not-found", exitCode: 127, executable: "gh" }); };
+    const byField = await gate.execute({ pr: "42" }, context);
+    expect(byField).toMatchObject({ status: "refused", code: "process.not-found" });
+    expect(byField.status === "ok" ? "" : (byField.details?.recovery as string) ?? JSON.stringify(byField)).toContain("GitHub CLI");
+    // see packages/commands/src/effects/process.ts
+    // Message shape: a pre-field error still reads the name out of the
+    // normalized `executable not found in $PATH: <name>` text.
+    context.effects.spawn = async () => { throw Object.assign(new Error("executable not found in $PATH: glab"), { code: "process.not-found", exitCode: 127 }); };
+    const byMessage = await gate.execute({ pr: "42" }, context);
+    expect(byMessage).toMatchObject({ status: "refused", code: "process.not-found" });
+    expect(byMessage.status === "ok" ? "" : (byMessage.details?.recovery as string) ?? JSON.stringify(byMessage)).toContain("glab");
+  });
+
+  test("a registered fixture provider drives the gate without spawning", async () => {
+    const { cwd, context, calls } = fixture();
+    const head = "abcdef0123456";
+    const nodes = [
+      { id: "FX1", isResolved: false, isOutdated: false, path: "src/f.ts", line: 9, author: "fixture-bot", body: "fix this" },
+    ];
+    const threadCalls: Array<{ owner: string; repo: string; pr: number; after: string | null }> = [];
+    let pageHead = head;
+    // see skills/mstar-use-cli/references/checks-and-lints.md
+    // why: the gate must ask the named adapter for the head and every thread
+    // page; a fixture proves the seam drives the same pinning, digest and
+    // refusal path without any spawn.
+    const fixtureProvider: MergeGateProvider = {
+      async resolve() {
+        return { ok: true, value: { head, host: "fixture.example", owner: "fix", repo: "ture" } };
+      },
+      async threads({ owner, repo, pr, after }) {
+        threadCalls.push({ owner, repo, pr, after });
+        return { ok: true, value: { threads: nodes, hasNextPage: false, endCursor: null, readable: true, headRefOid: pageHead } };
+      },
+    };
+    registerMergeGateProvider("fixture", fixtureProvider);
+    const gate = command("pr.merge-gate");
+    const refused = await gate.execute({ pr: "7", provider: "fixture" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unresolved", exitCode: 1 });
+    expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ head, unresolved: [{ id: "FX1", author: "fixture-bot" }] });
+    expect(calls).toHaveLength(0);
+    expect(threadCalls).toEqual([{ owner: "fix", repo: "ture", pr: 7, after: null }]);
+
+    const digest = (refused.status === "ok" ? {} : refused.details)?.digest as string;
+    expect(digest).toMatch(/^[0-9a-f]{16}$/);
+    const confirm = path.join(cwd, "confirm.json");
+    writeFileSync(confirm, JSON.stringify({ head, confirmations: 2, threads: ["FX1"], digest }));
+    const allowed = await gate.execute({ pr: "7", provider: "fixture", confirm }, context);
+    expect(allowed).toMatchObject({ status: "ok" });
+
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: a head the provider reports differently on the next scan makes the
+    // confirmed enumeration stale, so the seam must refuse the same way.
+    pageHead = "9999999999999";
+    const moved = await gate.execute({ pr: "7", provider: "fixture", confirm }, context);
+    expect(moved).toMatchObject({ status: "refused", code: "pr.merge-gate.head-moved" });
   });
 });
