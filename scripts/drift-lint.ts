@@ -112,14 +112,16 @@
  * diagnostic names the line its text starts on. A `foreignObject`'s embedded
  * HTML is read the same way, so `section<br>5.1` reads as `section 5.1`.
  * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
- * and adjacent prose lines are judged as one block (a blank line or a
- * following list marker ends the block; a list item and its continuation
- * indented past that item's marker, and two lines of one blockquote, are one
- * block with the quote prefix dropped), so a name split by a line break is
- * still reported; a match
+ * and adjacent prose lines are judged as one block: a line is a block
+ * boundary when it opens a heading, table, fence or blockquote the previous
+ * line did not already open, or when it starts a list marker; two lines join
+ * when neither is a boundary, or when the current line is the same blockquote
+ * container's next line or a list item's lazy continuation at any
+ * indentation, so a name split by a line break is still reported. A blank
+ * line ends the block and the quote prefix is dropped before the join; a match
  * wholly inside the earlier line is reported there only. A list marker is
- * `-`/`*`/`+` or an ordered `1.`/`1)` in either spelling, and a sibling item
- * at the same indentation is the next item, never a wrapped line. `<code>` is
+ * `-`/`*`/`+` or an ordered `1.`/`1)` in either spelling, and a new marker of
+ * any indentation is a block boundary, never a wrapped line. `<code>` is
  * judged
  * like a backtick span in Markdown, and a span opens and closes on a whole
  * backtick run of equal length. A fence
@@ -1913,6 +1915,15 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
   return values;
 }
 
+/** see scripts/drift-lint.ts § 16 — the quote prefix is markup, so the inner line is what is classified:
+ * `> Phase 2` followed by `> - 4 checks` is a new bullet. */
+const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
+/** see scripts/drift-lint.ts § 16 — a list marker in either spelling starts a block. */
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])(?:\s|$)/;
+/** see scripts/drift-lint.ts § 16 — a heading, table or fence opens a block; a blockquote is judged
+ * against the previous line, since the same container's next line continues it. */
+const BLOCK_OPENER = /^\s*(?:#{1,6}(?:\s|$)|\||`{3,}|~{3,})/;
+
 /** see scripts/drift-lint.ts § 16 — Scan one prose document: fence state, quote container and the cross-line
  * join reset per document, so one JSON value cannot inherit another's fence. */
 function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string, hits: string[]): void {
@@ -1931,6 +1942,8 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
   // see scripts/drift-lint.ts § 16 — why: Markdown renders adjacent prose lines as one block, so a name
   // split across a line break is judged on the joined pair as well.
   let previous = "";
+  let previousStartsBlock = false;
+  let previousIsItem = false;
   for (const { text, line } of rows) {
     const delimiter = text.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
     const quote = quoteOf(text);
@@ -1968,31 +1981,21 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     }
     const lineHits = findRetiredStageSpellings(text, false);
     for (const hit of lineHits) report(line, hit);
-    // see scripts/drift-lint.ts § 16 — why: a block element starts its own block — a bullet, a heading
-    // of any level, a table or quote line, a fence — so its leading character is not a stage separator.
-    // The quote prefix is markup, so the inner line is what is classified: `> Phase 2` followed by
-    // `> - 4 checks` is a new bullet.
-    const quoteOfLine = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
-    const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
+    // see scripts/drift-lint.ts § 16 — the rule, stated once: a line is a block boundary when it opens
+    // a heading, a table, a fence or a blockquote the previous line did not already open, or when it
+    // starts a list marker (`-`, `*`, `+`, `1.`, `1)`). Two lines join when neither is a boundary, or
+    // when the current line continues the previous block: it is the same blockquote container's next
+    // line, or the previous line is a list item and this one is not a new marker, i.e. a lazy
+    // continuation at any indentation. The quote prefix is markup, so the inner line is classified:
+    // `> Phase 2` followed by `> - 4 checks` is a new bullet.
     const inner = quoteless(text);
-    const previousInner = quoteless(previous);
-    // see scripts/drift-lint.ts § 16 — an ordered item is written `1.` or `1)`, and both spellings start a
-    // block, so neither is read as a continuation of the line above.
-    const blockStart = /^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
-    const blockStarts = blockStart.test(inner);
-    const previousBlockStarts = blockStart.test(previousInner);
-    // see scripts/drift-lint.ts § 16 — a list item and its indented continuation render as one
-    // paragraph, and so do two lines of the same blockquote, so those join; a new item, heading or
-    // fence still starts a block. A continuation must reach the item's content column: a marker at the
-    // item's own indentation is the next item of the same list, not a wrapped line of this one.
-    const listItem = /^(\s*)(?:[-*+]|\d+[.)])(\s+)/;
-    const previousItem = listItem.exec(previousInner);
-    const continuation =
-      (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text) && !blockStarts && !previousBlockStarts) ||
-      (previousItem !== null &&
-        !listItem.test(inner) &&
-        (inner.match(/^\s*/)?.[0].length ?? 0) >= previousItem[0].length);
-    if (previous !== "" && text.trim() !== "" && (!blockStarts || continuation) && (!previousBlockStarts || continuation)) {
+    const startsMarker = LIST_MARKER.test(inner);
+    const startsBlock = startsMarker || BLOCK_OPENER.test(inner);
+    const startsQuote = quote !== "";
+    const opensQuote = startsQuote && quote !== quoteOf(previous);
+    const sameQuote = startsQuote && quote === quoteOf(previous);
+    const joins = !(startsBlock || opensQuote) && (!previousStartsBlock || previousIsItem || sameQuote);
+    if (previous !== "" && text.trim() !== "" && joins) {
       // see scripts/drift-lint.ts § 16 — recognize spans on the joined SOURCE (a Markdown code span may
       // cross one line break), with the boundary rendered as a space so a probe inside a straddling
       // span is still stripped.
@@ -2019,6 +2022,9 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
       }
     }
     previous = text.trim() === "" ? "" : text;
+    // see scripts/drift-lint.ts § 16 — what this line opened decides whether the next one continues it.
+    previousIsItem = startsMarker;
+    previousStartsBlock = startsBlock || startsQuote;
   }
 }
 

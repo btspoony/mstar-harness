@@ -2513,6 +2513,24 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(result.hits[0]).toContain("split across the line break");
   });
 
+  test("a bullet's lazy continuation under-indented past its marker still joins", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/p2.md", text: "- Open the Phase\n 4 delivery\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("an ordered item's lazy continuation under-indented past its marker still joins", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s3.md", text: "1. Open the Phase\n  4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blockquote that opens after a paragraph is its own block", () => {
+    expect(
+      checkRetiredStageNames([{ rel: "skills/x/q2.md", text: "A paragraph that ends with Phase\n> 4 delivery\n" }]).hits,
+    ).toEqual([]);
+  });
+
   test("two sibling ordered lists are not one stage run, in either marker spelling", () => {
     for (const text of [
       "1. Read the heading named Phase\n4) Verify the result.\n",
