@@ -67,7 +67,7 @@ At close, review the local ignored per-edit attribution record for this iteratio
 
 **Precondition**: §3.1 checklist `[x]`；§3.4 frontmatter `completed` + `end_date` 已写。
 
-PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`。close commit 之后：有 tracked 变更 → 按下方建 layer ref 与 close-delta layer PR，并走 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `mstar-iteration/references/pr-stack.md`「Landing」，直到整链合并；无 tracked 变更 → 建 ref、不开 PR，封存预期清单。随后整链证明 → `mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」（链未合并完则按该节回到「Landing」，不进入 close-out），最后 Workflow Close Out → `mstar-roles/references/project-manager/workflow-close.md`：
+PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git commit`。close commit 之后：有 tracked 变更 → 按下方建 layer ref 与 close-delta layer PR，并走 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `mstar-iteration/references/pr-stack.md`「Landing」，直到整链合并；无 tracked 变更 → 不建 ref、不开 PR，封存预期清单。随后整链证明 → `mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」（链未合并完则按该节回到「Landing」，不进入 close-out），最后 Workflow Close Out → `mstar-roles/references/project-manager/workflow-close.md`：
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 specs/ADR promotion 完成；package specs 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 specs/ADR 均完成 store catalog 登记（或记明无提升原因）；各 plan compound disposition 已记录
@@ -94,8 +94,10 @@ git commit -m "chore(iteration): close <iteration-id> — specs/ADR promotion"  
 
 Staging 说明：`{SPECS_DIR}` 与 `{ADR_DIR}` 为解析后的实际语料目录（候选链见 `mstar-conventions`）；本轮更新过才加入。per-plan knowledge compound 的 tracked 写入已在各 plan `Done` 后提交到 integration 分支，本 commit 不重复提交。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
 
-commit 存在时按其值建 `iteration-stack/<iteration-id>/sNN` 并发布：先按 `mstar-iteration/references/pr-stack.md`「Sizing」量测，并按「Layer」确定每层 accountable scope（close 层见该节的 close 范围与拆分规则，封存预期清单前完成），`adviseSplit` → 停；再由它的单一 pusher push 该 layer ref，并以 live predecessor 为 base 开 close-delta layer PR（`branch.integration` 不作 PR head），随后按 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `pr-stack.md`「Landing」推进到整链合并。无 tracked 变更时不建 ref、不开 PR，封存预期清单供整链证明使用。
-
-close-delta layer 的 base 是它的 live predecessor，只有首个 open layer 才是当前权威 workflow `branch.target`；target 缺失时停止并按受守卫入口处理，不默认 `main`。
+**Promoted corpus 过大时按 owner group 构建**：按 owner group 分组 stage 推广语料，每组各 commit 一次（上文 commit 步骤按组重复），使每组成为其 commit 上的独立 layer ref；任何 close layer push 之前、以及封存预期清单之前，按 `mstar-iteration/references/pr-stack.md`「Sizing」逐 range 量测。
 
 close commit 之后**无论 close delta 是否发布**，都由 coordinator 按 `phase-2-worktree-lease.md` § Rescheduling checkpoint「Integration ref sync」把 `branch.integration` fast-forward 同步到 upstream（**无 force**；non-fast-forward 即 **STOP**，先与 remote 对账）；该同步独立于 layer 发布，不受 size check 门控。
+
+commit 存在时按其每个 commit 建 `iteration-stack/<iteration-id>/sNN` 并发布：先按 `mstar-iteration/references/pr-stack.md`「Sizing」逐 range 量测（`adviseSplit` 的处置与 owner 书面例外以该节为准），并按「Layer」确定每层 accountable scope（close 层见该节的范围与拆分构造，封存预期清单前完成）；再由它的单一 pusher push 该 layer ref，并以 live predecessor 为 base 开 close-delta layer PR（`branch.integration` 不作 PR head），随后按 `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」→「Merge-ready checklist」→「Merge authorization」与 `pr-stack.md`「Landing」推进到整链合并。无 tracked 变更时不建 ref、不开 PR，封存预期清单供整链证明使用。
+
+close-delta layer 的 base 是它的 live predecessor，只有首个 open layer 才是当前权威 workflow `branch.target`；target 缺失时停止并按受守卫入口处理，不默认 `main`。
