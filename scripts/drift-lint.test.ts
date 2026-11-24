@@ -2520,6 +2520,37 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
   });
 
+  test("a stage name split across an html source line break is judged", () => {
+    const html = "<html><body><p>Then Phase\n4 delivery closes it.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("an inline tag inside an html stage name does not hide it", () => {
+    const html = "<html><body><p>Then Pha<b>se</b> 4 closes it.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("block-level html tags still separate blocks", () => {
+    const html = "<html><body><div>Phase</div><div>4 closes</div></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("an html block reports the line its text starts on", () => {
+    const html = "<html><body>\n<p>\n  Then Phase\n  4 delivery\n</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":3 ");
+  });
+
+  test("a probe inside a multi-line html code element is exempt", () => {
+    const html = "<html><body><p>Run <code>--phase\n6</code> now.</p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
   test("a fence in one json value does not hide a probe in the next", () => {
     const probe = RETIRED_STAGE_MACHINE_LITERALS[0];
     const text = `{"fixture":"Example:\\n\`\`\`\\n${probe}\\n\`\`\`","prompt":"Run ${probe} now."}`;

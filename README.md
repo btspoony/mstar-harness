@@ -106,7 +106,7 @@ The audit commands read and report; they do not edit your code. Two boundaries t
 
 ![Layered delivery: from execute to Workflow Close Out — layer PRs run beside execute, only a close-delta layer depends on close, every required layer merges, then whole-chain proof and Workflow Close Out](assets/workflow.svg)
 
-[Interactive version](assets/workflow.html). Layer PRs run beside execute; only a close-delta layer depends on close; every required layer merges, then whole-chain proof, then Workflow Close Out.
+The interactive version of this diagram is `assets/workflow.html` in the repository; GitHub shows the file source rather than a rendered page, so open it locally in a browser. The inline image above is the readable view. Layer PRs run beside execute; only a close-delta layer depends on close; every required layer merges, then whole-chain proof, then Workflow Close Out.
 
 The main path shows a **development** delivery. Every plan gets plan-level QC — three independent seats by default — and multi-task plans add per-task review. Hotfix/inline review keeps its lighter seat rules. **PM Acceptance** is the sole acceptance route for every scope: each required criterion maps to relevant evidence and an honest result; QC approval alone is not test proof. PM may fill a named gap with a short bounded acceptance check, not implementation, test authoring, long suites or ops. Unfixed confirmed problems remain tracked issues.
 

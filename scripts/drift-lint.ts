@@ -103,7 +103,11 @@
  * the `data-node-*` / `data-edge-*` detail attributes an interactive viewer
  * renders on demand. A diagram label is literal text: a backtick is a
  * character a reader sees, so a probe in a label is prose. An `.html` page
- * also has its markup dropped and its ordinary prose judged line by line.
+ * also has its ordinary prose judged as rendered blocks: block-level tags
+ * separate blocks, a source line break or `<br>` inside a block renders as
+ * one space, and an inline tag is dropped without adding one, so `Pha<b>se</b>
+ * 4` and a `Phase` / `4` line break both read as `Phase 4`. Each block's
+ * diagnostic names the line its text starts on.
  * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
  * and adjacent prose lines are judged as one block (a blank line or a
  * following list marker ends the block; a list item and its indented
@@ -1959,31 +1963,89 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG.
       // see scripts/drift-lint.ts § 16 — Comments, scripts, styles and the already-scanned SVG are blanked without
       // see scripts/drift-lint.ts § 16 — moving a line; a probe inside a `<code>` element is blanked the same way,
-      // see scripts/drift-lint.ts § 16 — across as many lines as it spans. Each source line then has block tags
-      // see scripts/drift-lint.ts § 16 — turned into a line break and inline tags into a space, and is read as
-      // see scripts/drift-lint.ts § 16 — literal text: a backtick is a character in HTML, so only `<code>` exempts.
+      // see scripts/drift-lint.ts § 16 — across as many lines as it spans and in place, so a block still names the
+      // see scripts/drift-lint.ts § 16 — line its text starts on.
       if (file.rel.endsWith(".html")) {
         const blank = (block: string): string => block.replace(/[^\n]/g, " ");
-        const withoutBlocks = file.text
+        const source = file.text
           .replace(/<!--[\s\S]*?-->/g, blank)
           .replace(/<script[\s\S]*?<\/script>/gi, blank)
           .replace(/<style[\s\S]*?<\/style>/gi, blank)
           .replace(/<svg[\s\S]*?<\/svg>/gi, blank)
-          .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (whole: string, inner: string) =>
-            whole.replace(inner, inner.replace(PROBE_PATTERN, " ")),
-          );
+          .replace(HTML_CODE, (whole: string, inner: string) =>
+            whole.replace(
+              inner,
+              inner
+                // see scripts/drift-lint.ts § 16 — why: a code element may span source lines; the reader sees
+                // see scripts/drift-lint.ts § 16 — one space there, so a probe split across them still exempts.
+                // see scripts/drift-lint.ts § 16 — Equal-length space runs keep every later offset in place.
+                .replace(/\s*\n\s*/g, (gap: string) => " ".repeat(gap.length))
+                .replace(PROBE_PATTERN, (probe: string) => " ".repeat(probe.length)),
+            ),
+          )
+          // see scripts/drift-lint.ts § 16 — why: a `<br>` is a line break inside a block, which a reader sees as
+          // see scripts/drift-lint.ts § 16 — whitespace, not as a block boundary.
+          .replace(/<br\b[^>]*>/gi, blank);
+        // see scripts/drift-lint.ts § 16 — A reader sees a rendered block, not a source line: block tags separate
+        // see scripts/drift-lint.ts § 16 — blocks, a line break or `<br>` between inline content renders as one
+        // see scripts/drift-lint.ts § 16 — space, and an inline tag is dropped without inserting one (so
+        // see scripts/drift-lint.ts § 16 — `Pha<b>se</b> 4` renders `Phase 4`). Each block is judged whole.
         const blockTag =
-          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|br|hr|nav|main|aside|figure|figcaption|dl|dt|dd)\b[^>]*>/gi;
-        splitLines(withoutBlocks).forEach((raw, index) => {
-          for (const piece of raw.replace(blockTag, "\n").split("\n")) {
-            const text = piece.replace(/<[^>]*>/g, " ");
-            for (const hit of findRetiredStageSpellings(decodeXmlEntities(text), false, false)) {
+          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd)\b[^>]*>/gi;
+        // see scripts/drift-lint.ts § 16 — The first character of the rendered text, so the diagnostic names the
+        // see scripts/drift-lint.ts § 16 — line that text starts on rather than the line its opening tag sits on.
+        const firstContent = (slice: string): number => {
+          let index = 0;
+          while (index < slice.length) {
+            if (slice[index] === "<") {
+              const close = slice.indexOf(">", index);
+              if (close >= 0) {
+                index = close + 1;
+                continue;
+              }
+            }
+            if (!/\s/.test(slice[index])) return index;
+            index += 1;
+          }
+          return -1;
+        };
+        let cursor = 0;
+        let line = 1;
+        // see scripts/drift-lint.ts § 16 — why: every blanking step preserves length, and a code element may
+        // see scripts/drift-lint.ts § 16 — swallow a line break, so the original page text is what maps an offset
+        // see scripts/drift-lint.ts § 16 — back to its source line.
+        const original = file.text;
+        const lineAt = (index: number): number => {
+          for (; cursor < index; cursor += 1) if (original[cursor] === "\n") line += 1;
+          return line;
+        };
+        let at = 0;
+        for (const match of source.matchAll(blockTag)) {
+          const boundary = match.index ?? 0;
+          const piece = source.slice(at, boundary);
+          const start = firstContent(piece);
+          if (start >= 0) {
+            // see scripts/drift-lint.ts § 16 — Collapsed whitespace is the rendered spacing; a backtick is a
+            // see scripts/drift-lint.ts § 16 — character in HTML, so the block is literal text and only `<code>` exempts.
+            const rendered = decodeXmlEntities(piece.replace(/<[^>]*>/g, "").replace(/\s+/g, " "));
+            for (const hit of findRetiredStageSpellings(rendered, false, false)) {
               hits.push(
-                `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+                `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + start)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
               );
             }
           }
-        });
+          at = boundary + match[0].length;
+        }
+        const tail = source.slice(at);
+        const tailStart = firstContent(tail);
+        if (tailStart >= 0) {
+          const rendered = decodeXmlEntities(tail.replace(/<[^>]*>/g, "").replace(/\s+/g, " "));
+          for (const hit of findRetiredStageSpellings(rendered, false, false)) {
+            hits.push(
+              `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + tailStart)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+            );
+          }
+        }
       }
       continue;
     }

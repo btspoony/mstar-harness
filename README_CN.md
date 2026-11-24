@@ -107,7 +107,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ![分层交付：从执行到 Workflow Close Out — 层 PR 与执行并行，只有 close-delta 层依赖 close，所有必需层合并后整链证明，最后 Workflow Close Out](assets/workflow.zh.svg)
 
-[交互版](assets/workflow.zh.html)。层 PR 与执行并行；只有 close-delta 层依赖 close；所有必需层合并后整链证明，最后 Workflow Close Out。
+交互版是仓库中的 `assets/workflow.zh.html`；GitHub 只显示文件源码而非渲染后的页面，请在本地用浏览器打开。上面的内嵌图片就是可读版本。层 PR 与执行并行；只有 close-delta 层依赖 close；所有必需层合并后整链证明，最后 Workflow Close Out。
 
 主路径展示 **development** 交付。每个 plan 都有 plan 级 QC，默认三个独立席位；多任务 plan 另有 per-task review，hotfix/inline 仍保留较轻的席位规则。**PM Acceptance** 是所有范围唯一的验收路径：每条必需标准都映射到相关证据与真实结果，QC 批准本身不是测试证明。PM 可为具名缺口执行短小、有界的验收检查，但不得代做实现、编写测试、长套件或运维。已确认但未修复的问题仍作为 issue 跟踪。
 
