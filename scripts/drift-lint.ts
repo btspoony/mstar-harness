@@ -1660,7 +1660,7 @@ const STAGE_RUN =
   /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
 /** see scripts/drift-lint.ts § 16 — An inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
-const INLINE_CODE = /`([^`\n]*)`/g;
+const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
 /** see scripts/drift-lint.ts § 16 — A diagram text node or label; the value is decoded before it is judged.
  * `desc` is reader-visible too (tooltip and screen-reader text). */
 const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
@@ -1711,20 +1711,22 @@ export function findRetiredStageSpellings(line: string, inFence = false, markup 
   if (inFence) {
     rest = stripProbes(decodeXmlEntities(rest));
   } else if (!markup) {
-    // see scripts/drift-lint.ts § 16 — Literal text: nothing here is a code span, so a probe is prose.
-    rest = decodeXmlEntities(rest);
+    // see scripts/drift-lint.ts § 16 — Literal text: nothing here is a code span, so a probe is prose. The caller
+    // already decoded it (a JSON value or a diagram label), so no second decode runs here.
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   } else {
     // see scripts/drift-lint.ts § 16 — A span keeps its position: only the probe literals leave it, so a stage
     // see scripts/drift-lint.ts § 16 — run written across prose and backticks is still one run. `<code>` is the
-    // see scripts/drift-lint.ts § 16 — render-equivalent HTML form and is judged the same way.
-    rest = rest.replace(INLINE_CODE, (_match, inner: string) => stripProbes(inner));
+    // see scripts/drift-lint.ts § 16 — render-equivalent HTML form and is judged the same way, and a code span
+    // opens and closes with a matching run of backticks, not only one.
+    rest = rest.replace(INLINE_CODE, (_match, _fence: string, inner: string) => stripProbes(inner));
     rest = rest.replace(HTML_CODE, (_match, inner: string) => stripProbes(inner));
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   }
   // see scripts/drift-lint.ts § 16 — A render-equivalent spelling may be written as `&#52;`; decode before the
-  // see scripts/drift-lint.ts § 16 — spelling rules read the text.
-  rest = decodeXmlEntities(rest);
+  // see scripts/drift-lint.ts § 16 — spelling rules read the text. A literal-text caller already decoded its
+  // input, so decoding again would read `&amp;lt;` as a tag.
+  if (markup || inFence) rest = decodeXmlEntities(rest);
   for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
   for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
   // see scripts/drift-lint.ts § 16 — Section citations are removed before a stage run is read, so `Phase 3 §3.4`
@@ -1871,7 +1873,13 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
     const blockStarts = blockStart.test(text);
     const previousBlockStarts = blockStart.test(previous);
-    if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
+    // see scripts/drift-lint.ts § 16 — A list item and its indented continuation render as one paragraph, and
+    // so do two lines of the same blockquote, so those join; a new item, heading or fence still starts a block.
+    const quoteOfLine = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
+    const continuation =
+      (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text)) ||
+      (/^\s*[-*+]\s/.test(previous) && !/^\s*[-*+]\s/.test(text) && /^\s+\S/.test(text));
+    if (previous !== "" && text.trim() !== "" && (!blockStarts || continuation) && (!previousBlockStarts || continuation)) {
       // see scripts/drift-lint.ts § 16 — Recognize spans on the joined SOURCE (a Markdown code span may cross one
       // see scripts/drift-lint.ts § 16 — line break), with the boundary rendered as a space so a probe inside a
       // see scripts/drift-lint.ts § 16 — straddling span is still stripped.
@@ -1879,18 +1887,21 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
       const render = (value: string): string =>
         decodeXmlEntities(
           value
-            .replace(/`([^`]*)`/g, (_match, inner: string) =>
+            .replace(/(`+)([\s\S]*?)\1/g, (_match, _fence: string, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             )
             .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             ),
         );
-      const joinedRendered = render(`${previous}${MARKER}${text}`).split(MARKER).join(" ");
+      // see scripts/drift-lint.ts § 16 — A quote prefix is markup, not text: two lines of one blockquote read
+      // as one sentence, so the prefix is dropped before the join.
+      const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
+      const joinedRendered = render(`${quoteless(previous)}${MARKER}${quoteless(text)}`).split(MARKER).join(" ");
       // see scripts/drift-lint.ts § 16 — A hit is split only when neither standalone line *matches* it — a
       // see scripts/drift-lint.ts § 16 — substring test would hide a real `Phase 4` behind `SubPhase 4`.
-      const previousHits = findRetiredStageSpellings(render(previous), false, false);
-      const textHits = findRetiredStageSpellings(render(text), false, false);
+      const previousHits = findRetiredStageSpellings(render(quoteless(previous)), false, false);
+      const textHits = findRetiredStageSpellings(render(quoteless(text)), false, false);
       for (const hit of findRetiredStageSpellings(joinedRendered, false, false)) {
         if (lineHits.includes(hit)) continue;
         if (previousHits.includes(hit) || textHits.includes(hit)) continue;
@@ -1916,11 +1927,10 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       continue;
     }
+    const splitLines = (value: string): string[] => value.split(/\r\n|\n|\r/);
     const groups: Array<Array<{ text: string; line: number }>> = file.rel.endsWith(".json")
-      ? jsonStringValues(file.text).map((value) =>
-          value.text.split("\n").map((text) => ({ text, line: value.line })),
-        )
-      : [file.text.split("\n").map((text, index) => ({ text, line: index + 1 }))];
+      ? jsonStringValues(file.text).map((value) => splitLines(value.text).map((text) => ({ text, line: value.line })))
+      : [splitLines(file.text).map((text, index) => ({ text, line: index + 1 }))];
     for (const group of groups) scanProseRows(group, file.rel, hits);
   }
   return { filesScanned: files.length, hits };
@@ -1940,7 +1950,7 @@ export function readRetiredStageCorpus(
   const readFailures: string[] = [];
   for (const rel of tracked) {
     const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
-    if (!inRoot && !RETIRED_STAGE_FILES.includes(rel)) continue;
+    if (!inRoot && !RETIRED_STAGE_FILES.some((name) => name === rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
     // see scripts/drift-lint.ts § 16 — The diagram addition is `assets/*.svg`: a nested SVG is not the diagram face.
     if (rel.startsWith("assets/") && !/^assets\/[^/]+\.svg$/.test(rel)) continue;

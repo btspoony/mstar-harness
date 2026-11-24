@@ -2448,6 +2448,28 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/h.md", text }]).hits).toEqual([]);
   });
 
+  test("a double-backtick span is a code span", () => {
+    const text = "The close code is \`\`" + RETIRED_STAGE_MACHINE_LITERALS[1] + "INVALID_ROOT\`\` here.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/n.md", text }]).hits).toEqual([]);
+  });
+
+  test("a CRLF fence keeps its probes exempt", () => {
+    const text = "\`\`\`text\r\n" + RETIRED_STAGE_MACHINE_LITERALS[0] + "\r\n\`\`\`\r\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/o.md", text }]).hits).toEqual([]);
+  });
+
+  test("a list item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/p.md", text: "- Open the Phase\n  4 delivery procedure.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("two lines of one blockquote are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/q.md", text: "> Open the Phase\n> 4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
   test("an entity-rendered backtick does not become a code span across the join", () => {
     const text = "Use &#96;--phase\n6&#96; here.\n";
     const result = checkRetiredStageNames([{ rel: "skills/x/g.md", text }]);
