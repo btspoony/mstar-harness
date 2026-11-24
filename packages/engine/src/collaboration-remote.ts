@@ -26,10 +26,12 @@ import {
   localPredecessorRetiredPath,
   mintIssueRef,
   openRemoteCache,
+  openRemoteCacheRecovery,
   readLocalPredecessorLane,
   retireLocalPredecessorLane,
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
+  withRemoteCacheRecoveryWrite,
   withRemoteCacheWrite,
   withRemoteCacheWriteHeld,
   assertIssueRef,
@@ -3126,7 +3128,9 @@ export async function readPendingIntents(context: StoreContext, projectId: strin
   // listing carries no send right, so it is exactly what an operator needs to reconcile.
   const draining = selection.phase === "draining" && selection.previous?.mode === "remote";
   const generation = draining ? selection.previous!.generation : selection.generation;
-  const handle = await openRemoteCache(context, "read", undefined, { previousDuringDraining: draining });
+  // note: Recovery read: admits a below-current cache whose inventory this build still declares,
+  // restricted to the outbox surface — this listing is exactly the guard's first recovery step.
+  const handle = await openRemoteCacheRecovery(context, "read", undefined, { previousDuringDraining: draining });
   try {
     const rows = handle.db
       .prepare(
@@ -3983,8 +3987,10 @@ async function recordReceiptEvidence(
 ): Promise<RemoteIntentRead> {
   const envelope = receiptEnvelope(raw, source);
   // note: Q1/Q2 recovery runs under the intent's ORIGINAL binding, including a draining
-  // generation's pinned previous one; this never prepares or dispatches anything.
-  return withRemoteCacheWrite(context, (handle) => {
+  // generation's pinned previous one; this never prepares or dispatches anything. The settlement
+  // write takes the outbox recovery lane, which also admits a below-current cache this build can
+  // still prove against its own declared inventory.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, envelope.operationId);
     noSettledClaim(row, "A receipt names what one dispatched attempt observed, and this claim was never sent.");
@@ -4209,7 +4215,7 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
   // note: The sample is the request's whole admission: the open below validates exactly this
   // pair, and disclosure compares against it instead of a second read of the v3 binding.
   await remoteIntentSampleGapForTest?.();
-  const handle = await openRemoteCache(context, "read", { location: lane.location, binding: lane.binding }, {
+  const handle = await openRemoteCacheRecovery(context, "read", { location: lane.location, binding: lane.binding }, {
     previousDuringDraining: true,
   });
   try {
@@ -4701,7 +4707,9 @@ export async function dispatchRemoteIntent(
         "bind first; nothing was sent.",
     );
   }
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The dispatch is the enqueued intent's own settlement route; it takes the outbox recovery
+  // lane so a below-current cache can still dispatch and settle what it holds.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, target);
     noSettledClaim(row, "Only an enqueued intent is dispatched, and this claim was already carried by the observation.");
@@ -4903,7 +4911,8 @@ export async function prepareRemoteResolution(
         `Nothing was enqueued.`,
     );
   }
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The resolution settles a conflicted intent, so it takes the outbox recovery lane.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const original = intentRow(db, conflicted);
     noSettledClaim(original, "A reviewed resolution needs a conflicted fork, and a settled claim has no fork.");
@@ -5069,7 +5078,8 @@ export async function abandonRemoteIntent(
 ): Promise<RemoteIntentRead> {
   const operationId = linearId(input?.operationId, "operationId");
   const reason = text(input?.reason, "reason");
-  return withRemoteCacheWrite(context, (handle) => {
+  // note: The abandonment settles one intent, so it takes the outbox recovery lane.
+  return withRemoteCacheRecoveryWrite(context, (handle) => {
     const db = handle.db;
     const row = intentRow(db, operationId);
     noSettledClaim(row, "An abandonment names an unpublished request, and this claim was already settled by the observation.");

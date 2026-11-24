@@ -1335,6 +1335,20 @@ function assertOutboxSchema(db: StoreDb, dbPath: string): void {
   assertKeyLayout(db, dbPath);
 }
 
+/**
+ * invariant: A recovery open proves the lane against the EXACT inventory this build declares for
+ * the recorded version - the same proof an explicit upgrade runs before its delta - derived from
+ * `collaborationInventoryOf`, never a pinned version. A layout this build does not declare an
+ * inventory for has no recovery proof and refuses.
+ */
+function assertVersionInventory(db: StoreDb, dbPath: string, version: number): void {
+  const inventory = collaborationInventoryOf(version);
+  if (inventory === COLLABORATION_CURRENT_COLUMNS) assertCurrentSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V3_COLUMNS) assertOutboxSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V2_COLUMNS) assertRemoteCacheSchema(db, dbPath);
+  else assertLegacySchema(db, dbPath);
+}
+
 /** invariant: The closed table inventory and required columns, or a named refusal. */
 function assertInventory(
   db: StoreDb,
@@ -1577,6 +1591,9 @@ function admit(
   location: CollaborationLocation,
   expected: CollaborationStamp | undefined,
   requirement: "active" | "any",
+  // note: Internal recovery flag, never a caller-passed option: only the outbox recovery opens
+  // (see `openRemoteCacheRecovery` / `withRemoteCacheRecoveryWrite`) construct it.
+  recovery = false,
 ): CollaborationAuthority {
   try {
     // note: The ledger's version verdict comes FIRST: a store written by a newer
@@ -1584,9 +1601,14 @@ function admit(
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
-      throw upgradeRequired(location, schemaVersion);
+      // invariant: Only the outbox recovery surface may open a below-current lane, and only when
+      // this build still declares that version's exact inventory; every other caller keeps the
+      // unchanged upgrade refusal.
+      if (!recovery) throw upgradeRequired(location, schemaVersion);
+      assertVersionInventory(db, location.dbPath, schemaVersion);
+    } else {
+      assertCurrentSchema(db, location.dbPath);
     }
-    assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
       throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
@@ -1753,6 +1775,7 @@ async function openAdmission(
   requirement: "active" | "any",
   expected: CollaborationStamp | undefined,
   timeout: number,
+  recovery = false,
 ): Promise<CollaborationStoreHandle> {
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
@@ -1761,7 +1784,7 @@ async function openAdmission(
   // and creates no sidecar.
   const db = await connectAt(dbPath, "read", timeout);
   try {
-    return handleFor(db, admit(db, location, expected, requirement));
+    return handleFor(db, admit(db, location, expected, requirement, recovery));
   } catch (error) {
     db.close();
     throw error;
@@ -1873,13 +1896,28 @@ async function replaceDerivedLaneBelow(
   }
   if (recorded.unsettled.length > 0) {
     const oldest = recorded.unsettled[0]!;
+    // note: The first step must be executable for the OLDEST row's own state: `outbox-pending` lists
+    // only `enqueued` rows, so an `unconfirmed` or `conflict` row has to start at `outbox-show`.
+    const firstStep =
+      oldest.state === "enqueued"
+        ? "list it with \`mstar store collaboration remote outbox-pending\` and settle it through " +
+          "\`mstar store collaboration remote outbox-dispatch\`"
+        : oldest.state === "unconfirmed"
+          ? "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, " +
+            "then settle it with \`mstar store collaboration remote outbox-receipt\` or \`outbox-reconcile\`"
+          : "read it with \`mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>\`, " +
+            "then settle it with \`mstar store collaboration remote outbox-resolve\`";
+    const multiState = new Set(recorded.unsettled.map((row) => row.state)).size > 1;
     throw new StoreError(
       "remote.effect-pending",
       `The remote cache at ${dbPath} holds ${String(recorded.unsettled.length)} unsettled outbox intent(s); the
         oldest is operation ${oldest.operation_id} in state ${oldest.state}. Such an intent may already have taken
-        effect at the provider, so the cache is not replaced. Settle each pending outbox intent with
-        \`mstar store collaboration remote outbox-pending\`, then \`outbox-reconcile\`, \`outbox-receipt\` or
-        \`outbox-abandon\`, and rerun the same bind. Nothing was replaced.`,
+        effect at the provider, so the cache is not replaced. Start with ${firstStep}, settle every unsettled
+        intent, and rerun the same bind.${
+          multiState
+            ? " The \`outbox-pending\` listing and \`outbox-show\` name the intents of the other states."
+            : ""
+        } Nothing was replaced.`,
       { oldestOperationId: oldest.operation_id, unsettledCount: recorded.unsettled.length },
     );
   }
@@ -2122,11 +2160,12 @@ async function createFreshStore(location: CollaborationLocation, timeout: number
 }
 
 /**
- * invariant: Replace one verified pre-outbox derived lane with a staged successor, inside ONE
- * critical section under the lane's replacement lock: the ownership/schema probe, the staging, the
- * preservation of the predecessor and the publication all hold that lock, so a probe taken before
- * another binder advanced the lane can never authorize overwriting its bytes — and a replacement
- * that publishes a v3 cache and an ordinary writer's frozen outbox row are never unlinked.
+ * invariant: Replace one verified derived lane holding no unsettled outbox intent with a staged
+ * successor, inside ONE critical section under the lane's replacement lock: the ownership/schema
+ * probe, the staging, the preservation of the predecessor and the publication all hold that lock,
+ * so a probe taken before another binder advanced the lane can never authorize overwriting its
+ * bytes — and a replacement that publishes a cache with only settled rows and an ordinary writer's
+ * frozen outbox row are never unlinked.
  *
  * The predecessor is preserved by hard link (same inode) before the name moves, and the successor
  * is published with ONE atomic rename: the canonical name is never absent, so an interruption
@@ -2152,9 +2191,9 @@ async function replaceDerivedLane(
   }
   try {
     await remoteCacheReplacementPublishGapForTest?.();
-    // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
-    // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
-    // cache another process advanced while the successor was staged.
+    // invariant: The ownership, schema and unsettled-intent proof is RE-TAKEN at the publication
+    // boundary: the bytes this attempt is about to replace are proven this checkout's own generation
+    // with no unsettled outbox intent, not a cache another process advanced while staged.
     const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
     if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
       // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
@@ -3784,6 +3823,19 @@ export async function withRemoteCacheWriteHeld<T>(
   return withWriteLane(context, apply, undefined, "remote-cache", admission, true);
 }
 
+/**
+ * note: The outbox settlement lane: the ONLY write lane that admits a below-current remote cache,
+ * constructed here alone and restricted to the outbox surface. Ordinary business verbs keep the
+ * unchanged `collaboration.upgrade-required` refusal of `withRemoteCacheWrite`.
+ */
+export async function withRemoteCacheRecoveryWrite<T>(
+  context: StoreContext,
+  apply: (handle: CollaborationStoreHandle) => T,
+  admission: RemoteCacheAdmission = {},
+): Promise<T> {
+  return withWriteLane(context, apply, undefined, "remote-cache", admission, false, true);
+}
+
 async function withWriteLane<T>(
   context: StoreContext,
   apply: (handle: CollaborationStoreHandle) => T | Promise<T>,
@@ -3791,6 +3843,8 @@ async function withWriteLane<T>(
   lane: "domain" | "remote-cache",
   admission: RemoteCacheAdmission = {},
   holdAsync = false,
+  // note: Internal outbox-recovery switch, constructed only by `withRemoteCacheRecoveryWrite`.
+  recovery = false,
 ): Promise<T> {
   assertStoreRuntimeSupported();
   let location: CollaborationLocation;
@@ -3812,7 +3866,7 @@ async function withWriteLane<T>(
   // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    const admitted = admit(probe, location, expected, "active");
+    const admitted = admit(probe, location, expected, "active", recovery);
     // note: The binding is proved on the same refusing read, before a writer exists.
     if (lane === "remote-cache") assertRemoteCacheIdentity(admitted, remoteBinding!);
     else await assertControlBinding(context, location, admitted, "write");
@@ -3832,14 +3886,14 @@ async function withWriteLane<T>(
   try {
     db.exec("begin immediate");
     try {
-      const authority = admit(db, location, expected, "active");
+      const authority = admit(db, location, expected, "active", recovery);
       // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
       // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
       // invariant: The transaction stays with this wrapper: the effect sees only a
       // connection that refuses its own commit/rollback/close.
       const effect = apply({
-        db: guardedWriteDb(db),
+        db: guardedWriteDb(recovery ? recoverySurfaceDb(db) : db),
         authority,
         close(): never {
           throw transactionOwnershipRefusal();
@@ -3897,6 +3951,32 @@ export async function openRemoteCache(
   resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
   admission: RemoteCacheAdmission = {},
 ): Promise<CollaborationStoreHandle> {
+  return openRemoteCacheAdmission(context, mode, resolved, admission, false);
+}
+
+/**
+ * note: The outbox recovery open: the ONLY admission that may serve a below-current cache whose
+ * recorded version this build still declares an inventory for, and it is constructed here alone —
+ * no caller-passed flag on the ordinary open. The handle it returns is restricted to the outbox
+ * surface, so the lane can be settled but is never read or written as a current store.
+ */
+export async function openRemoteCacheRecovery(
+  context: StoreContext,
+  mode: "read" | "write",
+  resolved?: { location: CollaborationLocation; binding: CollaborationBinding },
+  admission: RemoteCacheAdmission = {},
+): Promise<CollaborationStoreHandle> {
+  return openRemoteCacheAdmission(context, mode, resolved, admission, true);
+}
+
+/** note: The ordinary open admits only the current schema; the recovery open proves its exact version inventory. */
+async function openRemoteCacheAdmission(
+  context: StoreContext,
+  mode: "read" | "write",
+  resolved: { location: CollaborationLocation; binding: CollaborationBinding } | undefined,
+  admission: RemoteCacheAdmission,
+  recovery: boolean,
+): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
   const { location, binding } = remoteCacheScope(context, resolved, admission);
   if (mode === "write" && existsSync(location.dbPath)) {
@@ -3906,14 +3986,58 @@ export async function openRemoteCache(
       throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
     }
   }
-  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs());
+  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs(), recovery);
   try {
     assertRemoteCacheIdentity(handle.authority, binding);
   } catch (error) {
     handle.close();
     throw error;
   }
-  return handle;
+  return recovery
+    ? { db: recoverySurfaceDb(handle.db), authority: handle.authority, close: handle.close }
+    : handle;
+}
+
+/**
+ * note: The tables a recovery open serves: the intent tables plus the remote projection rows the
+ * settlement verbs read. Every domain table stays behind the ordinary current-schema admission.
+ */
+const REMOTE_CACHE_RECOVERY_TABLES: ReadonlySet<string> = new Set([
+  ...COLLABORATION_REMOTE_TABLES,
+  ...COLLABORATION_OUTBOX_TABLES,
+]);
+
+/** why: The recovery surface is an outbox escape hatch, not a current-schema substitute. */
+function recoverySurfaceRefusal(table: string): StoreError {
+  return new StoreError(
+    "collaboration.upgrade-required",
+    `The recovery open of a below-current remote cache serves only the outbox surface; "${table}" is a domain table this admission never serves. Settle every unsettled outbox intent, rerun the reviewed remote bind to replace the cache, and retry the domain verb against the current cache. Nothing was read or modified.`,
+  );
+}
+
+/** invariant: A recovery open's connection refuses every statement naming a table outside the surface. */
+function recoverySurfaceGuard(sql: string): void {
+  for (const table of COLLABORATION_TABLES) {
+    if (REMOTE_CACHE_RECOVERY_TABLES.has(table)) continue;
+    if (new RegExp(`\\b${table}\\b`).test(sql)) throw recoverySurfaceRefusal(table);
+  }
+}
+
+/** note: Read/write wrapper composing the surface guard under the caller's connection. */
+function recoverySurfaceDb(db: StoreDb): StoreDb {
+  return {
+    exec(sql: string): void {
+      recoverySurfaceGuard(sql);
+      db.exec(sql);
+    },
+    prepare(sql: string) {
+      recoverySurfaceGuard(sql);
+      return db.prepare(sql);
+    },
+    close(): void {
+      db.close();
+    },
+  };
 }
 
 /** note: The active remote cache identity alone; nothing is created. */

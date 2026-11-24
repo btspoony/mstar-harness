@@ -45,12 +45,14 @@ import {
   probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
+  openRemoteCacheRecovery,
   readRemoteCacheAuthority,
   setLocalPredecessorPublicationGapForTest,
   setRemoteCacheReplacementGapForTest,
   setRemoteCacheReplacementPublishGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
+  withRemoteCacheWrite,
   writeCollaborationBinding,
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
@@ -9503,15 +9505,201 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(frozenId);
     expect(refused.message).toContain("unconfirmed");
-    expect(refused.message).toContain("outbox-pending");
+    // note: The recovery must be executable for THIS state: an `unconfirmed` row is invisible to
+    // `outbox-pending`, so the first step names `outbox-show` and its settlement verbs.
+    expect(refused.message).toContain("outbox-show");
     expect(refused.message).toContain("outbox-reconcile");
     expect(refused.message).toContain("outbox-receipt");
-    expect(refused.message).toContain("outbox-abandon");
     // invariant: Nothing was replaced: the ledger, the identity and the intent itself are exactly
     // as the refused bind found them, and no `.replaced-` copy was staged.
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
     expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "unconfirmed" }));
+    expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
+  }, 30_000);
+
+  /** note: Seed one synthetic outbox row into a REMOTE v3 lane: enough for the guard's refusal texts. */
+  function seedRemoteV3Intent(
+    location: CollaborationLocation,
+    operationId: string,
+    state: RemoteIntentState,
+    createdAt = "2026-11-21T00:00:00.000Z",
+  ): void {
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.exec(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
+          "'seed-commit', 'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}');" +
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
+          "values ('" + operationId + "', 1, 'seed-project', 'seed-hash', '{}', '" + state + "', '" + createdAt + "', '" + createdAt + "');",
+      );
+    } finally {
+      db.close();
+    }
+  }
+
+  test("an enqueued intent is settled through the public outbox verbs on the refused cache and the bind then succeeds", async () => {
+    const fixture = remoteFixture("remote-v3-pending-recovery");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const frozenId = "00000000-0000-4000-8000-0000000009f3";
+    // note: The frozen request is a real one, so the settlement verbs can read and abandon it.
+    const request = intentRequest(fixture, commit, frozenId);
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', " +
+          "'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', '2026-11-21T00:00:00.000Z', '{}')",
+      ).run(generation, SELECTED_PROJECT.localProjectId, commit);
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
+          "values (?, ?, ?, 'seed-hash', ?, 'enqueued', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+      ).run(frozenId, generation, SELECTED_PROJECT.localProjectId, JSON.stringify(request));
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    // invariant: The bind refuses with the executable recovery: the oldest operation id and the
+    // listing/dispatch route an enqueued row can actually start from.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(frozenId);
+    expect(refused.message).toContain("outbox-pending");
+    expect(refused.message).toContain("outbox-dispatch");
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+
+    // invariant: The recovery the refusal names RUNS on the below-current cache: the listing sees
+    // the row, and the public abandonment settles it.
+    const pending = await readPendingIntents(context, SELECTED_PROJECT.localProjectId);
+    expect(pending.intents.map((intent) => intent.operationId)).toEqual([frozenId]);
+    const abandoned = await abandonRemoteIntent(context, { operationId: frozenId, reason: "settled on the refused cache" });
+    expect(abandoned).toMatchObject({ operationId: frozenId, state: "abandoned" });
+
+    // invariant: The recovery admission widened nothing: the ordinary write lane still refuses the
+    // below-current cache with its unchanged text, and a domain table is never served.
+    const business = await refusalOf(() => withRemoteCacheWrite(context, () => undefined));
+    expect(business.code).toBe("collaboration.upgrade-required");
+    expect(business.message).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
+    const recovery = await openRemoteCacheRecovery(context, "read");
+    try {
+      expect(() => recovery.db.prepare("select count(*) as n from issues").get()).toThrow(/"issues"/);
+      expect(recovery.db.prepare("select count(*) as n from remote_outbox").get()).toMatchObject({ n: 1 });
+    } finally {
+      recovery.close();
+    }
+
+    // invariant: With every intent settled, the ordinary bind replaces the cache and keeps the
+    // store identity - the exit the guard promises.
+    const bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote", store_id: recorded.storeId, authority_state: "active" });
+    expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(CURRENT_VERSION);
+  }, 30_000);
+
+  test("each unsettled state's refusal names a first step that works for that state", async () => {
+    const cases: Array<{ state: RemoteIntentState; step: string }> = [
+      { state: "enqueued", step: "outbox-dispatch" },
+      { state: "unconfirmed", step: "outbox-reconcile" },
+      { state: "conflict", step: "outbox-resolve" },
+    ];
+    for (const { state, step } of cases) {
+      const fixture = remoteFixture("remote-v3-route-" + state);
+      const commit = fixture.publish(fixture.payload());
+      const generation = Number(fixture.payload().generation);
+      const context = contextAt(fixture.repo);
+      const location = locationAt(fixture.repo);
+      const frozenId = "00000000-0000-4000-8000-0000000009f4";
+      seedRemoteV3Intent(location, frozenId, state);
+      const recorded = recordedGeneration(location);
+      writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+      const refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+      );
+      // invariant: The named first step is the verb that settles THIS state, and it is always
+      // introduced by a listing/show command that can find the row.
+      expect(refused.code).toBe("remote.effect-pending");
+      expect(refused.message).toContain(frozenId);
+      expect(refused.message).toContain(step);
+      expect(refused.message).toMatch(/outbox-(pending|show)/);
+    }
+  }, 30_000);
+
+  test("a cache holding intents of several states names the oldest route and points at the listing", async () => {
+    const fixture = remoteFixture("remote-v3-route-mixed");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      // note: The conflict row is OLDER, so its route is the named first step.
+      db.exec(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
+          "'seed-commit', 'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}');" +
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
+          "values ('00000000-0000-4000-8000-0000000009e1', 1, 'seed-project', 'seed-hash', '{}', 'conflict', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z'), " +
+          "('00000000-0000-4000-8000-0000000009e2', 1, 'seed-project', 'seed-hash', '{}', 'enqueued', " +
+          "'2026-11-22T00:00:00.000Z', '2026-11-22T00:00:00.000Z');",
+      );
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain("00000000-0000-4000-8000-0000000009e1");
+    expect(refused.message).toContain("outbox-resolve");
+    expect(refused.message).toContain("outbox-pending");
+    expect(refused.message).toMatch(/other states/);
+  }, 30_000);
+
+  test("a below-current cache this build's declared inventory does not match still refuses, mutating nothing", async () => {
+    const fixture = remoteFixture("remote-v3-inventory-mismatch");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    // note: Damage one column the declared inventory requires: the exact-inventory proof of the
+    // recovery admission must refuse these bytes, not serve them.
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.exec("create table issues_broken as select * from issues");
+      db.exec("drop table issues");
+      db.exec("alter table issues_broken drop column identity_key");
+      db.exec("alter table issues_broken rename to issues");
+    } finally {
+      db.close();
+    }
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+    // invariant: The recovery open refuses the exact-inventory proof by name...
+    const refused = await refusalOf(() => openRemoteCacheRecovery(context, "read"));
+    expect(refused.code).toBe("collaboration.unreadable");
+    // invariant: ...and that refused open mutates nothing: the ledger, identity and damaged bytes
+    // are exactly as found, with no staging beside the lane.
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+    expect(existsSync(location.dbPath)).toBe(true);
     expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
   }, 30_000);
 });
