@@ -2363,6 +2363,20 @@ describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
     const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Pha<tspan>se</tspan> 4</text>" }]);
     expect(result.hits.length).toBeGreaterThan(0);
   });
+
+  test("an out-of-range code point does not abort the scan", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text: "&#x110000; Phase 4" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a bullet under a phase line is not a stage run", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text: "Phase 2\n- 4 items\n" }]).hits).toEqual([]);
+  });
+
+  test("a probe in a diagram label is prose", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>" + RETIRED_STAGE_MACHINE_LITERALS[0] + "</text>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
 });
 
 describe("checkRetiredStageNames — a name split across a line break", () => {

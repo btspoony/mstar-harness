@@ -87,18 +87,31 @@
  * own file, and only a genuinely ambiguous basename fails.
  * 16. prompt face — retired stage names (`checkRetiredStageNames`): the
  * iteration delivery stages 4, 5 and 6 no longer exist, so a tracked line
- * under the prompt roots that cites a retired section (`§5.x`, `§6.x`, or
- * its word spellings `policy 5.x` / `section 5.x`), or names stage 4, 5 or
- * 6 (`Phase 4`, `phase-4-…`, `phase5-…`, a stage list after `phase(s)` such
- * as `Phase 2 → 3 → 4`), fails. Section citations are removed before a
- * stage list is read, so `Phase 3 §3.4` stays clean. `.svg` text counts: the
- * `<text>`, `<title>` and `aria-label` values are read, so a diagram cannot
- * keep a retired name a Markdown scan would miss. The three engine probes
- * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an
- * inline code span or a fenced block, and their presence in prose fails.
- * Skills whose numbered steps are their own process (`mstar-audit`,
- * `mstar-knowledge`) are exempt by path: their `Phase 4` is their own step,
- * not an iteration delivery stage.
+ * under the prompt roots (`skills/`, `commands/`, `agents/`, `codex/`,
+ * `docs/`, the routing-eval assets, `.changes/unreleased/`) or in
+ * `AGENTS.md`, `README.md`, `README_CN.md`, `INSTALL.md` that cites a retired
+ * section (`§5.x`, `§6.x`, or its word spellings `policy 5.x` /
+ * `section 5.x`), or names stage 4, 5 or 6 (`Phase 4`, `phase-4-…`,
+ * `phase5-…`, a stage list after `phase(s)` such as `Phase 2 → 3 → 4`),
+ * fails. A stage number is the whole number, so `Phase 14` is not stage 4 and
+ * `Phase 123 to 4` still reaches 4. Section citations are removed before a
+ * stage list is read, so `Phase 3 §3.4` stays clean. Text faces are `.md`,
+ * `.json`, `.toml` (the Codex prompt sources) and, in `assets/`, only a
+ * direct `*.svg` child. `.svg` text counts: the `<text>`, `<title>`, `<desc>`
+ * and `aria-label` values are read with inline markup joined and numeric
+ * character references decoded, and a diagram label is judged as prose. The
+ * same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape, and
+ * adjacent prose lines are judged as one block, so a name split by a line
+ * break is still reported. `<code>` is judged like a backtick span. A fence
+ * closes only on its own character, at least as long as the opener, with
+ * nothing after it, and may sit inside a blockquote. The three engine probes
+ * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
+ * code span or a fenced block, matched at their boundaries (the `PHASE6_`
+ * code family is exempt by prefix), and their presence in prose fails.
+ * Generated bundles and changelog history are skipped; skills whose numbered
+ * steps are their own process (`mstar-audit`, `mstar-knowledge`) are exempt
+ * by path. Guard-or-clear-error: a failed `git ls-files` reports the guard as
+ * skipped, and an unreadable file becomes one named row.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -1666,9 +1679,13 @@ const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
 /** why: a diagram may spell a stage as a numeric character reference, which
  * renders as the stage number; decode before matching. */
 function decodeXmlEntities(text: string): string {
+  // why: an out-of-range code point must not abort the whole lint; a rendering
+  // that cannot be produced cannot hide a retired name either.
+  const fromCodePoint = (codePoint: number): string =>
+    codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "\uFFFD";
   return text
-    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => fromCodePoint(Number.parseInt(dec, 10)))
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -1741,10 +1758,10 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
   const hits: string[] = [];
   for (const file of files) {
     if (file.rel.endsWith(".svg")) {
-      // SVG label text is not Markdown: nothing here is a code span, and only
-      // the exact probes leave it.
+      // SVG label text is prose a reader sees: a probe in a label is not in a
+      // Markdown code span or fence, so it is reported like prose.
       for (const segment of svgTextSegments(file.text)) {
-        for (const hit of findRetiredStageSpellings(segment.text, true)) {
+        for (const hit of findRetiredStageSpellings(segment.text, false)) {
           hits.push(
             `Guard 16 retired-stage-name: ${file.rel}:${segment.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
           );
@@ -1794,7 +1811,10 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       }
       const lineHits = findRetiredStageSpellings(text, false);
       for (const hit of lineHits) report(`${index + 1} "${hit}"`);
-      if (previous !== "" && text.trim() !== "") {
+      // why: a following bullet is a new block element, not part of the
+      // sentence above it, and its `-` would read as a stage-list separator.
+      const blockStarts = /^\s*(?:[-*+]|\d+\.)\s/.test(text);
+      if (previous !== "" && text.trim() !== "" && !blockStarts) {
         for (const hit of findRetiredStageSpellings(`${previous} ${text}`, false)) {
           if (!lineHits.includes(hit)) report(`${index + 1} "${hit}" (split across the line break)`);
         }
@@ -2376,8 +2396,8 @@ if (import.meta.main) {
 
 /* why: Guard 16 wiring — the rule is stated once, in this file's header § 16. */
 
-  const retiredStage =
-    tracked.failures.length === 0
+  const retiredStageRan = tracked.failures.length === 0;
+  const retiredStage = retiredStageRan
       ? readRetiredStageCorpus(root, tracked.tracked)
       : { files: [], readFailures: [] as string[] };
   for (const row of retiredStage.readFailures) fail(row);
@@ -2442,8 +2462,12 @@ if (import.meta.main) {
     referenceFailures === 0 ? "OK" : `FAIL (${referenceFailures} violation${referenceFailures === 1 ? "" : "s"})`
   }`;
 
-  const retiredStageSummary = `Guard 16 retired stage names ${retiredStageHits.filesScanned} files scanned, ${
-    retiredStageHits.hits.length === 0 ? "OK" : `FAIL (${retiredStageHits.hits.length} hit${retiredStageHits.hits.length === 1 ? "" : "s"})`
+  const retiredStageSummary = `Guard 16 retired stage names ${
+    retiredStageRan
+      ? `${retiredStageHits.filesScanned} files scanned, ${
+          retiredStageHits.hits.length === 0 ? "OK" : `FAIL (${retiredStageHits.hits.length} hit${retiredStageHits.hits.length === 1 ? "" : "s"})`
+        }`
+      : "skipped (git ls-files failed)"
   }`;
 
   reportOversizedTests();
