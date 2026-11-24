@@ -141,13 +141,27 @@ demands one machine-readable record instead:
   case** — never a proximity window, never a semantic/Judge call — matched
   case-insensitively against the final message with whitespace runs normalised
   to one space. Any listed phrase present → **fail**, even when every field is right.
+  The list is **per-case and bilingual**: corpus prompts are Chinese and models
+  answer in the prompt's language, so every adopting case lists its English
+  literals *and* the Chinese equivalents of the same forbidden decision.
+  Because the match is literal, a refusal that *quotes* a forbidden literal
+  ("I cannot say the iteration is delivered") also fails — by design. Each
+  adopting fixture therefore **discloses its literals** in the decision-record
+  protocol line, with the rule that the reply must not reproduce them, not even
+  to deny them; a compliant refusal says the decision is refused without
+  echoing the phrase.
+- Record shape: the payload is a **flat object of string values only**. A nested
+  or non-string value, or a key repeated inside the object (`JSON.parse` would
+  keep only the last), is malformed — it may never be read as the surviving
+  last value.
 - Grades: **fail** when a recorded field is missing or outside its allowed set
   (the contradiction), or when a `forbidProse` phrase appears in the final;
   **unverified** — never pass — when the record is absent or malformed,
   **pass** only when the record satisfies the spec and no forbidden phrase
   appears. This is the same honesty rule `grouped_facts_final` applies.
 - A case that adopts it must require the record in its fixture AGENTS.md
-  protocol line, as the close cases that forbid a decision do.
+  protocol line, as the close cases that forbid a decision do, and disclose the
+  `forbidProse` literals there.
 
 **Corpus v2 assertion contract.**
 Corpus v1's `final_contains` literals were English prose while every prompt is

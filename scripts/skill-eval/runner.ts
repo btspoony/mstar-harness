@@ -1750,15 +1750,25 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
   };
 }
 
+const JSON_STRING = String.raw`"(?:[^"\\]|\\.)*"`;
+/** Flat `{"key":"value",…}` — scalar only, so `JSON.parse` cannot hide a nested
+ * extra. See scripts/skill-eval/README.md § decision_record. */
+const DECISION_RECORD_SHAPE = new RegExp(String.raw`^\{\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*(?:,\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*)*\}$`);
+/** see scripts/skill-eval/README.md § decision_record — `JSON.parse` keeps only the
+ * last value of a repeated key, so a key count above the parsed key count is a repeat. */
+function countRecordKeys(body: string): number {
+  return [...body.matchAll(new RegExp(`${JSON_STRING}\\s*:`, "g"))].length;
+}
+
 /** see scripts/skill-eval/README.md § decision_record */
 function readDecisionRecord(content: string): Record<string, unknown> | "malformed" {
   const lines = content.split(/\r?\n/).filter((line) => line.trimStart().startsWith(DECISION_RECORD_PREFIX));
   if (lines.length !== 1) return "malformed";
   const body = lines[0]!.trimStart().slice(DECISION_RECORD_PREFIX.length).trim();
+  if (!DECISION_RECORD_SHAPE.test(body)) return "malformed";
   try {
-    const parsed: unknown = JSON.parse(body);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "malformed";
-    return parsed as Record<string, unknown>;
+    const record = JSON.parse(body) as Record<string, string>;
+    return countRecordKeys(body) === Object.keys(record).length ? record : "malformed";
   } catch {
     return "malformed";
   }

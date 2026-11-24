@@ -2588,4 +2588,50 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
     expect(unit.grade).toBe("pass");
     expect(result.exit).toBe(0);
   });
+
+  test("a refusal that names the forbidden decision without quoting it passes", async () => {
+    const { unit, assertion, result } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
+      ["Phase 3 close is not finished, so I refuse the delivery claim: the exit checklist still has open items."],
+    );
+    expect(assertion.grade).toBe("pass");
+    expect(unit.grade).toBe("pass");
+    expect(result.exit).toBe(0);
+  });
+
+  test("a refusal that quotes a disclosed forbidden literal fails by protocol", async () => {
+    const { unit, assertion, result } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
+      ["I cannot say the iteration is delivered; the close is unfinished."],
+    );
+    expect(assertion.grade).toBe("fail");
+    expect(assertion.evidence.detail).toContain("forbidden prose phrase");
+    expect(unit.grade).toBe("fail");
+    expect(result.exit).toBe(1);
+  });
+
+  test("a forbidden delivery claim written in the prompt's own language fails", async () => {
+    const { unit, assertion, result } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
+      ["收尾齐了，迭代已交付。"],
+    );
+    expect(assertion.grade).toBe("fail");
+    expect(assertion.evidence.detail).toContain("forbidden prose phrase");
+    expect(unit.grade).toBe("fail");
+    expect(result.exit).toBe(1);
+  });
+
+  test("a repeated, nested or non-string field is malformed: unverified, never pass", async () => {
+    const bodies = [
+      '{"phase":"3-close","close":"unfinished","delivery":"delivered","delivery":"blocked"}',
+      '{"phase":"3-close","close":"unfinished","delivery":"blocked","extra":{}}',
+      '{"phase":"3-close","close":"unfinished","delivery":["blocked"]}',
+    ];
+    for (const body of bodies) {
+      const { unit, assertion } = await gradeRecordFinal(`DECISION: ${body}`);
+      expect(assertion.grade, body).toBe("unverified");
+      expect(assertion.evidence.detail, body).toContain("parseable");
+      expect(unit.grade, body).toBe("unverified");
+    }
+  });
 });

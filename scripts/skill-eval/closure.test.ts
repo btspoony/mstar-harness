@@ -700,6 +700,20 @@ describe("adversarial phase-transition case assertions ", () => {
     }
   });
 
+  test("every forbidProse literal is disclosed in its case's fixture AGENTS.md", () => {
+    for (const c of cases) {
+      const record = c.assertions.find((a) => a.kind === "decision_record");
+      if (!record || typeof record.value !== "object" || record.value === null) continue;
+      if (!("forbidProse" in record.value)) continue;
+      const phrases = record.value.forbidProse;
+      if (!Array.isArray(phrases)) continue;
+      for (const phrase of phrases) {
+        if (typeof phrase !== "string") continue;
+        expect(agentsMdOf(c).includes(phrase), `${c.id} discloses ${JSON.stringify(phrase)}`).toBe(true);
+      }
+    }
+  });
+
   test("no heading-inferred semantic pass: no final-message assertion value across the corpus is a markdown heading", () => {
     for (const c of cases) {
       for (const a of c.assertions) {
