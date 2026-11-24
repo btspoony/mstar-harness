@@ -2058,11 +2058,11 @@ async function replaceDerivedLaneBelow(
   }
   if (recorded.unsettled.length > 0) {
     // note: The refusal names EVERY distinct unsettled state present, one line each, so a later
-    // `unconfirmed` or `conflict` row behind the oldest `enqueued` one is never invisible:
-    // `outbox-pending` lists only `enqueued` rows and `outbox-show` needs an operation id. Each
-    // line names that state's oldest operation id and the commands that actually move THAT state:
-    // a dispatch issues only a permit, a resolve only enqueues a repair, and a receipt records
-    // evidence, so none of them is called settling on its own.
+    // `unconfirmed` or `conflict` row behind the oldest `enqueued` one is never invisible: the
+    // listing covers every unsettled state, and each line additionally names that state's oldest
+    // operation id and the commands that actually move THAT state: a dispatch issues only a
+    // permit, a resolve only enqueues a repair, and a receipt records evidence, so none of them is
+    // called settling on its own.
     const cli = (verb: string): string => `mstar store collaboration remote ${verb}`;
     const showCommand = (operation: string): string =>
       "`" + cli("outbox-show") + " --harness <abs> --operation " + operation + "`";
