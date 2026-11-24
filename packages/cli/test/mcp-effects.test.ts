@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { createMcpEffects } from "../src/mcp/effects.js";
@@ -68,5 +70,33 @@ describe("mcp process effects", () => {
       signal: new AbortController().signal,
     }).catch((reason: unknown) => reason);
     expect(error).toMatchObject({ code: "process.not-found", exitCode: 127, executable: "mstar-no-such-executable-for-test" });
+  });
+
+  test("a vanished working directory refuses as a directory fault, not a missing executable", async () => {
+    // see packages/commands/src/effects/process.ts
+    // why: the spawn error names argv[0] even when the directory is what
+    // vanished, so classifying it as a missing binary tells the operator to
+    // install a tool that is already installed.
+    const cwd = path.join(os.tmpdir(), "mstar-effects-vanished-workspace");
+    const error = await createMcpEffects([]).spawn({
+      argv: [process.execPath, "-e", "0"],
+      cwd,
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.cwd-not-found", details: { cwd } });
+    expect(error).not.toHaveProperty("executable");
+  });
+
+  test("a missing executable in an existing directory still reports process.not-found", async () => {
+    // see packages/commands/src/effects/process.ts
+    // why: the directory probe must not swallow the genuine missing-binary case.
+    const error = await createMcpEffects([]).spawn({
+      argv: ["mstar-no-such-executable-for-test"],
+      cwd: os.tmpdir(),
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.not-found", executable: "mstar-no-such-executable-for-test" });
   });
 });

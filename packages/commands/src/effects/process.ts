@@ -1,5 +1,6 @@
 import { constants } from "node:os";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 export type ProcessRequest = {
   argv: readonly string[];
   cwd: string;
@@ -9,10 +10,22 @@ export type ProcessRequest = {
   signal: AbortSignal;
 };
 export type ProcessResult = { exitCode: number | null; signal: string | null; stdout: string; stderr: string };
-/** Runtime ENOENT messages differ per platform/Bun build (thrown synchronously
- * or delivered on the error event); normalize both to one deterministic string. */
-function normalizeNotFound(error: unknown, executable: string): Error {
+/**
+ * Classify a spawn failure. Runtime ENOENT messages differ per platform/Bun
+ * build (thrown synchronously or delivered on the error event), so both are
+ * normalized to one deterministic string.
+ *
+ * why: the spawn error names argv[0] even when the working directory is what
+ * vanished, so the error itself cannot tell the two apart. Probe the directory
+ * instead — otherwise a stale workspace is reported as a missing binary and the
+ * suggested repair (install the tool) cannot succeed.
+ */
+export function spawnFailure(error: unknown, request: Pick<ProcessRequest, "argv" | "cwd">): Error {
   if (error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (!existsSync(request.cwd)) {
+      return Object.assign(new Error(`working directory not found: ${request.cwd}`), { code: "process.cwd-not-found", exitCode: 1, details: { cwd: request.cwd } });
+    }
+    const executable = request.argv[0]!;
     return Object.assign(new Error(`executable not found in $PATH: ${executable}`), { code: "process.not-found", exitCode: 127, executable });
   }
   return error as Error;
@@ -56,7 +69,7 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
     });
   } catch (error) {
     cleanup();
-    reject(normalizeNotFound(error, request.argv[0]!));
+    reject(spawnFailure(error, request));
     return promise;
   }
   if (request.signal.aborted) abort();
@@ -67,7 +80,7 @@ export function spawnProcess(request: ProcessRequest): Promise<ProcessResult> {
   child.once("error", (error) => {
     cleanup();
     settled = true;
-    reject(normalizeNotFound(error, request.argv[0]!));
+    reject(spawnFailure(error, request));
   });
   child.once("close", (exitCode, signal) => finish({
     exitCode: exitCode ?? (signal ? 128 + ((constants.signals as Record<string, number>)[signal] ?? 0) : 1),

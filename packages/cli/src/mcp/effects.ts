@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:os";
-import { startDashboard, type CommandEffects } from "@mstar-harness/commands";
+import { spawnFailure, startDashboard, type CommandEffects } from "@mstar-harness/commands";
 import { openBrowserBounded } from "../browser-opener.js";
 
 type ProcessRequest = {
@@ -80,10 +80,7 @@ function spawnBounded(request: ProcessRequest): Promise<ProcessResult> {
       });
     } catch (error) {
       // see packages/commands/src/effects/process.ts
-      // Sync ENOENT carries the same contract as the error-event path below.
-      if (error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        reject(Object.assign(error, { code: "process.not-found", exitCode: 127, executable: request.argv[0] }));
-      } else reject(error);
+      reject(spawnFailure(error, request));
       return;
     }
     const stdout: Buffer[] = [];
@@ -127,10 +124,9 @@ function spawnBounded(request: ProcessRequest): Promise<ProcessResult> {
       cleanup();
       // see packages/commands/src/effects/process.ts
       // why: consumers read the missing binary from the shared `executable`
-      // field (the raw spawn message varies by platform), so MCP must set it
-      // the same way spawnProcess does.
-      if (error.code === "ENOENT") reject(Object.assign(error, { code: "process.not-found", exitCode: 127, executable: request.argv[0] }));
-      else reject(error);
+      // field (the raw spawn message varies by platform), so MCP classifies a
+      // spawn failure exactly as spawnProcess does.
+      reject(spawnFailure(error, request));
     });
     child.once("close", (exitCode, signal) => {
       if (settled) return;

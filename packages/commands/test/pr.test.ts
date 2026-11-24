@@ -130,7 +130,12 @@ describe("pr merge-gate", () => {
     const gate = command("pr.merge-gate");
     const capped = await gate.execute({ pr: "42", maxPages: "1" }, context);
     expect(capped).toMatchObject({ status: "refused", code: "pr.merge-gate.page-cap" });
-    expect(capped.status === "ok" ? "" : JSON.stringify(capped)).toContain("--max-pages");
+    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
+    // why: the retry re-runs this invocation, so it must keep `--provider` — a
+    // bare `--max-pages` retry would rescan through GitHub. The concrete id is
+    // carried on details.provider because the retry text stays a literal.
+    expect(capped.status === "ok" ? "" : JSON.stringify(capped)).toContain("mstar pr merge-gate --pr <n> --provider <id> --max-pages <n>");
+    expect(capped.status === "ok" ? {} : capped.details).toMatchObject({ provider: "github" });
     // why: the refusal names the one action that changes the outcome, so the
     // raised cap must actually complete the same scan.
     pages = 0;
@@ -174,6 +179,48 @@ describe("pr merge-gate", () => {
     const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
     expect(recovery).toContain("mstar pr merge-gate --pr <number> --provider <id> --confirm <file>");
     expect(recovery).toContain("passing the provider id this invocation selected");
+    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
+    // why: the recovery asks for the id this invocation selected, so an
+    // operator holding only the refusal must be able to read it here.
+    expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ provider: "wfix" });
+  });
+
+  test("the unreadable, head-moved and page-cap retries all name the selected provider", async () => {
+    const { context } = fixture();
+    const head = "abcdef0123456";
+    let mode: "unreadable" | "moved" | "more" = "unreadable";
+    registerMergeGateProvider("tfix", {
+      async resolve() { return { ok: true, value: { head, host: "h", owner: "o", repo: "r" } }; },
+      async threads() {
+        if (mode === "unreadable") return { ok: true, value: { threads: [], hasNextPage: false, endCursor: null, readable: false, headRefOid: head } };
+        if (mode === "moved") return { ok: true, value: { threads: [], hasNextPage: false, endCursor: null, readable: true, headRefOid: "9999999999999" } };
+        return { ok: true, value: { threads: [], hasNextPage: true, endCursor: "c1", readable: true, headRefOid: head } };
+      },
+    });
+    const gate = command("pr.merge-gate");
+    const recoveryOf = (envelope: Awaited<ReturnType<typeof gate.execute>>): string =>
+      envelope.status === "ok" ? "" : (envelope.details?.recovery as string | undefined) ?? "";
+
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
+    // why: each of these retries re-runs the same invocation, so every one must
+    // keep `--provider` — otherwise following it rescans via GitHub — and every
+    // refusal must carry the concrete id the operator has to pass.
+    const unreadable = await gate.execute({ pr: "7", provider: "tfix" }, context);
+    expect(unreadable).toMatchObject({ status: "refused", code: "pr.merge-gate.unreadable" });
+    expect(recoveryOf(unreadable)).toContain("mstar pr merge-gate --pr <n> --provider <id>");
+    expect(unreadable.status === "ok" ? {} : unreadable.details).toMatchObject({ provider: "tfix" });
+
+    mode = "moved";
+    const moved = await gate.execute({ pr: "7", provider: "tfix" }, context);
+    expect(moved).toMatchObject({ status: "refused", code: "pr.merge-gate.head-moved" });
+    expect(recoveryOf(moved)).toContain("mstar pr merge-gate --pr <n> --provider <id>");
+    expect(moved.status === "ok" ? {} : moved.details).toMatchObject({ provider: "tfix", expected: head, actual: "9999999999999" });
+
+    mode = "more";
+    const capped = await gate.execute({ pr: "7", provider: "tfix", maxPages: "1" }, context);
+    expect(capped).toMatchObject({ status: "refused", code: "pr.merge-gate.page-cap" });
+    expect(recoveryOf(capped)).toContain("mstar pr merge-gate --pr <n> --provider <id> --max-pages <n>");
+    expect(capped.status === "ok" ? {} : capped.details).toMatchObject({ provider: "tfix" });
   });
 
   test("a missing provider executable names the tool from the error's executable field or its message", async () => {
@@ -192,6 +239,20 @@ describe("pr merge-gate", () => {
     const byMessage = await gate.execute({ pr: "42" }, context);
     expect(byMessage).toMatchObject({ status: "refused", code: "process.not-found" });
     expect(byMessage.status === "ok" ? "" : (byMessage.details?.recovery as string) ?? JSON.stringify(byMessage)).toContain("glab");
+  });
+
+  test("a vanished working directory reaches the operator as a path fault, never as an install hint", async () => {
+    const { context } = fixture();
+    // see packages/commands/src/effects/process.ts
+    // why: the spawn error names argv[0] even when the directory is what
+    // vanished, so an unclassified ENOENT would tell the operator to install a
+    // tool they already have instead of repairing the workspace.
+    context.effects.spawn = async () => { throw Object.assign(new Error("working directory not found: /gone/workspace"), { code: "process.cwd-not-found", exitCode: 1, details: { cwd: "/gone/workspace" } }); };
+    const refused = await command("pr.merge-gate").execute({ pr: "42" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "process.cwd-not-found" });
+    expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ cwd: "/gone/workspace" });
+    expect(refused.status === "ok" ? "" : (refused.details?.recovery as string)).toContain("workspace, which no longer exists");
+    expect(refused.status === "ok" ? "" : JSON.stringify(refused)).not.toContain("GitHub CLI");
   });
 
   test("a registered fixture provider drives the gate without spawning", async () => {
