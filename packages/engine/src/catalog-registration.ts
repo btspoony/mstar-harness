@@ -1176,17 +1176,27 @@ export async function readCatalogRevisions(context: StoreContext): Promise<Catal
  * only what is known — the pending phase — because the registration entry
  * reaches it without a registry row; the caller names root visibility when its
  * own read proved one.
+ *
+ * invariant: A root-visible workflow's journals settlement is NOT reachable by itself. Both
+ * settlements refuse while the workflow stays registered (`refuseActiveCatalogRecovery`), and
+ * `purge-registration` needs an identity-failure record this state does not have, so the
+ * refusal must name the mandatory lifecycle close FIRST — with the coordinator identity that
+ * alone can perform it — and only then the journal route. Naming a command that refuses is
+ * not a recovery.
  */
 export function refusePendingRegistration(
   workflowId: string,
   pending: { operationId: string; phase: "prepared" | "execution-written" },
   rootVisible = false,
 ): never {
+  const closeFirst = rootVisible
+    ? `First stop the active lifecycle with "mstar workflow lifecycle --workflow ${workflowId} --status <completed|stopped|failed> --reason <text>" as its bound coordinator (a registered workflow's journal cannot be settled while it stays active); then `
+    : "Then ";
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
     `workflow ${JSON.stringify(workflowId)}'s catalog registration is ${pending.phase}, not committed ` +
       `(operation ${JSON.stringify(pending.operationId)})${rootVisible ? " while the workflow is root-visible" : ""}; registration must refuse until the legacy journal is settled. ` +
-      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
+      `${closeFirst}use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
   );
 }
 

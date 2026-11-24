@@ -1,6 +1,6 @@
 ---
 category: Fixed
-packages: root
+packages: root, dsh, engine
 ---
 
 - **A journal lane this checkout does not hold no longer refuses workflow selection, and a pending registration now vetoes the workflow/ralph dispatch instead of degrading to an unreadable read.** A bound remote checkout whose private cache is absent, or a scope with no collaboration store yet, carries no `catalog_operations` row, so it gets the same pre-activation pass-through `store.not-active` already had instead of `collaboration.not-initialized`. A registered workflow with a genuinely pending registration still refuses `catalog.registration-pending`, the verdict now runs on the source read the host actually uses (`readExecutionWorkflowSource`), and that read carries the verdict as its own field: the fan-out gate denies the call under `warn`, `ask` and `hard` alike rather than reporting "cannot read the store" and allowing it, so `ralph` cannot start work beside a lifecycle whose catalog registration never committed. Genuinely unreadable sources keep their documented fail-open.

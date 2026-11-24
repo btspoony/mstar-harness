@@ -666,6 +666,10 @@ export async function readExecutionWorkflowSource(
   // happens to also call it. The pre-activation exclusions (`store.not-initialized`/`store.not-active`,
   // a lane this checkout does not hold, an unregistered workflow) pass through inside that gate; any
   // other verdict becomes this read's structured selection error, never a dispatched guess.
+  // Its KIND separates the two failures a consumer must not conflate: only
+  // `catalog.registration-pending` is the store CONFIRMING a half-registered lifecycle;
+  // every other throw (a corrupt journal lane, schema drift, a conflict) is a read that could
+  // not answer, and keeps the documented fail-open.
   const registration = await catalogRegistrationRefusal(context.harnessDir, selection.workflowId)
   if (registration !== null) {
     return {
@@ -905,10 +909,18 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
 
 /* ---------------------------------- catalog registration ---------------------------------- */
 
-/** One catalog-registration refusal: the stable code + its actionable message. */
+/** One catalog-registration refusal: the stable code, its actionable message and its verdict kind. */
 export interface CatalogRegistrationRefusal {
   readonly code: string
   readonly message: string
+  /**
+   * why: `pending` is the store's own CONFIRMED refusal of a half-registered
+   * lifecycle; `unavailable` is a read that could not be answered (a corrupt or
+   * unreadable journal lane). They travel as one verdict type because both refuse
+   * the selection, but only `pending` may veto a dispatch — a broken read keeps
+   * the documented one-warn fail-open.
+   */
+  readonly kind: 'pending' | 'unavailable'
 }
 
 /**
@@ -935,6 +947,13 @@ export interface CatalogRegistrationRefusal {
  * store, below-floor/missing-capability runtime, schema drift, a conflict) is
  * returned as a refusal rather than swallowed: a dispatch that cannot prove
  * the registration is never allowed to proceed on a guess.
+ *
+ * The returned KIND is what a dispatch gate keys its veto on: only
+ * `catalog.registration-pending` is the store CONFIRMING a half-registered
+ * lifecycle, so only it vetoes. Every other code is a read that could not
+ * answer its question (a corrupt or unreadable journal lane, a capability floor,
+ * schema drift), and a caller that must not brick fan-out on a broken read keys
+ * on `kind === 'pending'` instead of on "a refusal came back".
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param workflowId - the workflow the caller's JSON selection resolved.
  * @returns the refusal, or `null` when the registration is committed (or the
@@ -952,9 +971,11 @@ export async function catalogRegistrationRefusal(
     const code = (error as { code?: unknown } | null | undefined)?.code
     // why: A missing or staged execution store is the pre-activation exclusion, never a verdict.
     if (code === 'store.not-initialized' || code === 'store.not-active') return null
+    const refusalCode = typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable'
     return {
-      code: typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable',
+      code: refusalCode,
       message: error instanceof Error ? error.message : String(error),
+      kind: refusalCode === 'catalog.registration-pending' ? 'pending' : 'unavailable',
     }
   }
 }

@@ -1,6 +1,6 @@
 ---
 category: Fixed
-packages: root
+packages: root, commands, engine
 ---
 
 - **The cutover-required disclosure no longer implies a released 4.8.x build can use the store after activation.** The execution schema is never lowered, so that build refuses it as `store.schema-unsupported` even after the cutover; the failure now says so and names this newer build as the one that completes the ladder.

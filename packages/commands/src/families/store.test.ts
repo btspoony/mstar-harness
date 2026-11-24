@@ -179,10 +179,11 @@ test("store.upgrade records and replays under the caller's --operation id", asyn
     expect(replay.status).toBe("ok");
     expect(operations()).toEqual(recorded);
 
-    // invariant: The receipt binds the EXACT request, so a retry that ADDS an acknowledgement is a
-    // different request and refuses under the old id. That is why `--operation` is not part of the
-    // advertised acknowledgement recovery: the operator omits it and the new request reserves its
-    // own operation, while the earlier receipt and the rows it committed stay native facts.
+    // invariant: The receipt binds the EXACT request, so a retry that ADDS a request-identity
+    // option (--ack-skip-workflow / --ack-skip-compass / --delivery) is a different request and
+    // refuses under the old id. That is why `--operation` is not part of the advertised
+    // acknowledgement recovery: the operator omits it and the new request reserves its own
+    // operation, while the earlier receipt and the rows it committed stay native facts.
     const changedRequest = await definition.execute(
       definition.input.parse({
         harness,
@@ -195,6 +196,40 @@ test("store.upgrade records and replays under the caller's --operation id", asyn
     expect(changedRequest).toMatchObject({ status: "refused", code: "execution.operation-conflict" });
     // invariant: The retained receipt is untouched by the refusal.
     expect(operations()).toEqual(recorded);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * why: The other half of the id contract — `--ack-skip-dsh` is host-state import state, NOT request
+ * identity. The documented `store.upgrade-dsh-source-refused` recovery reissues the SAME entry
+ * (same `--operation`, one added selector) because the failed run already committed its execution
+ * half; the retry must replay that half instead of dying as `execution.operation-conflict`.
+ */
+test("store.upgrade replays its committed execution half when a retry adds --ack-skip-dsh", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-dsh-ack-replay-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    // why: one refused DSH host-state fact — a malformed accepted-identity line.
+    const workflowDir = join(harness, "workflows", "upgrade-fixture-workflow");
+    writeFileSync(join(workflowDir, "agent-flow-ids.jsonl"), '{"id":"accepted","d":"digest"}\nmalformed\n');
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const upgrade = (extra: Record<string, unknown>) =>
+      definition.execute(definition.input.parse({ harness, operator: "fixture-operator", operation: "replayed-operation", ...extra }), invocation(root));
+
+    const refused = await upgrade({});
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-dsh-source-refused" });
+
+    // invariant: The SAME id with one added DSH selector replays the committed execution half
+    // instead of refusing `execution.operation-conflict`, so the advertised recovery is reachable
+    // in one step.
+    const recovered = await upgrade({ ackSkipDsh: ["dsh-ledger:upgrade-fixture-workflow"] });
+    expect(recovered.status).toBe("ok");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -54,10 +54,12 @@ import { workflowGateInputOf } from './dispatch-workflow.ts'
  * it returns `registrationRefusal` instead of `unreadable` and the caller vetoes
  * the call under every mode rather than degrading it (a pending registration is
  * never dispatchable state, and treating it as "cannot read" would let a
- * dispatch start work beside it).
+ * dispatch start work beside it). Only the CONFIRMED verdict travels that way:
+ * a journal read that could not answer keeps the unreadable degrade, so a broken
+ * collaboration lane never bricks fan-out.
  *
  * @returns the first uncovered plan id (undefined = covered / nothing to
- *   attribute) + the unreadable flag + the registration refusal, if any.
+ *   attribute) + the unreadable flag + the pending-registration refusal, if any.
  */
 async function writableFanOutUncovered(
   harnessDir: string | null,
@@ -78,11 +80,13 @@ async function writableFanOutUncovered(
   }
   if (source.kind === 'unavailable') return { unreadable: source.code !== 'store.not-initialized' }
   if (source.kind === 'error') {
-    // invariant: A registration verdict is NEVER the unreadable degrade — that degrade is fail-open
-    // (one warn, call allowed), which would let `ralph`/`workflow` start work beside a lifecycle whose
-    // catalog registration has not committed. It travels as its own refusal so the caller vetoes
-    // before any child starts; only a genuinely unreadable source keeps its documented fail-open.
-    if (source.registration !== undefined) return { unreadable: false, registrationRefusal: source.registration }
+    // invariant: A CONFIRMED pending registration is NEVER the unreadable degrade — that degrade is
+    // fail-open (one warn, call allowed), which would let `ralph`/`workflow` start work beside a
+    // lifecycle whose catalog registration has not committed. It travels as its own refusal so the
+    // caller vetoes before any child starts. A verdict whose kind is `unavailable` is a journal read
+    // that could not answer (a corrupt collaboration lane), so it keeps the documented fail-open
+    // below instead of bricking fan-out.
+    if (source.registration?.kind === 'pending') return { unreadable: false, registrationRefusal: source.registration }
     return {
       unreadable: source.selection.kind === 'error' && source.selection.code !== 'workflow.selection.no-active',
     }

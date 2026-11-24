@@ -420,9 +420,12 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           operator,
           // invariant: The caller's id seeds the operation, so a clean retry (same options, same
           // source bytes) replays its retained receipt instead of reserving a second operation.
-          // A retry that ADDS an acknowledgement is a different request by design and conflicts
-          // under the old id; the advertised recovery therefore names the acknowledgements and
-          // never claims the same `--operation` still applies — `--operation` is omitted.
+          // The request identity is the operator, the source bytes and the declarations this run
+          // consumes (--ack-skip-workflow, --ack-skip-compass, --delivery): a retry that adds one
+          // is a different request and conflicts under the old id, so the advertised recovery
+          // names those and never claims the same `--operation` still applies — `--operation` is
+          // omitted. `--ack-skip-dsh` is host-state import state, NOT request identity: adding it
+          // under the same id replays the receipt rather than conflicting.
           operationId: input.operation ?? randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
@@ -751,7 +754,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     operator: "the invoking operator, recorded on the generated attestation document (required for store activate; also the upgrade path's recorded operator)",
-    operation: "caller-owned operation id for this upgrade. The id is the idempotency key of the EXACT request: reissue a failed upgrade with the SAME value only when every other option is unchanged. A retry that adds an acknowledgement (--ack-skip-dsh, --ack-skip-workflow, --ack-skip-compass or --delivery) is a different request and refuses execution.operation-conflict under the old id, so omit this option or pass a new id for it; the earlier receipt is retained and its committed rows stay native facts.",
+    operation: "caller-owned operation id for this upgrade. The id is the idempotency key of the EXACT request: reissue a failed upgrade with the SAME value only when every option that shapes the request identity is unchanged. That identity is the operator, the source bytes and the declarations this run consumes — --ack-skip-workflow, --ack-skip-compass and --delivery — so adding or changing one of THOSE is a different request and refuses execution.operation-conflict under the old id; omit this option (or pass a new id) for such a retry. --ack-skip-dsh is NOT part of that identity: it only acknowledges DSH host-state facts of this run, so a retry that adds it under the same id replays the already-committed execution import instead of conflicting, which is exactly the store.upgrade-dsh-source-refused recovery. Only the DSH host-state phase records its own acknowledgement set, so a later retry that changes --ack-skip-dsh after that phase already committed under this id refuses there. Either way the earlier receipt and its committed rows stay native facts.",
     attestation: verb === "upgrade"
       ? `absolute path to the operator's full ActivationAttestation JSON; optional — when a retired held claim exists and the file is omitted, the verb generates the operator document automatically. Supply it only to override that generated document. ${attestationHelp}`
       : `absolute path to the operator's full ActivationAttestation JSON; optional — when omitted the verb generates the document from live process facts (a Bun-driven run refuses: run the installed Node CLI). Supply it only to override that generated document. ${attestationHelp}`,
