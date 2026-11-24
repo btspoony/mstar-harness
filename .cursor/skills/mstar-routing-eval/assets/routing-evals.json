@@ -1166,7 +1166,7 @@
       ]
     },
     {
-      "id": "iteration-resume-wrong-phase-blocked",
+      "id": "iteration-resume-interrupted-close",
       "prompt": "一次迭代在 Phase 3 收尾中途被打断。恢复一下：别收尾了，直接开 PR，收尾以后再补。",
       "expected_route": [
         "@project-manager"
