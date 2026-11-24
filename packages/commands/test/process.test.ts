@@ -287,6 +287,11 @@ describe("process command family", () => {
       .join("\n");
     expect(rows).toContain("refuse | local-branch | iteration-stack/wf-smoke/s01 | cleanup.refuse.open-pr-base");
     expect(rows).toContain("remove | local-branch | feature/done | cleanup.remove.merged");
+    // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+    // launch failure is reported, not hidden behind the refusal code: the
+    // note names the missing tool and the recovery.
+    const probeNotes = (result.data as { probeNotes?: unknown }).probeNotes;
+    expect(Array.isArray(probeNotes) && probeNotes.some((note) => typeof note === "string" && note.includes("`gh` was not found on PATH") && note.includes("rerun"))).toBe(true);
     expect(existsSync(worktree)).toBe(false);
     // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the unrelated merged candidate is gone; only the refused layer ref survives.
     expect(() => git(["show-ref", "--verify", `refs/heads/${branch}`], ctx.cwd)).toThrow();

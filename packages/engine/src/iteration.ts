@@ -88,9 +88,13 @@ export type PhaseGateOptions = {
  * - all plans Done → `phase-3-close` (Phase 3 required; missing checklist
  *   items listed in `violations`).
  *
- * `phase-3-close` is the transition from the moment every plan is Done, so the
- * close is writable as soon as it is legitimate: `ok` — not the transition
- * name — is the readiness signal a caller reads.
+ * `phase-3-close` is the transition from the moment every plan is Done.
+ * `transition` names the window; `ok` is the gate's pass signal inside the
+ * `phase-3-close` window — it becomes `true` only after the close write
+ * (`status: completed` + `end_date`) already landed, and it is also `true`
+ * under `phase-2-execute`, when the gate has nothing to check — so `ok` is a
+ * close-complete signal, never a precondition waited on before starting the
+ * close work that produces it.
  *
  * Note : during the Phase-3 window `ok` is false because the
  * §3.4 close items (`status: completed` + `end_date`) are only written at

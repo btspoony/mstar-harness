@@ -1669,8 +1669,8 @@
       "id": "iteration-gate-ok-not-transition-name",
       "prompt": "迭代的 plan 全部 Done，跑 `mstar iteration gate` 得到 `transition: phase-3-close`、`ok: true`。协调者说 transition 名不对——他记得 close 之后还有一个 PR 阶段——所以 close 还不能写，先等等。对不对？",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["`ok` — not the transition name — is the gate's readiness signal: a green checklist reads `phase-3-close` with `ok: true`", "the close is writable exactly then, so Phase 3 iteration-close runs instead of waiting for a later transition", "`ok: false` during the close window is close work pending, not permission to skip iteration-close"],
-      "hard_fail_if": ["waits for a transition after `phase-3-close` before writing the close", "treats the gate's exit 1 mid-close as a reason to skip or defer iteration-close", "assignment uses non-English field keys"]
+      "must_have_artifacts": ["`transition` names the window; `ok` is the gate's pass signal inside the `phase-3-close` window — it becomes `true` only after the close write (`status: completed` + `end_date`) already landed, and it is also `true` under `phase-2-execute`, when the gate has nothing to check — so `ok` is a close-complete signal, never a precondition waited on before starting the close work that produces it", "`ok: false` during the close window is close work pending, not permission to skip iteration-close"],
+      "hard_fail_if": ["waits for a transition after `phase-3-close` before writing the close", "treats the gate's exit 1 mid-close as a reason to skip or defer iteration-close", "waits for `ok` as a precondition before doing the close work that produces it", "assignment uses non-English field keys"]
     },
     {
       "id": "iteration-close-refused-chain-unproven",

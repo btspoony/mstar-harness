@@ -1539,6 +1539,11 @@ type DeliveryProofWording = Readonly<{
   targetTail: string;
 }>;
 
+/** see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f — a recorded `refs/heads/<name>` or `refs/remotes/origin/<name>` anchor names the same branch Git spells short. */
+function shortBranchName(branch: string): string {
+  return branch.replace(/^refs\/(heads|remotes\/origin)\//, "");
+}
+
 function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
@@ -1548,8 +1553,8 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
   // §4f — a qualified `refs/heads/<name>` record names the same branch; strip
   // once so every message and ref composition reads the short name.
-  const deliveryBranch = (deliveryBranchOf(branch) as string).replace(/^refs\/(heads|remotes\/origin)\//, "");
-  const targetBranch = (branch.target as string).replace(/^refs\/(heads|remotes\/origin)\//, "");
+  const deliveryBranch = shortBranchName(deliveryBranchOf(branch) as string);
+  const targetBranch = shortBranchName(branch.target as string);
   const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`;
   const base = deliveryCheckoutOf(snapshot, workflowId, deliveryBranch, targetBranch, {
     record,
@@ -1646,8 +1651,8 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
 function iterationDeliveryViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  const deliveryBranch = isNonEmptyString(branch.integration) ? branch.integration.replace(/^refs\/(heads|remotes\/origin)\//, "") : undefined;
-  const targetBranch = isNonEmptyString(branch.target) ? branch.target.replace(/^refs\/(heads|remotes\/origin)\//, "") : undefined;
+  const deliveryBranch = isNonEmptyString(branch.integration) ? shortBranchName(branch.integration) : undefined;
+  const targetBranch = isNonEmptyString(branch.target) ? shortBranchName(branch.target) : undefined;
   const stopped = `record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'`;
   if (deliveryBranch === undefined || targetBranch === undefined) {
     const missing = deliveryBranch === undefined ? "branch.integration" : "branch.target";
@@ -1697,7 +1702,10 @@ export function assertIntegrationCheckout(anchors: IntegrationAnchors, planId: s
     );
   }
   const branch = gitRead(anchors.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch !== anchors.targetBranch) {
+  // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+  // §4f — the delivery proofs accept the same anchor qualified, so the guard
+  // reads the short name too — `rev-parse --abbrev-ref HEAD` never reports one.
+  if (branch !== shortBranchName(anchors.targetBranch)) {
     throw integrationDiverged(
       `plan ${planId} integration checkout ${anchors.worktreePath} is on ${branch || "a detached HEAD"}, not the recorded target ${anchors.targetBranch}`,
       { plan_id: planId, expected: anchors.targetBranch, actual: branch },

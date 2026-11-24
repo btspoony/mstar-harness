@@ -56,7 +56,7 @@ import {
 import { evaluatePostMergeCloseFromExecutionAuthority } from "../src/iteration.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { CompletionEvidence, PlanProgress } from "../src/coordination-write.js";
-import { prepareAmendmentComponent } from "../src/coordination.js";
+import { assertIntegrationCheckout, prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
@@ -4096,6 +4096,21 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
       } as never),
     );
     expect(integrationRefusal.code).toBe("coordination.forbidden-field");
+  });
+
+  test("the integration-checkout guard accepts a qualified recorded anchor", () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the delivery proof accepts `refs/heads/<name>` anchors, so the
+    // checkout guard reads the same anchor's short name rather than refusing
+    // the spelling the proof takes.
+    const repo = realpathSync(mkdtempSync(join(ROOT, "integration-guard-")));
+    runGit(["init", "-q", "-b", "main"], repo);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repo);
+    const worktreePath = join(repo, "wt-int");
+    runGit(["worktree", "add", "-q", "-b", "iteration/wf-guard", worktreePath], repo);
+    const accepted = assertIntegrationCheckout({ targetBranch: "refs/heads/iteration/wf-guard", worktreePath }, PLAN_ID);
+    expect(accepted.clean).toBe(true);
+    expect(() => assertIntegrationCheckout({ targetBranch: "refs/heads/other-branch", worktreePath }, PLAN_ID)).toThrowError(/not the recorded target/);
   });
 
   test("an anchorless, empty or reason-less repair is refused with no mutation", async () => {

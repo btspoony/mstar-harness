@@ -1,7 +1,7 @@
 import fs, { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, planWorktreeCleanup, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, planWorktreeCleanup, type CleanupDecision, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -284,7 +284,7 @@ function cleanupOwner(claims: CleanupClaim[], snapshots: readonly WorkflowSnapsh
  * undefined so the probe fails closed instead of aiming at the wrong host.
  */
 function githubRepoOf(origin: string): string | undefined {
-  const normalized = origin.replace(/\.git$/, "").replace(/\/+$/, "");
+  const normalized = origin.replace(/\/+$/, "").replace(/\.git$/, "");
   const parsed = (() => { try { return new URL(normalized); } catch { return undefined; } })();
   // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
   // scp-like `[user@]host:path` form (git-clone(1): the user is optional —
@@ -297,7 +297,11 @@ function githubRepoOf(origin: string): string | undefined {
   return `${host}/${tail}`;
 }
 
-async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>, retainedPullRequestBases?: readonly string[]): Promise<CommandEnvelope> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function cleanupWorktrees(input: Input, invocation: InvocationContext, retainedOwnerKeys?: ReadonlySet<string>): Promise<CommandEnvelope> {
   if (!input.workflow) throw new SddScriptError("usage: worktree cleanup --workflow <id>", 2);
   if (input.workflow === "." || input.workflow === ".." || input.workflow.includes("/") || input.workflow.includes("\\")) throw new SddScriptError(`invalid workflow id ${JSON.stringify(input.workflow)}`, 1);
   const main = readMainWorktree(invocation.cwd);
@@ -422,18 +426,18 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   const defaultBranch = (await gitProbe(invocation, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], main.root)).replace(/^origin\//, "") || records[0]?.branch;
   if (!defaultBranch) throw new Error("cannot determine the default branch");
   // see skills/mstar-branch-worktree/references/worktree-cleanup.md — an apply
-  // invocation re-plans after each deletion wave. While a layer-ref candidate
-  // remains, EVERY pass re-probes the provider: a PR that gained this run's
-  // base after an earlier pass must still refuse the destructive branch pass,
-  // so a previously verified list is only the fallback once no layer ref is
-  // left to probe for. A probe that cannot START (gh not installed, a vanished
-  // cwd) fails closed exactly like one that fails or cannot parse — `null`,
-  // refusing only the probed layer refs — instead of aborting unrelated
-  // candidates; a cancellation is never swallowed.
-  let openPullRequestBases: CleanupFacts["openPullRequestBases"] = retainedPullRequestBases ?? [];
+  // invocation re-plans after each deletion wave and EVERY pass re-obtains the
+  // open-PR base list: nothing is carried between passes, so a probe failure
+  // in one pass yields `null` for that pass only (refusing just the probed
+  // layer refs) and never silently reuses an earlier answer. A probe that
+  // cannot START (gh not installed, a vanished cwd) fails closed the same way
+  // — a `process.not-found` is also reported as a probe note so a missing gh
+  // is not mistaken for an open PR — while a cancellation is never swallowed.
+  let openPullRequestBases: CleanupFacts["openPullRequestBases"] = [];
+  const probeNotes: string[] = [];
   const layerBranches = targets.filter((target) => target.kind !== "worktree" && LAYER_REF.test(target.branch)).map((target) => target.branch);
   if (layerBranches.length > 0) {
-    const origin = (await gitProbe(invocation, ["remote", "get-url", "origin"], main.root)).replace(/\.git$/, "").replace(/\/+$/, "");
+    const origin = await gitProbe(invocation, ["remote", "get-url", "origin"], main.root);
     const slug = githubRepoOf(origin);
     if (slug === undefined) {
       openPullRequestBases = null;
@@ -448,6 +452,9 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
         // the signal the same way).
         const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
         if (invocation.signal.aborted || code === "command.cancelled") throw error;
+        if (code === "process.not-found") {
+          probeNotes.push("`gh` was not found on PATH, so the open-PR probe could not run and only the layer refs were refused; install the GitHub CLI or put it on PATH, then rerun `mstar worktree cleanup` for this workflow.");
+        }
       }
       let verified = false;
       const bases: string[] = [];
@@ -472,7 +479,7 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   }
   const facts: CleanupFacts = { targets, worktrees: records, snapshots, defaultBranch, mergedLocalBranches, remoteEvidence, openPullRequestBases, openPullRequestProbeRefs: layerBranches };
   const plan = planWorktreeCleanup(selected, facts);
-  if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan });
+  if (!input.apply) return ok("worktree.cleanup", { workflow: input.workflow, dryRun: true, decisions: plan, probeNotes });
   const evidenceBaseBranches = new Set(snapshots.flatMap((snapshot) => [snapshot.branch?.integration, snapshot.branch?.target]).filter((value): value is string => Boolean(value)).map(shortBranchName));
   const deferred = new Set(plan.filter((row) => row.kind === "worktree" && row.verdict === "remove" && records.some((wt) => wt.path === row.ref && wt.branch !== null && evidenceBaseBranches.has(wt.branch))).map(({ ref }) => ref));
   for (const row of plan) if (row.kind === "worktree" && row.verdict === "remove" && !deferred.has(row.ref) && !records.find((wt) => wt.path === row.ref)?.isMain) {
@@ -483,28 +490,58 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   // branch merged only into a recorded target checkout must be deleted from
   // THAT checkout: the anchor's short branch name finds the worktree still
   // checked out on it (the raw qualified anchor never matches Git's short
-  // names). Merge evidence itself stays on the raw anchor.
-  const deleteBranchRow = async (row: { ref: string }): Promise<void> => {
+  // names). Merge evidence itself stays on the raw anchor. A remote-tracking
+  // anchor (`refs/remotes/origin/<name>`) has no checkout of its own: its
+  // same-named local checkout only earns the deletion when its HEAD contains
+  // the candidate tip — a stale namesake makes `git branch -d` refuse a
+  // branch the recorded base proves merged, so the main checkout decides.
+  const deleteBranchRow = async (row: { ref: string }, tolerateRefusal = false): Promise<void> => {
     const target = targets.find((candidate) => candidate.kind === "local-branch" && candidate.ref === row.ref);
     const ownerSnapshot = snapshots.find((snapshot) => snapshot.id === target?.owner?.workflowId);
     const base = target?.owner?.planId && ownerSnapshot?.type === "iteration" ? ownerSnapshot.branch?.integration : ownerSnapshot?.branch?.target;
-    const deletionCwd = base === undefined ? main.root : records.find((wt) => wt.branch === shortBranchName(base) && fs.existsSync(wt.path))?.path ?? main.root;
-    await git(invocation, ["branch", "-d", row.ref], deletionCwd);
+    const sameNamed = base === undefined ? undefined : records.find((wt) => wt.branch === shortBranchName(base) && fs.existsSync(wt.path))?.path;
+    const deletionCwd = sameNamed !== undefined && base !== undefined && base.startsWith("refs/remotes/")
+      ? ((await processReply(invocation, ["git", "merge-base", "--is-ancestor", target?.tip ?? row.ref, "HEAD"], sameNamed)).exitCode === 0 ? sameNamed : main.root)
+      : sameNamed ?? main.root;
+    const reply = await processReply(invocation, ["git", "branch", "-d", row.ref], deletionCwd);
+    if (reply.exitCode !== 0 && (!tolerateRefusal || reply.signal !== null)) throw new Error(reply.stderr.trim() || `git branch -d ${row.ref} exited ${reply.exitCode}`);
   };
-  const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys, openPullRequestBases ?? undefined);
+  const deleteRemoteRow = async (row: { ref: string }): Promise<void> => {
+    const target = targets.find((candidate) => candidate.kind === "remote-branch" && candidate.ref === row.ref);
+    if (target) await git(invocation, ["push", `--force-with-lease=refs/heads/${target.branch}:${target.tip}`, "origin", `:refs/heads/${target.branch}`], main.root);
+  };
+  // see skills/mstar-branch-worktree/references/worktree-cleanup.md — the
+  // destructive waves: pass 2 removes ordinary branches and remote branches;
+  // layer refs stay candidates until the final pass, which keeps the re-probe
+  // live through the last destructive wave (no base list is carried). Pass 3
+  // re-plans against a fresh probe and removes the layer refs plus every
+  // still-removable candidate; the deferred worktrees go last because
+  // layer-ref deletions can still need them as merge-evidence checkouts.
+  const refreshed = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
   if (refreshed.status !== "ok") return refreshed;
-  const secondPlan = (refreshed.data as { decisions: ReturnType<typeof planWorktreeCleanup> }).decisions;
-  for (const row of secondPlan) if (row.kind === "local-branch" && row.verdict === "remove") await deleteBranchRow(row);
+  const secondData = refreshed.data;
+  const secondPlan = isPlainObject(secondData) && Array.isArray(secondData.decisions) ? secondData.decisions as CleanupDecision[] : [];
+  if (isPlainObject(secondData) && Array.isArray(secondData.probeNotes)) probeNotes.push(...secondData.probeNotes.filter((note): note is string => typeof note === "string"));
+  for (const row of secondPlan) if (row.kind === "local-branch" && row.verdict === "remove" && !LAYER_REF.test(row.ref)) await deleteBranchRow(row);
+  for (const row of secondPlan) if (row.kind === "remote-branch" && row.verdict === "remove" && !LAYER_REF.test(row.ref.replace(/^origin\//, ""))) await deleteRemoteRow(row);
+  const finalRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys);
+  if (finalRefresh.status !== "ok") return finalRefresh;
+  const finalData = finalRefresh.data;
+  const finalPlan = isPlainObject(finalData) && Array.isArray(finalData.decisions) ? finalData.decisions as CleanupDecision[] : [];
+  if (isPlainObject(finalData) && Array.isArray(finalData.probeNotes)) probeNotes.push(...finalData.probeNotes.filter((note): note is string => typeof note === "string"));
+  for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "remove") await deleteBranchRow(row);
+  for (const row of finalPlan) if (row.kind === "remote-branch" && row.verdict === "remove" && LAYER_REF.test(row.ref.replace(/^origin\//, ""))) await deleteRemoteRow(row);
   for (const row of secondPlan) if (row.kind === "worktree" && row.verdict === "remove" && deferred.has(row.ref)) {
     await git(invocation, ["worktree", "remove", row.ref], main.root);
   }
-  for (const row of secondPlan) if (row.kind === "remote-branch" && row.verdict === "remove") {
-    const target = targets.find((candidate) => candidate.kind === "remote-branch" && candidate.ref === row.ref);
-    if (target) await git(invocation, ["push", `--force-with-lease=refs/heads/${target.branch}:${target.tip}`, "origin", `:refs/heads/${target.branch}`], main.root);
+  // see skills/mstar-branch-worktree/references/worktree-cleanup.md — a
+  // deferred worktree's own branch is refused checked-out until the worktree
+  // is gone; after the removal `git branch -d` is the judge: a branch the
+  // checkout proved merged deletes, and a refusal retains the branch (never a
+  // squash inference) instead of aborting the run.
+  const freedBranches = new Set(records.filter((wt) => deferred.has(wt.path)).map((wt) => wt.branch).filter((branch): branch is string => branch !== null));
+  for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "refuse" && row.reason === "cleanup.refuse.checked-out" && freedBranches.has(row.ref)) {
+    await deleteBranchRow(row, true);
   }
-  const finalRefresh = await cleanupWorktrees({ ...input, apply: false }, { ...invocation, cwd: main.root }, assertedOwnerKeys, openPullRequestBases ?? undefined);
-  if (finalRefresh.status !== "ok") return finalRefresh;
-  const finalPlan = (finalRefresh.data as { decisions: ReturnType<typeof planWorktreeCleanup> }).decisions;
-  for (const row of finalPlan) if (row.kind === "local-branch" && row.verdict === "remove") await deleteBranchRow(row);
-  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan, ...finalPlan] });
+  return ok("worktree.cleanup", { workflow: input.workflow, dryRun: false, decisions: [...plan, ...secondPlan, ...finalPlan], probeNotes: [...new Set(probeNotes)] });
 }
