@@ -2346,6 +2346,14 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
     expect(findRetiredStageSpellings("run `phase-4-pr-delivery-extra`").length).toBeGreaterThan(0);
     expect(findRetiredStageSpellings("`PHASE6_DELIVERY_MISSING` is the code")).toEqual([]);
   });
+
+  test("the phase probe needs its space, since the engine takes flag and value apart", () => {
+    expect(findRetiredStageSpellings("run `--phase6` now").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("run --phase6 now", true).length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("run `--phase  6` now")).toEqual([]);
+    expect(findRetiredStageSpellings("run `--phase\t6` now")).toEqual([]);
+    expect(findRetiredStageSpellings("run --phase   6 now", true)).toEqual([]);
+  });
 });
 
 describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
@@ -2499,6 +2507,22 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(result.hits[0]).toContain("split across the line break");
   });
 
+  test("a paren-marker item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s2.md", text: "1) Open the Phase\n   4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("two sibling ordered lists are not one stage run, in either marker spelling", () => {
+    for (const text of [
+      "1. Read the heading named Phase\n4) Verify the result.\n",
+      "1. Read the heading named Phase\n4. Verify the result.\n",
+      "1. Read the heading named Phase\n  4) Verify the result.\n",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/t.md", text }]).hits).toEqual([]);
+    }
+  });
+
   test("two lines of one blockquote are one paragraph", () => {
     const result = checkRetiredStageNames([{ rel: "skills/x/q.md", text: "> Open the Phase\n> 4 delivery.\n" }]);
     expect(result.hits.length).toBe(1);
@@ -2574,13 +2598,19 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
   });
 
-  test("a wrapped or unspaced code probe still exempts", () => {
+  test("a wrapped code probe still exempts, and an unspaced one reports", () => {
     for (const html of [
       "<html><body><p>Run <code>--phase\n  6</code> now.</p></body></html>",
-      "<html><body><p>Run <code>--phase6</code> now.</p></body></html>",
+      "<html><body><p>Run <code>--phase  6</code> now.</p></body></html>",
+      "<html><body><p>Run <code>--phase\t6</code> now.</p></body></html>",
     ]) {
       expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
     }
+    const unspaced = checkRetiredStageNames([
+      { rel: "assets/workflow.html", text: "<html><body><p>Run <code>--phase6</code> now.</p></body></html>" },
+    ]);
+    expect(unspaced.hits.length).toBe(1);
+    expect(unspaced.hits[0]).toContain('"phase6"');
   });
 
   test("a code body spelled in the opening tag is not blanked in place", () => {
@@ -2719,6 +2749,52 @@ describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
     const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
     expect(result.hits.length).toBe(1);
     expect(result.hits[0]).toContain("assets/x.svg:5");
+  });
+
+  test("a label split by a multi-line comment is still the word a reader sees", () => {
+    for (const text of ["<text>Pha<!--\n-->se 4</text>", "<text>Pha<!--\n  note\n-->se 4</text>"]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
+  test("a commented-out diagram label is invisible, in an element body and in embedded HTML", () => {
+    for (const text of [
+      "<text><!-- Phase 4 --></text>",
+      '<svg><foreignObject><div><p><!-- Phase 4 --></p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p><!--\nPhase 4\n--></p></div></foreignObject></svg>',
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.svg", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("a visible label beside a comment still reports", () => {
+    for (const text of [
+      '<svg><foreignObject><div><p><!-- note -->Phase 4</p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p>Phase<!-- note --> 4</p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p>Pha<!-- note -->se 4</p></div></foreignObject></svg>',
+    ]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
+  test("a break tag in embedded HTML keeps the space it renders", () => {
+    for (const br of ["<br>", "<br/>", "<br />"]) {
+      const svg = `<svg><foreignObject><div><p>section${br}5.1</p></div></foreignObject></svg>`;
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"section 5.1"');
+    }
+  });
+
+  test("a source line break inside embedded HTML keeps the space it renders", () => {
+    const svg = "<svg><foreignObject><div><p>section\n5.1</p></div></foreignObject></svg>";
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"section 5.1"');
   });
 
   test("a json case corpus is read as full text", () => {

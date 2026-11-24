@@ -97,7 +97,8 @@
  * `Phase 123 to 4` still reaches 4. Section citations are removed before a
  * stage list is read, so `Phase 3 §3.4` stays clean. Text faces are `.md`,
  * `.svg`, `.html`, `.json`, `.toml` (the Codex prompt sources) and, in
- * `assets/`, only a direct `*.svg` or `*.html` child. Diagram text counts:
+ * `assets/`, only a direct `*.svg`, `*.html` or `*.archify.json` child.
+ * Diagram text counts:
  * the `<text>`, `<title>`, `<desc>` and `aria-label` values are read with
  * comments skipped, inline markup joined and numeric character references
  * decoded, and so are the `data-node-*` / `data-edge-*` detail attributes an
@@ -108,21 +109,28 @@
  * `<br>` inside a run renders as one space, and an inline tag is dropped
  * without adding one, so `Pha<b>se</b>
  * 4` and a `Phase` / `4` line break both read as `Phase 4`. Each run's
- * diagnostic names the line its text starts on.
+ * diagnostic names the line its text starts on. A `foreignObject`'s embedded
+ * HTML is read the same way, so `section<br>5.1` reads as `section 5.1`.
  * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
  * and adjacent prose lines are judged as one block (a blank line or a
- * following list marker ends the block; a list item and its indented
- * continuation, and two lines of one blockquote, are one block with the quote
- * prefix dropped), so a name split by a line break is still reported; a match
- * wholly inside the earlier line is reported there only. `<code>` is judged
+ * following list marker ends the block; a list item and its continuation
+ * indented past that item's marker, and two lines of one blockquote, are one
+ * block with the quote prefix dropped), so a name split by a line break is
+ * still reported; a match
+ * wholly inside the earlier line is reported there only. A list marker is
+ * `-`/`*`/`+` or an ordered `1.`/`1)` in either spelling, and a sibling item
+ * at the same indentation is the next item, never a wrapped line. `<code>` is
+ * judged
  * like a backtick span in Markdown, and a span opens and closes on a whole
  * backtick run of equal length. A fence
  * closes only on its own character, at least as long as the opener, with
  * nothing after it, and may sit inside a blockquote. The three engine probes
  * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
  * code span or a fenced block, matched at their boundaries (the `PHASE6_`
- * code family is exempt by prefix, and rendered whitespace inside the
- * `--phase 6` probe is folded for the match), and their presence in prose fails.
+ * code family is exempt by prefix, and a code element's or fence's own
+ * whitespace run inside `--phase 6` folds to one space, so the flag and its
+ * value stay exempt together while `--phase6` without its space fails), and
+ * their presence in prose fails.
  * Generated bundles and changelog history are skipped; skills whose numbered
  * steps are their own process (`mstar-audit`, `mstar-knowledge`) are exempt
  * by path. Guard-or-clear-error: a failed `git ls-files` reports the guard as
@@ -1681,11 +1689,13 @@ const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*"([^"]*)"/gi;
 /** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier that
  * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
  * `PHASE6_` code family is exempt by prefix because the CLI names its
- * delivery codes that way, and rendered whitespace inside `--phase 6`
- * folds for the match. */
+ * delivery codes that way. The `--phase 6` probe needs its space: the engine
+ * takes the flag and the value apart, so `--phase6` is a retired spelling and
+ * reports again; a code element's or fence's own whitespace run still joins
+ * the pair. */
 const PROBE_PATTERN = new RegExp(
   [
-    String.raw`(?<![\w])--phase\s*6(?![\w])`,
+    String.raw`(?<![\w])--phase\s+6(?![\w])`,
     String.raw`PHASE6_`,
     String.raw`(?<![\w-])phase-4-pr-delivery(?![\w-])`,
   ].join("|"),
@@ -1701,6 +1711,11 @@ const TAG_OR_TEXT = /<(?:[^>"']|"[^"]*"|'[^']*')*>|[^\0<]+/g;
  * controls) break a text run; any other tag is dropped without adding whitespace. */
 const BLOCK_TAG =
   /^<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd|button)\b/i;
+/** see scripts/drift-lint.ts § 16 — why: `<br>` renders a line break inside a run, which a reader sees as
+ * whitespace, so it joins its neighbours with one space instead of ending the run. */
+const BR_TAG = /^<br\b/i;
+/** see scripts/drift-lint.ts § 16 — an SVG element that embeds HTML the reader sees as ordinary prose. */
+const FOREIGN_OBJECT = /<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi;
 /** see scripts/drift-lint.ts § 16 — why: a diagram may spell a stage as a numeric character reference, which
  * renders as the stage number; decode before matching. */
 function decodeXmlEntities(text: string): string {
@@ -1773,9 +1788,11 @@ export function findRetiredStageSpellings(line: string, inFence = false, markup 
 function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   const segments: Array<{ text: string; line: number }> = [];
   // see scripts/drift-lint.ts § 16 — a comment renders as nothing: its text is invisible, and a comment or
-  // tag inside a label joins the fragments around it with no whitespace. Blanking each comment to \0 keeps
-  // every later offset in place while making it a boundary the structure regexes cannot match into.
-  const markup = text.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, "\0"));
+  // tag inside a label joins the fragments around it with no whitespace. One sentinel per UTF-16 unit,
+  // line breaks included, keeps every later offset in place while making the whole comment a boundary the
+  // structure regexes cannot match into; extraction drops the sentinels instead of rendering them as
+  // spaces, so a label split by a comment reads as the joined word a browser shows.
+  const markup = text.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[\s\S]/g, "\0"));
   const lineStarts: number[] = [0];
   for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
   const lineAt = (index: number): number => {
@@ -1820,22 +1837,34 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
     segments.push({ text: value, line: lineAt(match.index ?? 0) });
   }
   // see scripts/drift-lint.ts § 16 — a diagram may embed HTML in a `foreignObject`; that text is
-  // reader-visible too, and the prose pass blanks the whole SVG, so it is read here. Each body row keeps
-  // its own source offset, so a label on the fourth row is not reported on the element's first line, where
-  // nothing needs fixing. An inline tag or a comment joins its neighbours; a block-level tag breaks the
-  // row's run with a space.
-  for (const match of markup.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
+  // reader-visible too, and the prose pass blanks the whole SVG, so it is read here. The body is
+  // tokenised the way a browser renders it: a block tag ends a run, `<br>` (in any spelling) or a source
+  // line break inside a run is one space, and an inline tag or a comment joins its neighbours — so
+  // `section<br>5.1` reads as `section 5.1`. Each run keeps the source offset of its first visible
+  // character, so a label in the fourth block is not reported on the element's first line.
+  for (const match of markup.matchAll(FOREIGN_OBJECT)) {
     const body = match[1];
     const bodyOffset = (match.index ?? 0) + (match[0].match(TAG)?.[0].length ?? 0);
-    for (const row of body.matchAll(/[^\r\n]+/g)) {
-      const rendered = decodeXmlEntities(
-        row[0]
-          .replace(TAG_OR_TEXT, (token) => (token.startsWith("<") ? (BLOCK_TAG.test(token) ? " " : "") : token))
-          .replace(/\s+/g, " "),
-      );
-      if (rendered.trim() === "") continue;
-      segments.push({ text: rendered, line: lineAt(bodyOffset + (row.index ?? 0)) });
+    let run = "";
+    let runStart = -1;
+    const flush = (): void => {
+      const rendered = decodeXmlEntities(run.replace(/\s+/g, " "));
+      if (rendered.trim() !== "" && runStart >= 0) segments.push({ text: rendered, line: lineAt(runStart) });
+      run = "";
+      runStart = -1;
+    };
+    for (const token of body.matchAll(TAG_OR_TEXT)) {
+      const fragment = token[0];
+      if (fragment.startsWith("<")) {
+        if (BLOCK_TAG.test(fragment)) flush();
+        else if (BR_TAG.test(fragment)) run += " ";
+        continue;
+      }
+      const lead = fragment.search(/\S/);
+      if (runStart < 0 && lead >= 0) runStart = bodyOffset + (token.index ?? 0) + lead;
+      run += fragment;
     }
+    flush();
   }
   return segments;
 }
@@ -1947,15 +1976,22 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
     const inner = quoteless(text);
     const previousInner = quoteless(previous);
-    const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
+    // see scripts/drift-lint.ts § 16 — an ordered item is written `1.` or `1)`, and both spellings start a
+    // block, so neither is read as a continuation of the line above.
+    const blockStart = /^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
     const blockStarts = blockStart.test(inner);
     const previousBlockStarts = blockStart.test(previousInner);
     // see scripts/drift-lint.ts § 16 — a list item and its indented continuation render as one
     // paragraph, and so do two lines of the same blockquote, so those join; a new item, heading or
-    // fence still starts a block.
+    // fence still starts a block. A continuation must reach the item's content column: a marker at the
+    // item's own indentation is the next item of the same list, not a wrapped line of this one.
+    const listItem = /^(\s*)(?:[-*+]|\d+[.)])(\s+)/;
+    const previousItem = listItem.exec(previousInner);
     const continuation =
       (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text) && !blockStarts && !previousBlockStarts) ||
-      (/^\s*(?:[-*+]|\d+\.)\s/.test(previousInner) && !/^\s*(?:[-*+]|\d+\.)\s/.test(inner) && /^\s+\S/.test(inner));
+      (previousItem !== null &&
+        !listItem.test(inner) &&
+        (inner.match(/^\s*/)?.[0].length ?? 0) >= previousItem[0].length);
     if (previous !== "" && text.trim() !== "" && (!blockStarts || continuation) && (!previousBlockStarts || continuation)) {
       // see scripts/drift-lint.ts § 16 — recognize spans on the joined SOURCE (a Markdown code span may
       // cross one line break), with the boundary rendered as a space so a probe inside a straddling

@@ -225,6 +225,55 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     }
 
     /* ==========================================================
+       STANDALONE SVG — an embedded `<img>` matches `:root`, so the
+       page's `[data-theme="light"]` block never applies there. This
+       media query gives the same light palette to a reader whose OS
+       prefers light, and comes last so it wins on `:root`.
+       ========================================================== */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f5f7;
+        --grid: #e9edf2;
+        --canvas-dot: #e2e7ec;
+        --text: #111827;
+        --text-muted: #5b6474;
+        --text-dim: #9aa3b2;
+        --text-faint: #6b7280;
+
+        --panel: #ffffff;
+        --panel-border: #e5e7eb;
+        --lane-fill: rgba(248, 250, 252, 0.65);
+        --lane-stroke: #cbd5e1;
+
+        --arrow: #64748b;
+        --arrow-emphasis: #059669;
+
+        --mask: #ffffff;
+
+        --frontend-fill: rgba(34, 211, 238, 0.15);
+        --frontend-stroke: #0891b2;
+        --backend-fill: rgba(52, 211, 153, 0.18);
+        --backend-stroke: #059669;
+        --database-fill: rgba(167, 139, 250, 0.2);
+        --database-stroke: #7c3aed;
+        --cloud-fill: rgba(251, 191, 36, 0.18);
+        --cloud-stroke: #d97706;
+        --security-fill: rgba(251, 113, 133, 0.15);
+        --security-stroke: #e11d48;
+        --messagebus-fill: rgba(251, 146, 60, 0.15);
+        --messagebus-stroke: #ea580c;
+        --external-fill: rgba(148, 163, 184, 0.18);
+        --external-stroke: #64748b;
+
+        --toolbar-bg:       rgba(255, 255, 255, 0.92);
+        --toolbar-border:   #cbd5e1;
+        --toolbar-text:     #334155;
+        --toolbar-hover:    #ffffff;
+        --toolbar-menu-bg:  #ffffff;
+      }
+    }
+
+    /* ==========================================================
        SIGNAL FLOW — an opt-in, motion-forward visual preset.
        The variables also target a standalone exported SVG, whose
        root carries data-preset and data-theme directly.

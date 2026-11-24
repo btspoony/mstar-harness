@@ -7,8 +7,9 @@ The generator is the external Archify CLI (v3.2.0 at the last render), not a rep
 this page is the only regeneration path and it is manual:
 
 ```bash
-archify finalize workflow assets/workflow.archify.json    assets/workflow.html    --quality showcase --json --out-dir .archify/<folder>/review-N
-archify finalize workflow assets/workflow.zh.archify.json assets/workflow.zh.html --quality showcase --json --out-dir .archify/<folder>/review-N
+review=.archify/review-1
+archify finalize workflow assets/workflow.archify.json    assets/workflow.html    --quality showcase --json --out-dir "$review/en"
+archify finalize workflow assets/workflow.zh.archify.json assets/workflow.zh.html --quality showcase --json --out-dir "$review/zh"
 ```
 
 Use a fresh `--out-dir` per run: an existing evidence directory refuses the second finalize. The
@@ -26,7 +27,13 @@ rendered pages then need hand post-processing, which the generator has no flag f
    page order, and strip `tabindex`, `role`, `aria-pressed` and the `aria-label="Focus …"` values
    from node `<g>` elements. Those attributes drive the interactive viewer only, which the static
    export has no script for; `<title>`, `<text>`, `data-*` and the root `role="img"` stay.
-4. Verify both SVGs parse:
+4. Append the light theme the page switches to at runtime, which a standalone SVG cannot: its
+   palette is declared as `:root, [data-theme="dark"] { … }`, and an `<img>` matches `:root`, so
+   `[data-theme="light"] { … }` never applies and the image stays dark. Append one
+   `@media (prefers-color-scheme: light) { :root { … } }` block after the dark palette, carrying
+   the light values the page's `[data-theme="light"]` block declares; sitting last, it wins on
+   `:root` for a reader whose OS prefers light.
+5. Verify both SVGs parse:
    `python3 -c "import xml.etree.ElementTree as ET; [ET.parse(p) for p in ['assets/workflow.svg','assets/workflow.zh.svg']]; print('ok')"`
 
 Re-rendering also rewrites `assets/*.delivery.json` (git-ignored) and `.archify/`; neither is
