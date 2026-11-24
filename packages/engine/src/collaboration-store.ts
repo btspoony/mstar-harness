@@ -2196,6 +2196,18 @@ export function setRemoteCacheReplacementPublishGapForTest(
 }
 
 /**
+ * note: The predecessor-ledger seam: a real settlement write commits on the predecessor between
+ * the carried snapshot and the guard's write lock, so a regression shows whether the re-read
+ * comparison refuses the replacement instead of publishing a successor that omits that evidence.
+ */
+let remoteCacheReplacementLedgerGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementLedgerGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementLedgerGapForTest = callback;
+}
+
+/**
  * note: The commit seam: runs INSIDE the replacement's exclusive writer scope, after the ledger
  * comparison passed and before the rename, so a regression shows whether a settlement write that
  * arrives there is excluded from the window instead of being lost by it.
@@ -2459,6 +2471,9 @@ async function replaceDerivedLane(
   // whose evidence a prepared composite still reads; the re-probe below discards this staging if the
   // bytes it was copied from advanced in the meantime.
   const carried = await readSettledOutboxLedger(dbPath, timeout);
+  // note: The predecessor-ledger window: a settlement write that commits HERE is carried by no
+  // snapshot, so only the guard's re-read comparison can keep it from being dropped.
+  await remoteCacheReplacementLedgerGapForTest?.();
   const staged = await stageCompleteStore(location, retained, timeout, carried);
   const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
   try {

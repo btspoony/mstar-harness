@@ -48,6 +48,7 @@ import {
   setLocalPredecessorPublicationGapForTest,
   setRemoteCacheReplacementCommitGapForTest,
   setRemoteCacheReplacementGapForTest,
+  setRemoteCacheReplacementLedgerGapForTest,
   setRemoteCacheReplacementPublishGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
@@ -10139,6 +10140,96 @@ describe("pre-v3 remote cache recovery", () => {
       [conflictedId, "conflict"],
       [repairId, "confirmed"],
     ]);
+  }, 30_000);
+
+  test("a receipt committed after the carried snapshot but before the guard lock refuses the replacement and survives", async () => {
+    // invariant: The settled-ledger snapshot is taken BEFORE the guard takes the write lock, so a
+    // receipt that commits in between reaches the predecessor and is carried by no snapshot. Only
+    // the guard's re-read comparison keeps it from being dropped: the replacement must refuse and
+    // leave the predecessor - with that receipt - named.
+    const fixture = remoteFixture("remote-v3-pre-window-receipt");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
+    // and the conflicted row still accepts appended evidence - the receipt that lands in the gap.
+    const conflictedId = "00000000-0000-4000-8000-000000000821";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000822";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+    const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+    confirmSeededIntent(location.dbPath, repairId, {
+      attemptId: "00000000-0000-4000-8000-000000000823",
+      requestHash: repairHash,
+      issueId: JOURNAL_ANCHOR,
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8",
+      event: recordedEvent(location.dbPath, repairId),
+    });
+    expect(outboxReceipts(location.dbPath)).toHaveLength(2);
+
+    // note: The real settlement write commits on the predecessor AFTER the carried snapshot was
+    // read and BEFORE the guard's write lock, so it can only be caught by the re-read comparison.
+    let settlement = "unknown";
+    setRemoteCacheReplacementLedgerGapForTest(() =>
+      recordRemoteReceipt(context, {
+        ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, { kind: "not-sent", code: "pre-send" }, {
+          generation,
+        }),
+      }).then(
+        () => {
+          settlement = "committed";
+        },
+        (error: unknown) => {
+          settlement =
+            error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+              ? error.code
+              : "failed";
+        },
+      ),
+    );
+    let refused: { code: string; message: string; details?: unknown };
+    try {
+      refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+      );
+    } finally {
+      setRemoteCacheReplacementLedgerGapForTest(undefined);
+    }
+
+    // invariant: The receipt really committed on the predecessor, so the refusal is about the
+    // changed carried ledger rather than about a write that never landed.
+    expect(settlement).toBe("committed");
+    // invariant: The changed ledger refuses the replacement by route.
+    expect(refused.code).toBe("collaboration.upgrade-required");
+    // invariant: The predecessor is still named, keeps its v3 generation and identity, and still
+    // carries the receipt the successor would have dropped.
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+    const survivorReceipts = outboxReceipts(location.dbPath);
+    expect(survivorReceipts).toHaveLength(3);
+    expect(survivorReceipts.filter((row) => row.outcome === "not-sent")).toHaveLength(1);
   }, 30_000);
 
   test("the settlement admission refuses a v3 local lane, a pre-v3 remote lane and an ordinary v3 remote read", async () => {
