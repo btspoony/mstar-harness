@@ -61,7 +61,14 @@ import {
   checkGateSurfaceChange,
   checkProvenanceScan,
   checkReferenceCorpus,
+  checkRetiredStageNames,
+  extractSvgText,
+  findRetiredStageSpellings,
   readReferenceCorpus,
+  readRetiredStageCorpus,
+  RETIRED_STAGE_MACHINE_LITERALS,
+  RETIRED_STAGE_OWN_PROCESS,
+  RETIRED_STAGE_ROOTS,
   checkSkillIndexCoverage,
   readSkillIndexCoverage,
   readSkillIndexTable,
@@ -2265,6 +2272,678 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
       expect(read.files).toEqual([]);
       expect(read.failures.length).toBe(1);
       expect(read.failures[0]).toContain("Guard 15 reference corpus read");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
+  test("a compact stage name of 4, 5 or 6 fails in each spelling", () => {
+    for (const line of ["Phase 4 PR delivery", "a phase-5-rollout step", "the phase6 habit"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a stage run after phase(s) fails when it reaches 4, 5 or 6", () => {
+    for (const line of ["Phase 2 → 3 → 4", "Phases 1–6", "Phase 2 through 6", "Phase 2–5"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a retired section citation fails in both spellings", () => {
+    for (const line of ["see §5.3", "per §6.1", "the policy 5.2 rule", "Section 6.0 covers it"]) {
+      expect(findRetiredStageSpellings(line).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a section citation inside a stage sentence is not read as a stage run", () => {
+    expect(findRetiredStageSpellings("Phase 3 §3.4 owns the close")).toEqual([]);
+    expect(findRetiredStageSpellings("Phase 1→2 is one step")).toEqual([]);
+    expect(findRetiredStageSpellings("phase-1-lock and phase-2-execute stay")).toEqual([]);
+  });
+
+  test("bare §4 and §6 are not retired section citations", () => {
+    expect(findRetiredStageSpellings("§4 and §6 name other documents")).toEqual([]);
+  });
+
+  test("an engine probe passes in a code span or a fenced line and fails in prose", () => {
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) {
+      expect(findRetiredStageSpellings(`run \`${literal}\` now`)).toEqual([]);
+      expect(findRetiredStageSpellings(literal, true)).toEqual([]);
+      expect(findRetiredStageSpellings(`run ${literal} now`).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("a retired stage name in backticks is still a retired stage name", () => {
+    expect(findRetiredStageSpellings("the `Phase 4` step").length).toBeGreaterThan(0);
+  });
+
+  test("a stage run keeps its context across a code span", () => {
+    expect(findRetiredStageSpellings("Phase 2 → 3 → `4`").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("Phase 2 → `3` → 4").length).toBeGreaterThan(0);
+  });
+
+  test("a multi-digit number is not a stage number", () => {
+    expect(findRetiredStageSpellings("Phase 14 shipped")).toEqual([]);
+    expect(findRetiredStageSpellings("Phases 12 to 14")).toEqual([]);
+  });
+
+  test("a long number before a retired stage does not hide it", () => {
+    expect(findRetiredStageSpellings("Phase 123 to 4").length).toBeGreaterThan(0);
+  });
+
+  test("an HTML code element passes a probe like a backtick span", () => {
+    expect(findRetiredStageSpellings(`run <code>${RETIRED_STAGE_MACHINE_LITERALS[0]}</code> now`)).toEqual([]);
+    expect(findRetiredStageSpellings("the <code>Phase 4</code> step").length).toBeGreaterThan(0);
+  });
+
+  test("a numeric character reference is decoded on the markdown path", () => {
+    expect(findRetiredStageSpellings("Phase &#52; step").length).toBeGreaterThan(0);
+  });
+
+  test("only the named probe is exempt, not a longer identifier", () => {
+    expect(findRetiredStageSpellings("run `phase-4-pr-delivery-extra`").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("`PHASE6_DELIVERY_MISSING` is the code")).toEqual([]);
+  });
+
+  test("the phase probe needs its space, since the engine takes flag and value apart", () => {
+    expect(findRetiredStageSpellings("run `--phase6` now").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("run --phase6 now", true).length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("run `--phase  6` now")).toEqual([]);
+    expect(findRetiredStageSpellings("run `--phase\t6` now")).toEqual([]);
+    expect(findRetiredStageSpellings("run --phase   6 now", true)).toEqual([]);
+  });
+});
+
+describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
+  test("a fenced probe inside a blockquote passes", () => {
+    const text = ["> ```text", "> " + RETIRED_STAGE_MACHINE_LITERALS[0], "> ```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/a.md", text }]).hits).toEqual([]);
+  });
+
+  test("a stage number written as a json escape is decoded", () => {
+    const result = checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text: '{"prompt":"Phase \\u0034"}' }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("svg inline markup does not break the rendered name", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Pha<tspan>se</tspan> 4</text>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a commented-out diagram label is not read", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<!-- <text>Phase 4</text> -->" }]);
+    expect(result.hits).toEqual([]);
+  });
+
+  test("a label split by a multi-line inline tag still reports", () => {
+    const result = checkRetiredStageNames([
+      { rel: "assets/workflow.svg", text: "<text>Pha<tspan\n  x=\"1\">se</tspan> 4</text>" },
+    ]);
+    expect(result.hits.length).toBe(1);
+  });
+
+  test("a label split across a source line break renders joined", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase\n  4</text>" }]);
+    expect(result.hits.length).toBe(1);
+  });
+
+  test("an out-of-range code point does not abort the scan", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text: "&#x110000; Phase 4" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a bullet under a phase line is not a stage run", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text: "Phase 2\n- 4 items\n" }]).hits).toEqual([]);
+  });
+
+  test("a probe in a diagram label is prose", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>" + RETIRED_STAGE_MACHINE_LITERALS[0] + "</text>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a backtick in a diagram label is a character, not a span", () => {
+    const text = "<text>`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "`</text>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.svg", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a backticked probe in a diagram source and in its rendered label both report", () => {
+    // see scripts/drift-lint.ts § 16 — paired fixture: the source label and the rendered label carry the
+    // same text, so either format drifting from the other fails here.
+    const label = "`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "` gate";
+    const source = checkRetiredStageNames([{ rel: "assets/x.archify.json", text: JSON.stringify({ nodes: [{ id: "close", label }] }) }]);
+    const rendered = checkRetiredStageNames([{ rel: "assets/x.svg", text: `<svg><g id="node-close"><text>${label}</text></g></svg>` }]);
+    for (const result of [source, rendered]) {
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain(`"${RETIRED_STAGE_MACHINE_LITERALS[0]}"`);
+    }
+  });
+
+  test("a hit inside the earlier line is not reported again as split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text: "Phase 4\nreview continues\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
+});
+
+describe("checkRetiredStageNames — a name split across a line break", () => {
+  test("adjacent prose lines are judged as one block", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text: "the Phase\n4 step\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blank line separates the block", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text: "the Phase\n\n4 step\n" }]).hits).toEqual([]);
+  });
+
+  test("a split hit that needs a code span or an entity is still reported", () => {
+    for (const text of ["Phase\n`4` begins\n", "Phase\n&#52; begins\n"]) {
+      const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain("split across the line break");
+    }
+  });
+
+  test("a probe in a span on the next line stays exempt", () => {
+    const text = "Run the probe:\n`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "`.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/d.md", text }]).hits).toEqual([]);
+  });
+
+  test("an indented quoted fence still passes", () => {
+    const text = ["  > ```text", "  > " + RETIRED_STAGE_MACHINE_LITERALS[0], "  > ```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/e.md", text }]).hits).toEqual([]);
+  });
+
+  test("a json escaped blank line still separates blocks", () => {
+    const text = '{"prompt":"Phase 2\\n\\n-4 °C is the minimum."}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
+  });
+
+  test("a word boundary on the earlier line does not hide the split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/l.md", text: "The label is SubPhase 4; begin Phase\n4 now.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a section citation on the earlier line is not reported again as split", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/m.md", text: "Phase 3 §3.4 → 4\nReview continues.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
+
+  test("a wrapped name inside a non-exempt span still reports", () => {
+    const text = "`Phase\n4`\n";
+    const result = checkRetiredStageNames([{ rel: "skills/x/j.md", text }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a code span whose delimiters straddle the join stays exempt", () => {
+    const text = "Use \`--phase\n6\` here.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/h.md", text }]).hits).toEqual([]);
+  });
+
+  test("a double-backtick span is a code span", () => {
+    const text = "The close code is \`\`" + RETIRED_STAGE_MACHINE_LITERALS[1] + "INVALID_ROOT\`\` here.\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/n.md", text }]).hits).toEqual([]);
+  });
+
+  test("a CRLF fence keeps its probes exempt", () => {
+    const text = "\`\`\`text\r\n" + RETIRED_STAGE_MACHINE_LITERALS[0] + "\r\n\`\`\`\r\n";
+    expect(checkRetiredStageNames([{ rel: "skills/x/o.md", text }]).hits).toEqual([]);
+  });
+
+  test("a list item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/p.md", text: "- Open the Phase\n  4 delivery procedure.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("an ordered list item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s.md", text: "1. Open the Phase\n   4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a paren-marker item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s2.md", text: "1) Open the Phase\n   4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a bullet's lazy continuation under-indented past its marker still joins", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/p2.md", text: "- Open the Phase\n 4 delivery\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("an ordered item's lazy continuation under-indented past its marker still joins", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s3.md", text: "1. Open the Phase\n  4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blockquote that opens after a paragraph is its own block", () => {
+    expect(
+      checkRetiredStageNames([{ rel: "skills/x/q2.md", text: "A paragraph that ends with Phase\n> 4 delivery\n" }]).hits,
+    ).toEqual([]);
+  });
+
+  test("two sibling ordered lists are not one stage run, in either marker spelling", () => {
+    for (const text of [
+      "1. Read the heading named Phase\n4) Verify the result.\n",
+      "1. Read the heading named Phase\n4. Verify the result.\n",
+      "1. Read the heading named Phase\n  4) Verify the result.\n",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/t.md", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("two lines of one blockquote are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/q.md", text: "> Open the Phase\n> 4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("an entity-rendered backtick does not become a code span across the join", () => {
+    const text = "Use &#96;--phase\n6&#96; here.\n";
+    const result = checkRetiredStageNames([{ rel: "skills/x/g.md", text }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a level-two heading is not joined to its paragraph", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/f.md", text: "## Phase 2\n-4 °C is the minimum.\n" }]).hits).toEqual([]);
+  });
+
+  test("a quoted heading is not joined to the quoted paragraph below it", () => {
+    for (const text of ["> ## Phase\n> 4 checks passed.\n", "> ## Phase 2\n> -4 °C is the minimum.\n"]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/fq.md", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("a quoted paragraph's lazy continuation joins without its own marker", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/ql.md", text: "> Open the Phase\n4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
+  test("a blank line or a new block opener breaks a quoted paragraph's lazy continuation", () => {
+    for (const text of ["> Open the Phase\n\n4 delivery.\n", "> Open the Phase\n## 4 delivery.\n"]) {
+      expect(checkRetiredStageNames([{ rel: "skills/x/ql2.md", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("a quoted bullet is a new block, not a stage run", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/r.md", text: "> Phase 2\n> - 4 checks passed\n" }]).hits).toEqual([]);
+  });
+
+  test("a mismatched backtick run is not a code span", () => {
+    expect(findRetiredStageSpellings("Use ``--phase 6``` now.").length).toBeGreaterThan(0);
+  });
+
+  test("a json entity-escaped backtick is a character, not a delimiter", () => {
+    const text = '{"prompt":"Use &#96;--phase 6&#96; here."}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a doubly escaped entity stays literal in a json prompt", () => {
+    const text = '{"prompt":"Phase &amp;#52; here"}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
+  });
+
+  test("an interactive detail attribute is reader-visible text", () => {
+    const html = '<html><body><svg><text>Review and CI</text><g data-node-sublabel="Phase 5"></g></svg></body></html>';
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("ordinary html prose outside the svg is judged", () => {
+    const html = "<html><body><p>Then Phase 4 closes it.</p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a stage name split across an html source line break is judged", () => {
+    const html = "<html><body><p>Then Phase\n4 delivery closes it.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("an inline tag inside an html stage name does not hide it", () => {
+    const html = "<html><body><p>Then Pha<b>se</b> 4 closes it.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("block-level html tags still separate blocks", () => {
+    const html = "<html><body><div>Phase</div><div>4 closes</div></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a quoted `>` in an attribute does not move the reported line", () => {
+    const html = '<html><body>\n<p data-x="a>b"\n>Then Phase 5 closes it.</p>\n</body></html>';
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":3 ");
+  });
+
+  test("an element whose name extends a block name joins instead of splitting", () => {
+    const cases = [
+      { rel: "assets/workflow.html", text: "<html><body><p>Phase <li-item>4</li-item> delivery closes it.</p></body></html>" },
+      { rel: "assets/x.svg", text: "<svg><foreignObject><p>Phase <li-item>4</li-item> delivery</p></foreignObject></svg>" },
+    ];
+    for (const file of cases) {
+      const result = checkRetiredStageNames([file]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
+  test("an html block reports the line its text starts on", () => {
+    const html = "<html><body>\n<p>\n  Then Phase\n  4 delivery\n</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":3 ");
+  });
+
+  test("a probe inside a multi-line html code element is exempt", () => {
+    const html = "<html><body><p>Run <code>--phase\n6</code> now.</p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a wrapped code probe still exempts, and an unspaced one reports", () => {
+    for (const html of [
+      "<html><body><p>Run <code>--phase\n  6</code> now.</p></body></html>",
+      "<html><body><p>Run <code>--phase  6</code> now.</p></body></html>",
+      "<html><body><p>Run <code>--phase\t6</code> now.</p></body></html>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+    }
+    const unspaced = checkRetiredStageNames([
+      { rel: "assets/workflow.html", text: "<html><body><p>Run <code>--phase6</code> now.</p></body></html>" },
+    ]);
+    expect(unspaced.hits.length).toBe(1);
+    expect(unspaced.hits[0]).toContain('"phase6"');
+  });
+
+  test("a code body spelled in the opening tag is not blanked in place", () => {
+    const html = '<html><body><p><code title="--phase 6">--phase 6</code> is the probe.</p></body></html>';
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a dollar sequence in a code body does not expand", () => {
+    const html = "<html><body><p><code>$` tail</code> then Phase 4.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("a code-wrapped retired stage name still reports", () => {
+    const html = "<html><body><p><code>Phase 5</code></p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a quoted `>` inside a code element's opening tag does not hide a stage split", () => {
+    const md = 'Then Phase<code data-x="a>b">--phase\n6</code> 4 delivery.\n';
+    const result = checkRetiredStageNames([{ rel: "docs/x.md", text: md }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":2 ");
+    expect(result.hits[0]).toContain('"Phase  4"');
+  });
+
+  test("neighbouring buttons do not join into one run", () => {
+    const html = "<html><body><button>Phase</button><button>4 checks</button></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a button after inline text still reports its own label", () => {
+    const html = "<html><body><p>Open<button>Phase 4</button></p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("an entity-escaped stage number in an archify source decodes once", () => {
+    const text = '{"label":"Phase &#52; close"}';
+    expect(checkRetiredStageNames([{ rel: "assets/x.archify.json", text }]).hits.length).toBeGreaterThan(0);
+    const doubled = '{"label":"Phase &amp;#52; close"}';
+    expect(checkRetiredStageNames([{ rel: "assets/x.archify.json", text: doubled }]).hits).toEqual([]);
+  });
+
+  test("a fence in one json value does not hide a probe in the next", () => {
+    const probe = RETIRED_STAGE_MACHINE_LITERALS[0];
+    const text = `{"fixture":"Example:\\n\`\`\`\\n${probe}\\n\`\`\`","prompt":"Run ${probe} now."}`;
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a leading quote mark inside an unquoted fence is literal content", () => {
+    const text = ["```text", "> transcript line", RETIRED_STAGE_MACHINE_LITERALS[0], "```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/i.md", text }]).hits).toEqual([]);
+  });
+
+  test("a quote-looking closer line stays content in an unquoted fence", () => {
+    const text = ["```text", ">```", RETIRED_STAGE_MACHINE_LITERALS[0], "```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/k.md", text }]).hits).toEqual([]);
+  });
+
+  test("a literal escaped backslash does not open a fence", () => {
+    const text = '{"prompt":"Example:\\\\n```\\\\n' + RETIRED_STAGE_MACHINE_LITERALS[0] + '"}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
+  });
+});
+
+describe("checkRetiredStageNames — fence tracking", () => {
+  test("a tilde line inside a backtick fence does not close it", () => {
+    const text = ["```text", "~~~", RETIRED_STAGE_MACHINE_LITERALS[1], "```", "prose " + RETIRED_STAGE_MACHINE_LITERALS[1]].join("\n");
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":5");
+  });
+
+  test("a short closer does not end a longer fence", () => {
+    const text = ["````text", "```", RETIRED_STAGE_MACHINE_LITERALS[1], "````"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text }]).hits).toEqual([]);
+  });
+
+  test("a fence info string is judged as prose", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text: "```Phase 4\nx\n```\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
+});
+
+describe("extractSvgText — labels, entities and nodes", () => {
+  test("a single-quoted aria-label is read", () => {
+    expect(extractSvgText("<g aria-label='Phase 4'></g>").join(" ")).toContain("Phase 4");
+  });
+
+  test("a numeric character reference renders as the stage number", () => {
+    expect(extractSvgText("<text>Phase &#52;</text>").join(" ")).toContain("Phase 4");
+  });
+
+  test("a desc element is reader-visible text", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<desc>Phase 6 close</desc>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("text, title and aria-label values are read, nested markup flattened", () => {
+    const svg = '<svg><title>Phase 5 merge</title><text x="1">a <tspan>Phase 4</tspan> b</text><g aria-label="§6.2"></g></svg>';
+    const segments = extractSvgText(svg);
+    expect(segments.length).toBe(3);
+    expect(segments.join(" ")).toContain("Phase 5 merge");
+    expect(segments.join(" ")).toContain("Phase 4");
+    expect(segments.join(" ")).toContain("§6.2");
+  });
+});
+
+describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
+  test("markdown lines report their file and line, and a fence state carries", () => {
+    const result = checkRetiredStageNames([
+      { rel: "skills/x/SKILL.md", text: "clean\n\nPhase 4 was here\n" },
+      { rel: "skills/x/references/a.md", text: "```text\n" + RETIRED_STAGE_MACHINE_LITERALS[0] + "\n```\n" },
+    ]);
+    expect(result.filesScanned).toBe(2);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("skills/x/SKILL.md:3");
+    expect(result.hits[0]).toContain("Phase 4");
+  });
+
+  test("diagram text is judged, and a clean diagram passes", () => {
+    const dirty = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase 6 close</text>" }]);
+    expect(dirty.hits.length).toBeGreaterThan(0);
+    expect(dirty.hits[0]).toContain("assets/workflow.svg");
+    const clean = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase 3 → close</text>" }]);
+    expect(clean.hits).toEqual([]);
+  });
+
+  test("a foreignObject label reports the row that holds it, not the element start", () => {
+    const svg = [
+      "<svg>",
+      '  <foreignObject x="0" y="0" width="10" height="10">',
+      '    <div xmlns="http://www.w3.org/1999/xhtml">',
+      "      <p>clean</p>",
+      "      <p>Phase 4 here</p>",
+      "    </div>",
+      "  </foreignObject>",
+      "</svg>",
+    ].join("\n");
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("assets/x.svg:5");
+  });
+
+  test("a label split by a multi-line comment is still the word a reader sees", () => {
+    for (const text of ["<text>Pha<!--\n-->se 4</text>", "<text>Pha<!--\n  note\n-->se 4</text>"]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
+  test("a commented-out diagram label is invisible, in an element body and in embedded HTML", () => {
+    for (const text of [
+      "<text><!-- Phase 4 --></text>",
+      '<svg><foreignObject><div><p><!-- Phase 4 --></p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p><!--\nPhase 4\n--></p></div></foreignObject></svg>',
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.svg", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("a visible label beside a comment still reports", () => {
+    for (const text of [
+      '<svg><foreignObject><div><p><!-- note -->Phase 4</p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p>Phase<!-- note --> 4</p></div></foreignObject></svg>',
+      '<svg><foreignObject><div><p>Pha<!-- note -->se 4</p></div></foreignObject></svg>',
+    ]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"Phase 4"');
+    }
+  });
+
+  test("a break tag in embedded HTML keeps the space it renders", () => {
+    for (const br of ["<br>", "<br/>", "<br />"]) {
+      const svg = `<svg><foreignObject><div><p>section${br}5.1</p></div></foreignObject></svg>`;
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toContain('"section 5.1"');
+    }
+  });
+
+  test("a source line break inside embedded HTML keeps the space it renders", () => {
+    const svg = "<svg><foreignObject><div><p>section\n5.1</p></div></foreignObject></svg>";
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"section 5.1"');
+  });
+
+  test("a json case corpus is read as full text", () => {
+    const result = checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text: '{"prompt":"Phase 4 closes"}' }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("a single-quoted detail attribute is reader-visible text", () => {
+    for (const text of [
+      "<svg><g data-node-label='Phase 5'></g></svg>",
+      "<svg><g data-edge-sublabel='Phase 4 now'></g></svg>",
+      '<svg><g data-node-sublabel="Phase 5"></g></svg>',
+    ]) {
+      const result = checkRetiredStageNames([{ rel: "assets/x.svg", text }]);
+      expect(result.hits.length).toBe(1);
+      expect(result.hits[0]).toMatch(/"Phase [45]/);
+    }
+  });
+
+  test("a single-quoted attribute value does not swallow the next node's label", () => {
+    const svg = "<svg><g data-node-label='clean'></g><text>Phase 5</text></svg>";
+    const result = checkRetiredStageNames([{ rel: "assets/x.svg", text: svg }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 5"');
+  });
+
+  test("a separate-control element splits a run in page prose", () => {
+    for (const html of [
+      "<html><body><select><option>Phase</option><option>4 checks</option></select></body></html>",
+      "<html><body><details><summary>Phase</summary><p>4 checks</p></details></body></html>",
+      "<html><body><fieldset>Phase</fieldset><fieldset>4 checks</fieldset></body></html>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.html", text: html }]).hits).toEqual([]);
+    }
+  });
+
+  test("a separate-control element splits a run in embedded HTML", () => {
+    for (const text of [
+      "<svg><foreignObject><option>Phase</option><option>4 checks</option></foreignObject></svg>",
+      "<svg><foreignObject><summary>Phase</summary><summary>4 checks</summary></foreignObject></svg>",
+      "<svg><foreignObject><textarea>Phase</textarea><textarea>4 checks</textarea></foreignObject></svg>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/x.svg", text }]).hits).toEqual([]);
+    }
+  });
+
+  test("an inline element still joins its neighbours", () => {
+    const result = checkRetiredStageNames([
+      { rel: "assets/x.html", text: "<html><body><p>Then Pha<span>se</span> 4 closes it.</p></body></html>" },
+    ]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+});
+
+describe("readRetiredStageCorpus — Guard 16 scope", () => {
+  test("only tracked prompt-face text is read, and own-process skills are exempt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-retired-stage-"));
+    try {
+      const write = (rel: string, text: string): void => {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        writeFileSync(join(dir, rel), text, "utf8");
+      };
+      const skill = `${RETIRED_STAGE_ROOTS[0]}example/SKILL.md`;
+      const ownProcess = `${RETIRED_STAGE_OWN_PROCESS[0]}SKILL.md`;
+      write(skill, "Phase 4\n");
+      write(ownProcess, "Phase 4\n");
+      write("scripts/notes.md", "Phase 4\n");
+      write("assets/diagram.svg", "<text>Phase 4</text>\n");
+      write("assets/nested/diagram.svg", "<text>Phase 4</text>\n");
+      const tracked = new Set([skill, ownProcess, "scripts/notes.md", "assets/diagram.svg", "assets/nested/diagram.svg"]);
+      const read = readRetiredStageCorpus(dir, tracked);
+      expect(read.readFailures).toEqual([]);
+      expect(read.files.map((file) => file.rel).sort()).toEqual([skill, "assets/diagram.svg"].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable tracked file returns a named row, never a silent skip", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-retired-stage-read-"));
+    try {
+      const read = readRetiredStageCorpus(dir, new Set([`${RETIRED_STAGE_ROOTS[0]}gone/SKILL.md`]));
+      expect(read.files).toEqual([]);
+      expect(read.readFailures.length).toBe(1);
+      expect(read.readFailures[0]).toContain("Guard 16 retired-stage-name corpus read");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

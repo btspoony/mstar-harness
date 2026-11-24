@@ -65,7 +65,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 
 - Non-hotfix path: `specify -> clarify -> plan -> tasks -> implement -> InReview -> Done`
 - Standalone development plans: row `Done` is not workflow completion — the delivery tail (see PM Responsibilities) runs to proved merge + terminal close before the workflow closes.
-- Standalone report-only plans: row `Done` is likewise not workflow completion — the close (`status workflow-close`) plus the phase-6 projection finish it, and no PR or merge exists on this kind.
+- Standalone report-only plans: row `Done` is likewise not workflow completion — the close (`status workflow-close`) plus the close-out projection finish it, and no PR or merge exists on this kind.
 - Hotfix path may be compressed, but requires post-fix clarify/RCA follow-up note.
 - New constraints during implement: write back to plan before continuing.
 

@@ -70,7 +70,7 @@ Workflow notes are ordinary admitted append facts, not execution authority. Curr
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
 
-iteration-start locks interactively, iteration-drive resumes an already locked iteration, and iteration-loop runs Phase 1→6 autonomously. None launches a per-row PM.
+iteration-start locks interactively, iteration-drive resumes an already locked iteration, and iteration-loop runs the whole lifecycle autonomously. None launches a per-row PM.
 
 ## /iteration-start
 
@@ -78,7 +78,7 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 /iteration-start [direction] [pause]
 ```
 
-**Purpose** — Phase 1 of an iteration: research, interactive direction lock with `grill-me`, compass and plans, the Review & Edit chain, PM lock, integration branch — then auto-continue into Phase 2→6.
+**Purpose** — Phase 1 of an iteration: research, interactive direction lock with `grill-me`, compass and plans, the Review & Edit chain, PM lock, integration branch — then auto-continue into execute, close and the delivery chain.
 
 **When** — you are starting a new iteration and want to converge on its direction with the PM. `pause` stops after Phase 1 (lock + integration worktree) so you can inspect the artifacts and continue later with `/iteration-drive`; `/iteration-loop` is the same lifecycle with an autonomous lock instead.
 
@@ -86,7 +86,7 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 
 **Hosts** — Cursor Plan mode takes the alternate Phase 1 path (empty CreatePlan scaffold → feedback loop → deferred grill) instead of the plain path; every other host runs the plain path. It is the only command that reads the bundled, non-`mstar-*` `skills/grill-me/` skill.
 
-**Defined in** — [`commands/iteration-start.md`](../commands/iteration-start.md); semantics → `mstar-iteration` (`references/phase-1-prepare.md` for Phase 1 detail, `references/command-shared-invariants.md` for the Phase 2–5 shared invariants); host dispatch → `mstar-host`.
+**Defined in** — [`commands/iteration-start.md`](../commands/iteration-start.md); semantics → `mstar-iteration` (`references/phase-1-prepare.md` for Phase 1 detail, `references/command-shared-invariants.md` for the shared invariants from execute through delivery); host dispatch → `mstar-host`.
 
 ## /iteration-drive
 
@@ -94,7 +94,7 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 /iteration-drive
 ```
 
-**Purpose** — drive the active iteration to completion: Phase 2 Autonomous Execute → Phase 3 iteration-close → Phase 4 Create PR → Phase 5 PR merge-ready → Phase 6 post-merge close. Done is the Phase 6 close complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff); neither the close, nor an open PR, nor a merged PR is Done by itself.
+**Purpose** — drive the active iteration to completion: Autonomous Execute with layered PRs published and driven to merge-ready alongside it, then authorized and merged in stack order during execution or afterward → iteration-close → any nonempty close-delta layer → the whole-chain proof → Workflow Close Out. Done is Workflow Close Out complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff); neither an open PR, nor a merged PR, nor a merge-ready exit is Done by itself.
 
 **When/arguments** — resume or advance an already locked iteration, with no arguments. Reject every nonempty argument shape before boot; never reinterpret unsupported input as whole-iteration authorization. PM stays in the primary session; a leaf receiving this command refuses it.
 
@@ -123,7 +123,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /iteration-loop [direction] [scale]
 ```
 
-**Purpose** — the whole lifecycle Phase 1→6 with minimal human intervention: code-first research and an **autonomous** direction lock (no `grill-me`), then the same execute → close → PR → merge-ready → post-merge close chain. Done is the Phase 6 close complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff).
+**Purpose** — the whole lifecycle end to end with minimal human intervention: code-first research and an **autonomous** direction lock (no `grill-me`), then the same chain — execute with layered PRs (published and driven to merge-ready alongside it, then authorization and verified merge in stack order during execution or afterward) → iteration-close → any nonempty close-delta layer → whole-chain proof → Workflow Close Out. Done is Workflow Close Out complete (Terminal write → Unregister → Projection reconciliation → Cleanup handoff).
 
 **When** — unattended or cloud runs that should not wait on a direction dialogue. `/iteration-start` locks interactively and `/iteration-drive` resumes an already locked iteration.
 
@@ -131,7 +131,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Scale** — budgets the iteration's **business** plans: `S` 1, `M` 2–3, `L` 3–4, `XL` more than 4. The budget rules — including what the budget does not count — live in `mstar-iteration`.
 
-**Defined in** — [`commands/iteration-loop.md`](../commands/iteration-loop.md); semantics → `mstar-iteration` (`references/phase-1-prepare.md` and `references/autonomous-direction-lock.md` for Phase 1; Phase 2–6 are delegated to the `/iteration-drive` route) plus `references/command-shared-invariants.md`.
+**Defined in** — [`commands/iteration-loop.md`](../commands/iteration-loop.md); semantics → `mstar-iteration` (`references/phase-1-prepare.md` and `references/autonomous-direction-lock.md` for Phase 1; execute through Workflow Close Out are delegated to the `/iteration-drive` route) plus `references/command-shared-invariants.md`.
 
 ## /codebase-audit
 

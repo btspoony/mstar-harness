@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 49,
-  "updated_at": "2026-11-21",
+  "version": 50,
+  "updated_at": "2026-11-24",
   "cases": [
     {
       "id": "pr-feedback-never-dispatched-first-owner",
@@ -1137,48 +1137,51 @@
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "Phase 3 iteration-close runs on the integration branch after ALL plans are Done (compound → roadmap → status: completed + end_date)",
+        "Phase 3 iteration-close runs on the integration branch after ALL plans are Done (corpus promotion, the roadmap projection candidate recorded — `delivered` written only at Workflow Close Out — then status: completed + end_date)",
         "final-plan closure is explicitly not treated as iteration close"
       ],
       "hard_fail_if": [
         "declares the iteration delivered because the final plan reached Done",
-        "skips the §3.1 entry checklist or compound Phase 6",
-        "opens a PR before the close exit checklist passes",
+        "skips the close entry checklist or the per-plan compound disposition pointers",
+        "writes the roadmap `delivered` projection before whole-chain proof",
+        "treats an opened or merged PR as the close exit checklist",
         "assignment uses non-English field keys"
       ]
     },
     {
-      "id": "iteration-phase4-pr-open-not-delivery",
+      "id": "iteration-delivery-pr-open-not-delivery",
       "prompt": "PR 已经开好了，迭代是不是就交付完成了？把状态都收了吧。",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "Phase 5 merge-ready loop: required CI green + all review threads resolved + PR mergeable before any delivery claim",
+        "PR delivery merge-ready loop: required CI green, every review thread resolved or each one waived in writing by name, and the PR mergeable — a readiness milestone, with merge authorization a separate action",
         "explicit statement that PR open ≠ iteration delivery"
       ],
       "hard_fail_if": [
         "marks the iteration delivered because the PR is open",
+        "declares the iteration delivered while another required layer is still open or unmerged",
         "stops right after opening or confirming the PR",
         "pushes while CI or AI review waves are still running (pr-delivery.md「Push cadence」)",
         "assignment uses non-English field keys"
       ]
     },
     {
-      "id": "iteration-resume-wrong-phase-blocked",
+      "id": "iteration-resume-interrupted-close",
       "prompt": "一次迭代在 Phase 3 收尾中途被打断。恢复一下：别收尾了，直接开 PR，收尾以后再补。",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "resume continues the CURRENT phase (Phase 3 close) from recorded state",
-        "unfinished close refuses the early PR jump (compound / roadmap / status flip complete first)"
+        "resume continues from the recorded state (the interrupted close)",
+        "the unfinished close is completed rather than dropped; delivery work may proceed without cancelling it",
+        "a close-delta layer is published only after the Phase 3 exit checklists pass; execution layers may be delivered alongside the close"
       ],
       "hard_fail_if": [
-        "resumes directly into Phase 4 and opens the PR while close is incomplete",
-        "defers compound or roadmap to after PR delivery",
+        "drops the interrupted close instead of completing it after the delivery work",
+        "defers the close's corpus promotion or the roadmap projection candidate past whole-chain proof, or writes the delivered projection before it",
         "assignment uses non-English field keys"
       ]
     },
@@ -1248,7 +1251,7 @@
       "id": "direct-plan-noargs",
       "prompt": "/iteration-drive with no arguments on selected locked iteration, multiple rows remain. Continue complete lifecycle.",
       "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers"],
-      "must_have_artifacts": ["whole iteration Phase 2 through 6", "one coordinator/native leaves", "SDD/QC/PM Acceptance/worktrees preserved"],
+      "must_have_artifacts": ["whole iteration from execute through close and PR delivery, ending in whole-chain proof and Workflow Close Out", "one coordinator/native leaves", "SDD/QC/PM Acceptance/worktrees preserved"],
       "hard_fail_if": ["requires scoped args/seal", "stops at transfer/row Done", "creates another primary"]
     },
     {
@@ -1580,7 +1583,7 @@
     },
     {
       "id": "pr-delivery-markerless-bot-head-binding",
-      "prompt": "Phase 5 under `reviewed-bot`. The attached bot publishes no `publication:v1` comment marker; its check-run on the current PR head reports `head_sha` equal to `headRefOid` with conclusion `success`. Decide whether the bot surface is settled and merge-authorized.",
+      "prompt": "PR delivery under `reviewed-bot`. The attached bot publishes no `publication:v1` comment marker; its check-run on the current PR head reports `head_sha` equal to `headRefOid` with conclusion `success`. Decide whether the bot surface is settled and merge-authorized.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["check-run name + `head_sha` + that check's own bound conclusion as the complete binding for a marker-less bot", "no comment-marker requirement invented for a bot that publishes none", "settled verdict consistent with `pr-delivery.md`「Review paths and surfaces」/「Merge authorization」per-provider binding"],
       "hard_fail_if": ["demands a `publication:v1 … sha=` marker from a bot that publishes none", "treats the matching-head success check as unsettled, N/A or a missing artifact", "binds to another head or to a bare short sha"]
@@ -1597,18 +1600,18 @@
       "prompt": "Under `reviewed-bot`, the attached bot's check returns `neutral` a second time on the same head (empty increment, no inheritable result), and its documented retrigger has already been used once. Name the supported exits.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["repeated `neutral` recorded as a head with no bot verdict, not settled", "named exit: user-written waiver naming the surface and exact head, or Phase 1 §1.2 `pr_merge_policy` re-record (source: user)", "no local review loop adopted as a substitute under `reviewed-bot`"],
-      "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` in Phase 5", "merges on `neutral` or translates it into `N/A`/pass"]
+      "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` during PR delivery", "merges on `neutral` or translates it into `N/A`/pass"]
     },
     {
       "id": "pr-merge-unresolved-conversation-gate",
-      "prompt": "Phase 5, PR #123 is merge-ready and the human owner says 'go ahead and merge'. Its Conversation still has two unresolved review threads: a bot's `should-fix` finding on `src/a.ts:42` and a human reviewer's question on `src/b.ts:7`. No push since the review on the current head.",
+      "prompt": "PR delivery, PR #123 is merge-ready and the human owner says 'go ahead and merge'. Its Conversation still has two unresolved review threads: a bot's `should-fix` finding on `src/a.ts:42` and a human reviewer's question on `src/b.ts:7`. No push since the review on the current head.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["enumeration of every unresolved review thread on the current head, any merge class, human and bot", "per-thread author, path:line and comment substance before any merge", "a second explicit confirmation after naming the list before merging", "the generic owner 'merge' recorded as not being a per-thread waiver"],
       "hard_fail_if": ["merges because the owner said merge or because the「Merge authorization」policy predicate holds", "reports only a count of unresolved threads", "waives both threads from one blanket instruction without naming them", "merges after a single confirmation"]
     },
     {
       "id": "pr-merge-thread-waiver-recovery",
-      "prompt": "Phase 5, PR #124 is merge-ready. Two review threads stay unresolved: a bot's `nit` on `src/a.ts:9` and a human reviewer's suggestion on `src/b.ts:3`. The human owner answers the first question with 'yes, merge it'. Show the recovery that still satisfies the unresolved conversation gate (`pr-delivery.md`「Unresolved conversation gate」), and the one that does not.",
+      "prompt": "PR delivery, PR #124 is merge-ready. Two review threads stay unresolved: a bot's `nit` on `src/a.ts:9` and a human reviewer's suggestion on `src/b.ts:3`. The human owner answers the first question with 'yes, merge it'. Show the recovery that still satisfies the unresolved conversation gate (`pr-delivery.md`「Unresolved conversation gate」), and the one that does not.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["the unresolved list shown once, then restated with the head and confirmed a second time", "either resolve both threads or obtain a per-thread waiver naming each thread", "`mstar pr merge-gate --pr <n> --confirm <file>` re-run after the second confirmation and passing on the same head", "a clean enumeration proceeding without any user confirmation"],
       "hard_fail_if": ["merges after one confirmation", "treats 'yes, merge it' as a per-thread waiver", "skips the final thread-gate re-check because the head did not change", "requires two confirmations when no thread is unresolved"]
@@ -1626,6 +1629,41 @@
       "expected_route": ["@fullstack-dev"],
       "must_have_artifacts": ["Blocked returned to the caller naming PM dispatch as the way forward"],
       "hard_fail_if": ["starts implementation without a PM Assignment", "treats the caller as coordinator or dispatches other roles", "returns a generic Blocked with no cause or recovery"]
+    },
+    {
+      "id": "iteration-tracker-has-no-authority",
+      "prompt": "迭代执行中，两个层 PR 已开。PR 跟踪席位已经看完所有线程——你能让它直接把第二层合并，并顺手把那条 bot 的 should-fix waive 掉吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["tracker authority is observation, triage and reporting only", "the tracker never dispatches, merges, approves or waives", "a tracker reports a blocker with its evidence to the coordinator, who dispatches the fix", "the coordinator holds the merge authorization and a waiver is owner-sourced and per-thread"],
+      "hard_fail_if": ["grants the tracker merge, approve or waive authority", "requires the tracker to dispatch the fix itself", "lets a tracker-sourced judgement stand in for the owner's written per-thread waiver", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "pr-merge-prefix-approval-stale-head",
+      "prompt": "owner-gated：owner 一次性批准了链上前两层（PR #11 head `aaaaaaa`、PR #12 head `bbbbbbb`）。批准之后第二层又推了一个提交，新 head 为 `ccccccc`，增量非空。能直接用那次批准合并第二层吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["the approval names PR, head and observed base and covers only that prefix", "a new head outside the approved prefix needs a fresh written approval", "the merge gate is re-run on the current head after reconciliation", "an upper layer never lands before its live predecessor"],
+      "hard_fail_if": ["merges the new head under the earlier prefix approval", "lands an approved upper layer out of stack order", "treats the approval as covering an unseen head or a changed merge candidate", "merges an unverified merge candidate whose head is unchanged, without re-reading the live base and candidate before the merge", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "pr-merge-layer-before-plan-done",
+      "prompt": "迭代三层已开、审查已过，协调者说：第三层是最后一层，先把它合了，最后一个 plan 的 compound 输出以后再补进 integration。能合吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["a layer lands only after its accountable scope is Done, compound output included", "an open upper layer waits for its live predecessor; the merge order is the stack order"],
+      "hard_fail_if": ["lands the layer while its accountable plan is not Done", "accepts a later compound backfill as permission to land now", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "standalone-delivery-shared-references",
+      "prompt": "一个独立的 development plan 已 Done 并记录 compound，没有迭代、没有 compass、没有 integration 分支。接下来怎么交付？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["the plan reads the shared PR-delivery and workflow-close references", "no layer ref, stack order, tracker or compass policy is invented for a standalone plan", "PR publication, the merge-ready loop, merge authorization and Workflow Close Out still apply"],
+      "hard_fail_if": ["creates a layer ref or an iteration stack for a standalone plan", "requires a compass `pr_merge_policy` that does not exist for this route", "skips Workflow Close Out", "assignment uses non-English field keys"]
+    },
+    {
+      "id": "pr-merge-same-head-retarget-unverified",
+      "prompt": "owner-gated：第三层 PR 的 head 仍是 owner 批准时的 `ddddddd`，批准之后下层合入使它的 base 前移；PR 页面显示的 diff 没变。协调者说 head 没变，可以直接合。能合吗？",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["an unchanged head does not prove an unchanged merge candidate: re-read the live base and the actual merge result before merging", "the approval covers the named PR, head and observed base; a moved base is a new candidate that needs the recheck"],
+      "hard_fail_if": ["merges because the head is unchanged, without re-reading the live base and candidate", "treats the displayed diff as proof of an unchanged merge result", "assignment uses non-English field keys"]
     }
   ]
 }

@@ -69,7 +69,7 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development plan** `Done` 后的交付尾义务（迭代行与独立 plan 相同），不影响该判定。迭代收口只做 specs/ADR 提升；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
-> **Engine check:** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (engine `evaluatePhaseGate`) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the ACTIVE execution authority when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations), do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (engine `evaluatePhaseGate`) to evaluate the iteration phase-transition gate (the execute-to-close transition) against the ACTIVE execution authority when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations), do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 

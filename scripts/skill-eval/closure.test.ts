@@ -557,7 +557,7 @@ describe("mstar-iteration phase route map ", () => {
     expect(gates.includes("→ Phase 2")).toBe(true);
     expect(gates.includes("→ Phase 3")).toBe(true);
     expect(gates.includes("close → delivery chain")).toBe(true);
-    expect(gates.includes("→ workflow close")).toBe(true);
+    expect(gates.includes("→ Workflow Close Out")).toBe(true);
     expect(gates.includes("→ 迭代交付完成")).toBe(true);
   });
 
