@@ -1615,6 +1615,8 @@ export const RETIRED_STAGE_ROOTS = [
 export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
 /** Text faces read from that set: Markdown, diagram text, and evaluation cases. */
 export const RETIRED_STAGE_EXTS = [".md", ".svg", ".json"] as const;
+/** Tracked trees the scan skips: generated bundles and changelog history. */
+export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
 /** The three engine probes that stay, only inside a code span or fenced block. */
 export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_", "phase-4-pr-delivery"] as const;
 /** Skills whose numbered steps are their own process, not delivery stages. */
@@ -1630,18 +1632,33 @@ export interface RetiredStageResult {
  * English workflow diagram uses. */
 const RETIRED_SECTION = /§\s*[56]\.\d+/g;
 const RETIRED_SECTION_WORD = /\b(?:policy|section)\s+[56]\.\d+/gi;
+/** why: a stage number is the whole number, so `Phase 14` is not stage 4. */
+const isRetiredStage = (digits: string): boolean => digits === "4" || digits === "5" || digits === "6";
 /** A compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
-const RETIRED_COMPACT_STAGE = /\bphase[- ]?[456]\b/gi;
+const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]{1,2})\b/gi;
 /** A stage run after `phase(s)`: numbers joined only by list separators, so a
  * sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
  * does not read as a list. */
 const STAGE_RUN =
-  /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
-/** An inline code span; its content is read unless it is an engine probe. */
+  /\bphases?\s*[:：]?\s*([0-9]{1,2}(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]{1,2})*)/gi;
+/** An inline code span; its content is judged in place, so a stage run that
+ * straddles prose and a span keeps its list context. */
 const INLINE_CODE = /`([^`\n]*)`/g;
-/** An HTML comment span; a commented citation is not visible prose. */
+/** A diagram text node or label; the value is decoded before it is judged. */
 const SVG_NODE = /<(?:text|title)\b[^>]*>([\s\S]*?)<\/(?:text|title)>/gi;
-const SVG_ARIA = /aria-label\s*=\s*"([^"]*)"/gi;
+const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
+/** why: a diagram may spell a stage as a numeric character reference, which
+ * renders as the stage number; decode before matching. */
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
 
 /** why: the three engine probes survive only where the reader sees them as a
  * literal, so the scan removes them from a code span or fence and reports
@@ -1653,37 +1670,38 @@ export function findRetiredStageSpellings(line: string, inFence = false): string
   if (inFence) {
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) rest = rest.split(literal).join("");
   } else {
-    const spans: string[] = [];
+    // A span keeps its position: only the probe literals leave it, so a stage
+    // run written across prose and backticks is still one run.
     rest = rest.replace(INLINE_CODE, (_match, inner: string) => {
-      // An engine probe inside a span is removed and the span's remaining text
-      // is judged like prose: `mstar iteration gate --phase 6` passes, while
-      // `--phase 6 then Phase 4` still reports Phase 4.
       let content = inner;
       for (const literal of RETIRED_STAGE_MACHINE_LITERALS) content = content.split(literal).join(" ");
-      if (content.trim() !== "") spans.push(content);
-      return " ";
+      return content;
     });
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
-    rest += `\n${spans.join("\n")}`;
   }
   for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
   for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
   // Section citations are removed before a stage run is read, so `Phase 3 §3.4`
   // is not mistaken for a list that reaches stage 4.
   const withoutSections = rest.replace(/§\s*\d+(?:\.\d+)?/g, " ");
-  for (const match of withoutSections.matchAll(RETIRED_COMPACT_STAGE)) hits.push(match[0]);
-  for (const match of withoutSections.matchAll(STAGE_RUN)) {
-    if (/[456]/.test(match[1])) hits.push(match[0].trim());
+  for (const match of withoutSections.matchAll(RETIRED_COMPACT_STAGE)) {
+    if (isRetiredStage(match[1])) hits.push(match[0]);
   }
-  return [...new Set(hits)];
+  for (const match of withoutSections.matchAll(STAGE_RUN)) {
+    if (match[1].split(/[^0-9]+/).some((digits) => digits !== "" && isRetiredStage(digits))) hits.push(match[0].trim());
+  }
+  const unique = [...new Set(hits)];
+  // A probe literal already names the compact spelling inside it; report the
+  // longer match once rather than twice.
+  return unique.filter((hit) => !unique.some((other) => other !== hit && other.includes(hit)));
 }
 
 /** Text a reader of a diagram sees: `<text>`/`<title>` bodies and `aria-label`
- * values, with nested markup flattened. */
+ * values (either quote style), entity-decoded and flattened. */
 export function extractSvgText(text: string): string[] {
   const out: string[] = [];
-  for (const match of text.matchAll(SVG_NODE)) out.push(match[1].replace(/<[^>]*>/g, " "));
-  for (const match of text.matchAll(SVG_ARIA)) out.push(match[1]);
+  for (const match of text.matchAll(SVG_NODE)) out.push(decodeXmlEntities(match[1].replace(/<[^>]*>/g, " ")));
+  for (const match of text.matchAll(SVG_ARIA)) out.push(decodeXmlEntities(match[2]));
   return out;
 }
 
@@ -1705,14 +1723,37 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       });
       continue;
     }
-    let inFence = false;
+    // why: a fence closes only on its own delimiter character, at least as
+    // long as the opener, with nothing after it — a tilde line inside a
+    // backtick fence is content, not a close.
+    let fence: { char: string; len: number } | null = null;
     file.text.split("\n").forEach((line, index) => {
-      if (/^\s*(?:```|~~~)/.test(line)) {
-        inFence = !inFence;
+      const delimiter = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+      if (fence !== null) {
+        const closes =
+          delimiter !== null && delimiter[2][0] === fence.char && delimiter[2].length >= fence.len && delimiter[3].trim() === "";
+        if (closes) {
+          fence = null;
+          return;
+        }
+        for (const hit of findRetiredStageSpellings(line, true)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
         return;
       }
-      const fenced = inFence && !file.rel.endsWith(".json");
-      for (const hit of findRetiredStageSpellings(line, fenced)) {
+      if (delimiter !== null) {
+        fence = { char: delimiter[2][0], len: delimiter[2].length };
+        // An info string after the opening fence is prose a reader can see.
+        for (const hit of findRetiredStageSpellings(delimiter[3], false)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
+        return;
+      }
+      for (const hit of findRetiredStageSpellings(line, false)) {
         hits.push(
           `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
         );
@@ -1735,8 +1776,12 @@ export function readRetiredStageCorpus(
   const files: Array<{ rel: string; text: string }> = [];
   const readFailures: string[] = [];
   for (const rel of tracked) {
-    if (!RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root)) && !RETIRED_STAGE_FILES.includes(rel)) continue;
+    const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
+    if (!inRoot && !RETIRED_STAGE_FILES.includes(rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
+    // The diagram root is text only as SVG; anything else under assets/ is an image.
+    if (rel.startsWith("assets/") && !rel.endsWith(".svg")) continue;
+    if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
     if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
     try {
       files.push({ rel, text: readFileSync(join(repoRoot, rel), "utf8") });

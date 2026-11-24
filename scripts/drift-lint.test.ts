@@ -2318,9 +2318,47 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
   test("a retired stage name in backticks is still a retired stage name", () => {
     expect(findRetiredStageSpellings("the `Phase 4` step").length).toBeGreaterThan(0);
   });
+
+  test("a stage run keeps its context across a code span", () => {
+    expect(findRetiredStageSpellings("Phase 2 → 3 → `4`").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("Phase 2 → `3` → 4").length).toBeGreaterThan(0);
+  });
+
+  test("a multi-digit number is not a stage number", () => {
+    expect(findRetiredStageSpellings("Phase 14 shipped")).toEqual([]);
+    expect(findRetiredStageSpellings("Phases 12 to 14")).toEqual([]);
+  });
 });
 
-describe("extractSvgText — Guard 16 diagram text", () => {
+describe("checkRetiredStageNames — fence tracking", () => {
+  test("a tilde line inside a backtick fence does not close it", () => {
+    const text = ["```text", "~~~", RETIRED_STAGE_MACHINE_LITERALS[1], "```", "prose " + RETIRED_STAGE_MACHINE_LITERALS[1]].join("\n");
+    const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":5");
+  });
+
+  test("a short closer does not end a longer fence", () => {
+    const text = ["````text", "```", RETIRED_STAGE_MACHINE_LITERALS[1], "````"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/b.md", text }]).hits).toEqual([]);
+  });
+
+  test("a fence info string is judged as prose", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/c.md", text: "```Phase 4\nx\n```\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":1");
+  });
+});
+
+describe("extractSvgText — labels, entities and nodes", () => {
+  test("a single-quoted aria-label is read", () => {
+    expect(extractSvgText("<g aria-label='Phase 4'></g>").join(" ")).toContain("Phase 4");
+  });
+
+  test("a numeric character reference renders as the stage number", () => {
+    expect(extractSvgText("<text>Phase &#52;</text>").join(" ")).toContain("Phase 4");
+  });
+
   test("text, title and aria-label values are read, nested markup flattened", () => {
     const svg = '<svg><title>Phase 5 merge</title><text x="1">a <tspan>Phase 4</tspan> b</text><g aria-label="§6.2"></g></svg>';
     const segments = extractSvgText(svg);
@@ -2335,7 +2373,7 @@ describe("checkRetiredStageNames — Guard 16 corpus verdict", () => {
   test("markdown lines report their file and line, and a fence state carries", () => {
     const result = checkRetiredStageNames([
       { rel: "skills/x/SKILL.md", text: "clean\n\nPhase 4 was here\n" },
-      { rel: "skills/x/references/a.md", text: "```text\n--phase 6\n```\n" },
+      { rel: "skills/x/references/a.md", text: "```text\n" + RETIRED_STAGE_MACHINE_LITERALS[0] + "\n```\n" },
     ]);
     expect(result.filesScanned).toBe(2);
     expect(result.hits.length).toBe(1);
