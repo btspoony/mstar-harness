@@ -488,11 +488,11 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const fixture = await workflowFixture("phase-skipped");
     const before = await workflowFootprint(fixture.context);
 
-    // The row is Todo, so the gate produces phase-2-execute: Phase 4 is skipped.
+    // The row is Todo, so the gate produces phase-2-execute: the close is skipped.
     const skipped = await refusalOf(() =>
-      workflowMutation(fixture, "op-phase-4", {
+      workflowMutation(fixture, "op-phase-close", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: fixture.compassPath,
       }),
     );
@@ -506,7 +506,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const outsider = await refusalOf(() =>
       workflowMutation(fixture, "op-phase-foreign", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: foreign,
       }),
     );
@@ -520,9 +520,9 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       endDate: "2026-01-02",
     });
     const contradicted = await refusalOf(() =>
-      workflowMutation(fixture, "op-phase-4-again", {
+      workflowMutation(fixture, "op-phase-close-again", {
         kind: "phase",
-        phase: "phase-4-pr-delivery",
+        phase: "phase-3-close",
         compassPath: fixture.compassPath,
       }),
     );
@@ -530,12 +530,12 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 
-  test("phase-4 is accepted exactly when the gate's own evidence is complete", async () => {
-    const fixture = await workflowFixture("phase-4");
+  test("phase-3-close is accepted exactly when the gate's own evidence is complete", async () => {
+    const fixture = await workflowFixture("phase-close");
     setRowStatus(fixture.context, PLAN_ID, "Done");
     // The §3.5 exit item 6 probe is the recorded PR identity (§4d): the DB
     // authority holds no operator PR probe, so that evidence is what makes
-    // Phase 4 verifiable at all.
+    // the close verifiable at all.
     await workflowMutation(fixture, "op-delivery-4", { kind: "delivery", delivery: DELIVERY_TAIL });
     writeCompass(fixture.compassPath, {
       status: "completed",
@@ -544,13 +544,25 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       endDate: "2026-01-02",
     });
 
-    const receipt = await workflowMutation(fixture, "op-phase-4-ok", {
+    // Every row Done with green checklists IS the close: the older gate named a
+    // PR stage here instead and refused this exact call.
+    const skipped = await refusalOf(() =>
+      workflowMutation(fixture, "op-phase-execute-again", {
+        kind: "phase",
+        phase: "phase-2-execute",
+        compassPath: fixture.compassPath,
+      }),
+    );
+    expect(skipped.code).toBe("coordination.invalid-transition");
+    expect(skipped.details.gate).toBe("phase-3-close");
+
+    const receipt = await workflowMutation(fixture, "op-phase-close-ok", {
       kind: "phase",
-      phase: "phase-4-pr-delivery",
+      phase: "phase-3-close",
       compassPath: fixture.compassPath,
     });
     const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    expect(state.phase).toBe("phase-4-pr-delivery");
+    expect(state.phase).toBe("phase-3-close");
   });
 
   test("phase entry refuses an integration branch switched after preflight", async () => {
@@ -1914,7 +1926,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     });
     const before = await workflowFootprint(fixture.context);
 
-    // The gate of this lifecycle produces phase-4; the request asks for phase-2.
+    // The gate of this lifecycle produces phase-3-close; the request asks for phase-2.
     // The refusal keeps its own verdict AND names the exact conflicting field,
     // its current value, the requested one and the one decision left.
     const refused = await refusalOf(() =>
@@ -1925,7 +1937,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
       }),
     );
     expect(refused.code).toBe("coordination.invalid-transition");
-    expect(refused.details.gate).toBe("phase-4-pr-delivery");
+    expect(refused.details.gate).toBe("phase-3-close");
     const recovery = recoveryOf(refused.details);
     expect(recovery.outcome).toBe("unresolved");
     expect(recovery.commitState).toBe("none");
@@ -1933,7 +1945,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(problems).toHaveLength(1);
     expect(problems[0]!.component).toBe("workflow-header");
     expect(problems[0]!.path).toBe("operation.phase");
-    expect(listOf(problems[0]!, "currentFacts")).toContain("phase-4-pr-delivery");
+    expect(listOf(problems[0]!, "currentFacts")).toContain("phase-3-close");
     expect(String(problems[0]!.withheldEffect)).toContain("was not overwritten");
     expect(String(problems[0]!.needed)).toContain("phase-2-execute");
     expect(listOf(problems[0]!, "availableWork")).toContain("read the current state of workflow");

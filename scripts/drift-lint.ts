@@ -131,13 +131,14 @@
  * like a backtick span in Markdown, and a span opens and closes on a whole
  * backtick run of equal length. A fence
  * closes only on its own character, at least as long as the opener, with
- * nothing after it, and may sit inside a blockquote. The three engine probes
- * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
+ * nothing after it, and may sit inside a blockquote. The two engine probes
+ * `--phase 6` and `PHASE6_` pass only inside an inline
  * code span or a fenced block, matched at their boundaries (the `PHASE6_`
  * code family is exempt by prefix, and a code element's or fence's own
  * whitespace run inside `--phase 6` folds to one space, so the flag and its
  * value stay exempt together while `--phase6` without its space fails), and
- * their presence in prose fails.
+ * their presence in prose fails. No other retired spelling is exempt, so
+ * `phase-4-pr-delivery` fails in a code span as it does in prose.
  * Generated bundles and changelog history are skipped; skills whose numbered
  * steps are their own process (`mstar-audit`, `mstar-knowledge`) are exempt
  * by path. Guard-or-clear-error: a failed `git ls-files` reports the guard as
@@ -1660,8 +1661,8 @@ export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "I
 export const RETIRED_STAGE_EXTS = [".md", ".svg", ".html", ".json", ".toml"] as const;
 /** Tracked trees the scan skips: generated bundles and changelog history. */
 export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
-/** The three engine probes that stay, only inside a code span or fenced block. */
-export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_", "phase-4-pr-delivery"] as const;
+/** The two engine probes that stay, only inside a code span or fenced block. */
+export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_"] as const;
 /** Skills whose numbered steps are their own process, not delivery stages. */
 export const RETIRED_STAGE_OWN_PROCESS = ["skills/mstar-audit/", "skills/mstar-knowledge/"] as const;
 
@@ -1700,18 +1701,17 @@ const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
 // see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text;
 // the quote style is not part of the contract, so either pair opens the value.
 const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*(["'])([\s\S]*?)\1/gi;
-/** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier that
- * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
- * `PHASE6_` code family is exempt by prefix because the CLI names its
+/** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier —
+ * the `PHASE6_` code family is exempt by prefix because the CLI names its
  * delivery codes that way. The `--phase 6` probe needs its space: the engine
  * takes the flag and the value apart, so `--phase6` is a retired spelling and
  * reports again; a code element's or fence's own whitespace run still joins
- * the pair. */
+ * the pair. `phase-4-pr-delivery` is NOT here: it is a retired stage name the
+ * guard rejects in a code span too, so the vocabulary cannot be re-licensed. */
 const PROBE_PATTERN = new RegExp(
   [
     String.raw`(?<![\w])--phase\s+6(?![\w])`,
     String.raw`PHASE6_`,
-    String.raw`(?<![\w-])phase-4-pr-delivery(?![\w-])`,
   ].join("|"),
   "g",
 );
@@ -1760,7 +1760,7 @@ function decodeXmlEntities(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
-/** see scripts/drift-lint.ts § 16 — why: the three engine probes survive only where the reader sees them as a
+/** see scripts/drift-lint.ts § 16 — why: the two engine probes survive only where the reader sees them as a
  * literal, so the scan removes them from a code span or fence and reports
  * them anywhere else. Other span content is judged like prose: a retired
  * stage name in backticks is still a retired stage name. `markup: false`

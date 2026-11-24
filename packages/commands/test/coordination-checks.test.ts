@@ -350,7 +350,7 @@ end_date: "2026-09-02"
       integration: "integration/test",
       target: "main",
     } as never, context(cwd));
-    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-4-pr-delivery", entry: { ok: true }, exit: { ok: true } } });
+    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-3-close", entry: { ok: true }, exit: { ok: true } } });
   });
 
   test("non-six ACTIVE compass gate requires registered plans to be Done", async () => {
