@@ -1631,7 +1631,7 @@ export const RETIRED_STAGE_ROOTS = [
 export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
 /** see scripts/drift-lint.ts § 16 — Text faces read from that set: Markdown, diagram text, evaluation cases,
  * and the Codex prompt sources. */
-export const RETIRED_STAGE_EXTS = [".md", ".svg", ".json", ".toml"] as const;
+export const RETIRED_STAGE_EXTS = [".md", ".svg", ".html", ".json", ".toml"] as const;
 /** see scripts/drift-lint.ts § 16 — Tracked trees the scan skips: generated bundles and changelog history. */
 export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
 /** see scripts/drift-lint.ts § 16 — The three engine probes that stay, only inside a code span or fenced block. */
@@ -1915,7 +1915,7 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
 export function checkRetiredStageNames(files: Array<{ rel: string; text: string }>): RetiredStageResult {
   const hits: string[] = [];
   for (const file of files) {
-    if (file.rel.endsWith(".svg")) {
+    if (/\.(?:svg|html)$/.test(file.rel)) {
       // see scripts/drift-lint.ts § 16 — SVG label text is literal text a reader sees: a backtick is a
       // see scripts/drift-lint.ts § 16 — character, and a probe in a label is prose.
       for (const segment of svgTextSegments(file.text)) {
@@ -1952,8 +1952,9 @@ export function readRetiredStageCorpus(
     const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
     if (!inRoot && !RETIRED_STAGE_FILES.some((name) => name === rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
-    // see scripts/drift-lint.ts § 16 — The diagram addition is `assets/*.svg`: a nested SVG is not the diagram face.
-    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.svg$/.test(rel)) continue;
+    // see scripts/drift-lint.ts § 16 — The diagram face is a direct `assets/*.svg` or `assets/*.html` child (the
+    // see scripts/drift-lint.ts § 16 — static image and the interactive page); a nested file is not the diagram face.
+    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.(?:svg|html)$/.test(rel)) continue;
     if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
     if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
     try {
