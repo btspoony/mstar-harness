@@ -311,8 +311,8 @@ describe("criterion 7 — cross-authority move", () => {
     expect(arrived[0]).toMatchObject({ relation: "blocks", toIssue: null, title: null });
     expect(typeof arrived[0]?.toRef).toBe("string");
 
-    // … and a SECOND move of the related record resolves it on arrival, in the transaction that
-    // admits it. That is the working relation the spec's table row asks for.
+    // invariant: A SECOND move of the related record resolves it on arrival, in the transaction that
+    // admits it — the working relation the spec's table row asks for.
     const secondId = `move-preserve-related-${String(sequence)}`;
     const second = await moveIssue(
       source,
@@ -344,7 +344,7 @@ describe("criterion 7 — cross-authority move", () => {
     const stillServed = await getIssue(source, issueId);
     expect(stillServed).toMatchObject({ id: issueId });
     expect(stillServed.occurrences).toHaveLength(2);
-    // … while every write to it is refused by the lane's own fence, naming the move that holds it.
+    // invariant: Every write to it is refused by the lane's own fence, naming the move that holds it.
     const fenced = await refusalOf(
       appendOccurrence(source, issueId, blockedOccurrence("stops-while-staged", `occ-blocked-${String(sequence)}`), {
         actor: "project-manager",
@@ -407,7 +407,7 @@ describe("criterion 7 — cross-authority move", () => {
     if (landed === undefined) throw new Error("the switched move admitted no destination record");
     expect(await issueRefOf(destination, landed.id)).toBe(landed.issue_ref);
 
-    // … the source stops presenting it, so the gap is NAMED rather than read as absence …
+    // invariant: The source stops presenting it, so the gap is NAMED rather than read as absence.
     const notPresented = await refusalOf(getIssue(source, issueId));
     expect(notPresented.code).toBe("collaboration.operation-partial");
     expect(String(notPresented.details?.recovery ?? notPresented.message)).toContain(request.operationId);
@@ -419,7 +419,7 @@ describe("criterion 7 — cross-authority move", () => {
     const rollup = await withStoreRead(source, queryOpenIssueRollup());
     expect(rollup.data.totalOpen).toBe(0);
     expect(rollup.data.recent.map((item) => item.id)).not.toContain(issueId);
-    // … and a source write is still refused: the switch did not release the fence.
+    // invariant: A source write is still refused: the switch did not release the fence.
     const fenced = await refusalOf(
       appendOccurrence(source, issueId, blockedOccurrence("stops_after_switch", `occ-after-switch-${String(sequence)}`), {
         actor: "project-manager",
@@ -482,7 +482,7 @@ describe("criterion 7 — cross-authority move", () => {
     expect(String(refused.details?.mismatch ?? "").length).toBeGreaterThan(0);
     // invariant: A refused verification never switches, so the source record is byte-identical …
     expect(recordImage(source, issueId)).toEqual(before);
-    // … the move row is the audit of the refusal and no blocking row survives …
+    // invariant: The move row is the audit of the refusal and no blocking row survives.
     const sourceLane = laneFile(source);
     try {
       expect(sourceLane.prepare("select phase from issue_moves where operation_id = ? and role = 'source'").get(request.operationId)).toEqual({
@@ -494,7 +494,7 @@ describe("criterion 7 — cross-authority move", () => {
     } finally {
       sourceLane.close();
     }
-    // … and the destination staging row is gone rather than left half-admitted.
+    // invariant: The destination staging row is gone rather than left half-admitted.
     const clearedLane = laneFileOf(request.destinationAuthority);
     try {
       expect(clearedLane.prepare("select count(*) as n from issue_moves").get()).toEqual({ n: 0 });
@@ -607,9 +607,9 @@ describe("criterion 7 — cross-authority move", () => {
     // invariant: The edge whose target left becomes the target's stable reference at publication, so
     // nothing in this lane still names a record that is gone …
     const unresolved = { fromIssue: holder, relation: "blocks", toIssue: null, toRef: leavingRef, title: null };
-    // … and BOTH local readers answer with it: the domain reader …
+    // invariant: BOTH local readers answer with that stable reference — the domain reader first.
     expect((await getIssue(source, holder)).relations).toEqual([unresolved]);
-    // … and the dashboard detail reader, the other production read of the same rows.
+    // note: The dashboard detail reader, the other production read of the same rows, answers the same way.
     const envelope = await withStoreRead(source, queryDashboard("issue-detail", { id: holder }));
     expect((envelope.data as IssueDetail).relations).toEqual([unresolved]);
     // note: The record is still served and still counted: an unresolved edge is visible, never absent.
