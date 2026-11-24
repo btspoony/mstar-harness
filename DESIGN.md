@@ -525,8 +525,8 @@ The screen is the prototype's, in its order — **as of the confirmed baseline
                     (id · lifecycle · Revision N · N open issues), then the roadmap's
                     presence chip and the catalog path
 .subtabs            Roadmap / Issues / Iterations, each with its count
-.panel              the milestone timeline — one node per milestone, target-ordered,
-                    missing targets last, plus one trailing unassigned-issues node
+.panel              the milestone timeline — one node per milestone in ordinal order (the
+                    milestone's stored position), plus one trailing unassigned-issues node
 .panel              the milestone board (writable), one row per milestone
 ```
 
@@ -535,17 +535,20 @@ and the stored-facts panel are **removed** with the user's decision; the directi
 into the header (falling back to the catalog description when the roadmap declares none;
 both absent renders nothing). The roadmap-presence chip and the location line stay.
 
-Each milestone row carries four tallies (`N open`, `N resolved`, `N retired without
+Each milestone row carries its planned effort — `<n> sessions`, or the localized word for
+*unestimated* when the count is null — and four tallies (`N open`, `N resolved`, `N retired without
 resolution`, `N total`), each with its own `data-ms-count` hook so a test can pin the
 number rather than the label. The issues it owns render as compact id chips, toned by
-disposition, with the settled ones folded into `+N <disposition>`. Each timeline node
-carries the retired-over-total pair and the open count; a milestone with no issues still
-renders its node.
+disposition, with the settled ones folded into `+N <disposition>`. Each timeline node's
+status line reads `<n> sessions · <status>`, or `unestimated · <status>`, above the
+retired-over-total pair and the open count; a milestone with no issues still renders its
+node, and the trailing unassigned-issues node carries no effort text.
 
 **The milestone board is the page's only write surface**: a create form carrying **name
-and target only** (the engine's add verb has no status field — creation always inserts
-`planned`, and status is changed through the edit control), per-milestone inline edit
-(name / target / status), an assign picker over the project's open unassigned issues
+and effort sessions only** (the engine's add verb has no status field — creation always
+inserts `planned`, and status is changed through the edit control; a whole number of at
+least 1, an empty value meaning unestimated), per-milestone inline edit
+(name / effort sessions / status), an assign picker over the project's open unassigned issues
 (stating the 50-row cap when it applies), per-chip unassign, and a two-step inline remove
 confirm behind which the engine's own emptiness rule answers — a non-empty removal is attempted and its
 `milestone.not-empty` refusal surfaced verbatim, then the read reloads. Every write goes
@@ -566,7 +569,7 @@ rewriting rather than patching, which is what eventually happened.
 ## A baseline offset is not a defect until you measure the prototype's
 
 The milestone board's head is a flex line whose parts carry different type sizes: the name
-at 13px, the status at 12px, the id and date at 10-11px. Their `top` values therefore differ
+at 13px, the status at 12px, the id and effort line at 10-11px. Their `top` values therefore differ
 even when the line is perfectly aligned — a 13px ascender starts higher than a 10px one.
 
 Measured `top` spread across that line:
@@ -1254,7 +1257,7 @@ rows: 0        before
 rows: 1        after
 ```
 
-The board's content was there — the milestone's name, status, target and `4/14` counts all
+The board's content was there — the milestone's name, status, effort line and `4/14` counts all
 rendered — but its row wore the generic `.row` class where the prototype has
 `.milestone-row` (`padding: 7px 0; border-bottom: 1px solid`). `.row` supplies a different
 rhythm and no per-row padding. `Row` gained a `rowClass` prop and the board passes it.
@@ -1465,8 +1468,8 @@ Measured on the three milestone states:
 prototype's colour" are different questions, and only the first was asked.
 
 **2. The milestone row was two rows in the prototype and one row here.** The prototype's
-`.milestone-top` (dot, name, target) and `.milestone-foot` (bar, counts) stack. As a single
-flex line at 360px, the target broke across lines and `5/14 · 9 open` split in two. The row is
+`.milestone-top` (dot, name, effort line) and `.milestone-foot` (bar, counts) stack. As a single
+flex line at 360px, the effort line broke across lines and `5/14 · 9 open` split in two. The row is
 now the prototype's two divs.
 
 **3. A dead rule was setting the layout.** `base.css` styled `.milestone-row` as a one-line
