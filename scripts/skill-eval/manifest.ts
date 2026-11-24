@@ -126,6 +126,12 @@ export interface GroupedFactsSpec {
 export interface DecisionRecordSpec {
   /** see scripts/skill-eval/README.md § decision_record */
   fields: Record<string, string[]>;
+  /**
+   * see scripts/skill-eval/README.md § decision_record — literal phrases that
+   * state the forbidden decision in prose; any one present in the final fails
+   * the assertion. A case-authored list, never a proximity or semantic check.
+   */
+  forbidProse?: string[];
 }
 
 export interface BoundedResolutionContext {
@@ -752,6 +758,13 @@ export function validateCases(
                   errors.push(`${alabel}.value.fields.${name} must be a non-empty array of non-empty allowed-value strings`);
                 }
               }
+            }
+            const forbidProse = (spec as Record<string, unknown>).forbidProse;
+            if (
+              forbidProse !== undefined &&
+              (!Array.isArray(forbidProse) || forbidProse.length === 0 || forbidProse.some((p) => typeof p !== "string" || p.trim() === ""))
+            ) {
+              errors.push(`${alabel}.value.forbidProse must be a non-empty array of non-empty literal phrase strings when present`);
             }
           }
         } else if (typeof rec.value !== "string" || rec.value === "") {

@@ -133,12 +133,19 @@ demands one machine-readable record instead:
   `DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}`. Two
   record lines, zero record lines, invalid JSON, or a non-object payload are
   malformed.
-- Spec: `{"fields": {<field>: [<allowed value>, …]}}`. Every listed field must
-  be present with one of its allowed values.
+- Spec: `{"fields": {<field>: [<allowed value>, …]}, "forbidProse": [<literal phrase>, …]}`.
+  Every listed field must be present with one of its allowed values.
+- `forbidProse` (optional) closes the remaining prose gap: a reply can carry a
+  correct record and still *state* the forbidden decision in its sentence
+  ("The iteration is delivered"). Each entry is a **literal phrase authored per
+  case** — never a proximity window, never a semantic/Judge call — matched
+  case-insensitively against the final message with whitespace runs normalised
+  to one space. Any listed phrase present → **fail**, even when every field is right.
 - Grades: **fail** when a recorded field is missing or outside its allowed set
-  (the contradiction), **unverified** — never pass — when the record is absent
-  or malformed, **pass** only when the record satisfies the spec. This is the
-  same honesty rule `grouped_facts_final` applies.
+  (the contradiction), or when a `forbidProse` phrase appears in the final;
+  **unverified** — never pass — when the record is absent or malformed,
+  **pass** only when the record satisfies the spec and no forbidden phrase
+  appears. This is the same honesty rule `grouped_facts_final` applies.
 - A case that adopts it must require the record in its fixture AGENTS.md
   protocol line, as the close cases that forbid a decision do.
 

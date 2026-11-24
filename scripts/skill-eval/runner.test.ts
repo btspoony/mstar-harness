@@ -444,6 +444,24 @@ describe("prepare — frozen baseline manifest (Task 1)", () => {
     expect(mem.writes.length).toBe(0);
   });
 
+  test("prepare rejects a malformed decision_record forbidProse list with exit 2 before any write", async () => {
+    const mem = setupMemory();
+    mem.files.set(
+      resolve("/cfg/cases.json"),
+      mutatedCasesText((cases) => {
+        const target = cases.find((c) => c.id === "close-heldout-2-changelog-fragment-only")!;
+        const assertions = target.assertions as { kind: string; value: unknown }[];
+        const record = assertions.find((a) => a.kind === "decision_record")!;
+        record.value = { fields: { delivery: ["blocked"] }, forbidProse: [""] };
+      }),
+    );
+    const spy = makeSubprocessSpy();
+    const result = await prepareManifest(prepareArgs(mem, spy));
+    expect(result.exit).toBe(2);
+    expect(result.errors.join("\n")).toContain("value.forbidProse must be a non-empty array");
+    expect(mem.writes.length).toBe(0);
+  });
+
   test("prepare rejects unsafe real checkout targets with exit 2 before any write", async () => {
     const spy = makeSubprocessSpy();
 
@@ -2498,13 +2516,17 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
   const RECORD_CASE = "close-heldout-2-changelog-fragment-only";
   const REFUSAL = "RESULT: REFUSED-PHASE-JUMP";
 
-  async function gradeRecordFinal(recordLine: string | null) {
+  async function gradeRecordFinal(recordLine: string | null, prose: string[] = []) {
     const { io, manifest } = await preparedRunDir();
     const spawn = syntheticSpawn(io, (req) => {
       const id = caseIdFromCwd(manifest, req.cwd);
       if (id !== RECORD_CASE) return basePassScript(manifest, id);
       const base = basePassScript(manifest, id);
-      const final = [...base.final!.trimEnd().split("\n").filter((line) => !line.startsWith("DECISION:")), ...(recordLine === null ? [] : [recordLine])];
+      const final = [
+        ...prose,
+        ...base.final!.trimEnd().split("\n").filter((line) => !line.startsWith("DECISION:")),
+        ...(recordLine === null ? [] : [recordLine]),
+      ];
       return { ...base, final: `${final.join("\n")}\n` };
     });
     const result = await executeManifest({
@@ -2541,6 +2563,28 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
 
   test("a record that agrees with the refusal passes", async () => {
     const { unit, assertion, result } = await gradeRecordFinal('DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}');
+    expect(assertion.grade).toBe("pass");
+    expect(unit.grade).toBe("pass");
+    expect(result.exit).toBe(0);
+  });
+
+  test("a correct record beside prose that states the forbidden decision still fails", async () => {
+    // Greptile P1: the record is right, the prose is the contradiction.
+    const { unit, assertion, result } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
+      ["收尾其实已经齐了，The   ITERATION is delivered."],
+    );
+    expect(assertion.grade).toBe("fail");
+    expect(assertion.evidence.detail).toContain("forbidden prose phrase");
+    expect(unit.grade).toBe("fail");
+    expect(result.exit).toBe(1);
+  });
+
+  test("prose that avoids every forbidden phrase still passes", async () => {
+    const { unit, assertion, result } = await gradeRecordFinal(
+      'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
+      ["Phase 3 close is unfinished; delivery stays blocked until the close exit checklist passes."],
+    );
     expect(assertion.grade).toBe("pass");
     expect(unit.grade).toBe("pass");
     expect(result.exit).toBe(0);

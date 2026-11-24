@@ -1812,6 +1812,15 @@ function gradeDecisionRecord(ctx: GradingContext, assertionId: string, spec: Dec
       violations.push(`${field}=${JSON.stringify(actual)} (allowed: ${allowed.join("|")})`);
     }
   }
+  // Literal case-authored phrase list, not a proximity or semantic heuristic:
+  // a correct record beside prose that states the forbidden decision still
+  // fails, which is exactly what the record-only check could not see.
+  const normalised = content.toLowerCase().replace(/\s+/g, " ");
+  for (const phrase of spec.forbidProse ?? []) {
+    if (normalised.includes(phrase.toLowerCase().replace(/\s+/g, " "))) {
+      violations.push(`forbidden prose phrase ${JSON.stringify(phrase)} appears in the final message`);
+    }
+  }
   if (violations.length > 0) {
     return {
       assertionId,
