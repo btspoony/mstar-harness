@@ -1,6 +1,6 @@
 # Workflow Close Out after a verified merge
 
-> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file for Workflow Close Out: the iteration route (`mstar-iteration` SKILL.md「Phase route map」) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
+> Responsibility: close a registered workflow once its route's completion prerequisite is satisfied — a verified delivery merge for a route that delivers through a PR, or QC and PM Acceptance under the registered completion policy for a report-only workflow — writing the terminal state, unregistering, reconciling projections, then handing off cleanup explicitly. Both callers load this file for Workflow Close Out: the iteration route (`mstar-iteration` SKILL.md「Phase route map」workflow close) and the standalone routes in `mstar-roles/references/project-manager/plan-management.md`. **Read `mstar-harness-core` first.** For a route with a merge, `mergeable` ≠ merged: the engine cannot probe remote PR state, so the caller verifies the merge before invoking close, and the close verb is not a merge verifier; a report-only workflow closes with no PR and no merge.
 
 | Route | Entry fact |
 |---|---|
@@ -11,7 +11,7 @@
 ## Entry
 
 1. Print `## Workflow Close Out`.
-2. **Iteration:** Append the iteration's close-out session todo (todo table → `mstar-iteration/references/command-shared-invariants.md`); a standalone development close has no such todo.
+2. **Iteration:** Append the iteration's close-out session todo (todo table — session todos SSOT → `mstar-iteration/references/command-shared-invariants.md`); a standalone development close has no such todo.
 3. Resumable: close may run in a later session, and it is idempotent against an already terminal lifecycle (a fully closed retry changes no authoritative target and does not rewrite `ended_at`).
 
 Ordered pipeline (HARD — fixed order, no skipping or inversion): **Terminal write → Unregister → Projection reconciliation → Cleanup handoff.**
@@ -45,9 +45,9 @@ Align only the projections the selected route actually has to the ACTIVE DB term
 1. the `{PLAN_DIR}` authored plan — every route
 2. compass `## Plans` — an iteration route only; the iteration README is prose only, with no status registration rows
 3. the store project roadmap content and issue rollup — where the project has them; the project register is migration history only and is not updated
+4. **Iteration only:** the compass `delivered` marker with its `## Roadmap Position` row, the roadmap row and the milestone rollup — written only here, because whole-chain proof is recorded (`mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」), through the existing `mstar-project-governance` operations
 
-- **Never** forge a `Done` row and **never** close an open residual to match. Reconciliation invents no Done/closed, closes no entry to align, and does not relax the `zero-residual` rule; under `allow-residual`, a registered and disclosed non-blocking open R# **stays open** and does not "close along with" the lifecycle end (a real remaining finding blocks `zero-residual` delivery instead of being silently closed).
-- **Never** slip new tracked product or documentation commits into the close (any step) — a newly found product fix opens its own authorized workflow.
+- **Never** forge a `Done` row or close an open residual to match, never relax `zero-residual` (under `allow-residual` a registered, disclosed non-blocking open R# **stays open**; a real remaining finding blocks `zero-residual` delivery instead of being silently closed), and never slip new tracked product or documentation commits into the close (any step) — a newly found product fix opens its own authorized workflow.
 
 ## Cleanup handoff
 

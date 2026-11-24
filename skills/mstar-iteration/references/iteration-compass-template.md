@@ -95,6 +95,12 @@ This table tracks **iteration delivery nodes**, not store `project_milestones` r
 | `spec_integration_branch` | <e.g. iteration/<iteration-id>> |
 | `target_branch` | <PR target after iteration-close> |
 
+## PR stack
+
+| # | Accountable plan | Repo / PR | Branch refs | Witnessed base → head | Readiness | Merge evidence |
+|---|---|---|---|---|---|---|
+| s1 | <plan-id> | <owner>/<repo> #<n> | <layer ref> ← <predecessor ref> | <base sha> → <head sha> | reviewing / ready / landed | <merge commit sha, or pending> |
+
 ## Risk Register
 
 | Risk | Likelihood | Impact | Mitigation |
@@ -156,12 +162,13 @@ Notes:
 | `pr_merge_policy` | Yes | Phase 1 at direction lock: exactly `reviewed-auto`, `reviewed-bot` or `owner-gated`, confirmed with the user and never defaulted. PR delivery dispatches its review path on it (`reviewed-auto` = local `mstar-pr-loop`; `reviewed-bot` = monitor the attached bot's own review, never start a local loop); Workflow Close Out requires the merge authorization it names (`mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」). |
 | `plans` (frontmatter) | Recommended | Phase 1 (initial), Phase 2 (add new) |
 | `## Plans` table | Yes | Phase 2 (sync status), Phase 3 (final) |
+| `## PR stack` | Yes (iteration delivery) | Layer publication: one row per layer from the first review-ready layer on; the primary coordinator alone writes it → `mstar-iteration/references/pr-stack.md` |
 | `## Milestones` | Recommended | Phase 1, Phase 2 (update) |
 | `## Acceptance Criteria` | Yes | Phase 1 |
 | `## Non-Goals` | Yes | Phase 1; each entry carries its rationale |
 | `## Decisions` | Yes | Phase 1 draft (appended in Phase 2); settled items with rationale and source |
 | `## Open Questions` | Yes (`None` allowed) | Phase 1 draft; owners must be PM or selected editing roles; row disposition before lock → `phase-1-prepare.md` §1.3 |
-| `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
+| `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（记录投影候选）；`delivered` 投影在整链证明之后由 Workflow Close Out 的 Projection reconciliation 写入 |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
 | `## Prototype baseline` | Yes | Phase 1 §1.3, from §1.2.5; retained path/revision and truthful confirmation/autonomous disposition |
 | Iteration package (`prototypes/`, optional `guides/` / `specs/`) | Yes (prototype) | Prototype before formal authoring; README is optional prose, not a required index |
@@ -171,8 +178,4 @@ Notes:
 
 ## Legacy compass drift
 
-若仓库中已有 compass **无** YAML frontmatter、**无** `## Roadmap Position`，或只有 prose completion status：
-
-- **新迭代**：Phase 1 必须按本模板写入 **`{ITERATION_DIR}/<iteration-id>/delivery-compass.md`**，不延续 prose-only 或根目录 flat 文件惯例。
-- **收口时**：`mstar-iteration` §3.0.5 在 Phase 3 入口规范化，再执行 §3.3–§3.4。
-- **Legacy path**：若仍存在 `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`，读时兼容；本轮若改写该迭代，迁入 `<iteration-id>/delivery-compass.md`。
+无 YAML frontmatter、无 `## Roadmap Position`、或只有 prose completion status 的 compass 属 legacy：**新迭代**按本模板写入 **`{ITERATION_DIR}/<iteration-id>/delivery-compass.md`**，不延续 prose-only 或根目录 flat 惯例；**收口时** `mstar-iteration` §3.0.5 在 Phase 3 入口规范化，再执行 §3.3–§3.4。Legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 读时兼容；本轮改写该迭代时迁入 `<iteration-id>/delivery-compass.md`。

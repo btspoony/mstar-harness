@@ -37,8 +37,8 @@ List every open issue linked to the delivered plan(s) with its severity, trackin
 
 Write `Door: one-way | two-way` and one `Blast radius` line naming the affected users, systems or data. Door describes rollback cost, not severity: a change that cannot be reverted without external coordination is `one-way`; otherwise it is `two-way`.
 
-## Iteration-only addition
+## Iteration-only additions
 
-Include the `pr_merge_policy` required by `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」item 5. Its definition stays there; standalone PRs do not invent a compass or iteration policy.
+Include the `pr_merge_policy` required by `mstar-roles/references/project-manager/pr-delivery.md`「Publish the PR」item 5; its definition stays there. For a layer PR also state the stack position: iteration id, layer order, predecessor PR and accountable plan (`mstar-iteration/references/pr-stack.md`「Opening」). Standalone PRs do not invent a compass or iteration policy.
 
 Follow the project's title convention when one is declared.

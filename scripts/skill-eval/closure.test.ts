@@ -48,7 +48,7 @@
  *   claims vs. real checks); this suite only reports that the seat exists.
  * - PM required reading → `mstar-roles/references/project-manager.md`
  *   (preset-exempt, never gated by `Skill presets:`).
- * - Phase transitions → `evaluatePhaseGate` (engine) and the `PHASE6_` behavior
+ * - Phase transitions → `evaluatePhaseGate` (engine) and the close-state probe
  *   suites (`packages/engine/src/execution-workflow.test.ts`,
  *   `packages/commands/test/coordination-checks.test.ts`,
  *   `packages/cli/test/execution-session.test.ts`); this suite asserts none
@@ -530,6 +530,37 @@ describe("mstar-iteration phase route map ", () => {
     }
   });
 
+  test("route map: each row names exactly one route file and each file has exactly one row", () => {
+    const rows = sectionLines("## Phase route map").filter((l) => l.trim().startsWith("|")).slice(2);
+    const routeFiles = [
+      ...PHASE_ROUTE_FILES,
+      SHARED_PR_DELIVERY,
+      "references/pr-stack.md",
+      "mstar-roles/references/project-manager/workflow-close.md",
+    ];
+    for (const file of routeFiles) {
+      const path = file.startsWith("mstar-") ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
+      expect(existsSync(path), `${file} exists on disk`).toBe(true);
+    }
+    for (const row of rows) {
+      const named = routeFiles.filter((file) => row.includes(`\`${file}\``));
+      expect(named.length, `row names exactly one route file: ${row}`).toBe(1);
+    }
+    for (const file of routeFiles) {
+      const naming = rows.filter((row) => row.includes(`\`${file}\``));
+      expect(naming.length, `${file} is named by exactly one row`).toBe(1);
+    }
+  });
+
+  test("transition gates: execution and close entrances survive as responsibility rows", () => {
+    const gates = sectionLines("## Phase transition gates（HARD — 防跳步）").join("\n");
+    expect(gates.includes("→ Phase 2")).toBe(true);
+    expect(gates.includes("→ Phase 3")).toBe(true);
+    expect(gates.includes("close → delivery chain")).toBe(true);
+    expect(gates.includes("→ workflow close")).toBe(true);
+    expect(gates.includes("→ 迭代交付完成")).toBe(true);
+  });
+
   test("no missing local file/anchor: entry headings + load-bearing AC2 semantics resolve", () => {
     for (const { file, entryAnchor } of PHASE_ROUTES) {
       expect(read(routeFilePath(file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
@@ -537,7 +568,7 @@ describe("mstar-iteration phase route map ", () => {
     expect(read(routeFilePath("references/pr-helper-discovery.md")).includes("# PR helper discovery")).toBe(true);
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
-    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–3 与 PR delivery 通用 SSOT）")).toBe(true);
+    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（execute → whole-chain close 通用 SSOT）")).toBe(true);
  // Phase 1 detail: the section heading is structural. The sequential
  // product-manager/architect/writing chain and `status: locked` are prose
  // claims whose owners are the phase-gates contract and `evaluatePhaseGate`,
@@ -550,8 +581,7 @@ describe("mstar-iteration phase route map ", () => {
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
- // Phase 3 / PR delivery detail keeps its hard gates — see
- // skills/mstar-roles/references/project-manager/pr-delivery.md.
+ // see skills/mstar-iteration/references/phase-3-iteration-close.md § 3.1, § 3.5
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.1 Close entry checklist（HARD GATE）")).toBe(true);
     expect(phase3.includes("## 3.5 Close exit checklist + commit")).toBe(true);
@@ -583,27 +613,8 @@ describe("mstar-iteration phase route map ", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Adversarial phase-transition case assertions (AC5 boundary scenarios).
-// Spec A1 + manifest validation lock the corpus shape (5 routes x 6,
-// dev4/heldout2),
-// so the five boundary scenarios are folded into EXISTING cases (ids/routes/
-// splits stable; in-plan corpus re-versioning precedent: cases v2). See
-// scripts/skill-eval/cases.json. Pins
-// (STRUCTURAL only — never substitutes for model traces, Spec A1):
-// 1. Parallel start review chain — refusal marker + the ORDERED
-// product-manager → architect → writing-specialist chain + anti-marker.
-// 2. Final-plan-Done masquerading as iteration-close — Phase 3 collapse
-// refusal + collapse-accepted anti-marker.
-// 3. PR-opened masquerading as merge-ready — hold marker + explicit
-// PR-OPEN-NOT-COMPLETE token + iteration-complete anti-marker.
-// 4. Resume in wrong phase — resume case refuses skipping an unfinished
-// close ahead to PR delivery (Phase 3 → PR delivery jump).
-// 5. Overridden pause — pause honored; auto-continue anti-marker.
-// Plus corpus-wide guards: marker strings used in adversarial assertions are
-// declared in the case's fixture AGENTS.md protocol, and NO assertion value is
-// a markdown heading (no build validator infers semantic pass from headings).
-// ---------------------------------------------------------------------------
+// see scripts/skill-eval/cases.json — the five adversarial boundary hosts and
+// their structural pins.
 
 const ADVERSARIAL_CASE_IDS = [
   "pm-dev-2-refuse-gate-skip-and-main-commit",

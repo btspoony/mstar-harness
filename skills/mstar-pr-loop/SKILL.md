@@ -19,15 +19,15 @@ The project-manager orchestrates; implementers fix; review seats remain read-onl
 
 ## Scope
 
-Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. Not under `reviewed-bot`: that policy makes an attached review bot the PR's review producer, so this loop must not start, and its findings are triaged by iteration Phase 5 like any third-party reviewer's. This is not routine review, and the loop never starts on its own initiative.
+Enter only on the user's explicit request to loop review → fix on an existing ready PR, or when the active iteration recorded `pr_merge_policy: reviewed-auto` at its Phase 1. Not under `reviewed-bot`: that policy makes an attached review bot the PR's review producer, so this loop must not start, and its findings are triaged like any third-party reviewer's under `mstar-roles/references/project-manager/pr-delivery.md`「Review paths and surfaces」. This is not routine review, and the loop never starts on its own initiative.
 
-Under a recorded `reviewed-auto` this loop is that iteration's Phase 5 review gate, and its `ship it` row is the merge authorization `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
+Under a recorded `reviewed-auto` this loop is that iteration's review gate, and its `ship it` row is the merge authorization `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」reads. Outside such a recorded policy a `ship it` exit authorizes nothing: no merge, no lifecycle Done.
 
 - Resolve `pr:<n>` preferentially, otherwise a branch with an open PR. If resolution fails or the PR is not ready, refuse with the actual cause and accepted forms: `pr:<n>` or a branch with an open, ready PR; supply that target or make the existing PR ready, then retry this entry.
 - Accept one optional tier: `quick`, `default` or `deep`; otherwise use the review's own inference ladder (§ Review depth (tiers)), not a loop-specific default.
 - An optional user-supplied round budget has no default. Honor an explicit budget or interruption, retain the latest report and residuals, and name the user action needed to resume; never invent a numeric round ceiling.
 
-The loop does not own CI babysitting, third-party review threads (those an external reviewer/bot opened, which iteration Phase 5 / its separately discovered babysit helper triages) or the merge-ready gate; the review's own thread lifecycle (step 3: resolve this flow's `fixed` threads, fold its superseded bodies) is not that. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a finding-capture issue. A deferred-PR tracking issue must still be closed through the existing closure authority at that PR's review completion (`mstar-audit` → `mstar-audit/references/pr-review.md` § Batch sibling PRs). A `ship it` exit is review-loop success, never lifecycle Done, and it authorizes a merge only where a recorded `pr_merge_policy: reviewed-auto` names it as that authorization.
+The loop does not own CI babysitting, third-party review threads (those an external reviewer/bot opened, which the iteration's review path / its separately discovered babysit helper triages) or the merge-ready gate; the review's own thread lifecycle (step 3: resolve this flow's `fixed` threads, fold its superseded bodies) is not that. Never submit `APPROVE` or `REQUEST_CHANGES`, merge a PR, or close a finding-capture issue. A deferred-PR tracking issue must still be closed through the existing closure authority at that PR's review completion (`mstar-audit` → `mstar-audit/references/pr-review.md` § Batch sibling PRs). A `ship it` exit is review-loop success, never lifecycle Done, and it authorizes a merge only where a recorded `pr_merge_policy: reviewed-auto` names it as that authorization.
 
 ## Workflow
 
@@ -65,10 +65,13 @@ Leftover `unmet` acceptance criteria are separate tally increments, not findings
 
 | PR context | Head and fix site |
 | --- | --- |
-| Iteration PR | PR head = `branch.integration`; edit and commit in a fix feature worktree, then serially merge into the integration worktree. Follow `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」, whose integration merge-back rules apply only to an iteration PR. |
+| Iteration PR | PR head = that PR's layer ref `iteration-stack/<iteration-id>/sNN`; edit and commit in a fix feature worktree, then that PR's single pusher merges the fix into its layer ref and the coordinator propagates the integration update to affected upper layers per `mstar-iteration/references/pr-stack.md`「Propagation」. Follow `mstar-roles/references/project-manager/pr-delivery.md`「Fix boundary」. |
+| Iteration aggregate PR (Rollout) | PR head = `branch.integration`; there is no layer ref. An ordinary fix is edited and reviewed in a fix feature worktree based on `branch.integration`, then merged serially by the coordinator in the integration worktree; conflict repair is the only work done in that checkout. No layer ref is created and the PR is never reinterpreted as a stack; follow `mstar-iteration/references/pr-stack.md`「Rollout」. |
 | Standalone `development` plan | PR head = registered `branch.work`; commits land in a dedicated worktree checked out on that branch, never the primary checkout. |
 
 The iteration merge ritual is not generalized to standalone plans.
+
+Who fixes an attached bot's findings: the coordinator confirms the finding and dispatches its fix to the owning implementer; this loop owns only the fixes for its own review findings, and every head update goes through that PR's single pusher.
 
 ### Fixable findings and push discipline
 
