@@ -24,6 +24,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 | `## Quality Gate Summary` | 按模板补占位，§3.4 填写 |
 | `## Corpus Promotion Summary` | 按模板补占位，§3.4 填写 |
 | `## Iteration Retrospective (minimal)` | 按模板补占位，§3.4 填写 |
+| `## PR stack`（迭代交付必备；模板 → `iteration-compass-template.md`） | 按模板补节；已发布 layer 的行按实际 refs 与既有 PR 重建，不以标题或最新 PR 推断（`pr-stack.md`「Records」）；行内容由 primary coordinator 写入 |
 
 正文 completion status 只能作为历史注释；最终状态必须写入 frontmatter `status: completed` + `end_date`。
 
@@ -36,7 +37,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 - [ ] compass `## Plans` 表状态与当前权威执行行同步
 - [ ] 每个 plan 的 compound disposition（`created` / `updated` / reasoned `skipped`）已记录在该 plan 的 `## Review Gate Summary`（`Compound disposition`）
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
-- [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
+- [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + `## PR stack` + close 占位节）
 
 PM **必须**在对话中打印本 checklist；不得默认同过。
 
