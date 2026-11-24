@@ -21,7 +21,7 @@ import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
-import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
 import { openCollaborationStore, openRemoteCache, withCollaborationWrite, withRemoteCacheWrite } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
@@ -829,7 +829,7 @@ async function withJournalRead<T>(
 export async function readPendingRegistration(
   context: StoreContext,
   workflowId: string,
-): Promise<{ operationId: string; phase: "prepared" | "execution-written" } | null> {
+): Promise<{ operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null> {
   return await withJournalRead(context, (db) => pendingRegistrationOf(db, workflowId));
 }
 
@@ -846,7 +846,7 @@ export async function readPendingRegistration(
  * stores instead of widening this read.
  */
 export type SplitJournal = {
-  read(workflowId: string): { operationId: string; phase: "prepared" | "execution-written" } | null;
+  read(workflowId: string): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null;
   close(): void;
 };
 
@@ -873,7 +873,7 @@ export function pendingRegistrationInTransaction(
   journal: SplitJournal | null,
   db: StoreDb,
   workflowId: string,
-): { operationId: string; phase: "prepared" | "execution-written" } | null {
+): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null {
   return journal === null ? pendingRegistrationOf(db, workflowId) : journal.read(workflowId);
 }
 
@@ -992,14 +992,47 @@ function pendingRows(db: StoreDb): JournalRow[] {
  * registration guard and recovery surface. `execution-written` is reported as
  * itself and every other non-committed row as `prepared`; committed or aborted
  * rows are not pending.
+ *
+ * `hasIdentityFailure` is the fact `purge-registration` requires
+ * (`after_versions_json.failure` with the four identity fields): a caller that
+ * offers purge must KNOW the journal carries one, because purge refuses a plain
+ * pending row with `catalog.purge-not-found`.
  */
 export function pendingRegistrationOf(
   db: StoreDb,
   workflowId: string,
-): { operationId: string; phase: "prepared" | "execution-written" } | null {
+): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null {
   const row = pendingRows(db).find((candidate) => parseJournalWorkflowId(candidate) === workflowId);
   if (row === undefined) return null;
-  return { operationId: row.operation_id, phase: row.phase === "execution-written" ? "execution-written" : "prepared" };
+  return {
+    operationId: row.operation_id,
+    phase: row.phase === "execution-written" ? "execution-written" : "prepared",
+    hasIdentityFailure: identityFailureOf(row) !== undefined,
+  };
+}
+
+/** note: The recorded identity failure of one journal row, or undefined when it holds none. */
+function identityFailureOf(row: JournalRow): {
+  workflow_id: string;
+  snapshot_path: string;
+  snapshot_content_sha256: string;
+  reviewed_identity: string;
+} | undefined {
+  let after: unknown;
+  try { after = JSON.parse(row.after_versions_json); } catch { return undefined; }
+  const failure = isPlainObject(after) ? after.failure : undefined;
+  return isPlainObject(failure)
+    && typeof failure.workflow_id === "string"
+    && typeof failure.snapshot_path === "string"
+    && typeof failure.snapshot_content_sha256 === "string"
+    && typeof failure.reviewed_identity === "string"
+    ? {
+        workflow_id: failure.workflow_id,
+        snapshot_path: failure.snapshot_path,
+        snapshot_content_sha256: failure.snapshot_content_sha256,
+        reviewed_identity: failure.reviewed_identity,
+      }
+    : undefined;
 }
 
 /**
@@ -1176,17 +1209,31 @@ export async function readCatalogRevisions(context: StoreContext): Promise<Catal
  * only what is known — the pending phase — because the registration entry
  * reaches it without a registry row; the caller names root visibility when its
  * own read proved one.
+ *
+ * invariant: A root-visible workflow's journal settlement is NOT reachable by itself. Both
+ * settlements refuse while the workflow stays registered (`refuseActiveCatalogRecovery`), so the
+ * refusal must name the mandatory lifecycle close FIRST — with the coordinator identity that
+ * alone can perform it — and only then the journal route. Naming a command that refuses is not a
+ * recovery. `reconcile --abort` is the route that always applies to a plain pending journal;
+ * `purge-registration` is offered only where the caller PROVED the journal carries an
+ * identity-failure record, because it refuses one that does not.
  */
 export function refusePendingRegistration(
   workflowId: string,
-  pending: { operationId: string; phase: "prepared" | "execution-written" },
+  pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure?: boolean },
   rootVisible = false,
 ): never {
+  const closeFirst = rootVisible
+    ? `First stop the active lifecycle with "mstar workflow lifecycle --workflow ${workflowId} --status <completed|stopped|failed> --reason <text>" as its bound coordinator (a registered workflow's journal cannot be settled while it stays active); then `
+    : "Then ";
+  const settle = pending.hasIdentityFailure === true
+    ? `use "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its recorded identity failure in the native store (if the revision is stale, retry with the current revision printed in the refusal)`
+    : `use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon the unregistered journal`;
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
     `workflow ${JSON.stringify(workflowId)}'s catalog registration is ${pending.phase}, not committed ` +
       `(operation ${JSON.stringify(pending.operationId)})${rootVisible ? " while the workflow is root-visible" : ""}; registration must refuse until the legacy journal is settled. ` +
-      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
+      `${closeFirst}${settle}. Source bytes are retained.`,
   );
 }
 
@@ -1205,7 +1252,7 @@ export function refusePendingRegistration(
 export function assertCatalogExecutionCommittedOn(
   db: StoreDb,
   workflowId: string,
-  pending: { operationId: string; phase: "prepared" | "execution-written" } | null,
+  pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null,
 ): void {
   const id = requireText(workflowId, "workflowId");
   if (!catalogVerdictApplies(db, id)) return;
@@ -1216,7 +1263,7 @@ export function assertCatalogExecutionCommittedOn(
 
 /**
  * note: Whether the gate has any verdict to give: ACTIVE authority AND a row in the
- * execution store's own registry. Both facts are that handle's, so the caller reads
+ * execution store's own registry. Both facts are that handle's, so every caller reads
  * them before it pays for the journal's cross-file read.
  */
 function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
@@ -1225,24 +1272,53 @@ function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
 }
 
 /**
- * why: Async handle-taking gate for callers outside an execution transaction
- * (`packages/dsh/src/gates/workflow-selection.ts`).
+ * invariant: The journal lane this workspace does not hold — a bound remote checkout
+ * whose cache is absent, or a scope with no collaboration store yet. A missing or
+ * staged lane carries no journal row, so it is the same pre-activation exclusion
+ * `store.not-active` already gets: never a catalog verdict, and it never retro-refuses a
+ * selection. A stale binding or unreadable lane is a real misconfiguration and still
+ * propagates.
+ */
+const NO_JOURNAL_LANE: readonly StoreErrorCode[] = ["collaboration.not-initialized", "collaboration.not-active"];
+
+/**
+ * why: Async gate over an already-open execution handle. Registry visibility is
+ * THIS store's own row, while the journal verdict comes from whichever file owns
+ * `catalog_operations` — so the registry is decided first and a workflow this
+ * store does not hold never pays for the cross-file read, nor can a lane it does
+ * not hold refuse it.
  *
- * The gate is ADVISORY here: registry visibility first on this execution handle,
- * then the journal verdict from whichever file owns `catalog_operations`. These
- * are two independent reads, never a snapshot across the databases, so a row
- * committed after either read is not seen by this call. The authoritative
- * refusal is the in-transaction one (`pendingRegistrationInTransaction`), which
- * re-reads the verdict under the committing transaction's own lock.
+ * The gate is ADVISORY here: these are two independent reads, never a snapshot
+ * across the databases, so a row committed after either read is not seen by this
+ * call. The authoritative refusal is the in-transaction one
+ * (`pendingRegistrationInTransaction`), which re-reads the verdict under the
+ * committing transaction's own lock.
+ */
+export async function assertCatalogExecutionCommittedWith(
+  context: StoreContext,
+  db: StoreDb,
+  workflowId: string,
+): Promise<void> {
+  const id = requireText(workflowId, "workflowId");
+  if (!catalogVerdictApplies(db, id)) return;
+  let pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null;
+  try {
+    pending = await readPendingRegistration(context, id);
+  } catch (error) {
+    if (error instanceof StoreError && NO_JOURNAL_LANE.includes(error.code)) return;
+    throw error;
+  }
+  assertCatalogExecutionCommittedOn(db, id, pending);
+}
+
+/**
+ * why: Async handle-taking gate for callers outside an execution transaction
+ * (`packages/dsh/src/gates/workflow-selection.ts`, `coordination.ts`).
  */
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
-  const id = requireText(workflowId, "workflowId");
   const handle = await openStore(context, "read");
   try {
-    // note: Registry-first: a workflow this store does not hold is never a gate, so the
-    // journal lane is not even opened for it.
-    if (!catalogVerdictApplies(handle.db, id)) return;
-    assertCatalogExecutionCommittedOn(handle.db, id, await readPendingRegistration(context, id));
+    await assertCatalogExecutionCommittedWith(context, handle.db, workflowId);
   } finally {
     handle.close();
   }
@@ -1336,14 +1412,9 @@ export async function purgeCatalogRegistration(
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the matching operation id`);
     }
-    let after: unknown;
-    try { after = JSON.parse(row.after_versions_json); } catch { after = undefined; }
-    const failure = isPlainObject(after) ? after.failure : undefined;
-    if (!isPlainObject(failure) ||
-      failure.workflow_id !== workflowId ||
-      typeof failure.snapshot_path !== "string" ||
-      typeof failure.snapshot_content_sha256 !== "string" ||
-      typeof failure.reviewed_identity !== "string") {
+    // note: ONE identity-failure rule, shared with the pending refusal the gate publishes.
+    const failure = identityFailureOf(row);
+    if (!isPlainObject(failure) || failure.workflow_id !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
     const snapshotPath = resolve(failure.snapshot_path);

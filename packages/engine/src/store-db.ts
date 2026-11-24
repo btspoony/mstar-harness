@@ -1177,10 +1177,16 @@ function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
       { runs },
     ),
     {
+      // invariant: This is the ONE owner of the run-open recovery text; the CLI forwards it
+      // verbatim instead of restating it, so the two cannot drift. Both commands name the SAME
+      // absolute harness: a run settled from another checkout settles THAT store and leaves this
+      // control root's run open, so the retry would refuse again.
       recovery:
-        "settle or take over the named run(s) with the 4.8.x build's `mstar issue-sync apply --project <project-id> --results <file|->` " +
-        "(add `--take-run` with an empty result list to take over a dead holder), confirm the store holds no `sync_runs` row, then retry " +
-        "mstar store upgrade --operator <name>.",
+        "Settle or take over the open mirror run(s) the refusal names with the 4.8.x build's " +
+        "mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> " +
+        "(add --take-run with an empty result list for a dead holder), then retry " +
+        "mstar store upgrade --harness <same-control-root> --operator <name>; after this build's schema advance " +
+        "neither build can settle the run.",
     },
   );
 }

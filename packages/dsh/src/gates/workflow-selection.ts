@@ -46,6 +46,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import {
+  assertCatalogExecutionCommitted,
   readExecutionAuthority,
   readJson,
   resolveExecutionReadRoute,
@@ -569,7 +570,7 @@ export type ExecutionWorkflowSourceRead =
       readonly storeId: string
       readonly epoch: number
     }
-  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection; readonly storeId?: string; readonly epoch?: number }
+  | { readonly kind: 'error'; readonly selection: ActiveWorkflowSelection; readonly storeId?: string; readonly epoch?: number; readonly registration?: CatalogRegistrationRefusal }
   | { readonly kind: 'unavailable'; readonly code: string; readonly message: string }
 
 /**
@@ -659,6 +660,29 @@ export async function readExecutionWorkflowSource(
   }
   const selection = selectActiveWorkflow(source, hint)
   if (selection.kind !== 'active') return { kind: 'error', selection, storeId: read.storeId, epoch: read.epoch }
+  // invariant: A half-registered lifecycle (its snapshot and root entry are visible while the catalog
+  // journal has not published the delta) is never handed to a writer: the verdict is the engine's OWN
+  // registration gate, consulted HERE on the route consumers actually read, not only where a caller
+  // happens to also call it. The pre-activation exclusions (`store.not-initialized`/`store.not-active`,
+  // a lane this checkout does not hold, an unregistered workflow) pass through inside that gate; any
+  // other verdict becomes this read's structured selection error, never a dispatched guess.
+  // Its KIND separates the two failures a consumer must not conflate: only
+  // `catalog.registration-pending` is the store CONFIRMING a half-registered lifecycle;
+  // every other throw (a corrupt journal lane, schema drift, a conflict) is a read that could
+  // not answer, and keeps the documented fail-open.
+  const registration = await catalogRegistrationRefusal(context.harnessDir, selection.workflowId)
+  if (registration !== null) {
+    return {
+      kind: 'error',
+      selection: { kind: 'error', code: registration.code, message: registration.message },
+      // invariant: The verdict travels as its own field, so a gate that must fail closed on a
+      // half-registered lifecycle cannot re-derive it from a message or treat it as an ordinary
+      // unreadable source: a pending registration is a registration verdict, never "cannot read".
+      registration,
+      storeId: read.storeId,
+      epoch: read.epoch,
+    }
+  }
   const snapshot = source.snapshotOf({ id: selection.workflowId, dir: selection.dir })
   if (snapshot === undefined) {
     return {
@@ -885,10 +909,18 @@ export function resolveReadWorkflow(harnessDir: string, hint?: SessionHint): Wor
 
 /* ---------------------------------- catalog registration ---------------------------------- */
 
-/** One catalog-registration refusal: the stable code + its actionable message. */
+/** One catalog-registration refusal: the stable code, its actionable message and its verdict kind. */
 export interface CatalogRegistrationRefusal {
   readonly code: string
   readonly message: string
+  /**
+   * why: `pending` is the store's own CONFIRMED refusal of a half-registered
+   * lifecycle; `unavailable` is a read that could not be answered (a corrupt or
+   * unreadable journal lane). They travel as one verdict type because both refuse
+   * the selection, but only `pending` may veto a dispatch — a broken read keeps
+   * the documented one-warn fail-open.
+   */
+  readonly kind: 'pending' | 'unavailable'
 }
 
 /**
@@ -909,12 +941,41 @@ export interface CatalogRegistrationRefusal {
  * Pre-activation exclusion (issue contract §7, engine `coordination.ts`
  * parity): a MISSING store (`store.not-initialized`) or a STAGED one
  * (`store.not-active`) is not a catalog verdict — the legacy authority is
- * still in force and the workflow is never retro-refused. Every other failure
- * (corrupt store, below-floor/missing-capability runtime, schema drift, a
- * conflict) is returned as a refusal rather than swallowed: a dispatch that
- * cannot prove the registration is never allowed to proceed on a guess.
+ * still in force and the workflow is never retro-refused, and neither is a
+ * workflow this store does not register or a journal lane the checkout does
+ * not hold (the engine gate decides all three). Every other failure (corrupt
+ * store, below-floor/missing-capability runtime, schema drift, a conflict) is
+ * returned as a refusal rather than swallowed: a dispatch that cannot prove
+ * the registration is never allowed to proceed on a guess.
+ *
+ * The returned KIND is what a dispatch gate keys its veto on: only
+ * `catalog.registration-pending` is the store CONFIRMING a half-registered
+ * lifecycle, so only it vetoes. Every other code is a read that could not
+ * answer its question (a corrupt or unreadable journal lane, a capability floor,
+ * schema drift), and a caller that must not brick fan-out on a broken read keys
+ * on `kind === 'pending'` instead of on "a refusal came back".
  * @param harnessDir - the resolved `{HARNESS_DIR}`.
  * @param workflowId - the workflow the caller's JSON selection resolved.
  * @returns the refusal, or `null` when the registration is committed (or the
  *   store makes no catalog claim yet).
  */
+export async function catalogRegistrationRefusal(
+  harnessDir: string,
+  workflowId: string,
+): Promise<CatalogRegistrationRefusal | null> {
+  const context: StoreContext = { harnessDir }
+  try {
+    await assertCatalogExecutionCommitted(context, workflowId)
+    return null
+  } catch (error) {
+    const code = (error as { code?: unknown } | null | undefined)?.code
+    // why: A missing or staged execution store is the pre-activation exclusion, never a verdict.
+    if (code === 'store.not-initialized' || code === 'store.not-active') return null
+    const refusalCode = typeof code === 'string' && code !== '' ? code : 'catalog.registration-unavailable'
+    return {
+      code: refusalCode,
+      message: error instanceof Error ? error.message : String(error),
+      kind: refusalCode === 'catalog.registration-pending' ? 'pending' : 'unavailable',
+    }
+  }
+}

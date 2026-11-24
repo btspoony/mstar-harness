@@ -34,7 +34,7 @@ import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_STATUS_CONTEXT_NAME } from '../src/gates/system-prompt.ts'
 import { EXECUTION_DIRECT_WRITE_CODE, STORE_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
-import { useCleanControlRoot, bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedHarness, seedPendingRegistration, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 useCleanControlRoot()
 
@@ -650,5 +650,32 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(source.snapshot.integration_merge_lease).toEqual(held)
     // The DB selection is otherwise unchanged: the plan rows still re-join.
     expect(activeRowsOf(source.snapshot).map((row) => row.id)).toEqual(['plan-db'])
+  })
+
+  it('refuses a half-registered selection on the source read every consumer uses, and still selects a committed one', async () => {
+    const { harnessDir } = await appWithRoot('execution-registration-gate')
+    // why: Two ACTIVE lifecycles, so the durable pick (not position) decides — the
+    // verdict has to follow the SELECTION, not the registry.
+    await seedExecutionAuthority(harnessDir, [
+      { id: 'wf-committed', planId: 'plan-committed' },
+      { id: 'wf-half', planId: 'plan-half' },
+    ])
+    seedPendingRegistration(harnessDir, 'wf-half')
+
+    // invariant: A pending registration is a STRUCTURED selection error on the read itself — the
+    // route `readExecutionWorkflowSource` serves every host gate — never a dispatchable lifecycle.
+    const half = await readExecutionWorkflowSource({ harnessDir }, { selectedWorkflowId: 'wf-half' })
+    expect(half.kind).toBe('error')
+    if (half.kind !== 'error') throw new Error(`expected a structured refusal for the half-registered pick, got ${half.kind}`)
+    expect(half.selection).toMatchObject({ kind: 'error', code: 'catalog.registration-pending' })
+    // invariant: The verdict also travels as its own field, so the fan-out gate can fail closed
+    // without re-deriving it from the message.
+    expect(half.registration?.code).toBe('catalog.registration-pending')
+
+    // invariant: Tolerating a pending journal elsewhere never hides a committed lifecycle: the same
+    // reader still selects it, with its plan rows, when the pick names it.
+    const committed = await readExecutionWorkflowSource({ harnessDir }, { selectedWorkflowId: 'wf-committed' })
+    expect(committed.kind === 'active' ? committed.workflowId : null).toBe('wf-committed')
+    expect(committed.kind === 'active' ? activeRowsOf(committed.snapshot).map((row) => row.id) : []).toEqual(['plan-committed'])
   })
 })

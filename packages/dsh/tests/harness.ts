@@ -21,6 +21,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import * as nodeOs from 'node:os'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
@@ -1251,6 +1252,42 @@ export async function seedStagedCollaboration(harnessDir: string): Promise<void>
 /** The collaboration database this harness resolves to (fixture corruption target). */
 export function collaborationDbPathAt(harnessDir: string): string {
   return resolveCollaborationLocation({ harnessDir }).dbPath
+}
+
+/**
+ * invariant: A pending journal row lives on the file that OWNS the journal — the
+ * execution store while it still carries `catalog_operations` (a combined
+ * source), otherwise this repository's collaboration database. That is the
+ * half-registered state a dispatch must never walk into.
+ */
+export function seedPendingRegistration(harnessDir: string, workflowId: string): void {
+  const ts = '2026-09-21T00:00:00.000Z'
+  const storePath = join(harnessDir, 'store.db')
+  const owned = new DatabaseSync(storePath)
+  let ownerPath: string
+  try {
+    ownerPath = owned
+      .prepare("select 1 as found from sqlite_master where type = 'table' and name = 'catalog_operations'")
+      .get() === undefined
+      ? collaborationDbPathAt(harnessDir)
+      : storePath
+  } finally {
+    owned.close()
+  }
+  const owner = new DatabaseSync(ownerPath)
+  try {
+    owner.prepare(
+      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+        "values (?, 'dsh-hash', 'prepared', ?, '{}', '{}', null, ?, ?)",
+    ).run(
+      `op-pending-${workflowId}`,
+      JSON.stringify({ workflow: { workflowId }, execution: {}, catalog: {} }),
+      ts,
+      ts,
+    )
+  } finally {
+    owner.close()
+  }
 }
 
 /**

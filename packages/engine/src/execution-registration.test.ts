@@ -1368,7 +1368,7 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual({ ...accepted, effects: (accepted.effects as number) + 1 });
   });
 
-  test("execution-registration-refuses-a-legacy-pending-operation-with-abort-and-purge-recovery", async () => {
+  test("execution-registration-refuses-a-legacy-pending-operation-with-abort-recovery", async () => {
     const fixture = await activeFixture("pending-legacy");
     await plantPendingLegacyOperation(fixture.context, "op-legacy-pending", WORKFLOW_ID);
     const before = await footprint(fixture.context);
@@ -1377,7 +1377,10 @@ describe("execution-registration", () => {
     expect(refusal.code).toBe("catalog.registration-pending");
     expect(refusal.message).toContain("op-legacy-pending");
     expect(refusal.message).toContain("mstar catalog reconcile --abort");
-    expect(refusal.message).toContain("mstar catalog purge-registration");
+    // invariant: This journal carries NO identity-failure record, so the refusal offers only the
+    // route that applies. `purge-registration` refuses exactly this state
+    // (`catalog.purge-not-found`), and naming a command that refuses is not a recovery.
+    expect(refusal.message).not.toContain("mstar catalog purge-registration");
     // note: The refusal is reached by the registration entry itself, which holds no
     // root visibility; the journal verdict is all this caller knows. (The dispatch and
     // handle-taking gates, which DO read the registry row, still name it.)
