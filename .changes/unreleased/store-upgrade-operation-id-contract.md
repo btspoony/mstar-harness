@@ -1,6 +1,6 @@
 ---
 category: Fixed
-packages: commands,engine
+packages: root, commands, engine
 ---
 
 - **`store upgrade` honours `--operation`, and refuses a malformed id before it advances the execution schema.** The caller's id is the idempotency key of the exact request, so a clean retry replays its retained reservation and receipt instead of minting a fresh operation; a retry that adds a request-identity option (`--ack-skip-workflow`, `--ack-skip-compass` or `--delivery`) is a different request and refuses `execution.operation-conflict`, which the option's own help now states instead of promising a same-id retry. `--ack-skip-dsh` is not part of that identity — it only disposes DSH host-state facts — so the `store.upgrade-dsh-source-refused` recovery, which reissues the same entry with a selector added, replays the already-committed execution half instead of conflicting. A malformed id is rejected at the entry of `upgradeStoreMinimal`, so the execution schema advance and the execution authority are untouched by that refusal; the collaboration lane is not, because `store upgrade` advances an existing v1 lane before that validation runs, so a corrected retry resumes on an already-advanced collaboration lane.

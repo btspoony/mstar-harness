@@ -737,9 +737,11 @@ describe('workflow gate — P-b lease attribution', () => {
     expect(decision.reason).toContain('catalog.registration-pending')
     // invariant: The veto names the recovery the operator can actually run: closing the still
     // registered lifecycle FIRST (its journal cannot be settled while it stays active), then the
-    // journal route. A reason that named only the journal refuses in practice.
+    // journal route the seeded journal qualifies for. The seeded row carries NO identity-failure
+    // record, so `purge-registration` would refuse it and must not be offered.
     expect(decision.reason).toContain('mstar workflow lifecycle --workflow wf-1')
-    expect(decision.reason).toContain('mstar catalog reconcile --abort')
+    expect(decision.reason).toContain('mstar catalog reconcile --abort --operation-id op-pending-wf-1')
+    expect(decision.reason).not.toContain('mstar catalog purge-registration')
     expect(decision.reason.indexOf('mstar workflow lifecycle')).toBeLessThan(decision.reason.indexOf('mstar catalog reconcile'))
     // invariant: This is not the degrade — a fail-open read would have emitted its one warn and
     // allowed the call.
