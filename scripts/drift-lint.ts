@@ -99,14 +99,15 @@
  * `.svg`, `.html`, `.json`, `.toml` (the Codex prompt sources) and, in
  * `assets/`, only a direct `*.svg` or `*.html` child. Diagram text counts:
  * the `<text>`, `<title>`, `<desc>` and `aria-label` values are read with
- * inline markup joined and numeric character references decoded, and so are
- * the `data-node-*` / `data-edge-*` detail attributes an interactive viewer
- * renders on demand. A diagram label is literal text: a backtick is a
- * character a reader sees, so a probe in a label is prose. An `.html` page
- * also has its ordinary prose judged as rendered blocks: block-level tags
- * separate blocks, a source line break or `<br>` inside a block renders as
- * one space, and an inline tag is dropped without adding one, so `Pha<b>se</b>
- * 4` and a `Phase` / `4` line break both read as `Phase 4`. Each block's
+ * comments skipped, inline markup joined and numeric character references
+ * decoded, and so are the `data-node-*` / `data-edge-*` detail attributes an
+ * interactive viewer renders on demand. A diagram label is literal text: a
+ * backtick is a character a reader sees, so a probe in a label is prose. An
+ * `.html` page also has its ordinary prose judged as rendered blocks:
+ * block-level tags and `<button>` separate runs, a source line break or
+ * `<br>` inside a run renders as one space, and an inline tag is dropped
+ * without adding one, so `Pha<b>se</b>
+ * 4` and a `Phase` / `4` line break both read as `Phase 4`. Each run's
  * diagnostic names the line its text starts on.
  * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
  * and adjacent prose lines are judged as one block (a blank line or a
@@ -120,7 +121,8 @@
  * nothing after it, and may sit inside a blockquote. The three engine probes
  * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
  * code span or a fenced block, matched at their boundaries (the `PHASE6_`
- * code family is exempt by prefix), and their presence in prose fails.
+ * code family is exempt by prefix, and rendered whitespace inside the
+ * `--phase 6` probe is folded for the match), and their presence in prose fails.
  * Generated bundles and changelog history are skipped; skills whose numbered
  * steps are their own process (`mstar-audit`, `mstar-knowledge`) are exempt
  * by path. Guard-or-clear-error: a failed `git ls-files` reports the guard as
@@ -1622,11 +1624,10 @@ export function readReferenceCorpus(repoRoot: string): {
   return { files, referenceFiles, failures: [] };
 }
 
-// see scripts/drift-lint.ts § 16
-/* see scripts/drift-lint.ts § 16 — Guard 16: retired stage names — the rule lives in this file's header */
-// see scripts/drift-lint.ts § 16
+/* Guard 16: retired stage names — the rule lives in this file's header (item 16).
+ * see scripts/drift-lint.ts */
 
-/** see scripts/drift-lint.ts § 16 — Roots of the prompt face a retired stage name may not survive in. */
+/** Roots of the prompt face a retired stage name may not survive in. */
 export const RETIRED_STAGE_ROOTS = [
   "skills/",
   "commands/",
@@ -1637,65 +1638,74 @@ export const RETIRED_STAGE_ROOTS = [
   ".changes/unreleased/",
   "assets/",
 ] as const;
-/** see scripts/drift-lint.ts § 16 — Prompt-face files outside those roots. */
+/** Prompt-face files outside those roots. */
 export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
-/** see scripts/drift-lint.ts § 16 — Text faces read from that set: Markdown, diagram text, evaluation cases,
+/** Text faces read from that set: Markdown, diagram text, evaluation cases,
  * and the Codex prompt sources. */
 export const RETIRED_STAGE_EXTS = [".md", ".svg", ".html", ".json", ".toml"] as const;
-/** see scripts/drift-lint.ts § 16 — Tracked trees the scan skips: generated bundles and changelog history. */
+/** Tracked trees the scan skips: generated bundles and changelog history. */
 export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
-/** see scripts/drift-lint.ts § 16 — The three engine probes that stay, only inside a code span or fenced block. */
+/** The three engine probes that stay, only inside a code span or fenced block. */
 export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_", "phase-4-pr-delivery"] as const;
-/** see scripts/drift-lint.ts § 16 — Skills whose numbered steps are their own process, not delivery stages. */
+/** Skills whose numbered steps are their own process, not delivery stages. */
 export const RETIRED_STAGE_OWN_PROCESS = ["skills/mstar-audit/", "skills/mstar-knowledge/"] as const;
 
-/** see scripts/drift-lint.ts § 16 — Guard 16 result: corpus size plus one failure row per retired spelling. */
+/** Guard 16 result: corpus size plus one failure row per retired spelling. */
 export interface RetiredStageResult {
   filesScanned: number;
   hits: string[];
 }
 
-/** see scripts/drift-lint.ts § 16 — A retired section citation: `§5.x` / `§6.x` and the word spellings the
+/** see scripts/drift-lint.ts § 16 — a retired section citation: `§5.x` / `§6.x` and the word spellings the
  * English workflow diagram uses. */
 const RETIRED_SECTION = /§\s*[56]\.\d+/g;
 const RETIRED_SECTION_WORD = /\b(?:policy|section)\s+[56]\.\d+/gi;
 /** see scripts/drift-lint.ts § 16 — why: a stage number is the whole number, so `Phase 14` is not stage 4. */
 const isRetiredStage = (digits: string): boolean => digits === "4" || digits === "5" || digits === "6";
-/** see scripts/drift-lint.ts § 16 — A compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
+/** see scripts/drift-lint.ts § 16 — a compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
 const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]+)\b/gi;
-/** see scripts/drift-lint.ts § 16 — A stage run after `phase(s)`: numbers joined only by list separators, so a
- * sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
+/** see scripts/drift-lint.ts § 16 — a stage run after `phase(s)`: numbers joined only by list separators, so
+ * a sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
  * does not read as a list. */
 const STAGE_RUN =
   /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
-/** see scripts/drift-lint.ts § 16 — An inline code span; its content is judged in place, so a stage run that
+/** see scripts/drift-lint.ts § 16 — an inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
 const INLINE_CODE = /(?<!`)(`+)([^`]*)\1(?!`)/g;
-/** see scripts/drift-lint.ts § 16 — A diagram text node or label; the value is decoded before it is judged.
+/** see scripts/drift-lint.ts § 16 — a diagram text node or label; the value is decoded before it is judged.
  * `desc` is reader-visible too (tooltip and screen-reader text). */
 const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
-// see scripts/drift-lint.ts § 16 — Node and edge detail attributes feed the interactive viewer's on-demand text.
+// see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text.
 const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*"([^"]*)"/gi;
 /** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier that
  * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
  * `PHASE6_` code family is exempt by prefix because the CLI names its
- * delivery codes that way. */
+ * delivery codes that way, and rendered whitespace inside `--phase 6`
+ * folds for the match. */
 const PROBE_PATTERN = new RegExp(
   [
-    String.raw`(?<![\w])--phase 6(?![\w])`,
+    String.raw`(?<![\w])--phase\s*6(?![\w])`,
     String.raw`PHASE6_`,
     String.raw`(?<![\w-])phase-4-pr-delivery(?![\w-])`,
   ].join("|"),
   "g",
 );
-/** see scripts/drift-lint.ts § 16 — An HTML code element; render-equivalent to a backtick span. */
+/** see scripts/drift-lint.ts § 16 — an HTML code element; render-equivalent to a backtick span. */
 const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
+/** see scripts/drift-lint.ts § 16 — one token of element body text: a whole tag (a `>` inside a quoted
+ * attribute is part of the tag, not the label) or the text between two tags or comment boundaries. */
+const TAG = /<(?:[^>"']|"[^"]*"|'[^']*')*>/;
+const TAG_OR_TEXT = /<(?:[^>"']|"[^"]*"|'[^']*')*>|[^\0<]+/g;
+/** see scripts/drift-lint.ts § 16 — block-level elements (and buttons, which a browser renders as separate
+ * controls) break a text run; any other tag is dropped without adding whitespace. */
+const BLOCK_TAG =
+  /^<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd|button)\b/i;
 /** see scripts/drift-lint.ts § 16 — why: a diagram may spell a stage as a numeric character reference, which
  * renders as the stage number; decode before matching. */
 function decodeXmlEntities(text: string): string {
-  // see scripts/drift-lint.ts § 16 — why: an out-of-range code point must not abort the whole lint; a rendering
-  // see scripts/drift-lint.ts § 16 — that cannot be produced cannot hide a retired name either.
+  // see scripts/drift-lint.ts § 16 — why: an out-of-range code point must not abort the whole lint; a
+  // rendering that cannot be produced cannot hide a retired name either.
   const fromCodePoint = (codePoint: number): string =>
     codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "\uFFFD";
   return text
@@ -1717,32 +1727,32 @@ function decodeXmlEntities(text: string): string {
 export function findRetiredStageSpellings(line: string, inFence = false, markup = true): string[] {
   const hits: string[] = [];
   // see scripts/drift-lint.ts § 16 — why: span recognition must see the source form. A decoded `&lt;code&gt;`
-  // see scripts/drift-lint.ts § 16 — renders as literal angle brackets, not as an HTML code element.
+  // renders as literal angle brackets, not as an HTML code element.
   let rest = line;
   const stripProbes = (inner: string): string => inner.replace(PROBE_PATTERN, " ");
   if (inFence) {
     rest = stripProbes(decodeXmlEntities(rest));
   } else if (!markup) {
-    // see scripts/drift-lint.ts § 16 — Literal text: nothing here is a code span, so a probe is prose. The caller
-    // already decoded it (a JSON value or a diagram label), so no second decode runs here.
+    // see scripts/drift-lint.ts § 16 — literal text: nothing here is a code span, so a probe is prose. The
+    // caller already decoded it (a JSON value or a diagram label), so no second decode runs here.
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   } else {
-    // see scripts/drift-lint.ts § 16 — A span keeps its position: only the probe literals leave it, so a stage
-    // see scripts/drift-lint.ts § 16 — run written across prose and backticks is still one run. `<code>` is the
-    // see scripts/drift-lint.ts § 16 — render-equivalent HTML form and is judged the same way, and a code span
-    // opens and closes with a matching run of backticks, not only one.
+    // see scripts/drift-lint.ts § 16 — a span keeps its position: only the probe literals leave it, so a
+    // stage run written across prose and backticks is still one run. `<code>` is the render-equivalent
+    // HTML form and is judged the same way, and a code span opens and closes with a matching run of
+    // backticks, not only one.
     rest = rest.replace(INLINE_CODE, (_match, _fence: string, inner: string) => stripProbes(inner));
     rest = rest.replace(HTML_CODE, (_match, inner: string) => stripProbes(inner));
     for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
   }
-  // see scripts/drift-lint.ts § 16 — A render-equivalent spelling may be written as `&#52;`; decode before the
-  // see scripts/drift-lint.ts § 16 — spelling rules read the text. A literal-text caller already decoded its
-  // input, so decoding again would read `&amp;lt;` as a tag.
+  // see scripts/drift-lint.ts § 16 — a render-equivalent spelling may be written as `&#52;`; decode before
+  // the spelling rules read the text. A literal-text caller already decoded its input, so decoding again
+  // would read `&amp;lt;` as a tag.
   if (markup || inFence) rest = decodeXmlEntities(rest);
   for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
   for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
-  // see scripts/drift-lint.ts § 16 — Section citations are removed before a stage run is read, so `Phase 3 §3.4`
-  // see scripts/drift-lint.ts § 16 — is not mistaken for a list that reaches stage 4.
+  // see scripts/drift-lint.ts § 16 — section citations are removed before a stage run is read, so
+  // `Phase 3 §3.4` is not mistaken for a list that reaches stage 4.
   const withoutSections = rest.replace(/§\s*\d+(?:\.\d+)?/g, " ");
   for (const match of withoutSections.matchAll(RETIRED_COMPACT_STAGE)) {
     if (isRetiredStage(match[1])) hits.push(match[0]);
@@ -1751,17 +1761,21 @@ export function findRetiredStageSpellings(line: string, inFence = false, markup 
     if (match[1].split(/[^0-9]+/).some((digits) => digits !== "" && isRetiredStage(digits))) hits.push(match[0].trim());
   }
   const unique = [...new Set(hits)];
-  // see scripts/drift-lint.ts § 16 — A probe literal already names the compact spelling inside it; report the
-  // see scripts/drift-lint.ts § 16 — longer match once rather than twice.
+  // see scripts/drift-lint.ts § 16 — a probe literal already names the compact spelling inside it; report
+  // the longer match once rather than twice.
   return unique.filter((hit) => !unique.some((other) => other !== hit && other.includes(hit)));
 }
 
-/** see scripts/drift-lint.ts § 16 — Text a reader of a diagram sees: `<text>`/`<title>`/`<desc>` bodies and
- * `aria-label` values (either quote style), entity-decoded, inline markup
- * dropped without adding whitespace, each with its source line. */
+/** see scripts/drift-lint.ts § 16 — text a reader of a diagram sees: `<text>`/`<title>`/`<desc>` bodies and
+ * `aria-label` values (either quote style), entity-decoded. Comments and whole tags (a `>` inside a quoted
+ * attribute still belongs to the tag) are dropped, and the fragments they leave are joined the way the
+ * browser renders them, each run keeping the source offset of its first visible character. */
 function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   const segments: Array<{ text: string; line: number }> = [];
-  // see scripts/drift-lint.ts § 16 — One pass builds the line starts; each label then needs a binary search.
+  // see scripts/drift-lint.ts § 16 — a comment renders as nothing: its text is invisible, and a comment or
+  // tag inside a label joins the fragments around it with no whitespace. Blanking each comment to \0 keeps
+  // every later offset in place while making it a boundary the structure regexes cannot match into.
+  const markup = text.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, "\0"));
   const lineStarts: number[] = [0];
   for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
   const lineAt = (index: number): number => {
@@ -1774,28 +1788,53 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
     }
     return low + 1;
   };
-  for (const match of text.matchAll(SVG_NODE)) {
-    segments.push({ text: decodeXmlEntities(match[1].replace(/<[^>]*>/g, "")), line: lineAt(match.index ?? 0) });
-  }
-  for (const match of text.matchAll(SVG_ARIA)) {
-    segments.push({ text: decodeXmlEntities(match[2]), line: lineAt(match.index ?? 0) });
-  }
-  // see scripts/drift-lint.ts § 16 — An interactive viewer renders some text from element attributes on demand,
-  // see scripts/drift-lint.ts § 16 — so a clean static caption does not prove the interactive detail is clean.
-  for (const match of text.matchAll(DATA_TEXT)) {
-    segments.push({ text: decodeXmlEntities(match[1]), line: lineAt(match.index ?? 0) });
-  }
-  // see scripts/drift-lint.ts § 16 — A diagram may embed HTML in a `foreignObject`; that text is reader-visible
-  // see scripts/drift-lint.ts § 16 — too, and the prose pass blanks the whole SVG, so it is read here. Each body
-  // see scripts/drift-lint.ts § 16 — row keeps its own source offset, so a label on the fourth row is not
-  // see scripts/drift-lint.ts § 16 — reported on the element's first line, where nothing needs fixing.
-  for (const match of text.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
+  // see scripts/drift-lint.ts § 16 — one element body renders as one run: the tag itself and any inline
+  // markup are dropped without adding whitespace, and the diagnostic names the line the visible text
+  // starts on, not the line the opening tag sits on.
+  for (const match of markup.matchAll(SVG_NODE)) {
     const body = match[1];
-    const bodyOffset = (match.index ?? 0) + match[0].length - body.length - "</foreignObject>".length;
+    const bodyOffset = (match.index ?? 0) + (match[0].match(TAG)?.[0].length ?? 0);
+    const parts: string[] = [];
+    let first = -1;
+    for (const token of body.matchAll(TAG_OR_TEXT)) {
+      const fragment = token[0];
+      if (fragment.startsWith("<")) continue;
+      const lead = fragment.search(/\S/);
+      if (first < 0 && lead >= 0) first = bodyOffset + (token.index ?? 0) + lead;
+      parts.push(fragment);
+    }
+    const rendered = decodeXmlEntities(parts.join("").replace(/\s+/g, " "));
+    if (rendered.trim() === "") continue;
+    segments.push({ text: rendered, line: lineAt(first >= 0 ? first : (match.index ?? 0)) });
+  }
+  for (const match of markup.matchAll(SVG_ARIA)) {
+    const value = decodeXmlEntities(match[2].replace(/\0+/g, ""));
+    if (value.trim() === "") continue;
+    segments.push({ text: value, line: lineAt(match.index ?? 0) });
+  }
+  // see scripts/drift-lint.ts § 16 — an interactive viewer renders some text from element attributes on
+  // demand, so a clean static caption does not prove the interactive detail is clean.
+  for (const match of markup.matchAll(DATA_TEXT)) {
+    const value = decodeXmlEntities(match[1].replace(/\0+/g, ""));
+    if (value.trim() === "") continue;
+    segments.push({ text: value, line: lineAt(match.index ?? 0) });
+  }
+  // see scripts/drift-lint.ts § 16 — a diagram may embed HTML in a `foreignObject`; that text is
+  // reader-visible too, and the prose pass blanks the whole SVG, so it is read here. Each body row keeps
+  // its own source offset, so a label on the fourth row is not reported on the element's first line, where
+  // nothing needs fixing. An inline tag or a comment joins its neighbours; a block-level tag breaks the
+  // row's run with a space.
+  for (const match of markup.matchAll(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi)) {
+    const body = match[1];
+    const bodyOffset = (match.index ?? 0) + (match[0].match(TAG)?.[0].length ?? 0);
     for (const row of body.matchAll(/[^\r\n]+/g)) {
-      const text = row[0].replace(/<[^>]*>/g, " ");
-      if (text.trim() === "") continue;
-      segments.push({ text: decodeXmlEntities(text), line: lineAt(bodyOffset + (row.index ?? 0)) });
+      const rendered = decodeXmlEntities(
+        row[0]
+          .replace(TAG_OR_TEXT, (token) => (token.startsWith("<") ? (BLOCK_TAG.test(token) ? " " : "") : token))
+          .replace(/\s+/g, " "),
+      );
+      if (rendered.trim() === "") continue;
+      segments.push({ text: rendered, line: lineAt(bodyOffset + (row.index ?? 0)) });
     }
   }
   return segments;
@@ -1829,11 +1868,11 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
   };
   const values: Array<{ text: string; line: number }> = [];
   for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
-    // see scripts/drift-lint.ts § 16 — why: the native decoder is the only faithful one — it keeps a literal
-    // see scripts/drift-lint.ts § 16 — `\\n` as a backslash and an `n`, and turns a real `\n` into a line break.
-    // see scripts/drift-lint.ts § 16 — Character references stay as written: the Markdown scan recognises a span
-    // see scripts/drift-lint.ts § 16 — on the source form, so `&#96;` renders as a backtick character and never
-    // see scripts/drift-lint.ts § 16 — becomes a delimiter, while `&#52;` still reads as a stage number there.
+    // see scripts/drift-lint.ts § 16 — why: the native decoder is the only faithful one — it keeps a
+    // literal `\\n` as a backslash and an `n`, and turns a real `\n` into a line break. Character
+    // references stay as written: the Markdown scan recognises a span on the source form, so `&#96;`
+    // renders as a backtick character and never becomes a delimiter, while `&#52;` still reads as a
+    // stage number there.
     let decoded: string;
     try {
       decoded = JSON.parse(`"${match[1]}"`);
@@ -1853,23 +1892,23 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
       `Guard 16 retired-stage-name: ${rel}:${row} "${hit}"${note} - the iteration delivery has no stages 4-6; name the procedure instead`,
     );
   };
-  // see scripts/drift-lint.ts § 16 — why: quote membership is decided by the parsed `>` prefix, not by raw
-  // see scripts/drift-lint.ts § 16 — whitespace, so a permitted indent does not drop a quoted fence.
+  // see scripts/drift-lint.ts § 16 — why: quote membership is decided by the parsed `>` prefix, not by
+  // raw whitespace, so a permitted indent does not drop a quoted fence.
   const quoteOf = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
-  // see scripts/drift-lint.ts § 16 — why: a fence closes only on its own delimiter character, at least as long
-  // see scripts/drift-lint.ts § 16 — as the opener, with nothing after it, and only inside the quote container
-  // see scripts/drift-lint.ts § 16 — it opened in; an unquoted fence keeps a leading `>` as literal content.
+  // see scripts/drift-lint.ts § 16 — why: a fence closes only on its own delimiter character, at least
+  // as long as the opener, with nothing after it, and only inside the quote container it opened in; an
+  // unquoted fence keeps a leading `>` as literal content.
   let fence: { char: string; len: number; quote: string } | null = null;
-  // see scripts/drift-lint.ts § 16 — why: Markdown renders adjacent prose lines as one block, so a name split
-  // see scripts/drift-lint.ts § 16 — across a line break is judged on the joined pair as well.
+  // see scripts/drift-lint.ts § 16 — why: Markdown renders adjacent prose lines as one block, so a name
+  // split across a line break is judged on the joined pair as well.
   let previous = "";
   for (const { text, line } of rows) {
     const delimiter = text.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
     const quote = quoteOf(text);
     if (fence !== null) {
       const sameContainer = fence.quote === "" || quote === fence.quote;
-      // see scripts/drift-lint.ts § 16 — Inside an unquoted fence a `>` line is literal content, even when it
-      // see scripts/drift-lint.ts § 16 — looks like a quoted closer.
+      // see scripts/drift-lint.ts § 16 — inside an unquoted fence a `>` line is literal content, even
+      // when it looks like a quoted closer.
       const quoteLine = /^\s*>/.test(text) && fence.quote === "";
       const closes =
         sameContainer &&
@@ -1888,22 +1927,22 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
         for (const hit of findRetiredStageSpellings(text, true)) report(line, hit);
         continue;
       }
-      // see scripts/drift-lint.ts § 16 — The blockquote ended; the fence cannot continue outside it.
+      // see scripts/drift-lint.ts § 16 — the blockquote ended; the fence cannot continue outside it.
       fence = null;
     }
     if (delimiter !== null) {
       previous = "";
       fence = { char: delimiter[2][0], len: delimiter[2].length, quote };
-      // see scripts/drift-lint.ts § 16 — An info string after the opening fence is prose a reader can see.
+      // see scripts/drift-lint.ts § 16 — an info string after the opening fence is prose a reader can see.
       for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(line, hit);
       continue;
     }
     const lineHits = findRetiredStageSpellings(text, false);
     for (const hit of lineHits) report(line, hit);
-    // see scripts/drift-lint.ts § 16 — why: a block element starts its own block — a bullet, a heading of any
-    // see scripts/drift-lint.ts § 16 — level, a table or quote line, a fence — so its leading character is not
-    // see scripts/drift-lint.ts § 16 — a stage separator. The quote prefix is markup, so the inner line is what
-    // see scripts/drift-lint.ts § 16 — is classified: `> Phase 2` followed by `> - 4 checks` is a new bullet.
+    // see scripts/drift-lint.ts § 16 — why: a block element starts its own block — a bullet, a heading
+    // of any level, a table or quote line, a fence — so its leading character is not a stage separator.
+    // The quote prefix is markup, so the inner line is what is classified: `> Phase 2` followed by
+    // `> - 4 checks` is a new bullet.
     const quoteOfLine = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
     const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
     const inner = quoteless(text);
@@ -1911,15 +1950,16 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
     const blockStarts = blockStart.test(inner);
     const previousBlockStarts = blockStart.test(previousInner);
-    // see scripts/drift-lint.ts § 16 — A list item and its indented continuation render as one paragraph, and
-    // so do two lines of the same blockquote, so those join; a new item, heading or fence still starts a block.
+    // see scripts/drift-lint.ts § 16 — a list item and its indented continuation render as one
+    // paragraph, and so do two lines of the same blockquote, so those join; a new item, heading or
+    // fence still starts a block.
     const continuation =
       (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text) && !blockStarts && !previousBlockStarts) ||
-      (/^\s*[-*+]\s/.test(previousInner) && !/^\s*[-*+]\s/.test(inner) && /^\s+\S/.test(inner));
+      (/^\s*(?:[-*+]|\d+\.)\s/.test(previousInner) && !/^\s*(?:[-*+]|\d+\.)\s/.test(inner) && /^\s+\S/.test(inner));
     if (previous !== "" && text.trim() !== "" && (!blockStarts || continuation) && (!previousBlockStarts || continuation)) {
-      // see scripts/drift-lint.ts § 16 — Recognize spans on the joined SOURCE (a Markdown code span may cross one
-      // see scripts/drift-lint.ts § 16 — line break), with the boundary rendered as a space so a probe inside a
-      // see scripts/drift-lint.ts § 16 — straddling span is still stripped.
+      // see scripts/drift-lint.ts § 16 — recognize spans on the joined SOURCE (a Markdown code span may
+      // cross one line break), with the boundary rendered as a space so a probe inside a straddling
+      // span is still stripped.
       const MARKER = "\u0000";
       const render = (value: string): string =>
         decodeXmlEntities(
@@ -1932,8 +1972,8 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
             ),
         );
       const joinedRendered = render(`${quoteless(previous)}${MARKER}${quoteless(text)}`).split(MARKER).join(" ");
-      // see scripts/drift-lint.ts § 16 — A hit is split only when neither standalone line *matches* it — a
-      // see scripts/drift-lint.ts § 16 — substring test would hide a real `Phase 4` behind `SubPhase 4`.
+      // see scripts/drift-lint.ts § 16 — a hit is split only when neither standalone line *matches* it — a
+      // substring test would hide a real `Phase 4` behind `SubPhase 4`.
       const previousHits = findRetiredStageSpellings(render(quoteless(previous)), false, false);
       const textHits = findRetiredStageSpellings(render(quoteless(text)), false, false);
       for (const hit of findRetiredStageSpellings(joinedRendered, false, false)) {
@@ -1951,8 +1991,8 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
   for (const file of files) {
     const splitLines = (value: string): string[] => value.split(/\r\n|\n|\r/);
     if (/\.(?:svg|html)$/.test(file.rel)) {
-      // see scripts/drift-lint.ts § 16 — Diagram label text is literal text a reader sees: a backtick is a
-      // see scripts/drift-lint.ts § 16 — character, and a probe in a label is prose.
+      // see scripts/drift-lint.ts § 16 — diagram label text is literal text a reader sees: a backtick is a
+      // character, and a probe in a label is prose.
       for (const segment of svgTextSegments(file.text)) {
         for (const hit of findRetiredStageSpellings(segment.text, false, false)) {
           hits.push(
@@ -1960,11 +2000,10 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           );
         }
       }
-      // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG.
-      // see scripts/drift-lint.ts § 16 — Comments, scripts, styles and the already-scanned SVG are blanked without
-      // see scripts/drift-lint.ts § 16 — moving a line; a probe inside a `<code>` element is blanked the same way,
-      // see scripts/drift-lint.ts § 16 — across as many lines as it spans and in place, so a block still names the
-      // see scripts/drift-lint.ts § 16 — line its text starts on.
+      // see scripts/drift-lint.ts § 16 — an interactive page also carries ordinary HTML prose outside the
+      // SVG. Comments, scripts, styles and the already-scanned SVG are blanked without moving a line; a
+      // probe inside a `<code>` element is blanked the same way, across as many lines as it spans and in
+      // place, so a block still names the line its text starts on.
       if (file.rel.endsWith(".html")) {
         const blank = (block: string): string => block.replace(/[^\n]/g, " ");
         const source = file.text
@@ -1972,28 +2011,31 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           .replace(/<script[\s\S]*?<\/script>/gi, blank)
           .replace(/<style[\s\S]*?<\/style>/gi, blank)
           .replace(/<svg[\s\S]*?<\/svg>/gi, blank)
-          .replace(HTML_CODE, (whole: string, inner: string) =>
-            whole.replace(
-              inner,
-              inner
-                // see scripts/drift-lint.ts § 16 — why: a code element may span source lines; the reader sees
-                // see scripts/drift-lint.ts § 16 — one space there, so a probe split across them still exempts.
-                // see scripts/drift-lint.ts § 16 — Equal-length space runs keep every later offset in place.
-                .replace(/\s*\n\s*/g, (gap: string) => " ".repeat(gap.length))
-                .replace(PROBE_PATTERN, (probe: string) => " ".repeat(probe.length)),
-            ),
-          )
-          // see scripts/drift-lint.ts § 16 — why: a `<br>` is a line break inside a block, which a reader sees as
-          // see scripts/drift-lint.ts § 16 — whitespace, not as a block boundary.
+          .replace(HTML_CODE, (whole: string, inner: string) => {
+            // see scripts/drift-lint.ts § 16 — why: the element is rebuilt from the match bounds, not by
+            // string replacement, so a body spelled inside the opening tag is not blanked by mistake and
+            // a `$` sequence in the body cannot expand. The reader sees the body wrapped to one space per
+            // source line break, so the probe matches folded whitespace; equal-length space runs keep
+            // every later offset in place.
+            const close = whole.lastIndexOf("</");
+            const open = whole.slice(0, close - inner.length);
+            const body = inner
+              .replace(/\s*\n\s*/g, (gap: string) => " ".repeat(gap.length))
+              .replace(PROBE_PATTERN, (probe: string) => " ".repeat(probe.length));
+            return open + body + whole.slice(close);
+          })
+          // see scripts/drift-lint.ts § 16 — why: a `<br>` is a line break inside a block, which a reader
+          // sees as whitespace, not as a block boundary.
           .replace(/<br\b[^>]*>/gi, blank);
-        // see scripts/drift-lint.ts § 16 — A reader sees a rendered block, not a source line: block tags separate
-        // see scripts/drift-lint.ts § 16 — blocks, a line break or `<br>` between inline content renders as one
-        // see scripts/drift-lint.ts § 16 — space, and an inline tag is dropped without inserting one (so
-        // see scripts/drift-lint.ts § 16 — `Pha<b>se</b> 4` renders `Phase 4`). Each block is judged whole.
+        // see scripts/drift-lint.ts § 16 — a reader sees a rendered block, not a source line: block tags
+        // separate blocks, a line break or `<br>` between inline content renders as one space, and an
+        // inline tag is dropped without inserting one (so `Pha<b>se</b> 4` renders `Phase 4`). `<button>`
+        // is a boundary too: two buttons are separate controls, so `Open` + `Phase 4` never joins.
+        // Each block is judged whole.
         const blockTag =
-          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd)\b[^>]*>/gi;
-        // see scripts/drift-lint.ts § 16 — The first character of the rendered text, so the diagnostic names the
-        // see scripts/drift-lint.ts § 16 — line that text starts on rather than the line its opening tag sits on.
+          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|hr|nav|main|aside|figure|figcaption|dl|dt|dd|button)\b[^>]*>/gi;
+        // see scripts/drift-lint.ts § 16 — the first character of the rendered text, so the diagnostic
+        // names the line that text starts on rather than the line its opening tag sits on.
         const firstContent = (slice: string): number => {
           let index = 0;
           while (index < slice.length) {
@@ -2011,9 +2053,9 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         };
         let cursor = 0;
         let line = 1;
-        // see scripts/drift-lint.ts § 16 — why: every blanking step preserves length, and a code element may
-        // see scripts/drift-lint.ts § 16 — swallow a line break, so the original page text is what maps an offset
-        // see scripts/drift-lint.ts § 16 — back to its source line.
+        // see scripts/drift-lint.ts § 16 — why: every blanking step preserves length, and a code element
+        // may swallow a line break, so the original page text is what maps an offset back to its source
+        // line.
         const original = file.text;
         const lineAt = (index: number): number => {
           for (; cursor < index; cursor += 1) if (original[cursor] === "\n") line += 1;
@@ -2025,8 +2067,8 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           const piece = source.slice(at, boundary);
           const start = firstContent(piece);
           if (start >= 0) {
-            // see scripts/drift-lint.ts § 16 — Collapsed whitespace is the rendered spacing; a backtick is a
-            // see scripts/drift-lint.ts § 16 — character in HTML, so the block is literal text and only `<code>` exempts.
+            // see scripts/drift-lint.ts § 16 — collapsed whitespace is the rendered spacing; a backtick
+            // is a character in HTML, so the block is literal text and only `<code>` exempts.
             const rendered = decodeXmlEntities(piece.replace(/<[^>]*>/g, "").replace(/\s+/g, " "));
             for (const hit of findRetiredStageSpellings(rendered, false, false)) {
               hits.push(
@@ -2050,11 +2092,12 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       continue;
     }
     if (file.rel.endsWith(".archify.json")) {
-      // see scripts/drift-lint.ts § 16 — A diagram source holds display strings, not Markdown: a backtick in a
-      // see scripts/drift-lint.ts § 16 — label is a character a reader sees, so the same string is judged literally
-      // see scripts/drift-lint.ts § 16 — here and in the rendered SVG, and neither can exempt a probe the other reports.
+      // see scripts/drift-lint.ts § 16 — a diagram source holds display strings, not Markdown: a backtick
+      // in a label is a character a reader sees, so the same string is judged literally here and in the
+      // rendered SVG, and neither can exempt a probe the other reports. Character references decode once
+      // before the literal match, like the SVG sibling.
       for (const value of jsonStringValues(file.text)) {
-        for (const hit of findRetiredStageSpellings(value.text, false, false)) {
+        for (const hit of findRetiredStageSpellings(decodeXmlEntities(value.text), false, false)) {
           hits.push(
             `Guard 16 retired-stage-name: ${file.rel}:${value.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
           );
@@ -2086,9 +2129,9 @@ export function readRetiredStageCorpus(
     const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
     if (!inRoot && !RETIRED_STAGE_FILES.some((name) => name === rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
-    // see scripts/drift-lint.ts § 16 — The diagram face is a direct `assets/*.svg`, `assets/*.html` or
-    // see scripts/drift-lint.ts § 16 — `assets/*.archify.json` child (the static image, the interactive page and
-    // see scripts/drift-lint.ts § 16 — the source they are generated from); a nested file is not the diagram face.
+    // see scripts/drift-lint.ts § 16 — the diagram face is a direct `assets/*.svg`, `assets/*.html` or
+    // `assets/*.archify.json` child (the static image, the interactive page and the source they are
+    // generated from); a nested file is not the diagram face.
     if (rel.startsWith("assets/") && !/^assets\/[^/]+\.(?:svg|html|archify\.json)$/.test(rel)) continue;
     if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
     if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;

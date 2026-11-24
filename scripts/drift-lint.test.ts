@@ -2364,6 +2364,23 @@ describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
     expect(result.hits.length).toBeGreaterThan(0);
   });
 
+  test("a commented-out diagram label is not read", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<!-- <text>Phase 4</text> -->" }]);
+    expect(result.hits).toEqual([]);
+  });
+
+  test("a label split by a multi-line inline tag still reports", () => {
+    const result = checkRetiredStageNames([
+      { rel: "assets/workflow.svg", text: "<text>Pha<tspan\n  x=\"1\">se</tspan> 4</text>" },
+    ]);
+    expect(result.hits.length).toBe(1);
+  });
+
+  test("a label split across a source line break renders joined", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Phase\n  4</text>" }]);
+    expect(result.hits.length).toBe(1);
+  });
+
   test("an out-of-range code point does not abort the scan", () => {
     const result = checkRetiredStageNames([{ rel: "skills/x/a.md", text: "&#x110000; Phase 4" }]);
     expect(result.hits.length).toBeGreaterThan(0);
@@ -2384,8 +2401,8 @@ describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
   });
 
   test("a backticked probe in a diagram source and in its rendered label both report", () => {
-    // Paired fixture: the source label and the rendered label carry the same text, so either format
-    // drifting from the other fails here.
+    // see scripts/drift-lint.ts § 16 — paired fixture: the source label and the rendered label carry the
+    // same text, so either format drifting from the other fails here.
     const label = "`" + RETIRED_STAGE_MACHINE_LITERALS[0] + "` gate";
     const source = checkRetiredStageNames([{ rel: "assets/x.archify.json", text: JSON.stringify({ nodes: [{ id: "close", label }] }) }]);
     const rendered = checkRetiredStageNames([{ rel: "assets/x.svg", text: `<svg><g id="node-close"><text>${label}</text></g></svg>` }]);
@@ -2476,6 +2493,12 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(result.hits[0]).toContain("split across the line break");
   });
 
+  test("an ordered list item and its indented continuation are one paragraph", () => {
+    const result = checkRetiredStageNames([{ rel: "skills/x/s.md", text: "1. Open the Phase\n   4 delivery.\n" }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
   test("two lines of one blockquote are one paragraph", () => {
     const result = checkRetiredStageNames([{ rel: "skills/x/q.md", text: "> Open the Phase\n> 4 delivery.\n" }]);
     expect(result.hits.length).toBe(1);
@@ -2549,6 +2572,51 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
   test("a probe inside a multi-line html code element is exempt", () => {
     const html = "<html><body><p>Run <code>--phase\n6</code> now.</p></body></html>";
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a wrapped or unspaced code probe still exempts", () => {
+    for (const html of [
+      "<html><body><p>Run <code>--phase\n  6</code> now.</p></body></html>",
+      "<html><body><p>Run <code>--phase6</code> now.</p></body></html>",
+    ]) {
+      expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+    }
+  });
+
+  test("a code body spelled in the opening tag is not blanked in place", () => {
+    const html = '<html><body><p><code title="--phase 6">--phase 6</code> is the probe.</p></body></html>';
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a dollar sequence in a code body does not expand", () => {
+    const html = "<html><body><p><code>$` tail</code> then Phase 4.</p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("a code-wrapped retired stage name still reports", () => {
+    const html = "<html><body><p><code>Phase 5</code></p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("neighbouring buttons do not join into one run", () => {
+    const html = "<html><body><button>Phase</button><button>4 checks</button></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);
+  });
+
+  test("a button after inline text still reports its own label", () => {
+    const html = "<html><body><p>Open<button>Phase 4</button></p></body></html>";
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain('"Phase 4"');
+  });
+
+  test("an entity-escaped stage number in an archify source decodes once", () => {
+    const text = '{"label":"Phase &#52; close"}';
+    expect(checkRetiredStageNames([{ rel: "assets/x.archify.json", text }]).hits.length).toBeGreaterThan(0);
+    const doubled = '{"label":"Phase &amp;#52; close"}';
+    expect(checkRetiredStageNames([{ rel: "assets/x.archify.json", text: doubled }]).hits).toEqual([]);
   });
 
   test("a fence in one json value does not hide a probe in the next", () => {
