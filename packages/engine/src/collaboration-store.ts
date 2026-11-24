@@ -1915,6 +1915,22 @@ export function hasConfirmedReceipt(db: StoreDb, operationId: string): boolean {
 }
 
 /**
+ * note: The settle rule reads the receipts table, so bytes without one prove no confirmation:
+ * nothing there is settled, and no statement runs against a missing table.
+ */
+export function hasReceiptLedger(db: StoreDb): boolean {
+  return (
+    Number(
+      (
+        db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'remote_outbox_receipts'").get() as
+          | { n?: unknown }
+          | undefined
+      )?.n ?? 0,
+    ) > 0
+  );
+}
+
+/**
  * note: The settle rule for one conflict row: it is settled exactly when its `resolved_by`
  * repair chain reaches a `confirmed` repair that HOLDS RECORDED EVIDENCE - a
  * `remote_outbox_receipts` row with outcome `confirmed` for that operation id. The state column
@@ -1925,7 +1941,7 @@ export function hasConfirmedReceipt(db: StoreDb, operationId: string): boolean {
  * unsettled: a withdrawn review (the linked repair abandoned) blocks the replacement again until
  * a new reviewed resolution is prepared and confirmed.
  */
-function conflictRepairSettled(
+export function conflictRepairSettled(
   db: StoreDb,
   row: { operation_id: string; generation: unknown; project_key: unknown; state: string; resolved_by: unknown },
   receiptsPresent: boolean,
@@ -1996,14 +2012,7 @@ async function replaceDerivedLaneBelow(
       .get() as { n?: unknown };
     // note: The settle rule reads the receipts table, so bytes without one prove no confirmation:
     // nothing there is settled, and no statement runs against a missing table.
-    const receiptsPresent =
-      Number(
-        (
-          db
-            .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'remote_outbox_receipts'")
-            .get() as { n?: unknown }
-        )?.n ?? 0,
-      ) > 0;
+    const receiptsPresent = hasReceiptLedger(db);
     const unsettled: UnsettledRow[] =
       Number(outboxPresent?.n ?? 0) === 0
         ? []

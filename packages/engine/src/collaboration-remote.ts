@@ -20,7 +20,9 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  conflictRepairSettled,
   hasConfirmedReceipt,
+  hasReceiptLedger,
   readCollaborationBinding,
   REMOTE_CACHE_REBUILD_ROUTE,
   initializeRemoteCacheStore,
@@ -3128,7 +3130,10 @@ function intentOf(
  * `outbox-pending`: every unsettled intent of the current binding - `enqueued`, `unconfirmed` or
  * `conflict` - FIFO by `(createdAt, operationId)`, as summaries carrying their state, and without a
  * send permit or an attempt id. It is a read: no send right is implied by listing, and a settled
- * (`confirmed` or `abandoned`) row is never listed.
+ * (`confirmed` or `abandoned`) row is never listed. A `conflict` row is settled by the SAME rule
+ * the cache-replacement guard applies: when its `resolvedBy` repair chain reaches a `confirmed`
+ * repair holding its recorded confirmed receipt. Listing such a parent would send the operator to
+ * `outbox-resolve`, which refuses while that live resolution stands.
  */
 export async function readPendingIntents(context: StoreContext, projectId: string): Promise<RemotePendingIntents> {
   const project = text(projectId, "projectId");
@@ -3145,21 +3150,40 @@ export async function readPendingIntents(context: StoreContext, projectId: strin
   try {
     const rows = handle.db
       .prepare(
-        "select operation_id, request_hash, request_json, created_at, state from remote_outbox " +
+        "select operation_id, generation, project_key, state, resolved_by, request_hash, request_json, created_at " +
+          "from remote_outbox " +
           `where generation = ? and project_key = ? and state in (${REMOTE_UNSETTLED_STATES.map(() => "?").join(", ")}) ` +
           "order by created_at, operation_id",
       )
-      .all(generation, project, ...REMOTE_UNSETTLED_STATES) as Array<Record<string, unknown>>;
+      .all(generation, project, ...REMOTE_UNSETTLED_STATES) as PendingOutboxRow[];
+    // invariant: The listing and the cache-replacement guard settle a conflict row by ONE rule, so
+    // they can never disagree about the same row: a parent whose repair chain is settled is not
+    // awaiting settlement, and offering it would route the operator to a refusing `outbox-resolve`.
+    const receiptsPresent = hasReceiptLedger(handle.db);
     return {
       version: 1,
       projectId: project,
       generation,
-      intents: rows.map((row) => pendingIntentOf(row, project)),
+      intents: rows
+        .filter((row) => !(receiptsPresent && conflictRepairSettled(handle.db, row, receiptsPresent)))
+        .map((row) => pendingIntentOf(row, project)),
     };
   } finally {
     handle.close();
   }
 }
+
+/** note: The outbox columns the settle rule and the listed summary both read. */
+type PendingOutboxRow = {
+  operation_id: string;
+  generation: unknown;
+  project_key: unknown;
+  state: string;
+  resolved_by: unknown;
+  request_hash: string;
+  request_json: string;
+  created_at: string;
+};
 
 function pendingIntentOf(row: Record<string, unknown>, project: string): RemotePendingIntent {
   const unreadable = (): never => {

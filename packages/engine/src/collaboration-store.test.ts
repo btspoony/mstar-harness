@@ -9925,6 +9925,67 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
   }, 30_000);
 
+  test("the pending listing excludes a conflict its confirmed repair settled and keeps an unsettled one", async () => {
+    const conflictId = "00000000-0000-4000-8000-000000000a20";
+    const repairId = "00000000-0000-4000-8000-000000000a21";
+    const cache = await seedConflictedV3Cache("remote-v3-listing-settled-conflict", conflictId);
+    const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
+    await prepareRemoteResolution(cache.context, conflictId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: resolutionEvent,
+    });
+    const dispatched = await dispatchRemoteIntent(
+      cache.context,
+      repairId,
+      forkObservationFor({ commit: cache.commit, dbPath: cache.location.dbPath }, conflictId, cache.fork.heads),
+    );
+    const repair = await readRemoteIntent(cache.context, repairId);
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9",
+        event: resolutionEvent,
+      }),
+    );
+    // invariant: The parent keeps the conflict state it arrived with and only its repair chain
+    // settles it, so the listing excludes the row through the settle rule, never a state rewrite.
+    expect(await readRemoteIntent(cache.context, conflictId)).toMatchObject({
+      state: "conflict",
+      resolvedBy: repairId,
+    });
+    // invariant: The listing and the guard settle by ONE rule: this parent is not awaiting
+    // settlement, and reporting it would route the operator to a refusing `outbox-resolve`.
+    expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).intents).toEqual([]);
+    // note: The guard admits the replacement of the same bytes, which is the agreement the listing
+    // above rests on; the listing is asserted first because the bind replaces this cache.
+    const bound = await bindRemoteAuthority(cache.context, {
+      version: 1,
+      selectorCommit: cache.commit,
+      generation: cache.generation,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ version: 1, generation: cache.generation });
+
+    const withdrawnConflict = "00000000-0000-4000-8000-000000000a22";
+    const withdrawnRepair = "00000000-0000-4000-8000-000000000a23";
+    const withdrawn = await seedConflictedV3Cache("remote-v3-listing-withdrawn-conflict", withdrawnConflict);
+    await prepareRemoteResolution(withdrawn.context, withdrawnConflict, {
+      operationId: withdrawnRepair,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent({ repoKey: withdrawn.repoKey }, withdrawnRepair, withdrawn.fork.heads),
+    });
+    await abandonRemoteIntent(withdrawn.context, { operationId: withdrawnRepair, reason: "review withdrawn" });
+    // invariant: A withdrawn repair settles nothing, so the parent stays listed: the exclusion is
+    // the settle rule, never a blanket "carries a resolvedBy" filter.
+    const listed = (await readPendingIntents(withdrawn.context, SELECTED_PROJECT.localProjectId)).intents;
+    expect(listed.map((intent) => [intent.operationId, intent.state])).toEqual([[withdrawnConflict, "conflict"]]);
+  }, 30_000);
+
   test("a confirmed repair holds no settle without its recorded confirmed receipt", async () => {
     const conflictId = "00000000-0000-4000-8000-000000000a10";
     const repairId = "00000000-0000-4000-8000-000000000a11";
