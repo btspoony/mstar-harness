@@ -924,6 +924,57 @@ describe("issue command family", () => {
     expect(shown).toMatchObject({ status: "ok", data: { revision: seed.revision } });
   }, 60_000);
 
+  test("the move verb refuses a missing --expect at runtime unless a handoff document supplies the peer half", async () => {
+    // invariant: The flag stays schema-optional ONLY because the exchange's destination half addresses a
+    // record another authority holds. Nothing else may reach a route that reads a local record without its
+    // revision CAS, so the missing flag refuses at execute with the recovery an operator can run.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-expect-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const expectStore = (page.data as { storeRevision: number }).storeRevision;
+    const before = await issueState(context);
+    const command = definition("issue.move");
+
+    // note: Every other store/issue revision in this test is current, so the ONLY refusal each call can
+    // meet is the missing flag — the assertion cannot pass on an unrelated CAS failure.
+    const noExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-missing",
+      payload: { projectId: "proj-a", reason: "no revision" },
+    }, context);
+    expect(noExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    if (noExpect.status === "refused") {
+      expect(noExpect.details?.paths).toEqual(["expect"]);
+      expect(noExpect.details?.recovery).toEqual(expect.stringContaining("--expect"));
+    }
+    // invariant: The refusal happens before anything is frozen or written.
+    expect(await issueState(context)).toEqual(before);
+
+    // note: The staged route without `--input` is the same shape: it reads a local record, so it needs the CAS.
+    const stagedNoExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-staged",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "staged without a CAS" },
+    }, context);
+    expect(stagedNoExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expect"] } });
+
+    // invariant: With `--input` the flag check is skipped: the destination half carries the peer's record,
+    // so the refusal that comes back names the document it could not read, never a missing `expect`.
+    const handoff = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-handoff",
+      toAuthority: "github.com/acme/never-created-authority",
+      input: "/nonexistent/handoff.json",
+      payload: { projectId: "proj-b", reason: "peer half" },
+    }, context);
+    expect(handoff).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["input"] } });
+  }, 60_000);
+
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
     const addressed = ["occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"];
     for (const verb of addressed) {

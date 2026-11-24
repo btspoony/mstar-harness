@@ -317,6 +317,21 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         error.paths = ["expectStore"];
         throw error;
       }
+      // invariant: `--expect` is the record's revision CAS on every route that reads a local record; only
+      // the exchange's handoff half addresses a record another authority holds and carries no revision.
+      if (input.expect === undefined && input.input === undefined) {
+        const error = new Error(
+          "expect is required for a move unless --input supplies the peer's handoff document",
+        ) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+        error.code = "issue.invalid-payload";
+        error.paths = ["expect"];
+        error.details = {
+          recovery:
+            `Read the record with \`mstar issue show --id <issue-id>\`, then reissue the same command with ` +
+            `--expect <issue-revision> (and the same --operation-id).`,
+        };
+        throw error;
+      }
       const addressed = requiredId(input);
       const payload = validatePayload(input, "IssueMove", "move") as IssueMove;
       // invariant: `--to-authority` selects the staged cross-authority route; without it the verb is the

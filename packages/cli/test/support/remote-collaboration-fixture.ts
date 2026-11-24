@@ -297,7 +297,6 @@ export class RemoteCollaborationFixture {
   private readonly publisher: string;
   private readonly localBare: string;
   private readonly localPublisher: string;
-  private localSequence = 0;
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
   /** note: The provider records a lookup can observe; `send` appends and `withheld` holds the rest. */

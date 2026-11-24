@@ -3511,6 +3511,28 @@ export async function readLocalPredecessorLane(location: CollaborationLocation):
   }
 }
 
+/**
+ * note: The mode one lane path RECORDS, or `null` when the path holds no readable lane. Deliberately
+ * narrow: a destination addressed by `repoKey` is only CLASSIFIED here, so a damaged or older lane is
+ * that lane's own refusal when some path actually opens it, never a verdict guessed by this reader.
+ */
+export async function readLaneMode(location: CollaborationLocation): Promise<CollaborationMode | null> {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(location.dbPath);
+  if (!existsSync(location.dbPath)) return null;
+  const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
+  try {
+    const row = db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined;
+    const mode = row?.mode;
+    return mode === "local" || mode === "mirror" || mode === "remote" ? mode : null;
+  } catch {
+    // note: An unreadable lane here is only unclassifiable; opening it is what reports the real cause.
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
 /** note: Where one retired predecessor's bytes are preserved: beside the lane, outside every read path. */
 export function localPredecessorRetiredPath(
   location: CollaborationLocation,

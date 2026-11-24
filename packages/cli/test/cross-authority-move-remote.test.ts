@@ -473,6 +473,162 @@ describe("cross-authority move through two checkouts", () => {
     }
   }, 240_000);
 
+  test("an admission that arrives before the source switched is refused, leaving the provider record and the move intact", () => {
+    const fixture = host("early-admission");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const destination = localHost(fixture);
+      const moveArgs = [
+        "issue", "move",
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+      ];
+
+      const requestPath = source.outPath("request");
+      expect(source.runJson([...moveArgs, "--id", FIXTURE_REF, "--out", requestPath]).data).toMatchObject({ phase: "staged" });
+      const stagedPath = destination.outPath("staged");
+      const verified = destination.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect-store", "0",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--input", requestPath,
+        "--out", stagedPath,
+      ]);
+      expect(verified.data).toMatchObject({ phase: "verified", side: "destination" });
+
+      // note: A document relabelled `admission` — the shape a mis-sequenced or forged handoff has —
+      // reaches the source while ITS row is still `staged`. Publishing on it would mark the move done
+      // with the provider record still live beside the admitted copy.
+      const forged = source.writeJson("forged-admission", {
+        ...destination.readOut(stagedPath),
+        phase: "admission",
+        destinationIssueId: "66666666-6666-4666-8666-666666666666",
+      });
+      const refused = source.runJson([...moveArgs, "--id", FIXTURE_REF, "--input", forged]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.code).toBe("collaboration.move-phase-invalid");
+
+      // invariant: Nothing was published and nothing was tombstoned: the honest next step still runs,
+      // freezing the obsolete replacement and answering it as pending.
+      const staged = destination.readOut(stagedPath);
+      const tombstone = source.runJson([...moveArgs, "--id", FIXTURE_REF, "--input", source.writeJson("staged", staged)]);
+      expect(tombstone.exitCode).toBe(1);
+      expect(tombstone.code).toBe("remote.effect-pending");
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("an admission naming no admitted record is refused, and the local source record survives", () => {
+    const fixture = host("unadmitted-admission");
+    try {
+      fixture.publish(1);
+      const destination = remoteHost(fixture, "remote-destination");
+      const source = localHost(fixture, "local-source");
+      const remoteKey = fixture.repoKey;
+      const seeded = source.runJson([
+        "issue", "add",
+        "--payload", JSON.stringify({
+          projectId: "_default",
+          title: "Local record facing a forged admission",
+          kind: "bug",
+          severity: "high",
+          impact: "A fabricated admission must never delete the source record.",
+          acceptance: "The record is still readable in its own authority.",
+          sourceIdentity: "review/forged-admission",
+          rootCauseKey: "forged.admission.root",
+          acceptanceKey: "forged.admission.accept",
+          occurrenceKey: "occ-forged-admission",
+          sourceKind: "test",
+          location: "packages/cli/test/cross-authority-move-remote.test.ts",
+          observedBehavior: "A forged admission arrived early.",
+          evidence: ["controlled host fixture"],
+          discoveredAt: AT,
+        }),
+        "--actor", "project-manager",
+        "--operation-id", "55555555-5555-4555-8555-555555555555",
+      ]);
+      expect(seeded.exitCode).toBe(0);
+      const localId = String(seeded.data.issueId);
+      const localRef = String(source.runJson(["issue", "show", "--id", localId, "--harness", source.harness]).data.issueRef);
+      const storeRevision = String(source.runJson(["issue", "list", "--harness", source.harness]).data.storeRevision);
+      const moveArgs = [
+        "issue", "move",
+        "--id", localId,
+        "--to-authority", remoteKey,
+        "--payload", JSON.stringify({ projectId: REMOTE_PROJECT.localProjectId, reason: "cross to the provider" }),
+        "--expect", "1",
+        "--expect-store", storeRevision,
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+      ];
+
+      const requestPath = source.outPath("request");
+      expect(source.runJson([...moveArgs, "--out", requestPath]).data).toMatchObject({ phase: "staged" });
+
+      // note: The forged document is the `request` document relabelled `admission`: it matches the frozen
+      // digest and counts exactly, so only the missing admitted record distinguishes it from a real one.
+      const forged = source.writeJson("forged-admission", { ...source.readOut(requestPath), phase: "admission" });
+      const refused = source.runJson([...moveArgs, "--input", forged]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.code).toBe("collaboration.move-phase-invalid");
+
+      // invariant: The source record was never removed: it is still readable here, at its own revision.
+      const shown = source.runJson(["issue", "show", "--id", localId, "--harness", source.harness]);
+      expect(shown.exitCode).toBe(0);
+      expect(shown.data).toMatchObject({ id: localId, issueRef: localRef, revision: 1 });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("a replay under the same operation id without a handoff is bound to the request it recorded", () => {
+    const fixture = host("unbound-replay");
+    try {
+      fixture.publish(1);
+      const source = remoteHost(fixture);
+      const first = source.runJson([
+        "issue", "move",
+        "--id", FIXTURE_REF,
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--out", source.outPath("request"),
+      ]);
+      expect(first.exitCode).toBe(0);
+
+      // invariant: The same operation id with another record is a different request, so it refuses —
+      // exactly as the handoff-carrying form does — instead of answering the first request's document.
+      const unbound = source.runJson([
+        "issue", "move",
+        "--id", "mstar:issue:ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "--to-authority", fixture.localRepoKey,
+        "--payload", JSON.stringify({ projectId: "_default", reason: "leave the provider project" }),
+        "--expect", "2",
+        "--expect-store", "1",
+        "--actor", "project-manager",
+        "--operation-id", MOVE_OPERATION,
+        "--out", source.outPath("second-request"),
+      ]);
+      expect(unbound.exitCode).toBe(1);
+      expect(unbound.code).toBe("store.operation-conflict");
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
   test("a handoff from another operation is refused, never acted on", () => {
     const fixture = host("foreign-handoff");
     try {

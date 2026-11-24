@@ -15,7 +15,6 @@
  * the two is resumed by reissuing the same command rather than by a kept handle.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import {
   collaborationLocationOfRepoKey,
   resolveCollaborationLocation,
@@ -27,6 +26,7 @@ import {
   openRemoteCache,
   readCollaborationAuthority,
   readCollaborationStage,
+  readLaneMode,
   withCollaborationWrite,
   withRemoteCacheWrite,
   writeCollaborationStage,
@@ -1922,6 +1922,17 @@ async function requireOwnSourceRow(context: StoreContext, request: MoveRequest, 
   return row;
 }
 
+/**
+ * note: The source row this checkout already holds, bound to the request BEFORE its recorded result
+ * is reported: a replay under the same operation id with another record or destination refuses
+ * exactly as a handoff-carrying call does, instead of answering the first request's document.
+ */
+async function boundOwnSourceRow(context: StoreContext, request: MoveRequest): Promise<IssueMoveRecord | null> {
+  const row = await ownLaneRow(context, request.operationId, "source");
+  if (row !== null) await readOwnLane(context, (db) => assertBoundRequest(db, row, request));
+  return row;
+}
+
 /** note: One read on this checkout's own lane, with the handle kept open for the whole callback. */
 async function readOwnLane<T>(context: StoreContext, apply: (db: StoreDb) => T): Promise<T> {
   if (resolveCollaborationLocation(context).mode === "remote") {
@@ -2004,7 +2015,7 @@ export async function exchangeLocalToRemote(
   request: MoveRequest,
   handoff: IssueMoveDocument | null,
 ): Promise<ExchangeReceipt> {
-  const existing = await ownLaneRow(context, request.operationId, "source");
+  const existing = await boundOwnSourceRow(context, request);
   if (handoff === null) {
     if (existing !== null) return exchangeReceipt(existing, "source", documentOfRow(existing, "request"));
     await withCollaborationWrite(context, (handle) => {
@@ -2051,7 +2062,7 @@ export async function exchangeLocalToRemote(
     return exchangeReceipt(row, "source", documentOfRow(row, "request"));
   }
   // note: The destination's admission handoff: verify it against the frozen row, then switch and publish.
-  const source = await requireOwnSourceRow(context, request, "switch");
+  const source = existing ?? (await requireOwnSourceRow(context, request, "switch"));
   if (handoff.phase !== "admission") {
     throw new StoreError(
       "collaboration.move-phase-invalid",
@@ -2062,6 +2073,25 @@ export async function exchangeLocalToRemote(
   }
   const mismatch = documentMismatch(source, handoff);
   if (mismatch !== null) return await refuseDocumentMismatch(context, request, source, mismatch);
+  // invariant: An admission is the destination's statement that it holds this record. The local source
+  // cannot see that lane, so the one fact a real admission always carries — the provider record it
+  // admitted — is the gate: a document naming none publishes nothing and leaves the record in place.
+  if (handoff.destinationIssueId === null) {
+    throw new StoreError(
+      "collaboration.move-phase-invalid",
+      `The handoff carries phase admission but names no admitted record, and a real admission always names the provider ` +
+        `issue it adopted. Nothing was modified: the source record ${String(source.sourceIssueId ?? source.issueRef)} is ` +
+        `still here.`,
+      {
+        operation_id: request.operationId,
+        issue_ref: source.issueRef,
+        phase: source.phase,
+        recovery:
+          "Reissue this command with the admission document the destination wrote after it admitted the record; the same " +
+          "operation id and the same --id resume the move.",
+      },
+    );
+  }
   if (source.phase === "published") return exchangeReceipt(source, "source", null);
   if (source.phase === "staged" || source.phase === "verified") {
     await runMoveTransition(context, request, "verified", (handle) => {
@@ -2198,7 +2228,7 @@ export async function exchangeRemoteSource(
   request: MoveRequest,
   handoff: IssueMoveDocument | null,
 ): Promise<ExchangeReceipt> {
-  const existing = await ownLaneRow(context, request.operationId, "source");
+  const existing = await boundOwnSourceRow(context, request);
   if (handoff === null) {
     if (existing !== null) return exchangeReceipt(existing, "source", documentOfRow(existing, "request"));
     const observed = await observeRemoteSubject(context, request);
@@ -2248,12 +2278,28 @@ export async function exchangeRemoteSource(
     return exchangeReceipt(after, "source", documentOfRow(after, "switch"), pending);
   }
   if (handoff.phase === "admission") {
-    const verified = await requireOwnSourceRow(context, request, "publish");
-    if (verified.phase === "staged" || verified.phase === "verified") {
-      await writeOwnLaneRow(context, (db) => {
-        advanceRowTo(db, request.operationId, "source", "switched");
-      });
+    // invariant: An admission can only exist after this side emitted its `switch` document, which is
+    // emitted only once the confirmed tombstone advanced the row. A document that arrives while this
+    // row is still `staged`/`verified` is forged or mis-sequenced: publishing on it would mark the move
+    // done with the provider record still live beside the admitted copy.
+    if (source.phase !== "switched") {
+      throw new StoreError(
+        "collaboration.move-phase-invalid",
+        `The handoff carries phase admission, but this source row is ${source.phase}: an admission follows the source's ` +
+          `own switch, which the confirmed provider tombstone emits. Nothing was modified: the provider record ` +
+          `${source.issueRef} is untouched and the source still holds it.`,
+        {
+          operation_id: request.operationId,
+          issue_ref: source.issueRef,
+          phase: source.phase,
+          recovery:
+            `Reissue the command with the destination's \`staged\` handoff first, confirm the frozen tombstone with ` +
+            `\`mstar store collaboration remote outbox-dispatch\`/\`outbox-receipt\`, then publish from the switch document.`,
+        },
+      );
     }
+    const mismatch = documentMismatch(source, handoff);
+    if (mismatch !== null) return await refuseDocumentMismatch(context, request, source, mismatch);
     await writeOwnLaneRow(context, (db) => {
       advanceRowTo(db, request.operationId, "source", "published");
     });
@@ -2263,15 +2309,15 @@ export async function exchangeRemoteSource(
   if (handoff.phase === "switch") {
     throw new StoreError(
       "collaboration.move-phase-invalid",
-      `The handoff carries phase ${handoff.phase}, which the destination emits; the source waits on that side's ` +
-        `admission. Nothing was modified.`,
+      `The handoff carries phase ${handoff.phase}, which this side emits for the destination to act on; feeding it back ` +
+        `moves nothing. Nothing was modified.`,
       { operation_id: request.operationId, phase: handoff.phase },
     );
   }
   throw new StoreError(
     "collaboration.move-phase-invalid",
-    `The handoff carries phase ${handoff.phase}, but the source is already switched; the destination's admission is the ` +
-      `next step. Nothing was modified.`,
+    `The handoff carries phase ${handoff.phase}, but this source's next step is the destination's staged document; ` +
+      `nothing was modified.`,
     { operation_id: request.operationId, phase: handoff.phase },
   );
 }
@@ -2735,21 +2781,22 @@ export async function moveAcrossByDocument(
 ): Promise<ExchangeReceipt> {
   const remote = resolveCollaborationLocation(context).mode === "remote";
   if (remote && handoff === null) {
-    for (const mode of ["remote"] as const) {
-      const target = collaborationLocationOfRepoKey(request.destinationAuthority, mode);
-      if (existsSync(target.dbPath)) {
-        throw new StoreError(
-          "collaboration.mode-unavailable",
-          `${request.destinationAuthority} resolves a remote authority too, so this is a remote-to-remote move: the two ` +
-            `provider records would have to be rewritten into each other's selector generation as one event, which no ` +
-            `admitted transition expresses. Nothing was staged.`,
-          {
-            repoKey: request.destinationAuthority,
-            recovery:
-              "Move the record into a local/mirror authority instead, and address the provider through its own verbs.",
-          },
-        );
-      }
+    // invariant: The destination's own lane RECORD is what says it is remote — never whether some file
+    // exists at its path. Only a lane that declares remote makes this a remote-to-remote move; an
+    // absent lane declares nothing and is answered by the destination step's own refusal.
+    const target = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    if ((await readLaneMode(target)) === "remote") {
+      throw new StoreError(
+        "collaboration.mode-unavailable",
+        `${request.destinationAuthority} records remote collaboration, so this is a remote-to-remote move: the two ` +
+          `provider records would have to be rewritten into each other's selector generation as one event, which no ` +
+          `admitted transition expresses. Nothing was staged.`,
+        {
+          repoKey: request.destinationAuthority,
+          recovery:
+            "Move the record into a local/mirror authority instead, and address the provider through its own verbs.",
+        },
+      );
     }
   }
   if (handoff === null) {

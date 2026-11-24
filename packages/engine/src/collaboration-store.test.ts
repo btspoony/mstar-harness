@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
+  collaborationLocationOfRepoKey,
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationMode,
@@ -39,6 +40,7 @@ import {
   assertIssueRef,
   COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  initializeRemoteCacheStore,
   localPredecessorRetiredPath,
   openCollaborationStore,
   probeCollaborationAuthority,
@@ -116,6 +118,7 @@ import type { WorkflowEntry } from "./status.js";
 import type { ResidualInput } from "./coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
+import { moveAcrossByDocument, recordIssueMove } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -9442,6 +9445,134 @@ function writeV2RemoteLane(location: CollaborationLocation): void {
   }
   chmodSync(location.dbPath, 0o600);
 }
+
+describe("remote move fence", () => {
+  /** note: One blocking source row in the remote cache, the fence every provider write must meet. */
+  async function stagedMoveRow(context: StoreContext, issueRef: string, operationId: string): Promise<void> {
+    await withRemoteCacheWrite(context, (handle) => {
+      recordIssueMove(handle.db, {
+        operationId,
+        role: "source",
+        requestHash: "request-hash",
+        issueRef,
+        sourceIssueId: null,
+        destinationIssueId: null,
+        sourceAuthority: "github.com/remote-fixture/elsewhere",
+        destinationAuthority: "github.com/local-fixture/destination",
+        destinationProject: "fixture-project",
+        actor: "project-manager",
+        reason: "fence fixture",
+        phase: "staged",
+        payloadJson: "{}",
+        payloadDigest: "digest",
+        stagedCounts: "{}",
+        sourceStoreId: "store-one",
+        sourceEpoch: 1,
+        removedSyncRows: 0,
+      });
+    });
+  }
+
+  test("a provider-id-addressed replacement meets the fence a reference-addressed one meets", async () => {
+    const cache = await outboxCache("fence-provider-id");
+    const actor = "project-manager";
+    await stagedMoveRow(cache.context, FORGED_ISSUE_REF, "fence-provider-id");
+    // invariant: The write below addresses the record by its PROVIDER id, so the replay identity carries
+    // no reference to compare. The fence resolves the reference from the OBSERVED subject instead, which
+    // is the only address both shapes share: a provider-id write cannot slip past it.
+    await expect(
+      appendOccurrence(
+        cache.context,
+        MSTAR_ISSUE,
+        {
+          sourceIdentity: "review:fixture",
+          rootCauseKey: "remote.observation",
+          acceptanceKey: "remote.observation.stored",
+          occurrenceKey: "occurrence-under-fence",
+          sourceKind: "review",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "A write addressed the frozen record by provider id.",
+          evidence: [],
+          discoveredAt: "2026-11-20T00:00:00.000Z",
+        },
+        { operationId: "00000000-0000-4000-8000-000000000901", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({
+      code: "issue.move-in-progress",
+      details: expect.objectContaining({ issue_ref: FORGED_ISSUE_REF, operation_id: "fence-provider-id", phase: "staged" }),
+    });
+    // invariant: Nothing was enqueued: the refusal is the fence, not a frozen intent that failed later.
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+
+  test("remote-to-remote is decided by the destination lane's recorded mode, not by a file's presence", async () => {
+    // invariant: A destination addressed by `repoKey` resolves the SAME database path in every mode, so
+    // "the file exists" says nothing about which mode that lane records. The refusal must read the mode.
+    const cache = await outboxCache("fence-destination-mode");
+    const localKey = `github.com/remote-fixture/move-destination-${sequence++}`;
+    const localLane = collaborationLocationOfRepoKey(localKey, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+    const request = {
+      operationId: "00000000-0000-4000-8000-000000000921",
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: localKey,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    // invariant: An existing LOCAL destination lane is not a remote one, so the first step stages and
+    // emits its request document instead of being refused as remote-to-remote.
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    expect(staged).toMatchObject({ phase: "staged", side: "source", destinationAuthority: localKey });
+    expect(staged.document).toMatchObject({ phase: "request", destinationAuthority: localKey });
+
+    // note: The same destination key now RECORDS remote collaboration, which is the only fact that
+    // makes the pair remote-to-remote; the refusal names it.
+    const remoteKey = `github.com/remote-fixture/move-remote-destination-${sequence++}`;
+    const remoteLane = collaborationLocationOfRepoKey(remoteKey, "remote");
+    mkdirSync(join(remoteLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeRemoteCacheStore(remoteLane);
+    const refused = await refusalOf(() =>
+      moveAcrossByDocument(cache.context, { ...request, operationId: "00000000-0000-4000-8000-000000000922", destinationAuthority: remoteKey }, null),
+    );
+    expect(refused.code).toBe("collaboration.mode-unavailable");
+    expect(refused.details).toMatchObject({ repoKey: remoteKey });
+  }, 30_000);
+
+  test("the fence is read inside the freeze transaction, not before it", async () => {
+    const cache = await outboxCache("fence-inside-freeze");
+    const actor = "project-manager";
+    // note: The move is staged in the seam between the write's observation and its freeze, exactly the
+    // window a fence checked outside the transaction cannot see.
+    let staged = false;
+    setRemoteWriteScopeGapForTest(async () => {
+      if (staged) return;
+      staged = true;
+      setRemoteWriteScopeGapForTest(undefined);
+      await stagedMoveRow(cache.context, FORGED_ISSUE_REF, "fence-race");
+    });
+    await expect(
+      appendOccurrence(
+        cache.context,
+        FORGED_ISSUE_REF,
+        {
+          sourceIdentity: "review:fixture",
+          rootCauseKey: "remote.observation",
+          acceptanceKey: "remote.observation.stored",
+          occurrenceKey: "occurrence-racing-fence",
+          sourceKind: "review",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "A move was staged while this write was admitted.",
+          evidence: [],
+          discoveredAt: "2026-11-20T00:00:00.000Z",
+        },
+        { operationId: "00000000-0000-4000-8000-000000000902", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "issue.move-in-progress" });
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+});
 
 describe("pre-v3 remote cache recovery", () => {
   // note: The predecessor ledger is this fixture's own input; the destination ledger is the WHOLE

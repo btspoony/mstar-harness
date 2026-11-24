@@ -5270,31 +5270,52 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
  * that fence, once, for every remote issue write: a source row in a blocking phase refuses the write
  * exactly as the local triggers refuse a local one. The move's own steps declare themselves through
  * their origin verb and pass; every other write meets the same refusal the local lane's triggers raise.
+ *
+ * The returned check reads the ledger INSIDE the transaction that freezes the intent, so a move staged
+ * between the observation and the freeze still refuses instead of slipping past a separate look. It is
+ * resolved by the record's REFERENCE — the one address a provider-UUID-addressed replacement also
+ * resolves — so no addressing shape escapes the fence.
  */
-async function assertNotFrozenByMove(
+type MoveFence = (db: StoreDb) => void;
+
+async function moveFenceOf(
   context: StoreContext,
-  issueRef: IssueRef | null | undefined,
+  issueRef: IssueRef | null,
   origin: RemoteWriteOrigin,
-): Promise<void> {
-  if (issueRef === null || issueRef === undefined) return;
-  if (origin.verb === "issue-move") return;
-  if (resolveCollaborationLocation(context).mode !== "remote") return;
+): Promise<MoveFence | undefined> {
+  if (issueRef === null) return undefined;
+  if (origin.verb === "issue-move") return undefined;
+  if (resolveCollaborationLocation(context).mode !== "remote") return undefined;
   const { blockingMoveForRef } = await import("./cross-authority-move.js");
-  const frozen = await withRemoteCacheWrite(context, (handle) => blockingMoveForRef(handle.db, issueRef));
-  if (frozen === null) return;
-  throw new StoreError(
-    "issue.move-in-progress",
-    `${issueRef} is frozen by move ${frozen.operationId} in phase ${frozen.phase}, so no provider write addresses it until ` +
-      `that move publishes or is discarded. Nothing was enqueued.`,
-    {
-      issue_ref: issueRef,
-      operation_id: frozen.operationId,
-      phase: frozen.phase,
-      recovery:
-        `Finish the move with the same operation id, or discard it with \`--discard\` before the destination admits the ` +
-        `record; then retry this write.`,
-    },
-  );
+  return (db) => {
+    const frozen = blockingMoveForRef(db, issueRef);
+    if (frozen === null) return;
+    throw new StoreError(
+      "issue.move-in-progress",
+      `${issueRef} is frozen by move ${frozen.operationId} in phase ${frozen.phase}, so no provider write addresses it until ` +
+        `that move publishes or is discarded. Nothing was enqueued.`,
+      {
+        issue_ref: issueRef,
+        operation_id: frozen.operationId,
+        phase: frozen.phase,
+        recovery:
+          `Finish the move with the same operation id, or discard it with \`--discard\` before the destination admits the ` +
+          `record; then retry this write.`,
+      },
+    );
+  };
+}
+
+/** note: The caller's observed base and the move fence, both proved in the same freeze transaction. */
+function freezeGuards(
+  base: ((observed: { observationRevision: number }, db: StoreDb) => void) | undefined,
+  fence: MoveFence | undefined,
+): ((observed: { observationRevision: number }, db: StoreDb) => void) | undefined {
+  if (fence === undefined) return base;
+  return (observed, db) => {
+    base?.(observed, db);
+    fence(db);
+  };
 }
 
 /** note: The observed issue one remote write addresses, with the project scope it was found in. */
@@ -5417,6 +5438,8 @@ async function recordEstablishedNoOp(
       origin: RemoteWriteOrigin;
     }>;
     result: unknown;
+    /** note: The move fence, read in the same transaction as the settled claim. */
+    fence?: MoveFence;
   },
 ): Promise<"durable" | "recorded"> {
   return withRemoteCacheWrite(context, (handle) => {
@@ -5424,6 +5447,7 @@ async function recordEstablishedNoOp(
       .prepare("select 1 as found from remote_outbox where operation_id = ?")
       .get(claim.operationId) as { found?: number } | undefined;
     if (row !== undefined) return "durable" as const;
+    claim.fence?.(handle.db);
     const current = observationRevisionOf(handle.db, claim.binding.generation, claim.binding.projectKey);
     if (current !== claim.sampledRevision) {
       throw new StoreError(
@@ -5726,9 +5750,9 @@ export async function prepareRemoteIssueWrite(
   );
   if (replay !== null) return replay;
   await remoteReplayAdmissionGapForTest?.();
-  await assertNotFrozenByMove(context, replayRef, origin);
   if (kind === "issue-create") {
     const issueRef = declaredRef ?? issueRefForOperation(operationId);
+    const fence = await moveFenceOf(context, issueRef, origin);
     if (write?.issueId !== undefined && write.issueId !== null) invalid("issueId", "must be absent for a create");
     const projectId = text(write?.projectId, "projectId");
     const scope = await readWriteScope(context, projectId);
@@ -5755,7 +5779,7 @@ export async function prepareRemoteIssueWrite(
       expectedHeads: [],
       executionKey,
       origin,
-    }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
+    }, freezeGuards(proveSampledBase(projectId, scope.observationRevision, write.guard), fence), write.reservation ?? null);
   }
   const addressed = text(write?.issueId, "issueId");
   const { scope, native, projectId } = await resolveObservedIssue(context, addressed, write.projectId);
@@ -5785,6 +5809,9 @@ export async function prepareRemoteIssueWrite(
   const parents = native.mstar === null ? [] : native.mstar.head;
   const observed = { projectId, project: scope.snapshot.project, issues: scope.snapshot.issues };
   const current = native.mstar === null ? null : currentIssueSubject(native.mstar);
+  // note: The fence is resolved from the OBSERVED reference, so an adoption or replacement addressed by
+  // provider id is fenced exactly as one addressed by reference.
+  const fence = await moveFenceOf(context, issueRef, origin);
   // invariant: A write the observed authority already carries is the domain's own no-op, decided
   // BEFORE a second event is frozen; a conflicting payload refuses through the same callback. The
   // answer is replay-first and observation-proven like an insert: the boundary re-check under the
@@ -5800,6 +5827,7 @@ export async function prepareRemoteIssueWrite(
       sampledRevision: scope.observationRevision,
       identity: { kind, issueRef, target: native.identity.issueId, executionKey, origin },
       result: established,
+      ...(fence === undefined ? {} : { fence }),
     });
     if (proof === "durable") {
       const durable = await replayedIntent(context, operationId, kind, replayProjectKey, replayTarget, replayRef, executionKey, origin);
@@ -5832,7 +5860,7 @@ export async function prepareRemoteIssueWrite(
     expectedHeads: parents,
     executionKey,
     origin,
-  }, proveSampledBase(projectId, scope.observationRevision, write.guard), write.reservation ?? null);
+  }, freezeGuards(proveSampledBase(projectId, scope.observationRevision, write.guard), fence), write.reservation ?? null);
 }
 
 /**
