@@ -106,7 +106,7 @@
       "col": 3,
       "type": "security",
       "label": "Review and CI",
-      "sublabel": "QC tri · PM Acceptance · CI"
+      "sublabel": "QC tri · PM Acceptance · CI · bots"
     },
     {
       "id": "merge_ready",
@@ -132,7 +132,7 @@
       "col": 5,
       "type": "backend",
       "label": "iteration-close",
-      "sublabel": "specs/ADR · roadmap · done",
+      "sublabel": "specs/ADR · roadmap candidate · completed",
       "tag": "close-delta only for a delta"
     },
     {
