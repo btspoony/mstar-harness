@@ -1,5 +1,5 @@
-<svg viewBox="0 0 1158 1038" data-reader-fit="width-first" data-layout-contract="readable-v2" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="">
-<style>
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1158 1038" data-reader-fit="width-first" data-layout-contract="readable-v2" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="">
+<style><![CDATA[
 
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
@@ -5072,7 +5072,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           svg[data-node-ui][data-preset="blueprint"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] > rect.c-mask, .phase-chip) { rx: 2px; }
           svg[data-node-ui][data-preset="editorial"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] > rect.c-mask, .phase-chip) { rx: 3px; }
         
-</style>
+]]></style>
 
         <title id="archify-diagram-title">Layered delivery: from execute to Workflow Close Out</title>
         <desc id="archify-diagram-description">Layer PRs run beside execute; only a close-delta layer depends on close; every required layer merges, then whole-chain proof, then Workflow Close Out.</desc>

@@ -96,16 +96,22 @@
  * fails. A stage number is the whole number, so `Phase 14` is not stage 4 and
  * `Phase 123 to 4` still reaches 4. Section citations are removed before a
  * stage list is read, so `Phase 3 §3.4` stays clean. Text faces are `.md`,
- * `.json`, `.toml` (the Codex prompt sources) and, in `assets/`, only a
- * direct `*.svg` child. `.svg` text counts: the `<text>`, `<title>`, `<desc>`
- * and `aria-label` values are read with inline markup joined and numeric
- * character references decoded. A diagram label is literal text: a backtick
- * is a character a reader sees, so a probe in a label is prose. The same
- * decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape, and
- * adjacent prose lines are judged as one block (a blank line or a following
- * list marker ends the block), so a name split by a line break is still
- * reported; a match wholly inside the earlier line is reported there only.
- * `<code>` is judged like a backtick span in Markdown. A fence
+ * `.svg`, `.html`, `.json`, `.toml` (the Codex prompt sources) and, in
+ * `assets/`, only a direct `*.svg` or `*.html` child. Diagram text counts:
+ * the `<text>`, `<title>`, `<desc>` and `aria-label` values are read with
+ * inline markup joined and numeric character references decoded, and so are
+ * the `data-node-*` / `data-edge-*` detail attributes an interactive viewer
+ * renders on demand. A diagram label is literal text: a backtick is a
+ * character a reader sees, so a probe in a label is prose. An `.html` page
+ * also has its markup dropped and its ordinary prose judged line by line.
+ * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
+ * and adjacent prose lines are judged as one block (a blank line or a
+ * following list marker ends the block; a list item and its indented
+ * continuation, and two lines of one blockquote, are one block with the quote
+ * prefix dropped), so a name split by a line break is still reported; a match
+ * wholly inside the earlier line is reported there only. `<code>` is judged
+ * like a backtick span in Markdown, and a span opens and closes on a whole
+ * backtick run of equal length. A fence
  * closes only on its own character, at least as long as the opener, with
  * nothing after it, and may sit inside a blockquote. The three engine probes
  * `--phase 6`, `PHASE6_` and `phase-4-pr-delivery` pass only inside an inline
@@ -1660,11 +1666,13 @@ const STAGE_RUN =
   /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
 /** see scripts/drift-lint.ts § 16 — An inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
-const INLINE_CODE = /(`+)([\s\S]*?)\1/g;
+const INLINE_CODE = /(?<!`)(`+)([^`]*)\1(?!`)/g;
 /** see scripts/drift-lint.ts § 16 — A diagram text node or label; the value is decoded before it is judged.
  * `desc` is reader-visible too (tooltip and screen-reader text). */
 const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
+// see scripts/drift-lint.ts § 16 — Node and edge detail attributes feed the interactive viewer's on-demand text.
+const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*"([^"]*)"/gi;
 /** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier that
  * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
  * `PHASE6_` code family is exempt by prefix because the CLI names its
@@ -1768,6 +1776,11 @@ function svgTextSegments(text: string): Array<{ text: string; line: number }> {
   for (const match of text.matchAll(SVG_ARIA)) {
     segments.push({ text: decodeXmlEntities(match[2]), line: lineAt(match.index ?? 0) });
   }
+  // see scripts/drift-lint.ts § 16 — An interactive viewer renders some text from element attributes on demand,
+  // see scripts/drift-lint.ts § 16 — so a clean static caption does not prove the interactive detail is clean.
+  for (const match of text.matchAll(DATA_TEXT)) {
+    segments.push({ text: decodeXmlEntities(match[1]), line: lineAt(match.index ?? 0) });
+  }
   return segments;
 }
 
@@ -1801,13 +1814,14 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
   for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
     // see scripts/drift-lint.ts § 16 — why: the native decoder is the only faithful one — it keeps a literal
     // see scripts/drift-lint.ts § 16 — `\\n` as a backslash and an `n`, and turns a real `\n` into a line break.
-    // see scripts/drift-lint.ts § 16 — The value is then entity-decoded once, so a `&#52;` a prompt author wrote
-    // see scripts/drift-lint.ts § 16 — reads as the character it renders as.
+    // see scripts/drift-lint.ts § 16 — Character references stay as written: the Markdown scan recognises a span
+    // see scripts/drift-lint.ts § 16 — on the source form, so `&#96;` renders as a backtick character and never
+    // see scripts/drift-lint.ts § 16 — becomes a delimiter, while `&#52;` still reads as a stage number there.
     let decoded: string;
     try {
-      decoded = decodeXmlEntities(JSON.parse(`"${match[1]}"`));
+      decoded = JSON.parse(`"${match[1]}"`);
     } catch {
-      decoded = decodeXmlEntities(match[1]);
+      decoded = match[1];
     }
     values.push({ text: decoded, line: lineAt(match.index ?? 0) });
   }
@@ -1871,16 +1885,20 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     for (const hit of lineHits) report(line, hit);
     // see scripts/drift-lint.ts § 16 — why: a block element starts its own block — a bullet, a heading of any
     // see scripts/drift-lint.ts § 16 — level, a table or quote line, a fence — so its leading character is not
-    // see scripts/drift-lint.ts § 16 — a stage separator.
+    // see scripts/drift-lint.ts § 16 — a stage separator. The quote prefix is markup, so the inner line is what
+    // see scripts/drift-lint.ts § 16 — is classified: `> Phase 2` followed by `> - 4 checks` is a new bullet.
+    const quoteOfLine = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
+    const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
+    const inner = quoteless(text);
+    const previousInner = quoteless(previous);
     const blockStart = /^\s*(?:[-*+]\s|\d+\.\s|#{1,6}(?:\s|$)|>|\||`{3,}|~{3,})/;
-    const blockStarts = blockStart.test(text);
-    const previousBlockStarts = blockStart.test(previous);
+    const blockStarts = blockStart.test(inner);
+    const previousBlockStarts = blockStart.test(previousInner);
     // see scripts/drift-lint.ts § 16 — A list item and its indented continuation render as one paragraph, and
     // so do two lines of the same blockquote, so those join; a new item, heading or fence still starts a block.
-    const quoteOfLine = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
     const continuation =
-      (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text)) ||
-      (/^\s*[-*+]\s/.test(previous) && !/^\s*[-*+]\s/.test(text) && /^\s+\S/.test(text));
+      (quoteOfLine(previous) !== "" && quoteOfLine(previous) === quoteOfLine(text) && !blockStarts && !previousBlockStarts) ||
+      (/^\s*[-*+]\s/.test(previousInner) && !/^\s*[-*+]\s/.test(inner) && /^\s+\S/.test(inner));
     if (previous !== "" && text.trim() !== "" && (!blockStarts || continuation) && (!previousBlockStarts || continuation)) {
       // see scripts/drift-lint.ts § 16 — Recognize spans on the joined SOURCE (a Markdown code span may cross one
       // see scripts/drift-lint.ts § 16 — line break), with the boundary rendered as a space so a probe inside a
@@ -1889,16 +1907,13 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
       const render = (value: string): string =>
         decodeXmlEntities(
           value
-            .replace(/(`+)([\s\S]*?)\1/g, (_match, _fence: string, inner: string) =>
+            .replace(/(?<!`)(`+)([^`]*)\1(?!`)/g, (_match, _fence: string, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             )
             .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             ),
         );
-      // see scripts/drift-lint.ts § 16 — A quote prefix is markup, not text: two lines of one blockquote read
-      // as one sentence, so the prefix is dropped before the join.
-      const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
       const joinedRendered = render(`${quoteless(previous)}${MARKER}${quoteless(text)}`).split(MARKER).join(" ");
       // see scripts/drift-lint.ts § 16 — A hit is split only when neither standalone line *matches* it — a
       // see scripts/drift-lint.ts § 16 — substring test would hide a real `Phase 4` behind `SubPhase 4`.
@@ -1917,8 +1932,9 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
 export function checkRetiredStageNames(files: Array<{ rel: string; text: string }>): RetiredStageResult {
   const hits: string[] = [];
   for (const file of files) {
+    const splitLines = (value: string): string[] => value.split(/\r\n|\n|\r/);
     if (/\.(?:svg|html)$/.test(file.rel)) {
-      // see scripts/drift-lint.ts § 16 — SVG label text is literal text a reader sees: a backtick is a
+      // see scripts/drift-lint.ts § 16 — Diagram label text is literal text a reader sees: a backtick is a
       // see scripts/drift-lint.ts § 16 — character, and a probe in a label is prose.
       for (const segment of svgTextSegments(file.text)) {
         for (const hit of findRetiredStageSpellings(segment.text, false, false)) {
@@ -1927,9 +1943,23 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           );
         }
       }
+      // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG,
+      // see scripts/drift-lint.ts § 16 — so the markup is dropped and that text is judged too, line by line.
+      if (file.rel.endsWith(".html")) {
+        const prose = file.text
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<[^>]*>/g, "\n");
+        splitLines(prose).forEach((text, index) => {
+          for (const hit of findRetiredStageSpellings(decodeXmlEntities(text), false, false)) {
+            hits.push(
+              `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+            );
+          }
+        });
+      }
       continue;
     }
-    const splitLines = (value: string): string[] => value.split(/\r\n|\n|\r/);
     const groups: Array<Array<{ text: string; line: number }>> = file.rel.endsWith(".json")
       ? jsonStringValues(file.text).map((value) => splitLines(value.text).map((text) => ({ text, line: value.line })))
       : [splitLines(file.text).map((text, index) => ({ text, line: index + 1 }))];

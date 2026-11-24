@@ -2480,6 +2480,34 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "skills/x/f.md", text: "## Phase 2\n-4 °C is the minimum.\n" }]).hits).toEqual([]);
   });
 
+  test("a quoted bullet is a new block, not a stage run", () => {
+    expect(checkRetiredStageNames([{ rel: "skills/x/r.md", text: "> Phase 2\n> - 4 checks passed\n" }]).hits).toEqual([]);
+  });
+
+  test("a mismatched backtick run is not a code span", () => {
+    expect(findRetiredStageSpellings("Use ``--phase 6``` now.").length).toBeGreaterThan(0);
+  });
+
+  test("a json entity-escaped backtick is a character, not a delimiter", () => {
+    const text = '{"prompt":"Use &#96;--phase 6&#96; here."}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("a doubly escaped entity stays literal in a json prompt", () => {
+    const text = '{"prompt":"Phase &amp;#52; here"}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
+  });
+
+  test("an interactive detail attribute is reader-visible text", () => {
+    const html = '<html><body><svg><text>Review and CI</text><g data-node-sublabel="Phase 5"></g></svg></body></html>';
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
+  test("ordinary html prose outside the svg is judged", () => {
+    const html = "<html><body><p>Then Phase 4 closes it.</p></body></html>";
+    expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
+  });
+
   test("a fence in one json value does not hide a probe in the next", () => {
     const probe = RETIRED_STAGE_MACHINE_LITERALS[0];
     const text = `{"fixture":"Example:\\n\`\`\`\\n${probe}\\n\`\`\`","prompt":"Run ${probe} now."}`;
