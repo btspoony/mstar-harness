@@ -36,7 +36,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
-import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteSnapshot } from "./collaboration-remote.js";
+import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteMilestone, type RemoteSnapshot } from "./collaboration-remote.js";
 import { openRemoteReadView, setRemoteReadSampleGapForTest } from "./collaboration-remote-read.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
@@ -1811,9 +1811,14 @@ describe("remote read boundary", () => {
 
   test("a milestone document carrying target or an invalid effortSessions is refused, and a valid effortSessions is admitted", async () => {
     const { context, commit, check } = await boundScope("remote-milestone-effort");
-    const refusal = async (label: string, mutate: (snapshot: RemoteSnapshot) => void) => {
-      const snapshot = structuredClone(completeSnapshot(check));
-      mutate(snapshot);
+    // note: The snapshot's milestone row is readonly, so a case that changes it submits a whole
+    // replacement row instead of writing through the declared shape.
+    const withMilestone = (snapshot: RemoteSnapshot, row: RemoteMilestone): RemoteSnapshot => ({
+      ...snapshot,
+      project: { ...snapshot.project, milestones: [row] },
+    });
+    const refusal = async (label: string, mutate: (snapshot: RemoteSnapshot) => RemoteSnapshot) => {
+      const snapshot = mutate(structuredClone(completeSnapshot(check)));
       try {
         await ingestRemoteObservation(context, submission(commit, check, snapshot, 1));
         throw new Error(`expected ${label} to be refused`);
@@ -1822,30 +1827,35 @@ describe("remote read boundary", () => {
       }
     };
 
-    const retired = await refusal("a target field", (snapshot) => {
-      (snapshot.project.milestones[0] as Record<string, unknown>).target = "2026-12-01";
-    });
+    const retired = await refusal("a target field", (snapshot) =>
+      // note: A retired field is exactly what a host document may still arrive carrying.
+      withMilestone(snapshot, Object.assign({}, snapshot.project.milestones[0]!, { target: "2026-12-01" })),
+    );
     expect(retired.code).toBe("remote.input-invalid");
     expect(retired.message).toBe(
       `[${retired.code}] submission.snapshot.project.milestones[0].target: \"target\" is retired; submit \"effortSessions\" as null or an integer of at least 1 (a count of standard sessions). Nothing was written.`,
     );
 
     for (const [label, mutate] of [
-      ["a missing effortSessions", (s: RemoteSnapshot) => { delete (s.project.milestones[0] as Record<string, unknown>).effortSessions; }],
-      ["a non-integer effortSessions", (s: RemoteSnapshot) => { s.project.milestones[0].effortSessions = 1.5; }],
-      ["a below-1 effortSessions", (s: RemoteSnapshot) => { s.project.milestones[0].effortSessions = 0; }],
+      ["a missing effortSessions", (s: RemoteSnapshot) => { delete (s.project.milestones[0] as Record<string, unknown>).effortSessions; return s; }],
+      ["a non-integer effortSessions", (s: RemoteSnapshot) => withMilestone(s, { ...s.project.milestones[0]!, effortSessions: 1.5 })],
+      ["a below-1 effortSessions", (s: RemoteSnapshot) => withMilestone(s, { ...s.project.milestones[0]!, effortSessions: 0 })],
     ] as const) {
       const error = await refusal(label, mutate);
       expect(error.code).toBe("remote.input-invalid");
       expect(error.message).toContain("submission.snapshot.project.milestones[0].effortSessions:");
     }
 
+    // note: The fixture row already carries a valid count of 3, which this admission accepts as-is.
     const admitted = structuredClone(completeSnapshot(check));
-    admitted.project.milestones[0].effortSessions = 3;
     expect(await ingestRemoteObservation(context, submission(commit, check, admitted, 1))).toBeDefined();
     const cleared = structuredClone(completeSnapshot(check));
-    cleared.project.milestones[0].effortSessions = null;
-    expect(await ingestRemoteObservation(context, submission(commit, check, cleared, 2))).toBeDefined();
+    expect(
+      await ingestRemoteObservation(
+        context,
+        submission(commit, check, withMilestone(cleared, { ...cleared.project.milestones[0]!, effortSessions: null }), 2),
+      ),
+    ).toBeDefined();
   });
 
   /** note: Two selected projects bound; only A is observed, so a test chooses B's evidence. */

@@ -577,7 +577,7 @@ async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
 
   await addMilestone(
     context,
-    { projectId: "proj-a", name: "Read boundary", target: "2026-09-30", ordinal: 0 },
+    { projectId: "proj-a", name: "Read boundary", effortSessions: 3, ordinal: 0 },
     { operationId: "add-milestone-read-boundary", expectedStoreRevision: await storeRevision(context) },
   );
 
@@ -651,6 +651,7 @@ describe("overview read model", () => {
     const milestones: MilestoneRead = readMember(overview.milestones);
     expect(milestones.projectId).toBe("proj-a");
     expect(milestones.milestones.map((milestone) => milestone.name)).toEqual(["Read boundary"]);
+    expect(milestones.milestones.map((milestone) => milestone.effortSessions)).toEqual([3]);
 
     // Latest iteration: the newest compass start date inside the project, and
     // it reuses IterationDTO, so the gate step travels with it.

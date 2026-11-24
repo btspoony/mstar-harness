@@ -2027,7 +2027,7 @@ function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
         {
           milestoneId: "milestone-1",
           name: "First delivery",
-          target: "2026-12-01",
+          effortSessions: 3,
           status: "active",
           ordinal: 0,
           revision: 1,
@@ -5373,7 +5373,7 @@ describe("remote outbox lifecycle", () => {
     const milestone = await refusalOf(() =>
       addMilestone(
         cache.context,
-        { projectId: SELECTED_PROJECT.localProjectId, name: "Second delivery", target: null, ordinal: 1 },
+        { projectId: SELECTED_PROJECT.localProjectId, name: "Second delivery", effortSessions: null, ordinal: 1 },
         { operationId: "00000000-0000-4000-8000-000000000503", expectedStoreRevision: observationRevision(cache.dbPath) },
       ),
     );
@@ -5490,7 +5490,7 @@ describe("remote outbox review fixes", () => {
     const project = SELECTED_PROJECT.localProjectId;
     const duplicateId = "00000000-0000-4000-8000-000000000601";
     const first = await refusalOf(() =>
-      addMilestone(cache.context, { projectId: project, name: "First delivery", target: null, ordinal: 1 }, {
+      addMilestone(cache.context, { projectId: project, name: "First delivery", effortSessions: null, ordinal: 1 }, {
         operationId: duplicateId,
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
@@ -5507,14 +5507,14 @@ describe("remote outbox review fixes", () => {
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     // invariant: A changed payload under the same id never replays the accepted request.
     await expect(
-      addMilestone(cache.context, { projectId: project, name: "Another delivery", target: null, ordinal: 1 }, {
+      addMilestone(cache.context, { projectId: project, name: "Another delivery", effortSessions: null, ordinal: 1 }, {
         operationId: duplicateId,
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     // invariant: The identical request still replays its durable state.
     const replay = await refusalOf(() =>
-      addMilestone(cache.context, { projectId: project, name: "First delivery", target: null, ordinal: 1 }, {
+      addMilestone(cache.context, { projectId: project, name: "First delivery", effortSessions: null, ordinal: 1 }, {
         operationId: duplicateId,
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
@@ -7486,13 +7486,13 @@ describe("remote confirmed business results", () => {
     const milestoneId = "00000000-0000-4000-8000-000000000a11";
     const milestoneMutation = { operationId: milestoneId, expectedStoreRevision: observationRevision(cache.dbPath) };
     await expect(
-      addMilestone(cache.context, { projectId: project, name: "Second delivery", target: null, ordinal: 1 }, milestoneMutation),
+      addMilestone(cache.context, { projectId: project, name: "Second delivery", effortSessions: null, ordinal: 1 }, milestoneMutation),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
     const milestoneIntent = outboxIdFor(cache.dbPath, milestoneId);
     await confirmIntent(cache, milestoneIntent, JOURNAL_ANCHOR);
     const milestone = await addMilestone(
       cache.context,
-      { projectId: project, name: "Second delivery", target: null, ordinal: 1 },
+      { projectId: project, name: "Second delivery", effortSessions: null, ordinal: 1 },
       milestoneMutation,
     );
     expect(milestone).toMatchObject({ projectId: project, storeRevision: 0, changed: true });
@@ -9062,7 +9062,7 @@ describe("remote outbox qc fixes", () => {
     await expect(
       addMilestone(
         cache.context,
-        { projectId: SELECTED_PROJECT.localProjectId, name: "Late delivery", target: null, ordinal: 2 },
+        { projectId: SELECTED_PROJECT.localProjectId, name: "Late delivery", effortSessions: null, ordinal: 2 },
         { operationId: "00000000-0000-4000-8000-000000000872", expectedStoreRevision: observationRevision(cache.dbPath) },
       ),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
@@ -9183,7 +9183,7 @@ describe("remote outbox qc fixes", () => {
     const stale = await refusalOf(() =>
       addMilestone(
         cache.context,
-        { projectId: SELECTED_PROJECT.localProjectId, name: "Stale delivery", target: null, ordinal: 2 },
+        { projectId: SELECTED_PROJECT.localProjectId, name: "Stale delivery", effortSessions: null, ordinal: 2 },
         { operationId: "00000000-0000-4000-8000-0000000008a1", expectedStoreRevision: observed },
       ),
     );
@@ -9198,7 +9198,7 @@ describe("remote outbox qc fixes", () => {
     await expect(
       addMilestone(
         cache.context,
-        { projectId: SELECTED_PROJECT.localProjectId, name: "Fresh delivery", target: null, ordinal: 2 },
+        { projectId: SELECTED_PROJECT.localProjectId, name: "Fresh delivery", effortSessions: null, ordinal: 2 },
         { operationId: "00000000-0000-4000-8000-0000000008a2", expectedStoreRevision: observationRevision(cache.dbPath) },
       ),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });

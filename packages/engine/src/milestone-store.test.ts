@@ -83,7 +83,9 @@ function revision(): number {
 
 describe("milestone store", () => {
   test("validates name, effort sessions and ordinal, and requires a catalog project", async () => {
-    for (const [name,effortSessions,ordinal] of [[" ",null,0],["Valid",0,0],["Valid",1.5,0],["Valid","soon",0],["Valid",null,-1]] as const) {
+    // note: These are the invalid values a caller can actually submit, so the tuple is typed at the
+    // loop boundary instead of narrowing the fixture to what the declared type would already refuse.
+    for (const [name,effortSessions,ordinal] of [[" ",null,0],["Valid",0,0],["Valid",1.5,0],["Valid","soon",0],["Valid",null,-1]] as unknown as Array<[string, number | null, number]>) {
       await expect(addMilestone(context,{projectId,name,effortSessions,ordinal},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"milestone.invalid-input"});
     }
     await expect(addMilestone(context,{projectId,name:"Valid",effortSessions:0,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"milestone.invalid-input",message:"[milestone.invalid-input] Name, effort sessions, or ordinal is invalid."});
