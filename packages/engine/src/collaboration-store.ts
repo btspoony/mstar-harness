@@ -618,9 +618,12 @@ const COLLABORATION_OUTBOX_SCHEMA: Migration = {
  * invariant: v4 `collaboration-cross-authority` - the per-record move ledger over the v3 outbox.
  * A relation target that lives in another authority has no local issue row, so `to_issue` becomes
  * nullable beside the new `to_ref` and exactly one of the two is set (the spec's DDL). The partial
- * unique index deduplicates cross-authority relations because SQLite never compares two NULLs in a
+ * primary unique index deduplicates cross-authority relations because SQLite never compares two NULLs in a
  * primary key. `issue_moves` is the ledger AND the fence: the source row blocks every write to its
- * record from `staged` on, enforced by triggers stored here instead of by calling code.
+ * record from `staged` on, enforced by triggers stored here instead of by calling code. The row also
+ * carries the request's `actor` and `reason`, so a replay under the same operation id is compared
+ * against the whole immutable request and the membership it records uses the values it was staged
+ * with, not the ones a later attempt supplied.
  */
 const COLLABORATION_MOVE_V4_SQL = `
 create table relations_cross_authority_stage(
@@ -648,6 +651,8 @@ create table issue_moves(
   source_authority text not null,
   destination_authority text not null,
   destination_project text not null,
+  actor text not null,
+  reason text not null,
   phase text not null check (phase in ('staged','verified','switched','published','discarded')),
   payload_json text not null,
   payload_digest text not null,
@@ -896,8 +901,8 @@ const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = 
   relations: ["from_issue", "relation", "to_issue", "to_ref"],
   issue_moves: [
     "operation_id", "role", "request_hash", "issue_ref", "source_issue_id", "destination_issue_id", "source_authority",
-    "destination_authority", "destination_project", "phase", "payload_json", "payload_digest", "staged_counts",
-    "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+    "destination_authority", "destination_project", "actor", "reason", "phase", "payload_json", "payload_digest",
+    "staged_counts", "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
   ],
 };
 
@@ -1057,8 +1062,8 @@ const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
     table: "issue_moves",
     notNull: [
       "operation_id", "role", "request_hash", "issue_ref", "source_authority", "destination_authority",
-      "destination_project", "phase", "payload_json", "payload_digest", "staged_counts", "source_store_id",
-      "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+      "destination_project", "actor", "reason", "phase", "payload_json", "payload_digest", "staged_counts",
+      "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
     ],
     primaryKey: ["operation_id"],
     foreignKeys: [],

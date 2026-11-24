@@ -5,7 +5,7 @@
  * `staged` on through triggers stored in the lane rather than through calling code.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import {
   publishMove,
   readIssueMove,
   recordIssueMove,
+  setMoveGapForTest,
   stageMove,
   stagedMismatch,
   switchMove,
@@ -37,7 +38,7 @@ import {
 import { collaborationLocationOfRepoKey, resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ensureCollaborationAuthority } from "./store-activation.js";
 import { discardMove } from "./cross-authority-move.js";
-import { appendOccurrence, captureIssue, getIssue, linkIssue } from "./issue.js";
+import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, linkIssue } from "./issue.js";
 import { SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-cross-authority-move-")));
@@ -88,6 +89,8 @@ function sourceRow(
     sourceAuthority: "github.com/acme/move-fixture",
     destinationAuthority: "github.com/acme/elsewhere",
     destinationProject: "p-dest",
+    actor: "project-manager",
+    reason: "fixture",
     phase,
     payloadJson: "{}",
     payloadDigest: "digest",
@@ -969,7 +972,7 @@ describe("cross-authority move phase engine", () => {
         reason: "hijack",
       }).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
       expect(refused?.code).toBe("store.operation-conflict");
-      expect(refused?.details?.differing_fields).toEqual(["destinationAuthority", "destinationProject"]);
+      expect(refused?.details?.differing_fields).toEqual(["destinationAuthority", "destinationProject", "reason"]);
       // invariant: Neither lane gained a copy of the payload and the record is untouched.
       expect(recordImage(db, issueId)).toEqual(before);
       expect(await readCollaborationStage(elsewhere.location, ({ db: lane }) => readIssueMove(lane, "move-bound", "destination")))
@@ -1173,21 +1176,428 @@ describe("cross-authority move phase engine", () => {
     }
   }, 60_000);
 
-  test("trigger and switched-read refusals name a command that runs as written", async () => {
-    // invariant: Finding 8 — a recovery the operator cannot run is not a recovery. Both refusals must
-    // name the recorded source id, the recorded destination, both required revisions and the actor.
+  test("a destination record inserted after the preflight is refused at admission, never adopted", async () => {
+    // invariant: Critical 1 — the preflight read is not the admission predicate. A record another
+    // destination writer inserts under the same reference between them must be compared with the
+    // frozen copy inside the admission transaction, so the source history is never deleted for it.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const carriedRef = readIssueMoveReference(db, issueId);
+      const request = {
+        operationId: "move-race-occupant",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "race",
+      };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      setMoveGapForTest(async (point) => {
+        if (point !== "switch") return;
+        await writeCollaborationStage(destination.location, ({ db: lane }) => {
+          lane.prepare(
+            "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+              "updated_at, identity_key, issue_ref) values ('I-000009', 'p-dest', 'Late occupant', 'bug', 'low', 'open', " +
+              "'i', 'a', '2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', 'late-key', ?)",
+          ).run(carriedRef);
+        });
+      });
+      const refused = await switchMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.move-destination-occupied");
+      expect(refused?.details?.differing_sections).toContain("title");
+      // invariant: The source is still here with every row it carried, and the occupant keeps its own
+      // content; nothing was adopted and nothing was deleted for it.
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(readIssueMove(db, "move-race-occupant", "source")?.phase).toBe("switched");
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) => ({
+          occupant: lane.prepare("select title from issues where id = 'I-000009'").get(),
+          issues: lane.prepare("select count(*) as n from issues").get(),
+        })),
+      ).toEqual({ occupant: { title: "Late occupant" }, issues: { n: 1 } });
+      // invariant: The switched-but-unadmitted record is not stranded: discard restores it.
+      expect(await discardMove(context, request)).toMatchObject({ phase: "discarded", resumedFrom: "switched" });
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      db.prepare("update issues set title = 'writable again' where id = ?").run(issueId);
+    } finally {
+      setMoveGapForTest(undefined);
+      db.close();
+    }
+  }, 60_000);
+
+  test("an admission that commits while a discard reads leaves one member, not two", async () => {
+    // invariant: Critical 2, order one — the switch admits after the discard's read. The discard's
+    // claim re-checks inside the destination transaction and refuses, so the record stays a member
+    // and the source is never restored beside it.
     const { context, db } = await sourceCheckout();
     try {
       const destination = await destinationLane("p-dest");
       const issueId = await seededRecord(context, db, "p-source");
       const request = {
-        operationId: "move-recovery-text",
+        operationId: "move-race-admit-wins",
         actor: "project-manager",
         sourceIssueId: issueId,
         destinationAuthority: destination.repoKey,
         destinationProject: "p-dest",
-        reason: "recovery",
+        reason: "race",
       };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      let fired = false;
+      setMoveGapForTest(async (point) => {
+        if (point !== "discard" || fired) return;
+        fired = true;
+        await switchMove(context, request);
+      });
+      const refused = await discardMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.move-phase-invalid");
+      expect(refused?.details).toMatchObject({ allowed: ["published"] });
+      expect(readIssueMove(db, "move-race-admit-wins", "source")?.phase).toBe("switched");
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) => ({
+          issues: lane.prepare("select count(*) as n from issues").get(),
+          row: readIssueMove(lane, "move-race-admit-wins", "destination"),
+        })),
+      ).toMatchObject({ issues: { n: 1 }, row: { phase: "switched", destinationIssueId: "I-000001" } });
+      // invariant: Publishing the admitted move is the only completion, and it leaves one member.
+      expect(await publishMove(context, request)).toBeUndefined();
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+      expect(readIssueMove(db, "move-race-admit-wins", "source")?.phase).toBe("published");
+    } finally {
+      setMoveGapForTest(undefined);
+      db.close();
+    }
+  }, 60_000);
+
+  test("a discard that commits before the admission refuses the switch and restores the record", async () => {
+    // invariant: Critical 2, order two — the discard claims and commits between the switch's preflight
+    // and its source transition. The claim makes the source transition illegal, so the admission never
+    // lands and the record is restored with no destination member.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-race-discard-wins",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "race",
+      };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      let fired = false;
+      setMoveGapForTest(async (point) => {
+        if (point !== "switch" || fired) return;
+        fired = true;
+        await discardMove(context, request);
+      });
+      const refused = await switchMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string },
+      );
+      expect(refused?.code).toBe("collaboration.move-phase-invalid");
+      // invariant: No member was admitted and the record is exactly as it was before the move.
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) => ({
+          issues: lane.prepare("select count(*) as n from issues").get(),
+          rows: lane.prepare("select count(*) as n from issue_moves").get(),
+        })),
+      ).toEqual({ issues: { n: 0 }, rows: { n: 0 } });
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      expect(db.prepare("update issues set title = 'writable again' where id = ?").run(issueId) as { changes?: number }).toMatchObject({ changes: 1 });
+      // invariant: The same command reports the finished discard instead of retrying the switch.
+      await expect(getIssue(context, issueId)).resolves.toMatchObject({ id: issueId });
+    } finally {
+      setMoveGapForTest(undefined);
+      db.close();
+    }
+  }, 60_000);
+
+  test("an identity another writer inserts after the preflight refuses the admission too", async () => {
+    // invariant: Critical 1 — the predicate the admission transaction re-runs is the WHOLE one, so a
+    // colliding identity key inserted in the same window refuses exactly like a differing image.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-race-identity",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "race",
+      };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      setMoveGapForTest(async (point) => {
+        if (point !== "switch") return;
+        await writeCollaborationStage(destination.location, ({ db: lane }) => {
+          lane.prepare(
+            "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+              "updated_at, identity_key, issue_ref) values ('I-000010', 'p-dest', 'Identity rival', 'bug', 'low', 'open', " +
+              "'i', 'a', '2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', ?, " +
+              "'mstar:issue:99999999-9999-4999-8999-999999999999')",
+          ).run(computeIdentityKey("p-dest", "review/move", "root-move", "accept-move"));
+        });
+      });
+      const refused = await switchMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("issue.ambiguous-identity");
+      expect(refused?.details?.collidingIssueId).toBe("I-000010");
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(readIssueMove(db, "move-race-identity", "source")?.phase).toBe("switched");
+      expect(await discardMove(context, request)).toMatchObject({ phase: "discarded", resumedFrom: "switched" });
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+    } finally {
+      setMoveGapForTest(undefined);
+      db.close();
+    }
+  }, 60_000);
+
+  test("a crash after the discard claim is finished by the same command", async () => {
+    // invariant: The claim commits before the source transition. A process loss between them leaves a
+    // claimed destination and a still-frozen source; the same command finishes the discard instead of
+    // staging or verifying over the decision.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const request = {
+        operationId: "move-claim-crash",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "claim crash",
+      };
+      await stageMove(context, request);
+      await verifyMove(context, request);
+      // note: The exact state a crash between the claim and the source commit leaves behind.
+      await writeCollaborationStage(destination.location, ({ db: lane }) => {
+        advanceIssueMove(lane, { operationId: "move-claim-crash", role: "destination", from: "verified", to: "discarded" });
+      });
+      const replayed = await moveAcrossAuthorities(context, request);
+      expect(replayed).toMatchObject({ phase: "discarded", resumedFrom: "verified" });
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) =>
+          lane.prepare("select count(*) as n from issue_moves").get(),
+        ),
+      ).toEqual({ n: 0 });
+      db.prepare("update issues set title = 'writable again' where id = ?").run(issueId);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a crash at the freeze cannot leave a staged row whose revision never advanced", async () => {
+    // invariant: Critical 3 — the freeze and the lane revision advance are one commit. The injected
+    // crash is that transaction's own last statement, so a build that advanced the revision in a
+    // later transaction would leave the staged row behind and this read would find it.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const before = recordImage(db, issueId);
+      const observed = laneRevision(db);
+      const request = {
+        operationId: "move-freeze-atomic",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "atomic",
+      };
+      db.exec("create trigger injected_revision_crash before update on collaboration_meta begin select raise(abort, 'injected crash'); end");
+      const failed = await moveAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failed).not.toBeNull();
+      // invariant: Neither the row nor the revision landed, and the record is untouched.
+      expect(readIssueMove(db, "move-freeze-atomic", "source")).toBeNull();
+      expect(laneRevision(db)).toBe(observed);
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(blockingMoveFor(db, issueId)).toBeNull();
+      db.exec("drop trigger injected_revision_crash");
+      // invariant: The corrected run stages under the SAME operation id.
+      expect((await moveAcrossAuthorities(context, request)).phase).toBe("published");
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a second request under the same operation id refuses instead of staging the first payload", async () => {
+    // invariant: Critical 4 (concurrency) — a writer callback that finds a row must bind the COMPLETE
+    // request under the lock. Two first uses of one id cannot stage the first payload into the
+    // second request's destination.
+    const { context, db } = await sourceCheckout();
+    try {
+      const first = await destinationLane("p-first");
+      const second = await destinationLane("p-second");
+      const issueId = await seededRecord(context, db, "p-source");
+      const original = {
+        operationId: "move-two-writers",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: first.repoKey,
+        destinationProject: "p-first",
+        reason: "first",
+      };
+      let fired = false;
+      setMoveGapForTest(async (point) => {
+        if (point !== "stage" || fired) return;
+        fired = true;
+        await stageMove(context, original);
+      });
+      const refused = await moveAcrossAuthorities(context, {
+        ...original,
+        destinationAuthority: second.repoKey,
+        destinationProject: "p-second",
+        reason: "second",
+      }).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
+      expect(refused?.code).toBe("store.operation-conflict");
+      expect(refused?.details?.differing_fields).toEqual(["destinationAuthority", "destinationProject", "reason"]);
+      // invariant: The second destination never received a copy, and the ledger still records the
+      // request that actually staged.
+      expect(
+        await readCollaborationStage(second.location, ({ db: lane }) =>
+          lane.prepare("select count(*) as n from issue_moves").get(),
+        ),
+      ).toEqual({ n: 0 });
+      expect(readIssueMove(db, "move-two-writers", "source")).toMatchObject({
+        phase: "staged",
+        destinationProject: "p-first",
+        reason: "first",
+      });
+    } finally {
+      setMoveGapForTest(undefined);
+      db.close();
+    }
+  }, 60_000);
+
+  test("a changed reason or actor on replay refuses and the membership keeps the staged reason", async () => {
+    // invariant: Critical 4 (binding) — `reason` and `actor` are immutable request fields. A replay
+    // that changes either refuses instead of rewriting what admission records, and the membership
+    // project-move row carries the reason the request was staged with.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-reason-bound",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "the staged reason",
+      };
+      await stageMove(context, request);
+      const changedReason = await moveAcrossAuthorities(context, { ...request, reason: "another reason" }).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(changedReason?.code).toBe("store.operation-conflict");
+      expect(changedReason?.details?.differing_fields).toEqual(["reason"]);
+      const changedActor = await moveAcrossAuthorities(context, { ...request, actor: "someone-else" }).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(changedActor?.code).toBe("store.operation-conflict");
+      expect(changedActor?.details?.differing_fields).toEqual(["actor"]);
+      expect(readIssueMove(db, "move-reason-bound", "source")).toMatchObject({
+        phase: "staged",
+        reason: "the staged reason",
+        actor: "project-manager",
+      });
+      // invariant: The recorded request still completes, and the membership says what it was staged with.
+      expect((await moveAcrossAuthorities(context, request)).phase).toBe("published");
+      expect(
+        await readCollaborationStage(destination.location, ({ db: lane }) =>
+          lane.prepare("select to_project_id, actor, reason from issue_project_moves").all(),
+        ),
+      ).toEqual([{ to_project_id: "p-dest", actor: "project-manager", reason: "the staged reason" }]);
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("trigger and switched-read refusals name a command that runs as written", async () => {
+    // invariant: Finding 5 — a recovery the operator cannot run is not a recovery. Both refusals must
+    // name the recorded source id, the recorded destination, both required revisions, the recorded
+    // actor and reason, and every argument must survive the shell as one argument.
+    const { context, db } = await sourceCheckout();
+    try {
+      const project = "p-dest'quote";
+      const destination = await destinationLane(project);
+      const issueId = await seededRecord(context, db, "p-source");
+      const operationId = "move-rec-o'v\"b\\x";
+      const request = {
+        operationId,
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: project,
+        reason: "a reason with 'quotes' and \"double\" and \\slash",
+      };
+      const bin = join(ROOT, "fake-bin");
+      mkdirSync(bin, { recursive: true });
+      const argsFile = join(bin, "args");
+      writeFileSync(
+        join(bin, "mstar"),
+        '#!/bin/sh\n: > "$MSTAR_ARGS"\nfor arg in "$@"; do printf \'%s\\n\' "$arg" >> "$MSTAR_ARGS"; done\n',
+      );
+      chmodSync(join(bin, "mstar"), 0o755);
+      const run = (command: string): string[] => {
+        writeFileSync(argsFile, "");
+        execFileSync("/bin/sh", ["-c", command], {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, MSTAR_ARGS: argsFile },
+          stdio: "pipe",
+        });
+        const raw = readFileSync(argsFile, "utf8");
+        return raw === "" ? [] : raw.slice(0, -1).split("\n");
+      };
+      const expected = (issueRevision: number, storeRevision: number): string[] => [
+        "issue",
+        "move",
+        "--id",
+        issueId,
+        "--to-authority",
+        destination.repoKey,
+        "--payload",
+        JSON.stringify({ projectId: project, reason: request.reason }),
+        "--expect",
+        String(issueRevision),
+        "--expect-store",
+        String(storeRevision),
+        "--actor",
+        "project-manager",
+        "--operation-id",
+        operationId,
+      ];
+
       await stageMove(context, request);
       const frozen = await appendOccurrence(
         context,
@@ -1206,13 +1616,9 @@ describe("cross-authority move phase engine", () => {
         { actor: "project-manager", operationId: "occurrence-recovery" },
       ).then(() => null, (error: unknown) => error as { details?: Record<string, unknown> });
       const triggerCommand = String(frozen?.details?.recovery);
-      expect(triggerCommand).toContain(`--id ${issueId}`);
-      expect(triggerCommand).toContain(`--to-authority ${destination.repoKey}`);
-      expect(triggerCommand).toContain(`\"projectId\":\"p-dest\"`);
-      expect(triggerCommand).toContain("--expect ");
-      expect(triggerCommand).toContain("--expect-store ");
-      expect(triggerCommand).toContain("--actor project-manager");
-      expect(triggerCommand).toContain("--operation-id move-recovery-text");
+      expect(run(triggerCommand.match(/`([^`]+)`/)?.[1] ?? triggerCommand)).toEqual(
+        expected(laneIssueRevision(db, issueId), laneRevision(db)),
+      );
 
       await moveAcrossAuthorities(context, request, "switched");
       const read = await getIssue(context, issueId).then(
@@ -1220,12 +1626,9 @@ describe("cross-authority move phase engine", () => {
         (error: unknown) => error as { details?: Record<string, unknown> },
       );
       const readCommand = String(read?.details?.recovery);
-      expect(readCommand).toContain(`--id ${issueId}`);
-      expect(readCommand).toContain(`--to-authority ${destination.repoKey}`);
-      expect(readCommand).toContain("--expect ");
-      expect(readCommand).toContain("--expect-store ");
-      expect(readCommand).toContain("--actor project-manager");
-      expect(readCommand).toContain("--operation-id move-recovery-text");
+      expect(run(readCommand.match(/`([^`]+)`/)?.[1] ?? readCommand)).toEqual(
+        expected(laneIssueRevision(db, issueId), laneRevision(db)),
+      );
     } finally {
       db.close();
     }

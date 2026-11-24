@@ -62,6 +62,9 @@ export type IssueMoveRecord = Readonly<{
   sourceAuthority: string;
   destinationAuthority: string;
   destinationProject: string;
+  /** note: The request's remaining immutable fields, recorded once: a replay must match them. */
+  actor: string;
+  reason: string;
   phase: IssueMovePhase;
   payloadJson: string;
   payloadDigest: string;
@@ -114,8 +117,8 @@ function roleOf(value: unknown): IssueMoveRole {
 
 const MOVE_COLUMNS =
   "operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, source_authority, " +
-  "destination_authority, destination_project, phase, payload_json, payload_digest, staged_counts, source_store_id, " +
-  "source_epoch, removed_sync_rows, created_at, updated_at";
+  "destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, staged_counts, " +
+  "source_store_id, source_epoch, removed_sync_rows, created_at, updated_at";
 
 function rowToRecord(row: Record<string, unknown>): IssueMoveRecord {
   return {
@@ -128,6 +131,8 @@ function rowToRecord(row: Record<string, unknown>): IssueMoveRecord {
     sourceAuthority: moveText(row.source_authority, "source_authority"),
     destinationAuthority: moveText(row.destination_authority, "destination_authority"),
     destinationProject: moveText(row.destination_project, "destination_project"),
+    actor: moveText(row.actor, "actor"),
+    reason: moveText(row.reason, "reason"),
     phase: phaseOf(row.phase),
     payloadJson: moveText(row.payload_json, "payload_json"),
     payloadDigest: moveText(row.payload_digest, "payload_digest"),
@@ -220,6 +225,8 @@ export function recordIssueMove(db: StoreDb, record: Omit<IssueMoveRecord, "crea
     record.sourceAuthority,
     record.destinationAuthority,
     record.destinationProject,
+    record.actor,
+    record.reason,
     record.phase,
     record.payloadJson,
     record.payloadDigest,
@@ -277,6 +284,18 @@ export function advanceIssueMove(
 // ---------------------------------------------------------------------------
 // note: The phase engine: the one-checkout topology, where both sides are local/mirror lanes.
 // ---------------------------------------------------------------------------
+
+/**
+ * note: The interleaving seam. A regression runs another committed operation at the exact boundary
+ * between a phase's preflight read and the write that depends on it, so the check that must live
+ * inside that write is the one under test. Unset in every shipped path.
+ */
+let moveGapForTest: ((point: "stage" | "switch" | "discard") => void | Promise<void>) | undefined;
+export function setMoveGapForTest(
+  callback: ((point: "stage" | "switch" | "discard") => void | Promise<void>) | undefined,
+): void {
+  moveGapForTest = callback;
+}
 
 /** note: The move a caller asked for. `operationId` is the whole move's key: every phase derives its own composite id from it. */
 export type MoveRequest = Readonly<{
@@ -670,6 +689,15 @@ function issueRefusal(code: ConstructorParameters<typeof IssueError>[0], message
   return error;
 }
 
+/**
+ * note: One command argument as the POSIX shell reads it back byte for byte: wrapped in single quotes,
+ * with each embedded quote closed, escaped and reopened. A recovery is only usable if a value
+ * carrying a quote, an apostrophe or a backslash still reaches the verb unchanged.
+ */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /** note: The one command that resumes a recorded move, built from its row and the revisions the lane holds. */
 function moveResumeCommand(db: StoreDb, row: IssueMoveRecord): string {
   const issue = db.prepare("select revision from issues where id = ?").get(row.sourceIssueId) as { revision?: unknown } | undefined;
@@ -678,30 +706,49 @@ function moveResumeCommand(db: StoreDb, row: IssueMoveRecord): string {
   // lane still holds; a resume never compares it, and these are the values that make the copy run.
   const issueRevision = typeof issue?.revision === "number" ? issue.revision : 0;
   const storeRevision = typeof store?.revision === "number" ? store.revision : 0;
-  return (
-    `mstar issue move --id ${row.sourceIssueId ?? "<issue-id>"} --to-authority ${row.destinationAuthority} ` +
-    `--payload '{"projectId":"${row.destinationProject}","reason":"resume move ${row.operationId}"}' ` +
-    `--expect ${String(issueRevision)} --expect-store ${String(storeRevision)} --actor project-manager ` +
-    `--operation-id ${row.operationId}`
-  );
+  // invariant: The resume replays the RECORDED request, reason and actor included, because a
+  // replayed move is bound to the request it was staged under.
+  const payload = JSON.stringify({ projectId: row.destinationProject, reason: row.reason });
+  return [
+    "mstar issue move",
+    "--id",
+    shellQuote(row.sourceIssueId ?? "<issue-id>"),
+    "--to-authority",
+    shellQuote(row.destinationAuthority),
+    "--payload",
+    shellQuote(payload),
+    "--expect",
+    String(issueRevision),
+    "--expect-store",
+    String(storeRevision),
+    "--actor",
+    shellQuote(row.actor),
+    "--operation-id",
+    shellQuote(row.operationId),
+  ].join(" ");
 }
 
 /**
- * invariant: An operation id is an idempotency key, not a reusable slot. Every phase compares its
- * request with the recorded row BEFORE any destination or terminal action, so a resume under the same
- * id can never carry another record, authority or project into a lane the original request chose, and a
- * terminal replay never reports a different request's result.
+ * invariant: An operation id is an idempotency key, not a reusable slot. Every phase compares the
+ * COMPLETE immutable request — record, both authorities, destination project, actor and reason — with
+ * the recorded row BEFORE any destination or terminal action, so a resume under the same id can never
+ * carry another record into a lane the original request did not choose, and the membership admission
+ * records is the one the request was staged with rather than the one a later attempt supplied.
  */
 function assertBoundRequest(db: StoreDb, row: IssueMoveRecord, request: MoveRequest): void {
   const recorded = {
     sourceIssueId: row.sourceIssueId,
     destinationAuthority: row.destinationAuthority,
     destinationProject: row.destinationProject,
+    actor: row.actor,
+    reason: row.reason,
   };
   const requested = {
     sourceIssueId: request.sourceIssueId,
     destinationAuthority: request.destinationAuthority,
     destinationProject: request.destinationProject,
+    actor: request.actor,
+    reason: request.reason,
   };
   const differing = (Object.keys(recorded) as Array<keyof typeof recorded>).filter(
     (field) => recorded[field] !== requested[field],
@@ -924,6 +971,23 @@ async function deleteDestinationStaging(destination: CollaborationLocation, oper
   });
 }
 
+/** note: The refusal for a discard whose destination already admitted the record: a member is never abandoned. */
+function admittedDiscardRefusal(before: IssueMoveRecord, resume: string, destinationIssueId: string): StoreError {
+  return new StoreError(
+    "collaboration.move-phase-invalid",
+    `Move ${before.operationId} is already the member of ${before.destinationAuthority} (issue ${destinationIssueId}), so it ` +
+      `cannot be discarded: only a move whose record the destination never admitted can. Reissue the move to publish it ` +
+      `instead. Nothing was modified.`,
+    {
+      operation_id: before.operationId,
+      phase: before.phase,
+      destination_issue_id: destinationIssueId,
+      allowed: ["published"],
+      recovery: `Reissue the move to publish it: \`${resume}\`.`,
+    },
+  );
+}
+
 /** note: The destination lane's preconditions: an active lane of that key that holds the target project. */
 function assertDestinationReady(authority: { state: string; repoKey: string }, db: StoreDb, request: MoveRequest): void {
   if (authority.state !== "active") {
@@ -986,16 +1050,26 @@ export async function stageMove(context: StoreContext, request: MoveRequest): Pr
     }
   }
   await readCollaborationStage(destination, ({ db, authority }) => assertDestinationReady(authority, db, request));
+  // note: The preflight/write boundary: a regression runs another committed operation HERE, where a
+  // check that lives only in the preflight can no longer see its effect.
+  await moveGapForTest?.("stage");
   // invariant: Only the first run freezes and records the source row; a later run re-derives the
   // destination copy from the row that already exists, which is how a lost staging is recovered.
   if (!staged) {
-    // invariant: The caller's base, the record's frozen bytes and the source row are ONE writer
-    // transaction, so no write can slip between the revision the caller read and the freeze. It runs
-    // BEFORE the phase's composite reservation on purpose: settling a stale base is the documented
-    // recovery, and a refusal recorded as a durable decline against the operation id would refuse
-    // that recovery forever.
+    // invariant: The caller's base, the record's frozen bytes, the source row and the lane revision
+    // advance are ONE writer transaction, so no write can slip between the revision the caller read
+    // and the freeze, and a crash cannot leave a frozen record whose revision never advanced. It runs
+    // BEFORE any composite reservation on purpose: settling a stale base is the documented recovery,
+    // and a refusal recorded as a durable decline against the operation id would refuse that recovery
+    // forever.
     await withCollaborationWrite(context, (handle) => {
-      if (readIssueMove(handle.db, request.operationId, "source") !== null) return;
+      // invariant: Under the writer lock, a row that appeared after the preflight is THIS id's
+      // request or another one: it is bound to the complete request before anything is staged.
+      const existing = readIssueMove(handle.db, request.operationId, "source");
+      if (existing !== null) {
+        assertBoundRequest(handle.db, existing, request);
+        return;
+      }
       assertMoveBase(handle.db, request);
       // invariant: re-checked under the writer lock: a move that started between the preflight and
       // here must not be overwritten, and the frozen copy must be the record's current bytes.
@@ -1012,6 +1086,8 @@ export async function stageMove(context: StoreContext, request: MoveRequest): Pr
         sourceAuthority: handle.authority.repoKey,
         destinationAuthority: request.destinationAuthority,
         destinationProject: request.destinationProject,
+        actor: request.actor,
+        reason: request.reason,
         phase: "staged",
         payloadJson,
         payloadDigest: digestOf(payloadJson),
@@ -1020,10 +1096,10 @@ export async function stageMove(context: StoreContext, request: MoveRequest): Pr
         sourceEpoch: handle.authority.epoch,
         removedSyncRows: 0,
       });
+      // invariant: The freeze commits WITH the revision it advanced, as one transaction. A crash
+      // cannot leave the row staged while the lane still reports the revision the caller read.
+      handle.db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
     });
-    // note: The transition's own receipt. The row above is already the ledger, so this effect is the
-    // idempotent no-op the composite contract asks for; an apply-then-finalize crash replays it.
-    await runMoveTransition(context, request, "staged", () => undefined);
   }
   const row = await moveRowIn(context, request.operationId, "source");
   if (row === null) throw corruptMove(`move ${request.operationId} staged no source row`);
@@ -1042,6 +1118,8 @@ export async function stageMove(context: StoreContext, request: MoveRequest): Pr
       sourceAuthority: row.sourceAuthority,
       destinationAuthority: row.destinationAuthority,
       destinationProject: row.destinationProject,
+      actor: row.actor,
+      reason: row.reason,
       phase: "staged",
       payloadJson: row.payloadJson,
       payloadDigest: row.payloadDigest,
@@ -1100,15 +1178,32 @@ export async function verifyMove(context: StoreContext, request: MoveRequest): P
  * source row at `switched` whose admission did not land is the window the topology accepts: a read
  * names it (`collaboration.operation-partial`) and the same command closes it.
  *
- * invariant: The admission prerequisites are proved BEFORE that commit. A refused admission after the
- * switch would leave the record presented by neither lane and writable by neither, so a collision or a
- * missing identity is a refusal while this lane is still the member.
+ * invariant: The admission prerequisites are proved BEFORE that commit AND again inside the
+ * destination write transaction. A refused admission after the switch leaves the record presented by
+ * neither lane, so a collision or a missing identity is a refusal while this lane is still the
+ * member; and because another destination writer can insert a record under the same reference
+ * between the preflight and the admission, the transaction that adopts or inserts re-runs the whole
+ * predicate and adopts only the image the move froze.
  */
 export async function switchMove(context: StoreContext, request: MoveRequest): Promise<void> {
   const { row: source, resume } = await requireSourceRow(context, request, "switch");
   const destination = await destinationLaneOf(request.destinationAuthority);
   const admitted = await destinationRowIn(destination, request.operationId);
   if (source.phase === "switched" && admitted?.destinationIssueId != null) return;
+  // invariant: A destination that claimed the discard is the winner of the discard/switch race: the
+  // record is no longer admissible there, and the same command's --discard branch finishes it.
+  if (admitted?.phase === "discarded") {
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `Move ${request.operationId} was discarded in ${request.destinationAuthority}, so its record can no longer be ` +
+        `admitted there. Nothing was modified.`,
+      {
+        operation_id: request.operationId,
+        phase: source.phase,
+        recovery: `Finish the discard instead of admitting: \`${resume} --discard\`.`,
+      },
+    );
+  }
   if (source.phase !== "verified" && source.phase !== "switched") {
     throw new StoreError(
       "collaboration.operation-partial",
@@ -1123,12 +1218,19 @@ export async function switchMove(context: StoreContext, request: MoveRequest): P
   }
   const copy = JSON.parse(source.payloadJson) as MoveCopy;
   const counts = JSON.parse(source.stagedCounts) as MoveCounts;
+  // note: The RECORDED request is what admission writes. A replay's values are equal to it — the
+  // binding refuses any difference — and this states that the membership row carries the request the
+  // move was staged under rather than whatever a later attempt passed.
+  const bound: MoveRequest = { ...request, actor: source.actor, reason: source.reason };
   // note: The preflight owns its own destination read: it must see the same lane state the admission
   // will, and a refusal must leave the source row where it is.
   await readCollaborationStage(destination, ({ db, authority }) => {
     assertDestinationReady(authority, db, request);
-    assertAdmissible(db, request, copy, counts);
+    assertAdmissible(db, bound, copy, counts);
   });
+  // note: The preflight/write boundary: a destination writer that commits HERE is invisible to the
+  // preflight, so only the admission transaction's own re-check can refuse it.
+  await moveGapForTest?.("switch");
   await runMoveTransition(context, request, "switched", (handle) => {
     advanceRowTo(handle.db, request.operationId, "source", "switched");
   });
@@ -1147,7 +1249,11 @@ export async function switchMove(context: StoreContext, request: MoveRequest): P
     const row = readIssueMove(db, request.operationId, "destination");
     if (row === null) throw corruptMove(`move ${request.operationId} lost its destination row before admission`);
     if (row.destinationIssueId !== null) return;
-    admitMoveCopy(db, request, copy, counts);
+    // invariant: The whole admission predicate runs in THIS transaction. The occupant read here is
+    // the one the adoption or the insert depends on, so a record inserted after the preflight is
+    // compared with the frozen copy instead of being adopted by reference.
+    assertAdmissible(db, bound, copy, counts);
+    admitMoveCopy(db, bound, copy, counts);
   });
 }
 
@@ -1158,9 +1264,9 @@ export async function switchMove(context: StoreContext, request: MoveRequest): P
  * sides of an outgoing relation are stored in the shape the destination can address: a local target
  * when the destination already holds it, a `to_ref` otherwise.
  *
- * note: `assertAdmissible` already proved this transaction's preconditions before the switch, so the
- * collision and identity refusals are not repeated here; the count check IS repeated because a payload
- * that disagrees with its own counts is a damaged ledger, not a request outcome.
+ * note: The caller re-proves this transaction's admission predicate immediately before this call, so
+ * the collision and identity refusals are stated once there; the count check IS repeated because a
+ * payload that disagrees with its own counts is a damaged ledger, not a request outcome.
  */
 function admitMoveCopy(db: StoreDb, request: MoveRequest, copy: MoveCopy, counts: MoveCounts): void {
   if (counts.relations !== copy.relations.length) {
@@ -1359,11 +1465,14 @@ export async function publishMove(context: StoreContext, request: MoveRequest): 
  * half-written copy never outlives its move.
  *
  * invariant: A switch that never admitted its record is discardable, because the destination then holds
- * no member of it. The check is the destination row's own `destinationIssueId`, so an admitted move is
- * refused here instead of leaving a member's staging behind.
+ * no member of it. The no-admission decision and the admission itself are the SAME destination write
+ * transaction: discard CLAIMS the destination row as `discarded` there, and admission refuses a claimed
+ * row. Whichever commits first therefore wins, so the record is never both restored here and a member
+ * there. A destination row that does not exist yet is claimed too, because a staging re-created after
+ * this decision must not be admitted.
  */
 export async function discardMove(context: StoreContext, request: MoveRequest): Promise<MoveReceipt> {
-  const { row: before } = await requireSourceRow(context, request, "discard");
+  const { row: before, resume } = await requireSourceRow(context, request, "discard");
   if (before.phase === "published") {
     throw new StoreError(
       "collaboration.move-phase-invalid",
@@ -1374,24 +1483,21 @@ export async function discardMove(context: StoreContext, request: MoveRequest): 
   }
   const destination = await destinationLaneOf(before.destinationAuthority);
   const staged = await destinationRowIn(destination, request.operationId);
-  if (before.phase === "switched" && staged?.destinationIssueId != null) {
-    throw new StoreError(
-      "collaboration.move-phase-invalid",
-      `Move ${request.operationId} is already the member of ${before.destinationAuthority} (issue ` +
-        `${staged.destinationIssueId}), so it cannot be discarded: only a move whose record the destination never admitted can. ` +
-        `Reissue the move to publish it instead. Nothing was modified.`,
-      {
-        operation_id: request.operationId,
-        phase: before.phase,
-        destination_issue_id: staged.destinationIssueId,
-        allowed: ["published"],
-        recovery:
-          `Reissue the move to publish it: \`mstar issue move --id ${before.sourceIssueId ?? "<issue-id>"} ` +
-          `--to-authority ${before.destinationAuthority} --payload '{"projectId":"${before.destinationProject}","reason":"publish"}' ` +
-          `--expect <issue-revision> --expect-store <store-revision> --actor project-manager --operation-id ${before.operationId}\`.`,
-      },
-    );
-  }
+  if (staged?.destinationIssueId != null) throw admittedDiscardRefusal(before, resume, staged.destinationIssueId);
+  // note: The read/write boundary: an admission that commits HERE is invisible to the read above, so
+  // only the claim transaction's own re-check can refuse it.
+  await moveGapForTest?.("discard");
+  await writeCollaborationStage(destination, ({ db }) => {
+    const row = readIssueMove(db, request.operationId, "destination");
+    if (row === null) {
+      // invariant: Claiming an absent staging row is what stops a later re-stage from being admitted
+      // under a move this lane already decided to abandon.
+      recordIssueMove(db, { ...before, role: "destination", destinationIssueId: null, phase: "discarded" });
+      return;
+    }
+    if (row.destinationIssueId !== null) throw admittedDiscardRefusal(before, resume, row.destinationIssueId);
+    if (row.phase !== "discarded") advanceRowTo(db, request.operationId, "destination", "discarded");
+  });
   if (before.phase !== "discarded") {
     await runMoveTransition(context, request, "discarded", (handle) => {
       advanceRowTo(handle.db, request.operationId, "source", "discarded");
@@ -1433,6 +1539,12 @@ export async function moveAcrossAuthorities(
   // invariant: A `published` row is the move's answer, never a step to repeat: publication already
   // deleted the source record, so it reports the phase it holds.
   if (before !== null && before.phase === "published") return receiptOf(context, request, before.phase);
+  // invariant: A destination row that already claimed the discard is the winner of the discard/switch
+  // race, so the same command finishes that discard instead of staging over the decision.
+  if (before !== null) {
+    const claimed = await destinationRowIn(await destinationLaneOf(before.destinationAuthority), request.operationId);
+    if (claimed?.phase === "discarded") return discardMove(context, request);
+  }
   // note: Always re-derive the staging step: it records the source row once and re-creates a lost
   // destination copy, so the same command closes a window either side of the switch.
   await stageMove(context, request);

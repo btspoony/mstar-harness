@@ -611,7 +611,10 @@ describe("issue move --to-authority", () => {
         { projectId: "p-authority-reuse-other", reason: "hijacked", toAuthority: elsewhere },
         { actor: "project-manager", operationId: "move-reuse", expectedRevision: issue.revision, expectedStoreRevision: revision() },
       ),
-    ).rejects.toMatchObject({ code: "store.operation-conflict", details: { differing_fields: ["destinationAuthority", "destinationProject"] } });
+    ).rejects.toMatchObject({
+      code: "store.operation-conflict",
+      details: { differing_fields: ["destinationAuthority", "destinationProject", "reason"] },
+    });
     expect(issueRow(issue.issueId).project_id).toBe(projectA);
     expect(await readCollaborationStage(collaborationLocationOfRepoKey(elsewhere, "local"), ({ db: lane }) =>
       lane.prepare("select count(*) as n from issue_moves").get())).toEqual({ n: 0 });
@@ -700,5 +703,63 @@ describe("issue move --to-authority", () => {
     })).toMatchObject({ phase: "discarded" });
     expect(db.prepare("select count(*) as n from issue_moves where operation_id = 'move-collide' and phase = 'discarded'").get())
       .toEqual({ n: 1 });
+  }, 60_000);
+
+  test("a changed reason on replay refuses through the public route and the membership keeps the staged reason", async () => {
+    // invariant: `reason` is part of the immutable request the operation id binds. A replay that
+    // changes it refuses instead of rewriting the project-move history admission records.
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-reason", { sourceIdentity: "review/reason", rootCauseKey: "root-reason", acceptanceKey: "accept-reason" }),
+      { actor: "project-manager", operationId: "capture-reason" },
+    );
+    const repoKey = await destinationLane("p-authority-reason");
+    const mutation = {
+      actor: "project-manager",
+      operationId: "move-reason-bound",
+      expectedRevision: issue.revision,
+      expectedStoreRevision: revision(),
+    };
+    const { moveAcrossAuthorities } = await import("./cross-authority-move.js");
+    await moveAcrossAuthorities(
+      context,
+      {
+        operationId: mutation.operationId,
+        actor: mutation.actor,
+        sourceIssueId: issue.issueId,
+        destinationAuthority: repoKey,
+        destinationProject: "p-authority-reason",
+        reason: "the staged reason",
+        expectedRevision: mutation.expectedRevision,
+        expectedStoreRevision: mutation.expectedStoreRevision,
+      },
+      "staged",
+    );
+    await expect(
+      moveIssue(
+        context,
+        issue.issueId,
+        { projectId: "p-authority-reason", reason: "rewritten reason", toAuthority: repoKey },
+        mutation,
+      ),
+    ).rejects.toMatchObject({ code: "store.operation-conflict", details: { differing_fields: ["reason"] } });
+    expect(db.prepare("select reason from issue_moves where operation_id = 'move-reason-bound'").get()).toEqual({
+      reason: "the staged reason",
+    });
+    expect(issueRow(issue.issueId).project_id).toBe(projectA);
+    // invariant: The recorded request still completes, and the membership records what it was staged with.
+    expect(
+      await moveIssue(
+        context,
+        issue.issueId,
+        { projectId: "p-authority-reason", reason: "the staged reason", toAuthority: repoKey },
+        mutation,
+      ),
+    ).toMatchObject({ phase: "published" });
+    expect(
+      await readCollaborationStage(collaborationLocationOfRepoKey(repoKey, "local"), ({ db: lane }) =>
+        lane.prepare("select to_project_id, actor, reason from issue_project_moves").all(),
+      ),
+    ).toEqual([{ to_project_id: "p-authority-reason", actor: "project-manager", reason: "the staged reason" }]);
   }, 60_000);
 });
