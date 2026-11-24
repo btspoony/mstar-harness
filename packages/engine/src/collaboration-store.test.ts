@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -56,6 +57,11 @@ import {
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
+
+/** note: The lane's current version and full ledger, read from the registry: no test pins the literal. */
+const LANE_CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+const LANE_LEDGER_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
+const LANE_LEDGER_ROWS = COLLABORATION_MIGRATIONS.map(({ version, name }) => ({ version, name }));
 import {
   abandonRemoteIntent,
   bindRemoteAuthority,
@@ -373,7 +379,7 @@ describe("collaboration store", () => {
       repoKey: "github.com/acme/staged",
       mode: "local",
       state: "staged",
-      schemaVersion: 3,
+      schemaVersion: LANE_CURRENT_VERSION,
       epoch: 1,
       revision: 0,
       catalogRevision: 0,
@@ -392,11 +398,7 @@ describe("collaboration store", () => {
         db.close();
       }
     })();
-    expect(versions).toEqual([
-      { version: 1, name: "collaboration-core" },
-      { version: 2, name: "collaboration-remote-cache" },
-      { version: 3, name: "collaboration-remote-outbox" },
-    ]);
+    expect(versions).toEqual(LANE_LEDGER_ROWS);
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
 
@@ -504,8 +506,10 @@ describe("collaboration store", () => {
     const writer = new DatabaseSync(location.dbPath);
     try {
       writer
-        .prepare("insert into schema_version(version, name, checksum, applied_at) values (4, 'future', 'x', ?)")
-        .run("2026-11-21T00:00:00.000Z");
+        .prepare(
+          "insert into schema_version(version, name, checksum, applied_at) values (?, 'future', 'x', ?)",
+        )
+        .run(LANE_CURRENT_VERSION + 1, "2026-11-21T00:00:00.000Z");
       // invariant: A newer layout no longer matches this build's inventory; the verdict is
       // still the upgrade requirement, never "damaged store".
       writer.exec("create table future_extra(id text primary key)");
@@ -514,7 +518,11 @@ describe("collaboration store", () => {
     }
     const expected = {
       code: "store.schema-unsupported",
-      details: { storeSchemaVersion: 4, supportedSchemaMax: 3, firstUnsupportedMigration: 4 },
+      details: {
+        storeSchemaVersion: LANE_CURRENT_VERSION + 1,
+        supportedSchemaMax: LANE_CURRENT_VERSION,
+        firstUnsupportedMigration: LANE_CURRENT_VERSION + 1,
+      },
     };
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject(expected);
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject(expected);
@@ -1437,6 +1445,38 @@ function writeV2Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** note: A real v3 lane: the v2 body, the outbox delta and its ledger row. */
+function writeV3Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV2Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    const v3 = COLLABORATION_MIGRATIONS[2]!;
+    db.exec(v3.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v3.version,
+      v3.name,
+      migrationChecksum(v3),
+      "2026-11-21T00:00:00.000Z",
+    );
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+/** note: The v3 lane as a REMOTE cache: `remote` lanes are only ever written by the reviewed bind. */
+function writeV3RemoteLane(location: CollaborationLocation): void {
+  writeV3Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.prepare("update collaboration_meta set mode = 'remote' where id = 1").run();
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: Two issues with one occurrence: the history the upgrade must preserve. */
 function seedV1History(db: DatabaseSync): void {
   const insert = db.prepare(
@@ -1535,12 +1575,12 @@ describe("collaboration remote schema ladder", () => {
     expect(receipt).toMatchObject({
       version: 1,
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: LANE_CURRENT_VERSION,
       storeId: "v1-store",
       epoch: 1,
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
 
     const refs = issueRefs(location.dbPath);
     expect(refs.map((row) => row.id)).toEqual(["I-000001", "I-000002"]);
@@ -1559,10 +1599,10 @@ describe("collaboration remote schema ladder", () => {
 
     // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
     const replay = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(replay).toMatchObject({ fromVersion: 3, toVersion: 3, issuesBackfilled: 0 });
+    expect(replay).toMatchObject({ fromVersion: LANE_CURRENT_VERSION, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 0 });
     expect(issueRefs(location.dbPath)).toEqual(refs);
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
   });
 
   test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
@@ -1625,7 +1665,7 @@ describe("collaboration remote schema ladder", () => {
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
   });
 
   test("a current lane whose recorded migration name or checksum is unknown refuses admission and replay", async () => {
@@ -1633,6 +1673,7 @@ describe("collaboration remote schema ladder", () => {
       { version: 1, column: "checksum", value: "e".repeat(64) },
       { version: 2, column: "checksum", value: "e".repeat(64) },
       { version: 3, column: "checksum", value: "e".repeat(64) },
+      { version: LANE_CURRENT_VERSION, column: "checksum", value: "e".repeat(64) },
       { version: 3, column: "name", value: "foreign-outbox" },
     ] as const;
     for (const [index, change] of altered.entries()) {
@@ -1696,11 +1737,11 @@ describe("collaboration remote schema ladder", () => {
     activate(stale.dbPath);
     expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: LANE_CURRENT_VERSION,
       storeId: "v1-store",
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(stale.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
   });
 
   test("an unbound checkout adopts an intact v1 lane, then upgrades it", async () => {
@@ -1751,8 +1792,13 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
 
     const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 3, storeId: "v1-store", issuesBackfilled: 2 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(upgraded).toMatchObject({
+      fromVersion: 1,
+      toVersion: LANE_CURRENT_VERSION,
+      storeId: "v1-store",
+      issuesBackfilled: 2,
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     expect(issueCount(location.dbPath)).toBe(2);
   });
 
@@ -1767,12 +1813,17 @@ describe("collaboration remote schema ladder", () => {
     await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
 
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 3, storeId: "v1-store", issuesBackfilled: 0 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(receipt).toMatchObject({
+      fromVersion: 2,
+      toVersion: LANE_CURRENT_VERSION,
+      storeId: "v1-store",
+      issuesBackfilled: 0,
+    });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     expect(tableNames(location.dbPath)).toEqual(COLLABORATION_TABLES);
     // invariant: The upgraded lane admits as current only when the outbox keys, state
     // vocabulary and composite binding key match the declared v3 layout.
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
 
     // note: Half of the v3 delta (one outbox table without its ledger row) is a partial apply.
     const partialRepo = makeRepo("https://github.com/v3-upgrade/partial-v3.git");
@@ -1784,6 +1835,68 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(partial.dbPath)).toEqual([1, 2]);
     expect(tableNames(partial.dbPath)).not.toContain("remote_outbox_receipts");
+  });
+
+  test("a v3 lane's dated milestone reaches the effort column with its linked issue intact", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/milestone-effort.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV3Lane(location, (db) => {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values ('project', 'p-one', 'Project One', 'projects', 'p-one/roadmap.md', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');" +
+        "insert into project_milestones(milestone_id, project_id, project_kind, name, target, status, ordinal, revision, created_at, updated_at) " +
+          "values ('m-one', 'p-one', 'project', 'Milestone One', '2026-12-01', 'planned', 0, 1, " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');" +
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+          "updated_at, identity_key, issue_ref, milestone_id) values ('I-000001', 'p-one', 'Linked', 'bug', 'high', " +
+          "'open', 'i', 'a', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'effort-key', " +
+          "'mstar:issue:00000000-0000-4000-8000-000000000eff1', 'm-one');",
+      );
+    });
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual(COLLABORATION_MIGRATIONS.slice(0, 3).map(({ version }) => version));
+    expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(true);
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 3, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 0 });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // invariant: The former date reads as unestimated and the issue keeps its link; the column
+    // really moved, so the old name is gone from the table.
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(db.prepare("select effort_sessions, status from project_milestones where milestone_id = 'm-one'").get())
+        .toEqual({ effort_sessions: null, status: "planned" });
+      expect(db.prepare("select milestone_id from issues where id = 'I-000001'").get()).toEqual({ milestone_id: "m-one" });
+    } finally {
+      db.close();
+    }
+    expect(hasColumn(location.dbPath, "project_milestones", "effort_sessions")).toBe(true);
+    expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
+  });
+
+  test("a lane stopped between the effort DDL and its ledger row refuses without mutation", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/partial-v4.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    // note: The crash window: the v4 DDL committed, its ledger row did not.
+    writeV3Lane(location, (db) => {
+      db.exec(COLLABORATION_MIGRATIONS[3]!.sql);
+    });
+    activate(location.dbPath);
+    const before = ledgerRows(location.dbPath);
+
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    // invariant: The refusal is the partial-apply proof, and nothing was repaired: the ledger and
+    // the altered table keep exactly the crashed shape.
+    expect(ledgerRows(location.dbPath)).toEqual(before);
+    expect(hasColumn(location.dbPath, "project_milestones", "effort_sessions")).toBe(true);
+    expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
   });
 });
 
@@ -2230,7 +2343,11 @@ describe("remote observation cache", () => {
 
     // invariant: `store init` requires the populated remote binding and never creates a local
     // authority in its place.
-    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 3 });
+    expect(await ensureCollaborationAuthority(context)).toMatchObject({
+      mode: "remote",
+      state: "active",
+      schemaVersion: LANE_CURRENT_VERSION,
+    });
 
     // invariant: A restored local image never reauthorizes the provider. The receipt and
     // attestation are placeholders: the route refuses before either is read.
@@ -9312,5 +9429,89 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "enqueued" }));
+  }, 30_000);
+
+  test("a pre-current v3 remote cache with no unsettled intent is replaced by the bind", async () => {
+    const fixture = remoteFixture("remote-v3-clean-replacement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    // invariant: The ordinary read refuses and names the reviewed bind — a remote cache is never
+    // upgraded in place, even when this build's migration follows its own.
+    const stale = await refusalOf(() => readRemoteCacheAuthority(context));
+    expect(stale.code).toBe("collaboration.upgrade-required");
+    expect(stale.message).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
+
+    // invariant: The predecessor is preserved beside the lane as a `.replaced-` hard link in the
+    // window before the one atomic rename publishes the successor.
+    let preservedDuringPublish = false;
+    setRemoteCacheReplacementPublishGapForTest(() => {
+      preservedDuringPublish = readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"));
+    });
+    let bound;
+    try {
+      bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    } finally {
+      setRemoteCacheReplacementPublishGapForTest(undefined);
+    }
+    expect(preservedDuringPublish).toBe(true);
+    // invariant: The replacement kept the recorded store identity and lands at the current schema.
+    expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
+    expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote", store_id: recorded.storeId, authority_state: "active" });
+    expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(CURRENT_VERSION);
+  }, 30_000);
+
+  test("the bind refuses a v3 remote cache holding an unconfirmed intent and leaves it unchanged", async () => {
+    const fixture = remoteFixture("remote-v3-pending-replacement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    const frozenId = "00000000-0000-4000-8000-0000000009f2";
+    writeV3Lane(location, (db) => {
+      db.exec(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
+          "'" + commit + "', 'linear', 'seed-workspace', 'seed-team', 'seed-provider-project', 'seed-journal', " +
+          "'2026-11-21T00:00:00.000Z', '{}');" +
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+          "created_at, updated_at) values ('" + frozenId + "', 1, 'seed-project', 'seed-hash', '{}', 'unconfirmed', " +
+          "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');",
+      );
+    });
+    // note: The seeded bytes become a REMOTE cache the same way writeV3RemoteLane does.
+    const modeDb = new DatabaseSync(location.dbPath);
+    try {
+      modeDb.prepare("update collaboration_meta set mode = 'remote' where id = 1").run();
+    } finally {
+      modeDb.close();
+    }
+    chmodSync(location.dbPath, 0o600);
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    // invariant: The refusal names the intent, its age order and the exact outbox recovery route.
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain(frozenId);
+    expect(refused.message).toContain("unconfirmed");
+    expect(refused.message).toContain("outbox-pending");
+    expect(refused.message).toContain("outbox-reconcile");
+    expect(refused.message).toContain("outbox-receipt");
+    expect(refused.message).toContain("outbox-abandon");
+    // invariant: Nothing was replaced: the ledger, the identity and the intent itself are exactly
+    // as the refused bind found them, and no `.replaced-` copy was staged.
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+    expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "unconfirmed" }));
+    expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
   }, 30_000);
 });

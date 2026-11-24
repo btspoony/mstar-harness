@@ -30,6 +30,9 @@ type EngineManifest = { engines?: { node?: string } };
 const engineManifest = JSON.parse(
   readFileSync(join(import.meta.dir, "..", "..", "..", "engine", "package.json"), "utf8"),
 ) as EngineManifest;
+/** note: The lane's current version and full ledger, read from the registry: no test pins the literal. */
+const LANE_CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+const LANE_LEDGER_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
 const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
 const floorMajor = Number.parseInt(declaredNodeFloor.split(".")[0]!, 10);
 /** Injected current runtime: at/above the declared floor. */
@@ -653,14 +656,16 @@ test("store.upgrade advances an admitted v1 collaboration lane and replays witho
     if (first.status !== "ok") throw new Error(`expected the upgrade to succeed: ${first.message}`);
     expect(first.data).toMatchObject({
       verdict: "upgraded",
-      collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 },
+      collaboration: { version: 1, fromVersion: 1, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 1 },
     });
 
     // note: A committed upgrade replays by revalidating instead of re-backfilling.
     const replay = await upgrade("fixture-operator");
     expect(replay.status).toBe("ok");
     if (replay.status !== "ok") throw new Error(`expected the replay to succeed: ${replay.message}`);
-    expect(replay.data).toMatchObject({ collaboration: { fromVersion: 3, toVersion: 3, issuesBackfilled: 0 } });
+    expect(replay.data).toMatchObject({
+      collaboration: { fromVersion: LANE_CURRENT_VERSION, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 0 },
+    });
 
     // invariant: The retained issue is readable through the public read interface.
     const listed = await listIssues({ harnessDir: harness, checkoutRoot: root }, { disposition: "open" });
@@ -728,8 +733,10 @@ test("store.upgrade refuses a v1 lane this checkout is not bound to and leaves i
     const owned = await upgrade();
     expect(owned.status).toBe("ok");
     if (owned.status !== "ok") throw new Error(`expected the owned upgrade to succeed: ${owned.message}`);
-    expect(owned.data).toMatchObject({ collaboration: { version: 1, fromVersion: 1, toVersion: 3, issuesBackfilled: 1 } });
-    expect(v1LaneState(dbPath)).toEqual({ versions: [1, 2, 3], issueRef: true, issues: 1 });
+    expect(owned.data).toMatchObject({
+      collaboration: { version: 1, fromVersion: 1, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 1 },
+    });
+    expect(v1LaneState(dbPath)).toEqual({ versions: LANE_LEDGER_VERSIONS, issueRef: true, issues: 1 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -807,13 +814,21 @@ test("store.upgrade advances a combined source's execution schema before directi
     // invariant: A released build records only the schema it knows, so rewinding the ledger to
     // the version before the fence migration reproduces a genuinely released combined store.
     const fenceVersion = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version;
-    const releasedSchema = fenceVersion - 1;
+    const effortVersion = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
     const rewind = new DatabaseSync(join(harness, "store.db"));
     try {
       rewind.prepare("delete from schema_version where version >= ?").run(fenceVersion);
       // why: Both later migrations ADD objects, so dropping them keeps their re-application a
       // real migration rather than a no-op: the fence ledger and the composite reservation table.
       rewind.exec("drop table collaboration_cutover; drop table execution_collaboration_intents;");
+      // why: The effort migration ALTERs the existing project_milestones instead of adding a
+      // table, so a rewind crossing it must also restore the pre-migration shape its re-
+      // application proves against.
+      if (effortVersion >= fenceVersion) {
+        rewind.exec(
+          "alter table project_milestones add column target text; alter table project_milestones drop column effort_sessions;",
+        );
+      }
     } finally {
       rewind.close();
     }
@@ -858,12 +873,21 @@ test("store.upgrade advances a combined source's execution schema before directi
 /** note: A combined store rewound to the last schema a released 4.8.x build writes and admits. */
 function rewindToReleasedSchema(harness: string): void {
   const fenceVersion = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version;
+  const effortVersion = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
   const rewind = new DatabaseSync(join(harness, "store.db"));
   try {
     rewind.prepare("delete from schema_version where version >= ?").run(fenceVersion);
     // why: Both later migrations ADD objects, so dropping them keeps their re-application a
     // real migration rather than a no-op: the fence ledger and the reservation table.
     rewind.exec("drop table collaboration_cutover; drop table execution_collaboration_intents;");
+    // why: The effort migration ALTERs the existing project_milestones instead of adding a
+    // table, so a rewind crossing it must also restore the pre-migration shape its re-
+    // application proves against.
+    if (effortVersion >= fenceVersion) {
+      rewind.exec(
+        "alter table project_milestones add column target text; alter table project_milestones drop column effort_sessions;",
+      );
+    }
   } finally {
     rewind.close();
   }
