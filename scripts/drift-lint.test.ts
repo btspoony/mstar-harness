@@ -2685,6 +2685,14 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits.length).toBeGreaterThan(0);
   });
 
+  test("a quoted `>` inside a code element's opening tag does not hide a stage split", () => {
+    const md = 'Then Phase<code data-x="a>b">--phase\n6</code> 4 delivery.\n';
+    const result = checkRetiredStageNames([{ rel: "docs/x.md", text: md }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain(":2 ");
+    expect(result.hits[0]).toContain('"Phase  4"');
+  });
+
   test("neighbouring buttons do not join into one run", () => {
     const html = "<html><body><button>Phase</button><button>4 checks</button></body></html>";
     expect(checkRetiredStageNames([{ rel: "assets/workflow.html", text: html }]).hits).toEqual([]);

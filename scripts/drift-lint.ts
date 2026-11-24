@@ -1684,12 +1684,18 @@ const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]+)\b/gi;
  * does not read as a list. */
 const STAGE_RUN =
   /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
+/** see scripts/drift-lint.ts § 16 — the unquoted remainder of a tag: a `>` inside a quoted attribute is
+ * part of the tag, so it can never end it. Every tag matcher below is built from this one body. */
+const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+/** see scripts/drift-lint.ts § 16 — an element name ends at whitespace, `/` or `>`. A `\b` boundary also
+ * accepts a hyphen, so `<li-item>` would read as the block element `<li>`. */
+const NAME_END = `(?=[\\s/>])`;
 /** see scripts/drift-lint.ts § 16 — an inline code span; its content is judged in place, so a stage run that
  * straddles prose and a span keeps its list context. */
 const INLINE_CODE = /(?<!`)(`+)([^`]*)\1(?!`)/g;
 /** see scripts/drift-lint.ts § 16 — a diagram text node or label; the value is decoded before it is judged.
  * `desc` is reader-visible too (tooltip and screen-reader text). */
-const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
+const SVG_NODE = new RegExp(`<(?:text|title|desc)${NAME_END}${TAG_BODY}>([\\s\\S]*?)<\\/(?:text|title|desc)>`, "gi");
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
 // see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text;
 // the quote style is not part of the contract, so either pair opens the value.
@@ -1709,12 +1715,6 @@ const PROBE_PATTERN = new RegExp(
   ].join("|"),
   "g",
 );
-/** see scripts/drift-lint.ts § 16 — the unquoted remainder of a tag: a `>` inside a quoted attribute is
- * part of the tag, so it can never end it. Every tag matcher below is built from this one body. */
-const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`;
-/** see scripts/drift-lint.ts § 16 — an element name ends at whitespace, `/` or `>`. A `\b` boundary also
- * accepts a hyphen, so `<li-item>` would read as the block element `<li>`. */
-const NAME_END = `(?=[\\s/>])`;
 /** see scripts/drift-lint.ts § 16 — one token of element body text: a whole tag (a `>` inside a quoted
  * attribute is part of the tag, not the label) or the text between two tags or comment boundaries. */
 const TAG = new RegExp(`<${TAG_BODY}>`, "g");
@@ -1739,8 +1739,10 @@ const BLOCK_ELEMENT = new RegExp(`</?(?:${BLOCK_ELEMENTS})${NAME_END}${TAG_BODY}
  * whitespace, so it joins its neighbours with one space instead of ending the run; `br` sits in the list
  * above, so a pass that tests this first keeps that meaning. */
 const BR_TAG = new RegExp(`^<br${NAME_END}`, "i");
+/** see scripts/drift-lint.ts § 16 — the full `<br>` tag token, for the HTML pass's whitespace blanking. */
+const BR_ELEMENT = new RegExp(`<br${NAME_END}${TAG_BODY}>`, "gi");
 /** see scripts/drift-lint.ts § 16 — an SVG element that embeds HTML the reader sees as ordinary prose. */
-const FOREIGN_OBJECT = /<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/gi;
+const FOREIGN_OBJECT = new RegExp(`<foreignObject${NAME_END}${TAG_BODY}>([\\s\\S]*?)<\\/foreignObject>`, "gi");
 /** see scripts/drift-lint.ts § 16 — why: a diagram may spell a stage as a numeric character reference, which
  * renders as the stage number; decode before matching. */
 function decodeXmlEntities(text: string): string {
@@ -2033,7 +2035,7 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
             .replace(/(?<!`)(`+)([^`]*)\1(?!`)/g, (_match, _fence: string, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             )
-            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) =>
+            .replace(HTML_CODE, (_match, inner: string) =>
               inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
             ),
         );
@@ -2101,7 +2103,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           })
           // see scripts/drift-lint.ts § 16 — why: a `<br>` is a line break inside a block, which a reader
           // sees as whitespace, not as a block boundary.
-          .replace(/<br\b[^>]*>/gi, blank);
+          .replace(BR_ELEMENT, blank);
         // see scripts/drift-lint.ts § 16 — a reader sees a rendered block, not a source line: block tags
         // separate blocks, a line break or `<br>` between inline content renders as one space, and an
         // inline tag is dropped without inserting one (so `Pha<b>se</b> 4` renders `Phase 4`). `<button>`
