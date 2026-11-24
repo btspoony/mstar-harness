@@ -129,7 +129,7 @@ const PROJECT_DOCUMENT = {
     {
       milestoneId: MILESTONE_ID,
       name: "Round-trip delivery",
-      target: "2026-12-01",
+      effortSessions: 3,
       status: "active",
       ordinal: 0,
       revision: 1,
@@ -313,7 +313,9 @@ describe("remote host round trip", () => {
     expect(milestones.exitCode).toBe(0);
     const milestoneRead = milestones.data.data as Record<string, unknown>;
     expect(milestoneRead).toMatchObject({
-      milestones: [expect.objectContaining({ milestoneId: MILESTONE_ID, name: "Round-trip delivery", totalIssues: 1, openIssues: 1 })],
+      milestones: [
+        expect.objectContaining({ milestoneId: MILESTONE_ID, name: "Round-trip delivery", effortSessions: 3, totalIssues: 1, openIssues: 1 }),
+      ],
       issues: [expect.objectContaining({ id: MARKED_ISSUE_REF, milestoneId: MILESTONE_ID })],
     });
 
