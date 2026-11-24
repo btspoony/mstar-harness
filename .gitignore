@@ -43,3 +43,10 @@ packages/dsh/mcp/
 
 # SwiftPM build cache (never part of the product)
 .build/
+
+# Archify authoring candidates and delivery evidence
+.archify/
+assets/*.delivery.json
+assets/*.browser-check.json
+assets/*.finalize.json
+assets/*.finalize-summary.json
