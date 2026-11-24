@@ -1787,6 +1787,77 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(partial.dbPath)).toEqual([1, 2]);
     expect(tableNames(partial.dbPath)).not.toContain("remote_outbox_receipts");
   });
+
+  test("a v3 outbox whose nullable columns drifted refuses the upgrade and its settlement admission", async () => {
+    // note: `execution_key_json` is the ONE outbox column no key-layout check names (it is nullable
+    // and no index covers it), so this drift is admitted by the columns check alone. That is exactly
+    // the case `COLLABORATION_V3_COLUMNS` exists for: every settlement verb selects this column.
+    const drift = (db: DatabaseSync): void => {
+      db.exec("alter table remote_outbox drop column execution_key_json");
+    };
+
+    // note: A LOCAL v3 lane - the shape `store upgrade` advances - built from the released
+    // migration bodies, then drifted on its own outbox columns.
+    const repo = makeRepo("https://github.com/v4-upgrade/outbox-drift.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV2Lane(location);
+    const drifted = new DatabaseSync(location.dbPath);
+    try {
+      const v3 = COLLABORATION_MIGRATIONS[2]!;
+      drifted.exec(v3.sql);
+      drifted.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        v3.version,
+        v3.name,
+        migrationChecksum(v3),
+        "2026-11-21T00:00:00.000Z",
+      );
+      drift(drifted);
+    } finally {
+      drifted.close();
+    }
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    const ledgerBefore = ledgerRows(location.dbPath);
+    // invariant: The v4 DDL is applied over a proven v3 shape, so a drifted outbox refuses BEFORE
+    // the ladder and records no migration at all.
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(tableNames(location.dbPath)).not.toContain("issue_moves");
+
+    // invariant: The settlement admission proves the same columns before it serves the generation,
+    // so a drifted cache is a NAMED lane refusal instead of a raw "no such column" out of the
+    // first outbox query.
+    const cacheFixture = remoteFixture("remote-v3-drifted-outbox");
+    const commit = cacheFixture.publish(cacheFixture.payload());
+    const generation = Number(cacheFixture.payload().generation);
+    const cacheContext = contextAt(cacheFixture.repo);
+    const cacheLocation = locationAt(cacheFixture.repo);
+    writeV3RemoteLane(cacheLocation);
+    const cacheMeta = metaRecord(cacheLocation.dbPath);
+    writeRemoteCollaborationBinding(cacheContext, {
+      repoKey: cacheFixture.repoKey,
+      selectorCommit: commit,
+      generation,
+      storeId: cacheMeta.store_id,
+      epoch: cacheMeta.authority_epoch,
+    });
+    const cacheDrift = new DatabaseSync(cacheLocation.dbPath);
+    try {
+      drift(cacheDrift);
+    } finally {
+      cacheDrift.close();
+    }
+    const refused = await refusalOf(() =>
+      readRemoteIntent(cacheContext, "00000000-0000-4000-8000-0000000007f1"),
+    );
+    expect(refused.code).toBe("collaboration.unreadable");
+    expect(refused.message).toContain("collaboration store");
+    expect(refused.message).toContain("remote_outbox");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4291,6 +4362,18 @@ function outboxRows(dbPath: string): Array<{
       execution_key_json: typeof row.execution_key_json === "string" ? row.execution_key_json : null,
       abandon_reason: typeof row.abandon_reason === "string" ? row.abandon_reason : null,
     }));
+  } finally {
+    db.close();
+  }
+}
+
+/** note: The recorded receipt rows exactly as the lane holds them; the append-only evidence behind a state. */
+function outboxReceipts(dbPath: string): Array<{ operation_id: string; source: string; outcome: string }> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db
+      .prepare("select operation_id, source, outcome from remote_outbox_receipts order by operation_id, receipt_hash")
+      .all() as Array<{ operation_id: string; source: string; outcome: string }>;
   } finally {
     db.close();
   }
@@ -9428,5 +9511,115 @@ describe("pre-v3 remote cache recovery", () => {
       expect.objectContaining({ operation_id: unsettledId, state: "unconfirmed" }),
     );
     expect(ledgerVersions(frozenLocation.dbPath)).toEqual([1, 2, 3]);
+  }, 30_000);
+
+  test("a pending v3 intent is settled through the outbox verbs, then the bind replaces the cache", async () => {
+    // invariant: The refusal's own recovery must be REACHABLE. A v3 cache's pending intent is the
+    // operator's only evidence of a send that may have landed, so the outbox verbs admit exactly
+    // that generation: read it, record the pre-send refusal, abandon it, and only then bind.
+    const fixture = remoteFixture("remote-v3-settlement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    const unsettledId = "00000000-0000-4000-8000-0000000007e1";
+    const attemptId = "00000000-0000-4000-8000-0000000007e2";
+    const requestHash = "9".repeat(64);
+    // note: A frozen project-journal request exactly as `prepareRemoteIntent` would have committed
+    // it under this binding, so every settlement verb's own re-validation of the row passes.
+    const requestJson = JSON.stringify(journalIntent(fixture, commit, unsettledId));
+    const seeded = new DatabaseSync(location.dbPath);
+    try {
+      seeded
+        .prepare(
+          "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+            "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', ?, ?, ?, ?, ?, '{}')",
+        )
+        .run(
+          generation,
+          SELECTED_PROJECT.localProjectId,
+          commit,
+          SELECTED_PROJECT.workspaceId,
+          SELECTED_PROJECT.teamId,
+          SELECTED_PROJECT.projectId,
+          SELECTED_PROJECT.journalIssueId,
+          new Date(Date.now() - 1_000).toISOString(),
+        );
+      seeded
+        .prepare(
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+            "attempt_id, created_at, updated_at) values (?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?)",
+        )
+        .run(
+          unsettledId,
+          generation,
+          SELECTED_PROJECT.localProjectId,
+          requestHash,
+          requestJson,
+          attemptId,
+          "2026-11-21T00:00:00.000Z",
+          "2026-11-21T00:00:00.000Z",
+        );
+    } finally {
+      seeded.close();
+    }
+
+    // invariant: The bind still refuses an unknown provider effect, and the intent is untouched.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "unconfirmed" }),
+    );
+
+    // invariant: The route the refusal names is admitted on the SAME v3 bytes: inspection reads the
+    // row back through the settlement admission instead of the ordinary upgrade refusal.
+    const read = await readRemoteIntent(context, unsettledId);
+    expect(read).toMatchObject({ state: "unconfirmed", attemptId, requestHash, generation });
+
+    // invariant: The original host's own pre-send receipt is what proves nothing was sent; it is
+    // recorded on the v3 cache and does not itself settle the row. (The frozen content stays
+    // withheld because this seeded lane carries no verified access check, so the receipt is
+    // asserted on its stored row.)
+    const receipt = await recordRemoteReceipt(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId: unsettledId,
+      attemptId,
+      requestHash,
+      observedAt: new Date().toISOString(),
+      outcome: { kind: "not-sent", code: "pre-send" },
+    });
+    expect(receipt).toMatchObject({ state: "unconfirmed", disclosure: "metadata" });
+    expect(outboxReceipts(location.dbPath)).toEqual([
+      expect.objectContaining({ operation_id: unsettledId, source: "receipt", outcome: "not-sent" }),
+    ]);
+
+    // invariant: Only the explicit abandonment releases the cache; the reason is retained.
+    const abandoned = await abandonRemoteIntent(context, { operationId: unsettledId, reason: "pre-send refusal" });
+    expect(abandoned).toMatchObject({ state: "abandoned" });
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "abandoned", abandon_reason: "pre-send refusal" }),
+    );
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+
+    // invariant: With the outbox settled the same bind now completes, keeping the recorded
+    // generation, and the replacement is this build's complete current lane.
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(CURRENT_VERSION);
   }, 30_000);
 });

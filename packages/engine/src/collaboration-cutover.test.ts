@@ -1505,7 +1505,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(staged.authority.state).toBe("active");
   });
 
-  test("the fence advances a schema-21 source and preserves pins, history and execution rows", async () => {
+  test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema21.git");
     const source = seedSchema21Source(repo);
     const location = locationAt(repo);
@@ -1604,7 +1604,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect((await cutoverState(location)).authority.state).toBe("staged");
   });
 
-  test("a failed fence rolls the schema-21 source back and publishes nothing", async () => {
+  test("a failed fence rolls the schema-20 source back and publishes nothing", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema21-rollback.git");
     const source = seedSchema21Source(repo);
     const location = locationAt(repo);

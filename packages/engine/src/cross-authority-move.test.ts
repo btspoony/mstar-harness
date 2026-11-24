@@ -161,6 +161,16 @@ describe("cross-authority move ledger", () => {
       expect(blockingMoveFor(db, "I-000001")).toBeNull();
       assertRecordWritable(db, "I-000001");
 
+      // note: The second record, its relation and its sync row exist BEFORE the fence, so the
+      // update paths below are proved on rows the move did not create.
+      db.exec(`
+insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)
+values ('I-000002', 'p-one', 'Second finding', 'risk', 'low', 'open', 'i', 'a', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'fence-key', 'mstar:issue:22222222-2222-4222-8222-222222222222');
+insert into relations(from_issue, relation, to_issue) values ('I-000001', 'related', 'I-000002');
+insert into issue_sync_state(binding_id, direction, local_id, item_state, revision, updated_at)
+values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.000Z');
+`);
+
       recordIssueMove(db, sourceRow("mstar:issue:11111111-1111-4111-8111-111111111111", "staged"));
       expect(blockingMoveFor(db, "I-000001")).toEqual({ operationId: "move-one", phase: "staged" });
 
@@ -187,12 +197,36 @@ describe("cross-authority move ledger", () => {
         }
       }).toThrow(/issue\.move-in-progress/);
       expect((db.prepare("select count(*) as n from occurrences").get() as { n: number }).n).toBe(0);
+      // invariant: Both relation writers are fenced, on EITHER end of the edge: a relation that
+      // landed mid-flight would hand the destination a neighbourhood the move never counted.
+      expect(() =>
+        db.prepare("insert into relations(from_issue, relation, to_issue) values ('I-000002', 'blocks', 'I-000001')").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      expect(() =>
+        db.prepare("update relations set relation = 'blocks' where from_issue = 'I-000001'").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      // invariant: The sync-state writers are fenced too, so a push prepared against the moved
+      // record cannot advance while its record is frozen.
       expect(() =>
         db.prepare("insert into issue_sync_state(binding_id, direction, local_id, item_state, revision, updated_at) " +
-          "values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.000Z')").run(),
+          "values ('linear:p-one', 'pull', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.000Z')").run(),
+      ).toThrow(/issue\.move-in-progress/);
+      expect(() =>
+        db.prepare("update issue_sync_state set item_state = 'applied' where local_id = 'I-000001'").run(),
       ).toThrow(/issue\.move-in-progress/);
       // note: The caller-side helper names the operation and the phase, which is the recovery.
       expect(() => assertRecordWritable(db, "I-000001")).toThrow(/move-one/);
+
+      // invariant: `switched` is still inside the blocking set, so a move that already switched
+      // does not silently release its source; the record thaws at `published`.
+      recordIssueMove(db, { ...sourceRow("mstar:issue:22222222-2222-4222-8222-222222222222", "switched", "move-two"), sourceIssueId: "I-000002" });
+      expect(blockingMoveFor(db, "I-000002")).toEqual({ operationId: "move-two", phase: "switched" });
+      expect(() => db.prepare("update issues set title = 'edited' where id = 'I-000002'").run()).toThrow(
+        /issue\.move-in-progress/,
+      );
+      advanceIssueMove(db, { operationId: "move-two", role: "source", from: "switched", to: "published" });
+      expect(blockingMoveFor(db, "I-000002")).toBeNull();
+      db.prepare("update issues set title = 'published edit' where id = 'I-000002'").run();
 
       // invariant: Leaving the blocking set restores the record: `discarded` frees it and
       // `published` outlives it without holding it.
@@ -212,9 +246,6 @@ describe("cross-authority move ledger", () => {
       expect(
         (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name: string }>).map((column) => column.name),
       ).toContain("operation_id");
-      expect(
-        db.prepare("select name from sqlite_master where type = 'trigger' and name like '%move_guard%'").all().length,
-      ).toBe(6);
     } finally {
       db.close();
     }

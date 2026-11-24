@@ -3173,7 +3173,12 @@ describe("execution-composite-intents: the reservation ledger", () => {
       expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(
         /UNIQUE|unique/,
       );
-      move("move-a", "confirmed");
+      // note: The transition is an UPDATE of the row the reservation already holds; `move` always
+      // INSERTs, so a second call would conflict on the primary key instead of moving the phase.
+      db.prepare("update execution_collaboration_intents set phase = 'confirmed' where operation_id = 'move-a'").run();
+      expect(scalar(db, "select phase from execution_collaboration_intents where operation_id = 'move-a'")).toBe("confirmed");
+      // note: The released row no longer excludes the plan, so the next composite may reserve it.
+      reservation(db, epoch, { operationId: "op-c", planId: "p-1", phase: "prepared" });
       // note: The kind vocabulary stays closed around the new member.
       expect(() =>
         db
@@ -3182,6 +3187,86 @@ describe("execution-composite-intents: the reservation ledger", () => {
       ).toThrow(/CHECK|check/);
     } finally {
       db.close();
+    }
+  });
+
+  test("migration 22 preserves a populated v21 reservation and its pending-plan exclusion", async () => {
+    const context = controlRoot("composite-intents-v21-upgrade");
+    // note: A real v21 store: migrations 1-21 executed with this build's own bodies and checksums,
+    // so the upgrade finds exactly the predecessor shape a released workspace holds.
+    const before = new DatabaseSync(storePath(context));
+    try {
+      before.exec("pragma foreign_keys=ON");
+      before.exec(SCHEMA_VERSION_TABLE_SQL);
+      before.exec("begin immediate");
+      const record = before.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)");
+      for (const migration of MIGRATIONS.slice(0, 21)) {
+        before.exec(migration.sql);
+        record.run(migration.version, migration.name, migrationChecksum(migration), TS);
+      }
+      before
+        .prepare(
+          "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
+            "values ('wf-1', 1, 'host-1', '{}', ?, ?)",
+        )
+        .run(TS, TS);
+      before
+        .prepare(
+          "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
+            "values ('wf-1', 'p-1', 1, 0, '{}', '{}')",
+        )
+        .run();
+      before
+        .prepare(
+          "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+            "workflow_id, plan_id, actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+            "values ('store-1', 1, 'op-live', 'residual-add', 'hash-live', 'wf-1', 'p-1', 'project-manager', 'token', 1, " +
+            "'{}', '{}', 'prepared', ?, ?)",
+        )
+        .run(TS, TS);
+      before.exec("commit");
+      expect(scalar(before, "select max(version) as v from schema_version")).toBe(21);
+    } finally {
+      before.close();
+    }
+
+    expect(await upgradeStore(context)).toEqual({ schemaVersion: MIGRATIONS.length });
+
+    const after = rawDb(storePath(context));
+    try {
+      expect(scalar(after, "select max(version) as v from schema_version")).toBe(22);
+      // invariant: The rebuild copies the live reservation verbatim — losing a `prepared` row would
+      // free a plan another operation still holds.
+      expect(
+        one(
+          after,
+          "select operation_id, kind, phase, workflow_id, plan_id, expected_token from execution_collaboration_intents",
+        ),
+      ).toEqual({
+        operation_id: "op-live",
+        kind: "residual-add",
+        phase: "prepared",
+        workflow_id: "wf-1",
+        plan_id: "p-1",
+        expected_token: "token",
+      });
+      // invariant: The pending-plan exclusion is restored by the rebuild, not merely the rows.
+      expect(() =>
+        after
+          .prepare(
+            "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+              "workflow_id, plan_id, actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+              "values ('store-1', 1, 'op-second', 'residual-close', 'hash-second', 'wf-1', 'p-1', 'project-manager', 'token', 1, " +
+              "'{}', '{}', 'prepared', ?, ?)",
+          )
+          .run(TS, TS),
+      ).toThrow(/UNIQUE|unique/);
+      // note: The rebuilt CHECK admits the new member for the row that was preserved.
+      after.prepare("update execution_collaboration_intents set kind = 'issue-move' where operation_id = 'op-live'").run();
+      expect(scalar(after, "select kind from execution_collaboration_intents where operation_id = 'op-live'")).toBe("issue-move");
+      expect(all(after, "pragma foreign_key_check")).toEqual([]);
+    } finally {
+      after.close();
     }
   });
 

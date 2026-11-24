@@ -1467,9 +1467,14 @@ function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
 }
 
-/** note: The v3 shape an upgrade from v3 proves before the v4 move DDL: a partial v4 refuses. */
+/**
+ * invariant: The exact v3 shape - the whole v3 inventory INCLUDING the outbox tables' columns - proven
+ * before the v4 move DDL and by the settlement admission that serves a v3 cache's outbox. A lane that
+ * kept its v3 ledger row but lost or added an outbox column is refused instead of upgraded, because
+ * the verbs that settle an intent are exactly the ones that read those columns.
+ */
 function assertOutboxSchema(db: StoreDb, dbPath: string): void {
-  assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V2_COLUMNS, true);
+  assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V3_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
 }
 
@@ -1720,16 +1725,26 @@ function admit(
   location: CollaborationLocation,
   expected: CollaborationStamp | undefined,
   requirement: "active" | "any",
+  options: RemoteCacheAdmission = {},
 ): CollaborationAuthority {
   try {
     // note: The ledger's version verdict comes FIRST: a store written by a newer
     // build is an upgrade requirement, not a damaged current schema, even when
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
-    if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
-      throw upgradeRequired(location, schemaVersion);
-    }
-    assertCurrentSchema(db, location.dbPath);
+    const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+    // invariant: A v4 lane is never opened for ordinary work while an older generation is
+    // present. The ONE exception is the outbox generation on a remote cache: its pending intents
+    // are the operator's only evidence of a send that may have landed, so the verbs that settle
+    // them are admitted on exactly that shape - and on nothing else - while a replacement stays
+    // refused until the outbox is settled.
+    const settlesOutbox =
+      options.settleOutbox === true &&
+      location.mode === "remote" &&
+      schemaVersion === COLLABORATION_OUTBOX_SCHEMA.version;
+    if (schemaVersion < current && !settlesOutbox) throw upgradeRequired(location, schemaVersion);
+    if (settlesOutbox) assertOutboxSchema(db, location.dbPath);
+    else assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
       throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
@@ -1896,6 +1911,7 @@ async function openAdmission(
   requirement: "active" | "any",
   expected: CollaborationStamp | undefined,
   timeout: number,
+  options: RemoteCacheAdmission = {},
 ): Promise<CollaborationStoreHandle> {
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
@@ -1904,7 +1920,7 @@ async function openAdmission(
   // and creates no sidecar.
   const db = await connectAt(dbPath, "read", timeout);
   try {
-    return handleFor(db, admit(db, location, expected, requirement));
+    return handleFor(db, admit(db, location, expected, requirement, options));
   } catch (error) {
     db.close();
     throw error;
@@ -3456,6 +3472,14 @@ export async function retireLocalPredecessorLane(
  */
 export type RemoteCacheAdmission = Readonly<{
   previousDuringDraining?: boolean;
+  /**
+   * note: Admit the cache's own OUTBOX generation (v3) instead of refusing it as an upgrade
+   * requirement. Only the verbs that settle an already-frozen intent pass this: they read
+   * `remote_outbox` and `remote_outbox_receipts`, which exist unchanged in that generation, so the
+   * operator can resolve a send whose provider outcome is unknown before the bind replaces the
+   * cache. Every other read and write stays refused.
+   */
+  settleOutbox?: boolean;
 }>;
 
 /**
@@ -3958,7 +3982,7 @@ async function withWriteLane<T>(
   // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    const admitted = admit(probe, location, expected, "active");
+    const admitted = admit(probe, location, expected, "active", admission);
     // note: The binding is proved on the same refusing read, before a writer exists.
     if (lane === "remote-cache") assertRemoteCacheIdentity(admitted, remoteBinding!);
     else await assertControlBinding(context, location, admitted, "write");
@@ -3978,7 +4002,7 @@ async function withWriteLane<T>(
   try {
     db.exec("begin immediate");
     try {
-      const authority = admit(db, location, expected, "active");
+      const authority = admit(db, location, expected, "active", admission);
       // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
       // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
@@ -4052,7 +4076,7 @@ export async function openRemoteCache(
       throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
     }
   }
-  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs());
+  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs(), admission);
   try {
     assertRemoteCacheIdentity(handle.authority, binding);
   } catch (error) {

@@ -3128,7 +3128,7 @@ export async function readPendingIntents(context: StoreContext, projectId: strin
   // listing carries no send right, so it is exactly what an operator needs to reconcile.
   const draining = selection.phase === "draining" && selection.previous?.mode === "remote";
   const generation = draining ? selection.previous!.generation : selection.generation;
-  const handle = await openRemoteCache(context, "read", undefined, { previousDuringDraining: draining });
+  const handle = await openRemoteCache(context, "read", undefined, { previousDuringDraining: draining, settleOutbox: true });
   try {
     const rows = handle.db
       .prepare(
@@ -4103,7 +4103,7 @@ async function recordReceiptEvidence(
       invalidateConfirmedBase(db, row.generation, row.projectKey, "remote.effect-conflict");
     }
     return intentRead(db, intentRow(db, envelope.operationId), stored, readPermission(db, row.generation, row.projectKey));
-  }, { previousDuringDraining: source === "reconcile" });
+  }, { previousDuringDraining: source === "reconcile", settleOutbox: true });
 }
 
 function intentRead(
@@ -4213,6 +4213,7 @@ export async function readRemoteIntent(context: StoreContext, operationId: strin
   await remoteIntentSampleGapForTest?.();
   const handle = await openRemoteCache(context, "read", { location: lane.location, binding: lane.binding }, {
     previousDuringDraining: true,
+    settleOutbox: true,
   });
   try {
     const row = intentRow(handle.db, target);
@@ -4837,7 +4838,7 @@ export async function dispatchRemoteIntent(
         },
       },
     } satisfies RemoteDispatchResult;
-  });
+  }, { settleOutbox: true });
 }
 
 /** note: The history collections an issue subject carries; a merge keeps every branch's rows. */
@@ -5057,7 +5058,7 @@ export async function prepareRemoteResolution(
       createdAt: at,
       updatedAt: at,
     } satisfies RemoteIntent;
-  });
+  }, { settleOutbox: true });
 }
 
 /**
@@ -5127,7 +5128,7 @@ export async function abandonRemoteIntent(
     // invariant: The response is an inspection of the abandoned row, so a denied or expired
     // access check withholds the retained business payload instead of echoing it back.
     return intentRead(db, intentRow(db, operationId), stored, disclosure);
-  });
+  }, { settleOutbox: true });
 }
 
 // ---------------------------------------------------------------------------
