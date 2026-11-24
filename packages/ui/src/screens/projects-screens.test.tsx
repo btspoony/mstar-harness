@@ -81,7 +81,7 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
         milestoneId: "9f2c4a10",
         projectId: "engine",
         name: "Release the shared layer",
-        target: "2026-11-07",
+        effortSessions: 12,
         status: "active",
         ordinal: 0,
         revision: 2,
@@ -138,12 +138,13 @@ const detailCopy: ProjectDetailCopy = {
     milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
-    noTarget: "no target",
+    effort: (sessions) => `${sessions} sessions`,
+    unestimated: "unestimated",
     unassigned: (count) => `${count} unassigned`,
     writes: {
       create: "Create",
       nameLabel: "Milestone name",
-      targetLabel: "Target",
+      effortLabel: "Sessions",
       statusLabel: "Status",
       edit: "Edit",
       save: "Save",
@@ -322,8 +323,8 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
     expect(html).toContain("6/10");
   });
 
-  test("missing targets sort last, before the unassigned node", () => {
-    const withLateTarget = renderDetail({
+  test("nodes follow the store's ordinal order, then the unassigned node", () => {
+    const ordered = renderDetail({
       roadmap: roadmapBody(
         roadmapFeatureArm({
           data: roadmap({
@@ -331,10 +332,10 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
               projectId: "engine",
               milestones: [
                 {
-                  milestoneId: "no-target",
+                  milestoneId: "second",
                   projectId: "engine",
-                  name: "No target milestone",
-                  target: null,
+                  name: "Second position",
+                  effortSessions: null,
                   status: "planned",
                   ordinal: 1,
                   revision: 1,
@@ -346,10 +347,10 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
                   otherRetiredIssues: 0,
                 },
                 {
-                  milestoneId: "early",
+                  milestoneId: "first",
                   projectId: "engine",
-                  name: "Early milestone",
-                  target: "2026-10-01",
+                  name: "First position",
+                  effortSessions: 2,
                   status: "delivered",
                   ordinal: 0,
                   revision: 1,
@@ -369,14 +370,16 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
         }),
       ),
     });
-    const early = withLateTarget.indexOf('data-ms-timeline-node="early"');
-    const late = withLateTarget.indexOf('data-ms-timeline-node="no-target"');
-    const unassigned = withLateTarget.indexOf('data-ms-timeline-node="unassigned"');
-    expect(early).toBeGreaterThan(-1);
-    expect(early).toBeLessThan(late);
-    expect(late).toBeLessThan(unassigned);
-    // A milestone with no issues still renders its node, as the planned status shows.
-    expect(withLateTarget).toContain("No target milestone");
+    const first = ordered.indexOf('data-ms-timeline-node="first"');
+    const second = ordered.indexOf('data-ms-timeline-node="second"');
+    const unassigned = ordered.indexOf('data-ms-timeline-node="unassigned"');
+    expect(first).toBeGreaterThan(-1);
+    expect(first).toBeLessThan(second);
+    expect(second).toBeLessThan(unassigned);
+    // An unestimated milestone states the word, and a milestone with no issues still
+    // renders its node in the store's own position.
+    expect(ordered).toContain("unestimated · planned");
+    expect(ordered).toContain("Second position");
   });
 });
 
@@ -388,10 +391,10 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).not.toContain("<details");
   });
 
-  test("the milestone board carries status, target, the four tallies and its issues", () => {
+  test("the milestone board carries status, effort, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
-    expect(html).toContain("2026-11-07");
+    expect(html).toContain("12 sessions");
     expect(html).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
@@ -586,9 +589,13 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // Creation is name + target only: the engine's add verb has no status field.
+    // Creation is name + effort only: the engine's add verb has no status field.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
+    // A whole number of sessions, empty meaning unestimated — never a calendar date.
+    expect(createForm).toContain('type="number"');
+    expect(createForm).toContain('min="1"');
+    expect(createForm).not.toContain('type="date"');
     expect(html).not.toContain('data-ms-assign-cap');
   });
 
@@ -748,7 +755,7 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
             milestoneId: "a1b2c3d4",
             projectId: "engine",
             name: "Created without a roadmap",
-            target: "2026-12-01",
+            effortSessions: null,
             status: "planned",
             ordinal: 0,
             revision: 1,
@@ -769,6 +776,8 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
     expect(html).not.toContain('data-ms-absence="absent"');
     expect(html).toContain('data-ms-milestones=""');
     expect(html).toContain("Created without a roadmap");
+    // Never estimated: the board row and the timeline node both say so.
+    expect(html).toContain("unestimated");
     expect(html).toContain('data-ms-timeline-node="a1b2c3d4"');
     expect(html).toContain('data-ms-milestone="a1b2c3d4"');
     // And it stays writable: the create form and its edit control are there.

@@ -100,7 +100,7 @@ const milestones = (count: number) => ({
     milestoneId: `m-${index}`,
     projectId: "engine",
     name: `Milestone ${index}`,
-    target: "2026-11-07",
+    effortSessions: 12,
     status: "active" as const,
     ordinal: index,
     revision: 1,
@@ -189,6 +189,7 @@ const overviewCopy: OverviewCopy = {
   milestonesHeading: "Milestones",
   milestonesSummary: (count, open) => `${count} milestones · ${open} open`,
   milestoneProgress: (done, total) => `${done}/${total}`,
+  milestoneEffort: (sessions) => (sessions === null ? "unestimated" : `${sessions} sessions`),
   milestoneOpenCount: (open) => ` · ${open} open`,
   milestoneOpen: (open) => `${open} open`,
   projection: { current: "current", stale: "stale", unavailable: "unavailable" },
@@ -250,6 +251,7 @@ const focusCopy: FocusCopy = {
   milestoneProjectUnattributed: "unattributed",
   milestonesHeading: "Milestones",
   milestoneProgress: (done, total) => `${done}/${total}`,
+  milestoneEffort: (sessions) => (sessions === null ? "unestimated" : `${sessions} sessions`),
   milestoneOpenCount: (open) => ` · ${open} open`,
   absence: {
     "not-applicable": { labelWord: "n/a", body: "no active workflow" },
@@ -409,10 +411,21 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     }
   });
 
-  test("milestones are capped at three and carry progress", () => {
+  test("milestones are capped at three and carry effort and progress", () => {
     expect(html.match(/data-ms-milestone-|Milestone \d/g)?.length).toBeGreaterThanOrEqual(3);
     expect(html).not.toContain("Milestone 4");
     expect(html).toContain("6/10");
+    // Every row states its effort beside the name, as the prototype's slot does.
+    expect(html.match(/class="milestone-target">12 sessions/g)?.length).toBe(3);
+  });
+
+  test("an unestimated milestone states the word, never an empty slot", () => {
+    // The slot is not "when a date exists": an unestimated milestone says so.
+    const rows = milestones(1);
+    const page = overview({
+      milestones: read({ ...rows, milestones: rows.milestones.map((row) => ({ ...row, effortSessions: null })) }),
+    });
+    expect(page).toContain('class="milestone-target">unestimated');
   });
 
   test("the projection state closes the page", () => {
@@ -1087,6 +1100,8 @@ describe("Focus — the panels state their scope (plan 20261030 Task 2)", () => 
     expect(named).toContain('data-ms-milestone-scope=""');
     expect(named).toContain("engine");
     expect(named).not.toContain("unattributed");
+    // The Focus rows carry the same effort line as the Overview's.
+    expect(named).toContain('class="milestone-target">12 sessions');
 
     const bucket = focus({
       overview: { state: "read", data: overviewRead({ projectId: "_default" }) },

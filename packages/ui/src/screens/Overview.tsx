@@ -114,6 +114,8 @@ export type OverviewCopy = {
   /** The short-container summary: `n milestones · m open`. */
   milestonesSummary: (milestones: number, open: number) => string;
   milestoneProgress: (done: number, total: number) => string;
+  /** The row's effort line: `12 sessions`, or the word for never estimated. */
+  milestoneEffort: (sessions: number | null) => string;
   /** The ` · 9 open` tail of the same trailing cell. */
   milestoneOpenCount: (open: number) => string;
   milestoneOpen: (open: number) => string;
@@ -338,13 +340,13 @@ function WorkflowRowView(props: {
   );
 }
 
-/** One milestone row: status, target, progress, open count. */
+/** One milestone row: status, effort, progress, open count. */
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
-    // The prototype's milestone is two rows: `milestone-top` (a dot, the name, the target)
-    // and `milestone-foot` (the bar and the counts). As one flex row, a 360px pane broke the
-    // target and the counts across lines.
+    // The prototype's milestone is two rows: `milestone-top` (a dot, the name, the effort
+    // line) and `milestone-foot` (the bar and the counts). As one flex row, a 360px pane
+    // broke the effort line and the counts across lines.
     <div className="milestone-row" data-ms-milestone-row="">
       <div className="milestone-top">
         {row.status === null ? null : (
@@ -355,7 +357,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
         <span className="milestone-name">
           <TruncatedText text={row.name} />
         </span>
-        {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+        <span className="milestone-target">{props.copy.milestoneEffort(row.effortSessions)}</span>
       </div>
       {row.progress === null ? null : (
         <div className="milestone-foot">

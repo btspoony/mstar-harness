@@ -45,6 +45,16 @@ export type AssignableIssue = { id: string; title: string; severity: string; rev
 export const ASSIGNABLE_ISSUE_LIMIT = 50;
 
 /**
+ * An effort field's text as the count it states: empty means unestimated (`null`).
+ * Any other text is sent as typed and the store's own validator refuses it, so the
+ * screen never grows a second rule.
+ */
+function effortSessionsOf(value: string): number | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : Number(trimmed);
+}
+
+/**
  * The milestone write surface, declared structurally so this screen stays
  * transport-agnostic (the dashboard alignment change, Task 4). Every action
  * is one engine verb — add, update, assign/unassign and remove — and the
@@ -58,8 +68,8 @@ export type MilestoneWriteSurface = {
   busy: boolean;
   /** The store's own refusal message, verbatim, or `null`. */
   refusal: string | null;
-  create: (input: { name: string; target: string | null; ordinal: number }) => void;
-  update: (milestoneId: string, patch: { name?: string; target?: string | null; status?: string }) => void;
+  create: (input: { name: string; effortSessions: number | null; ordinal: number }) => void;
+  update: (milestoneId: string, patch: { name?: string; effortSessions?: number | null; status?: string }) => void;
   /** `milestoneId: null` is the unassign. */
   assign: (issueId: string, issueRevision: number, milestoneId: string | null) => void;
   /** Remove one milestone; the engine refuses a non-empty one in place. */
@@ -85,9 +95,12 @@ export type ProjectDetailCopy = {
     unassignedUnit: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
+    /** `12 sessions` — the effort line every milestone row and timeline node carries. */
+    effort: (sessions: number) => string;
+    /** The word for a milestone that was never estimated. */
+    unestimated: string;
     /** The four tallies of the prototype's board row. */
     countLabels: { open: string; resolved: string; retired: string; total: string };
-    noTarget: string;
     unassigned: (count: number) => string;
     /** The trailing timeline node's name for issues with no milestone. */
     timelineUnassigned: string;
@@ -96,7 +109,7 @@ export type ProjectDetailCopy = {
     writes: {
       create: string;
       nameLabel: string;
-      targetLabel: string;
+      effortLabel: string;
       statusLabel: string;
       edit: string;
       save: string;
@@ -164,7 +177,7 @@ function MilestoneActions(props: {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [name, setName] = useState(milestone.name);
-  const [target, setTarget] = useState(milestone.target ?? "");
+  const [effort, setEffort] = useState(milestone.effortSessions === null ? "" : String(milestone.effortSessions));
   const [status, setStatus] = useState(milestone.status ?? "planned");
   if (!editing) {
     return (
@@ -240,7 +253,7 @@ function MilestoneActions(props: {
           milestone.milestoneId,
           {
             ...(name.trim() === milestone.name ? {} : { name: name.trim() }),
-            ...(target === (milestone.target ?? "") ? {} : { target: target === "" ? null : target }),
+            ...(effortSessionsOf(effort) === milestone.effortSessions ? {} : { effortSessions: effortSessionsOf(effort) }),
             ...(status === milestone.status ? {} : { status }),
           },
         );
@@ -252,8 +265,15 @@ function MilestoneActions(props: {
         <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
       </label>
       <label>
-        {copy.roadmap.writes.targetLabel}
-        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+        {copy.roadmap.writes.effortLabel}
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={effort}
+          disabled={writes.busy}
+          onChange={(event) => setEffort(event.target.value)}
+        />
       </label>
       <label>
         {copy.roadmap.writes.statusLabel}
@@ -275,7 +295,7 @@ function MilestoneActions(props: {
   );
 }
 
-/** One milestone of the roadmap board: status, target, progress, open, issues. */
+/** One milestone of the roadmap board: status, effort, progress, open, issues. */
 function Milestone(props: {
   milestone: RoadmapModel["milestones"][number];
   copy: ProjectDetailCopy;
@@ -296,7 +316,9 @@ function Milestone(props: {
           {milestone.name}
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
-        <span className={"detail-meta"}>{milestone.target ?? copy.roadmap.noTarget}</span>
+        <span className={"detail-meta"}>
+          {milestone.effortSessions === null ? copy.roadmap.unestimated : copy.roadmap.effort(milestone.effortSessions)}
+        </span>
         {/* The prototype prints four tallies, each a number over its label. */}
         <span className={"milestone-block-counts"}>
           {[
@@ -362,11 +384,11 @@ function Milestone(props: {
   );
 }
 
-/** The board's create form: name + optional target; the ordinal is the list length. */
+/** The board's create form: name + optional effort; the ordinal is the list length. */
 function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
   const { writes, copy } = props;
   const [name, setName] = useState("");
-  const [target, setTarget] = useState("");
+  const [effort, setEffort] = useState("");
   return (
     <form
       className={"ms-create"}
@@ -374,9 +396,9 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
       onSubmit={(event) => {
         event.preventDefault();
         if (name.trim() === "") return;
-        writes.create({ name: name.trim(), target: target === "" ? null : target, ordinal: props.nextOrdinal });
+        writes.create({ name: name.trim(), effortSessions: effortSessionsOf(effort), ordinal: props.nextOrdinal });
         setName("");
-        setTarget("");
+        setEffort("");
       }}
     >
       <label>
@@ -384,8 +406,15 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
         <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
       </label>
       <label>
-        {copy.roadmap.writes.targetLabel}
-        <input type="date" value={target} disabled={writes.busy} onChange={(event) => setTarget(event.target.value)} />
+        {copy.roadmap.writes.effortLabel}
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={effort}
+          disabled={writes.busy}
+          onChange={(event) => setEffort(event.target.value)}
+        />
       </label>
       <button type="submit" className={"link"} disabled={writes.busy || name.trim() === ""}>
         {copy.roadmap.writes.create}
@@ -427,15 +456,16 @@ function dispositionTone(disposition: string): string {
 }
 
 /**
- * The Roadmap feature's timeline: one node per milestone, ordered by target with
- * missing targets last, and one trailing node for the unassigned issues (plan
- * the dashboard alignment change, Task 3). Every number is the read's own: the
- * retired-over-total pair and the open count.
+ * The Roadmap feature's timeline: one node per milestone in the store's own order
+ * (`ordinal`, then id — the comparator `readMilestonesOn` sorts with), and one
+ * trailing node for the unassigned issues (plan the dashboard alignment change,
+ * Task 3). Every number is the read's own: the effort line, the retired-over-total
+ * pair and the open count.
  */
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   const ordered = [...model.milestones].sort(
-    (a, b) => (a.target ?? "9999-12-31").localeCompare(b.target ?? "9999-12-31"),
+    (a, b) => a.ordinal - b.ordinal || (a.milestoneId < b.milestoneId ? -1 : a.milestoneId > b.milestoneId ? 1 : 0),
   );
   return (
     <div className="timeline" data-ms-milestone-timeline="" role="list">
@@ -454,7 +484,7 @@ function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy
         >
           <div className="tl-name">{milestone.name}</div>
           <div className="tl-date">
-            {milestone.target ?? copy.roadmap.noTarget}
+            {milestone.effortSessions === null ? copy.roadmap.unestimated : copy.roadmap.effort(milestone.effortSessions)}
             {milestone.status === null ? "" : ` · ${milestone.status}`}
           </div>
           <div className="tl-counts" data-ms-timeline-counts="">
@@ -465,7 +495,6 @@ function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy
       ))}
       <div className="tl-node" role="listitem" data-ms-timeline-node="unassigned">
         <div className="tl-name muted">{copy.roadmap.timelineUnassigned}</div>
-        <div className="tl-date">{copy.roadmap.noTarget}</div>
         <div className="tl-counts">{copy.roadmap.timelineUnassignedIssues(model.unassignedIssues)}</div>
       </div>
     </div>

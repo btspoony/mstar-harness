@@ -70,6 +70,8 @@ export type FocusCopy = {
   milestoneProjectUnattributed: string;
   milestonesHeading: string;
   milestoneProgress: (done: number, total: number) => string;
+  /** The row's effort line: `12 sessions`, or the word for never estimated. */
+  milestoneEffort: (sessions: number | null) => string;
   milestoneOpenCount: (open: number) => string;
   absence: {
     "not-applicable": { labelWord: string; body: string };
@@ -306,7 +308,7 @@ function MilestonesPanel(props: { overview: NonNullable<FocusModel["overview"]>;
                   <span className="milestone-name">
                     <TruncatedText text={row.name} />
                   </span>
-                  {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+                  <span className="milestone-target">{copy.milestoneEffort(row.effortSessions)}</span>
                 </div>
                 {row.progress === null ? null : (
                   <div className="milestone-foot">

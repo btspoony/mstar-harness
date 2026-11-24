@@ -142,6 +142,8 @@ export const en = {
     milestonesHeading: "Milestones",
     milestonesSummary: (milestones: number, open: number) => `${milestones} milestones · ${open} open`,
     milestoneProgress: (done: number, total: number) => `${done}/${total}`,
+    milestoneEffort: (sessions: number | null) =>
+      sessions === null ? "unestimated" : `${sessions} ${sessions === 1 ? "session" : "sessions"}`,
     milestoneOpenCount: (open: number) => ` · ${open} open`,
     milestoneOpen: (open: number) => `${open} open`,
     projection: {
@@ -491,15 +493,16 @@ export const en = {
     unassignedUnit: "unassigned issues",
       milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
+      effort: (sessions: number) => `${sessions} ${sessions === 1 ? "session" : "sessions"}`,
+      unestimated: "unestimated",
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
-      noTarget: "No target",
       unassigned: (count: number) => `${count} issues are not assigned to a milestone`,
       timelineUnassigned: "unassigned",
       timelineUnassignedIssues: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
       writes: {
         create: "Create",
         nameLabel: "Milestone name",
-        targetLabel: "Target",
+        effortLabel: "Sessions",
         statusLabel: "Status",
         edit: "Edit",
         save: "Save",
