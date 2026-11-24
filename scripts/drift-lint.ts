@@ -1943,15 +1943,19 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           );
         }
       }
-      // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG,
-      // see scripts/drift-lint.ts § 16 — so the markup is dropped and that text is judged too, line by line.
+      // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG.
+      // see scripts/drift-lint.ts § 16 — Scripts and styles are blanked without moving a line, then each SOURCE
+      // see scripts/drift-lint.ts § 16 — line has its tags replaced by a space: an inline tag does not split a
+      // see scripts/drift-lint.ts § 16 — sentence, the reported line is the real one, and a `<code>` sample keeps
+      // see scripts/drift-lint.ts § 16 — the span exemption because the line is read as Markdown.
       if (file.rel.endsWith(".html")) {
-        const prose = file.text
-          .replace(/<script[\s\S]*?<\/script>/gi, " ")
-          .replace(/<style[\s\S]*?<\/style>/gi, " ")
-          .replace(/<[^>]*>/g, "\n");
-        splitLines(prose).forEach((text, index) => {
-          for (const hit of findRetiredStageSpellings(decodeXmlEntities(text), false, false)) {
+        const blank = (block: string): string => block.replace(/[^\n]/g, "");
+        const withoutBlocks = file.text
+          .replace(/<script[\s\S]*?<\/script>/gi, blank)
+          .replace(/<style[\s\S]*?<\/style>/gi, blank);
+        splitLines(withoutBlocks).forEach((raw, index) => {
+          const text = raw.replace(/<(?!\/?code\b)[^>]*>/g, " ");
+          for (const hit of findRetiredStageSpellings(text, false, true)) {
             hits.push(
               `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
             );

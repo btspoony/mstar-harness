@@ -1,4 +1,4 @@
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1136 1038" data-reader-fit="width-first" data-layout-contract="readable-v2" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1136 912" data-reader-fit="width-first" data-layout-contract="readable-v2" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="">
 <style><![CDATA[
 
 /*
@@ -5138,10 +5138,6 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-5" x="40" y="682" width="931" height="106" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="704" class="t-muted" font-size="10" font-weight="600">06 / 收尾</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-6" x="40" y="808" width="931" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-6-exception" x="46" y="814" width="919" height="94" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="830" class="t-security" font-size="10" font-weight="600">EX / 阻塞</text>
-
         <!-- Phase headers -->
         <path d="M 56 35 H 538" class="a-default phase-rule" stroke-width="1" stroke-linecap="round" fill="none"/>
         <rect x="246.2" y="27" width="101.6" height="16" rx="8" class="c-mask phase-chip"/>
@@ -5345,26 +5341,26 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="20" y="938" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="用户界面" data-legend-x="20" data-legend-baseline="958" data-legend-width="81">
-            <rect x="20" y="950" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-            <text x="42" y="958" class="t-muted" font-size="7.5" font-weight="500">用户界面</text>
+          <text x="20" y="812" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="用户界面" data-legend-x="20" data-legend-baseline="832" data-legend-width="81">
+            <rect x="20" y="824" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="42" y="832" class="t-muted" font-size="7.5" font-weight="500">用户界面</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="108" data-legend-baseline="958" data-legend-width="90">
-            <rect x="108" y="950" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="130" y="958" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="108" data-legend-baseline="832" data-legend-width="90">
+            <rect x="108" y="824" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="130" y="832" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="205" data-legend-baseline="958" data-legend-width="62">
-            <rect x="205" y="950" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="227" y="958" class="t-muted" font-size="7.5" font-weight="500">策略</text>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="205" data-legend-baseline="832" data-legend-width="62">
+            <rect x="205" y="824" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="227" y="832" class="t-muted" font-size="7.5" font-weight="500">策略</text>
           </g>
-          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="云服务" data-legend-x="274" data-legend-baseline="958" data-legend-width="71">
-            <rect x="274" y="950" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-            <text x="296" y="958" class="t-muted" font-size="7.5" font-weight="500">云服务</text>
+          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="云服务" data-legend-x="274" data-legend-baseline="832" data-legend-width="71">
+            <rect x="274" y="824" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="296" y="832" class="t-muted" font-size="7.5" font-weight="500">云服务</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="352" data-legend-baseline="958" data-legend-width="81">
-            <rect x="352" y="950" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-            <text x="374" y="958" class="t-muted" font-size="7.5" font-weight="500">外部系统</text>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="352" data-legend-baseline="832" data-legend-width="81">
+            <rect x="352" y="824" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="374" y="832" class="t-muted" font-size="7.5" font-weight="500">外部系统</text>
           </g>
         </g>
       
