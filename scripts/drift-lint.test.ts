@@ -2424,6 +2424,13 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
     expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits).toEqual([]);
   });
 
+  test("a wrapped name inside a non-exempt span still reports", () => {
+    const text = "`Phase\n4`\n";
+    const result = checkRetiredStageNames([{ rel: "skills/x/j.md", text }]);
+    expect(result.hits.length).toBe(1);
+    expect(result.hits[0]).toContain("split across the line break");
+  });
+
   test("a code span whose delimiters straddle the join stays exempt", () => {
     const text = "Use \`--phase\n6\` here.\n";
     expect(checkRetiredStageNames([{ rel: "skills/x/h.md", text }]).hits).toEqual([]);
@@ -2448,6 +2455,16 @@ describe("checkRetiredStageNames — a name split across a line break", () => {
   test("a leading quote mark inside an unquoted fence is literal content", () => {
     const text = ["```text", "> transcript line", RETIRED_STAGE_MACHINE_LITERALS[0], "```"].join("\n");
     expect(checkRetiredStageNames([{ rel: "skills/x/i.md", text }]).hits).toEqual([]);
+  });
+
+  test("a quote-looking closer line stays content in an unquoted fence", () => {
+    const text = ["```text", ">```", RETIRED_STAGE_MACHINE_LITERALS[0], "```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/k.md", text }]).hits).toEqual([]);
+  });
+
+  test("a literal escaped backslash does not open a fence", () => {
+    const text = '{"prompt":"Example:\\\\n```\\\\n' + RETIRED_STAGE_MACHINE_LITERALS[0] + '"}';
+    expect(checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text }]).hits.length).toBeGreaterThan(0);
   });
 });
 

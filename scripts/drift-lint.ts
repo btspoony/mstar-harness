@@ -1797,12 +1797,14 @@ export function jsonStringValues(text: string): Array<{ text: string; line: numb
   };
   const values: Array<{ text: string; line: number }> = [];
   for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
-    const decoded = match[1]
-      .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-      .replace(/\\([nrt])/g, (_m, code: string) => (code === "t" ? "\t" : "\n"))
-      .replace(/\\\//g, "/")
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, "\\");
+    // why: the native decoder is the only faithful one — it keeps a literal
+    // `\\n` as a backslash and an `n`, and turns a real `\n` into a line break.
+    let decoded: string;
+    try {
+      decoded = JSON.parse(`"${match[1]}"`);
+    } catch {
+      decoded = match[1];
+    }
     values.push({ text: decoded, line: lineAt(match.index ?? 0) });
   }
   return values;
@@ -1831,8 +1833,12 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     const quote = quoteOf(text);
     if (fence !== null) {
       const sameContainer = fence.quote === "" || quote === fence.quote;
+      // Inside an unquoted fence a `>` line is literal content, even when it
+      // looks like a quoted closer.
+      const quoteLine = /^\s*>/.test(text) && fence.quote === "";
       const closes =
         sameContainer &&
+        !quoteLine &&
         delimiter !== null &&
         delimiter[2][0] === fence.char &&
         delimiter[2].length >= fence.len &&
@@ -1866,26 +1872,28 @@ function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string,
     const blockStarts = blockStart.test(text);
     const previousBlockStarts = blockStart.test(previous);
     if (previous !== "" && text.trim() !== "" && !blockStarts && !previousBlockStarts) {
-      // Recognize spans on the joined SOURCE first (a Markdown code span may
-      // cross one line break, rendering it as a space), strip the probes they
-      // contain, then decode to rendered text and match without a second span
-      // pass. `&#96;` stays a character because source spans are found first.
+      // Recognize spans on the joined SOURCE (a Markdown code span may cross one
+      // line break), with the boundary rendered as a space so a probe inside a
+      // straddling span is still stripped.
+      const MARKER = "\u0000";
       const render = (value: string): string =>
         decodeXmlEntities(
           value
-            .replace(/`([^`]*)`/g, (_match, inner: string) => inner.replace(/\s+/g, " ").replace(PROBE_PATTERN, " "))
-            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) => inner.replace(/\s+/g, " ").replace(PROBE_PATTERN, " ")),
+            .replace(/`([^`]*)`/g, (_match, inner: string) =>
+              inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
+            )
+            .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, inner: string) =>
+              inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
+            ),
         );
-      const previousNorm = render(previous);
-      const joined = render(`${previous}\n${text}`);
-      for (const hit of findRetiredStageSpellings(joined, false, false)) {
+      const joinedRendered = render(`${previous}${MARKER}${text}`).split(MARKER).join(" ");
+      // A hit that neither line renders on its own can only come from the join.
+      const previousRendered = render(previous);
+      const textRendered = render(text);
+      for (const hit of findRetiredStageSpellings(joinedRendered, false, false)) {
         if (lineHits.includes(hit)) continue;
-        // Only a match that starts in the earlier line and ends in the current
-        // one crosses the boundary; either side alone was reported there.
-        const at = joined.indexOf(hit);
-        if (at >= 0 && at < previousNorm.length && at + hit.length > previousNorm.length) {
-          report(line, hit, " (split across the line break)");
-        }
+        if (previousRendered.includes(hit) || textRendered.includes(hit)) continue;
+        report(line, hit, " (split across the line break)");
       }
     }
     previous = text.trim() === "" ? "" : text;
@@ -1909,7 +1917,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
     }
     const groups: Array<Array<{ text: string; line: number }>> = file.rel.endsWith(".json")
       ? jsonStringValues(file.text).map((value) =>
-          value.text.split("\n").map((text, offset) => ({ text, line: value.line + offset })),
+          value.text.split("\n").map((text) => ({ text, line: value.line })),
         )
       : [file.text.split("\n").map((text, index) => ({ text, line: index + 1 }))];
     for (const group of groups) scanProseRows(group, file.rel, hits);
