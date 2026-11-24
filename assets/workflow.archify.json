@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Layered delivery: from execute to Workflow Close Out",
+    "locale": "en",
+    "output": "assets/workflow.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "you",
+      "label": "You"
+    },
+    {
+      "id": "pm",
+      "label": "PM · coordination"
+    },
+    {
+      "id": "dev",
+      "label": "Developer seats"
+    },
+    {
+      "id": "review",
+      "label": "Independent review"
+    },
+    {
+      "id": "land",
+      "label": "Integration · layer refs"
+    },
+    {
+      "id": "external",
+      "label": "Close-out"
+    }
+  ],
+  "phases": [
+    {
+      "id": "execute",
+      "label": "Execute · layers deliver alongside",
+      "fromCol": 0,
+      "toCol": 3
+    },
+    {
+      "id": "merge",
+      "label": "Merge-ready and merge",
+      "fromCol": 4,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "close",
+      "label": "Close and whole-chain proof",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "describe",
+    "plan",
+    "implement",
+    "layer_pr",
+    "review",
+    "merge_ready",
+    "merge",
+    "close",
+    "proof",
+    "wco"
+  ],
+  "nodes": [
+    {
+      "id": "describe",
+      "lane": "you",
+      "col": 0,
+      "type": "frontend",
+      "label": "Describe the work",
+      "sublabel": "set the intent"
+    },
+    {
+      "id": "plan",
+      "lane": "pm",
+      "col": 1,
+      "type": "backend",
+      "label": "Clarify and plan",
+      "sublabel": "iteration or standalone plan"
+    },
+    {
+      "id": "implement",
+      "lane": "dev",
+      "col": 2,
+      "type": "frontend",
+      "label": "Implement",
+      "sublabel": "feature branch"
+    },
+    {
+      "id": "layer_pr",
+      "lane": "dev",
+      "col": 3,
+      "type": "backend",
+      "label": "Open a layer PR",
+      "sublabel": "published as work lands"
+    },
+    {
+      "id": "review",
+      "lane": "review",
+      "col": 3,
+      "type": "security",
+      "label": "Review and CI",
+      "sublabel": "QC tri · PM Acceptance · CI"
+    },
+    {
+      "id": "merge_ready",
+      "lane": "dev",
+      "col": 4,
+      "type": "security",
+      "label": "Merge-ready",
+      "sublabel": "CI green · resolved · mergeable",
+      "tag": "ready ≠ authorized"
+    },
+    {
+      "id": "merge",
+      "lane": "land",
+      "col": 4,
+      "type": "cloud",
+      "label": "Merge in stack order",
+      "sublabel": "owner approval when gated",
+      "tag": "merge commit"
+    },
+    {
+      "id": "close",
+      "lane": "pm",
+      "col": 5,
+      "type": "backend",
+      "label": "iteration-close",
+      "sublabel": "specs/ADR · roadmap · done",
+      "tag": "close-delta only for a delta"
+    },
+    {
+      "id": "proof",
+      "lane": "land",
+      "col": 5,
+      "type": "security",
+      "label": "Whole-chain proof",
+      "sublabel": "all required layers merged",
+      "tag": "blocking"
+    },
+    {
+      "id": "wco",
+      "lane": "external",
+      "col": 5,
+      "type": "external",
+      "label": "Workflow Close Out",
+      "sublabel": "terminal · reconcile"
+    },
+    {
+      "id": "blocked",
+      "lane": "dev",
+      "col": 5,
+      "type": "security",
+      "label": "Blocked",
+      "sublabel": "red CI · open threads · no auth"
+    }
+  ],
+  "edges": [
+    {
+      "from": "describe",
+      "to": "plan"
+    },
+    {
+      "from": "plan",
+      "to": "implement"
+    },
+    {
+      "from": "implement",
+      "to": "layer_pr",
+      "label": "lands, so publish",
+      "variant": "emphasis"
+    },
+    {
+      "from": "layer_pr",
+      "to": "review",
+      "label": "submit the layer"
+    },
+    {
+      "from": "review",
+      "to": "merge_ready"
+    },
+    {
+      "from": "merge_ready",
+      "to": "merge",
+      "label": "authorized",
+      "variant": "security"
+    },
+    {
+      "from": "merge_ready",
+      "to": "blocked",
+      "variant": "security",
+      "role": "error",
+      "label": "gate fails"
+    },
+    {
+      "from": "merge",
+      "to": "implement",
+      "label": "more plans / layers",
+      "variant": "dashed",
+      "role": "return",
+      "route": "return-left",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "from": "merge",
+      "to": "close",
+      "label": "every plan Done",
+      "variant": "emphasis"
+    },
+    {
+      "from": "close",
+      "to": "proof",
+      "label": "close-delta merged, or none",
+      "variant": "emphasis"
+    },
+    {
+      "from": "proof",
+      "to": "wco",
+      "label": "evidence complete",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One delivery line",
+      "items": [
+        "Layer PRs run beside execute: publish, merge-ready, authorize, merge",
+        "Only a close-delta layer depends on close; other layers may land before or after",
+        "Merges follow stack order, one commit each, base is the live predecessor"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Gates",
+      "items": [
+        "Merge-ready needs green CI, threads resolved or waived by name, mergeable",
+        "Authorization is separate: the recorded pr_merge_policy decides",
+        "Under owner-gated, only the owner's written approval of that head authorizes"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Done means",
+      "items": [
+        "An open PR, a merge, or merge-ready is not delivery",
+        "Whole-chain proof needs every required layer merged and content on target",
+        "The iteration is delivered only when Workflow Close Out finishes"
+      ]
+    }
+  ]
+}

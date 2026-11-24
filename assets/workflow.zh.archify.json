@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "分层交付：从执行到 Workflow Close Out",
+    "locale": "zh-CN",
+    "output": "assets/workflow.zh.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "you",
+      "label": "你"
+    },
+    {
+      "id": "pm",
+      "label": "PM / 协调"
+    },
+    {
+      "id": "dev",
+      "label": "开发席位"
+    },
+    {
+      "id": "review",
+      "label": "独立审查"
+    },
+    {
+      "id": "land",
+      "label": "集成与层 ref"
+    },
+    {
+      "id": "external",
+      "label": "收尾"
+    }
+  ],
+  "phases": [
+    {
+      "id": "execute",
+      "label": "执行 · 层交付并行",
+      "fromCol": 0,
+      "toCol": 3
+    },
+    {
+      "id": "merge",
+      "label": "Merge-ready 与合并",
+      "fromCol": 4,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "close",
+      "label": "close 与整链证明",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "describe",
+    "plan",
+    "implement",
+    "layer_pr",
+    "review",
+    "merge_ready",
+    "merge",
+    "close",
+    "proof",
+    "wco"
+  ],
+  "nodes": [
+    {
+      "id": "describe",
+      "lane": "you",
+      "col": 0,
+      "type": "frontend",
+      "label": "描述工作",
+      "sublabel": "设定意图"
+    },
+    {
+      "id": "plan",
+      "lane": "pm",
+      "col": 1,
+      "type": "backend",
+      "label": "澄清并制定计划",
+      "sublabel": "迭代或独立 plan"
+    },
+    {
+      "id": "implement",
+      "lane": "dev",
+      "col": 2,
+      "type": "frontend",
+      "label": "实现",
+      "sublabel": "feature branch"
+    },
+    {
+      "id": "layer_pr",
+      "lane": "dev",
+      "col": 3,
+      "type": "backend",
+      "label": "开层 PR",
+      "sublabel": "发布即推进 merge-ready"
+    },
+    {
+      "id": "review",
+      "lane": "review",
+      "col": 3,
+      "type": "security",
+      "label": "审查与 CI",
+      "sublabel": "QC 三席 · PM Acceptance · CI 与 bot"
+    },
+    {
+      "id": "merge_ready",
+      "lane": "dev",
+      "col": 4,
+      "type": "security",
+      "label": "Merge-ready",
+      "sublabel": "CI 绿 · 线程清零 · 可合并",
+      "tag": "就绪≠授权"
+    },
+    {
+      "id": "merge",
+      "lane": "land",
+      "col": 4,
+      "type": "cloud",
+      "label": "按栈序合并",
+      "sublabel": "owner-gated 等 owner 批准",
+      "tag": "merge commit"
+    },
+    {
+      "id": "close",
+      "lane": "pm",
+      "col": 5,
+      "type": "backend",
+      "label": "iteration-close",
+      "sublabel": "specs/ADR · roadmap 候选 · completed",
+      "tag": "非空 delta 时开 close-delta 层"
+    },
+    {
+      "id": "proof",
+      "lane": "land",
+      "col": 5,
+      "type": "security",
+      "label": "整链证明",
+      "sublabel": "全部必需层已合并 · 内容落 target",
+      "tag": "blocking"
+    },
+    {
+      "id": "wco",
+      "lane": "external",
+      "col": 5,
+      "type": "external",
+      "label": "Workflow Close Out",
+      "sublabel": "登记清理与投影核对"
+    },
+    {
+      "id": "blocked",
+      "lane": "dev",
+      "col": 5,
+      "type": "security",
+      "label": "阻塞",
+      "sublabel": "CI 红 / 线程未清 / 未授权 · 修正后重推"
+    }
+  ],
+  "edges": [
+    {
+      "from": "describe",
+      "to": "plan"
+    },
+    {
+      "from": "plan",
+      "to": "implement"
+    },
+    {
+      "from": "implement",
+      "to": "layer_pr",
+      "label": "落地即发布",
+      "variant": "emphasis"
+    },
+    {
+      "from": "layer_pr",
+      "to": "review",
+      "label": "提交该层"
+    },
+    {
+      "from": "review",
+      "to": "merge_ready"
+    },
+    {
+      "from": "merge_ready",
+      "to": "merge",
+      "label": "授权通过",
+      "variant": "security"
+    },
+    {
+      "from": "merge_ready",
+      "to": "blocked",
+      "variant": "security",
+      "role": "error",
+      "label": "门禁失败"
+    },
+    {
+      "from": "merge",
+      "to": "implement",
+      "label": "还有计划 / 层",
+      "variant": "dashed",
+      "role": "return",
+      "route": "return-left",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "from": "merge",
+      "to": "close",
+      "label": "全部 plan Done",
+      "variant": "emphasis"
+    },
+    {
+      "from": "close",
+      "to": "proof",
+      "label": "close-delta 层已合并（或无 delta）",
+      "variant": "emphasis"
+    },
+    {
+      "from": "proof",
+      "to": "wco",
+      "label": "证据齐全",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "一条交付线",
+      "items": [
+        "层 PR 与执行并行：发布、merge-ready、授权、合并不必等 close",
+        "只有 close 之后的 close-delta 层依赖 close；其余层可在 close 前后落地",
+        "合并按栈序，一层一个 merge commit，base 是实时前驱"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "门禁",
+      "items": [
+        "merge-ready 要求 CI 绿、线程清零或逐条书面 waive、PR 可合并",
+        "合并授权独立于就绪：按记录的 pr_merge_policy 判定",
+        "owner-gated 时 owner 对当前 head 的书面批准才是授权"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "完成的定义",
+      "items": [
+        "PR 打开、PR 合并、merge-ready 都不等于交付完成",
+        "整链证明要求所有必需层合并且最终内容落在 target",
+        "只有 Workflow Close Out 完成，迭代才算交付"
+      ]
+    }
+  ]
+}

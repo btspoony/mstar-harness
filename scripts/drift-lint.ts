@@ -1944,21 +1944,31 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         }
       }
       // see scripts/drift-lint.ts § 16 — An interactive page also carries ordinary HTML prose outside the SVG.
-      // see scripts/drift-lint.ts § 16 — Scripts and styles are blanked without moving a line, then each SOURCE
-      // see scripts/drift-lint.ts § 16 — line has its tags replaced by a space: an inline tag does not split a
-      // see scripts/drift-lint.ts § 16 — sentence, the reported line is the real one, and a `<code>` sample keeps
-      // see scripts/drift-lint.ts § 16 — the span exemption because the line is read as Markdown.
+      // see scripts/drift-lint.ts § 16 — Comments, scripts, styles and the already-scanned SVG are blanked without
+      // see scripts/drift-lint.ts § 16 — moving a line; a probe inside a `<code>` element is blanked the same way,
+      // see scripts/drift-lint.ts § 16 — across as many lines as it spans. Each source line then has block tags
+      // see scripts/drift-lint.ts § 16 — turned into a line break and inline tags into a space, and is read as
+      // see scripts/drift-lint.ts § 16 — literal text: a backtick is a character in HTML, so only `<code>` exempts.
       if (file.rel.endsWith(".html")) {
-        const blank = (block: string): string => block.replace(/[^\n]/g, "");
+        const blank = (block: string): string => block.replace(/[^\n]/g, " ");
         const withoutBlocks = file.text
+          .replace(/<!--[\s\S]*?-->/g, blank)
           .replace(/<script[\s\S]*?<\/script>/gi, blank)
-          .replace(/<style[\s\S]*?<\/style>/gi, blank);
+          .replace(/<style[\s\S]*?<\/style>/gi, blank)
+          .replace(/<svg[\s\S]*?<\/svg>/gi, blank)
+          .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (whole: string, inner: string) =>
+            whole.replace(inner, inner.replace(PROBE_PATTERN, " ")),
+          );
+        const blockTag =
+          /<\/?(?:div|p|h[1-6]|li|ul|ol|section|article|header|footer|table|thead|tbody|tr|td|th|blockquote|pre|br|hr|nav|main|aside|figure|figcaption|dl|dt|dd)\b[^>]*>/gi;
         splitLines(withoutBlocks).forEach((raw, index) => {
-          const text = raw.replace(/<(?!\/?code\b)[^>]*>/g, " ");
-          for (const hit of findRetiredStageSpellings(text, false, true)) {
-            hits.push(
-              `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
-            );
+          for (const piece of raw.replace(blockTag, "\n").split("\n")) {
+            const text = piece.replace(/<[^>]*>/g, " ");
+            for (const hit of findRetiredStageSpellings(text, false, false)) {
+              hits.push(
+                `Guard 16 retired-stage-name: ${file.rel}:${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+              );
+            }
           }
         });
       }
@@ -1988,9 +1998,10 @@ export function readRetiredStageCorpus(
     const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
     if (!inRoot && !RETIRED_STAGE_FILES.some((name) => name === rel)) continue;
     if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
-    // see scripts/drift-lint.ts § 16 — The diagram face is a direct `assets/*.svg` or `assets/*.html` child (the
-    // see scripts/drift-lint.ts § 16 — static image and the interactive page); a nested file is not the diagram face.
-    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.(?:svg|html)$/.test(rel)) continue;
+    // see scripts/drift-lint.ts § 16 — The diagram face is a direct `assets/*.svg`, `assets/*.html` or
+    // see scripts/drift-lint.ts § 16 — `assets/*.archify.json` child (the static image, the interactive page and
+    // see scripts/drift-lint.ts § 16 — the source they are generated from); a nested file is not the diagram face.
+    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.(?:svg|html|archify\.json)$/.test(rel)) continue;
     if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
     if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
     try {
