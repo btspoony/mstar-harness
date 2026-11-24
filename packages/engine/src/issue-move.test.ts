@@ -63,7 +63,14 @@ function issueRow(id: string): { project_id: string; identity_key: string; miles
 function operation(operationId: string): unknown {
   return db.prepare("select 1 from collaboration_operations where operation_id = ?").get(operationId);
 }
-
+/** note: One record's stable reference, the value a move carries to the destination unchanged. */
+function carriedRef(issueId: string): string {
+  const row = db.prepare("select issue_ref from issues where id = ?").get(issueId);
+  if (row === null || typeof row !== "object") throw new Error(`${issueId} returned no row`);
+  const value = (row as Record<string, unknown>).issue_ref;
+  if (typeof value !== "string") throw new Error(`${issueId} carries no issue_ref`);
+  return value;
+}
 /**
  * invariant: A destination lane is user-level, so this file's fixtures must never reach the
  * operator's `~/.mstar`: one spy serves the whole file, installed before the first lane exists.
@@ -529,5 +536,169 @@ describe("issue move --to-authority", () => {
         { actor: "project-manager", operationId: "move-staged-fence-two", expectedRevision: issue.revision, expectedStoreRevision: revision() },
       ),
     ).rejects.toMatchObject({ code: "issue.move-in-progress", details: { operation_id: "move-staged-fence", phase: "staged" } });
+  }, 60_000);
+
+  test("the same public command resumes from every persisted phase with its own stale arguments", async () => {
+    // invariant: Finding 1 through the PUBLIC route: the operator reissues the command they ran,
+    // `--expect` and `--expect-store` included. Those values are spent by the first run, so a resume
+    // that re-applied them would leave every interrupted move unresumable.
+    for (const stop of ["staged", "verified", "switched"] as const) {
+      const issue = await captureIssue(
+        context,
+        capture(projectA, `occ-public-${stop}`, {
+          sourceIdentity: `review/public-${stop}`,
+          rootCauseKey: `root-public-${stop}`,
+          acceptanceKey: `accept-public-${stop}`,
+        }),
+        { actor: "project-manager", operationId: `capture-public-${stop}` },
+      );
+      const repoKey = await destinationLane(`p-authority-public-${stop}`);
+      const mutation = {
+        actor: "project-manager",
+        operationId: `move-public-${stop}`,
+        expectedRevision: issue.revision,
+        expectedStoreRevision: revision(),
+      };
+      const { moveAcrossAuthorities } = await import("./cross-authority-move.js");
+      await moveAcrossAuthorities(
+        context,
+        {
+          operationId: mutation.operationId,
+          actor: mutation.actor,
+          sourceIssueId: issue.issueId,
+          destinationAuthority: repoKey,
+          destinationProject: `p-authority-public-${stop}`,
+          reason: "public resume",
+          expectedRevision: mutation.expectedRevision,
+          expectedStoreRevision: mutation.expectedStoreRevision,
+        },
+        stop,
+      );
+      const resumed = await moveIssue(
+        context,
+        issue.issueId,
+        { projectId: `p-authority-public-${stop}`, reason: "public resume", toAuthority: repoKey },
+        mutation,
+      );
+      expect(resumed).toMatchObject({ phase: "published", resumedFrom: stop });
+      expect(db.prepare("select count(*) as n from issues where id = ?").get(issue.issueId)).toEqual({ n: 0 });
+    }
+  }, 180_000);
+
+  test("a reused operation id cannot move the record to a different authority or project", async () => {
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-reuse", { sourceIdentity: "review/reuse", rootCauseKey: "root-reuse", acceptanceKey: "accept-reuse" }),
+      { actor: "project-manager", operationId: "capture-reuse" },
+    );
+    const repoKey = await destinationLane("p-authority-reuse");
+    const elsewhere = await destinationLane("p-authority-reuse-other");
+    const { stageMove } = await import("./cross-authority-move.js");
+    await stageMove(context, {
+      operationId: "move-reuse",
+      actor: "project-manager",
+      sourceIssueId: issue.issueId,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-reuse",
+      reason: "original",
+    });
+    // invariant: A reuse aimed elsewhere is refused before any destination action, so the frozen
+    // payload is never copied into a lane the original request did not choose.
+    await expect(
+      moveIssue(
+        context,
+        issue.issueId,
+        { projectId: "p-authority-reuse-other", reason: "hijacked", toAuthority: elsewhere },
+        { actor: "project-manager", operationId: "move-reuse", expectedRevision: issue.revision, expectedStoreRevision: revision() },
+      ),
+    ).rejects.toMatchObject({ code: "store.operation-conflict", details: { differing_fields: ["destinationAuthority", "destinationProject"] } });
+    expect(issueRow(issue.issueId).project_id).toBe(projectA);
+    expect(await readCollaborationStage(collaborationLocationOfRepoKey(elsewhere, "local"), ({ db: lane }) =>
+      lane.prepare("select count(*) as n from issue_moves").get())).toEqual({ n: 0 });
+  }, 60_000);
+
+  test("discard requires the issue-write seat and refuses without mutating", async () => {
+    // invariant: Finding 4 — `--discard` unfreezes a record, so it is an issue write and needs the
+    // same seat the move needs. A leaf actor must be refused before anything is touched.
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-discard-seat", { sourceIdentity: "review/discard", rootCauseKey: "root-discard", acceptanceKey: "accept-discard" }),
+      { actor: "project-manager", operationId: "capture-discard-seat" },
+    );
+    const repoKey = await destinationLane("p-authority-discard");
+    const { stageMove } = await import("./cross-authority-move.js");
+    await stageMove(context, {
+      operationId: "move-discard-seat",
+      actor: "project-manager",
+      sourceIssueId: issue.issueId,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-discard",
+      reason: "seat",
+    });
+    const before = issueRow(issue.issueId);
+    const { discardMove } = await import("./cross-authority-move.js");
+    // note: The ENGINE entry is not the authorization point: `discardMove` takes a resolved request.
+    // The public boundary the CLI calls is `moveIssue`'s seat check, so this asserts the shared rule
+    // through the exported assertion the CLI uses.
+    const { assertIssueWriteSeat } = await import("./issue.js");
+    expect(() => assertIssueWriteSeat("leaf-observer")).toThrow(/issue\.scope\.refused|issue\.scope-refused/);
+    expect(() => assertIssueWriteSeat("")).toThrow(/actor/);
+    assertIssueWriteSeat("project-manager");
+    // invariant: Refused before the store was opened, so nothing was unfrozen.
+    expect(issueRow(issue.issueId)).toEqual(before);
+    expect(db.prepare("select phase from issue_moves where operation_id = 'move-discard-seat'").get()).toEqual({ phase: "staged" });
+    // note: And a discard by the holder of the seat does release the record.
+    const discarded = await discardMove(context, {
+      operationId: "move-discard-seat",
+      actor: "project-manager",
+      sourceIssueId: issue.issueId,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-discard",
+      reason: "seat",
+    });
+    expect(discarded).toMatchObject({ phase: "discarded", resumedFrom: "staged" });
+    expect(db.prepare("select phase from issue_moves where operation_id = 'move-discard-seat'").get()).toEqual({ phase: "discarded" });
+  }, 60_000);
+
+  test("a destination that already holds the reference refuses before the switch", async () => {
+    // invariant: Finding 6 through the public route: the collision is detected while this lane is
+    // still the member, so the record is never stranded in a switched-but-unadmitted state.
+    const issue = await captureIssue(
+      context,
+      capture(projectA, "occ-collide", { sourceIdentity: "review/collide", rootCauseKey: "root-collide", acceptanceKey: "accept-collide" }),
+      { actor: "project-manager", operationId: "capture-collide" },
+    );
+    const repoKey = await destinationLane("p-authority-collide");
+    const location = collaborationLocationOfRepoKey(repoKey, "local");
+    await writeCollaborationStage(location, ({ db: lane }) => {
+      lane.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, " +
+          "identity_key, issue_ref) values ('I-000007', 'p-authority-collide', 'Occupant', 'bug', 'low', 'open', 'i', 'a', " +
+          "'2026-11-20T00:00:00.000Z', '2026-11-20T00:00:00.000Z', 'occupant-key', ?)",
+      ).run(carriedRef(issue.issueId));
+    });
+    const refused = await moveIssue(
+      context,
+      issue.issueId,
+      { projectId: "p-authority-collide", reason: "collision", toAuthority: repoKey },
+      { actor: "project-manager", operationId: "move-collide", expectedRevision: issue.revision, expectedStoreRevision: revision() },
+    ).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
+    expect(refused?.code).toBe("collaboration.move-destination-occupied");
+    // invariant: The source is still here, still this lane's, and still writable by its own readers.
+    expect(issueRow(issue.issueId)).toMatchObject({ project_id: projectA, revision: issue.revision });
+    await expect(getIssue(context, issue.issueId)).resolves.toMatchObject({ id: issue.issueId });
+    expect(db.prepare("select phase from issue_moves where operation_id = 'move-collide'").get()).toEqual({ phase: "verified" });
+    // invariant: The documented recovery is executable: discard the stranded attempt.
+    const { discardMove } = await import("./cross-authority-move.js");
+    expect(await discardMove(context, {
+      operationId: "move-collide",
+      actor: "project-manager",
+      sourceIssueId: issue.issueId,
+      destinationAuthority: repoKey,
+      destinationProject: "p-authority-collide",
+      reason: "collision",
+    })).toMatchObject({ phase: "discarded" });
+    expect(db.prepare("select count(*) as n from issue_moves where operation_id = 'move-collide' and phase = 'discarded'").get())
+      .toEqual({ n: 1 });
   }, 60_000);
 });

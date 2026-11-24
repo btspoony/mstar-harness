@@ -105,6 +105,9 @@ export type StoreErrorCode =
   // state machine does not allow forward is `collaboration.move-phase-invalid`.
   | "issue.move-in-progress"
   | "collaboration.move-phase-invalid"
+  // note: One record's move into a destination that already holds a record under the same reference,
+  // whose content is not the frozen copy; refusing it is what keeps publication from losing history.
+  | "collaboration.move-destination-occupied"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
   // note: Remote observation evidence: a scope the host could not verify, the snapshot gap a

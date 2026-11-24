@@ -898,6 +898,32 @@ describe("issue command family", () => {
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar milestone add"));
   });
 
+  test("discard through the public verb requires the issue-write seat and refuses without mutating", async () => {
+    // invariant: Finding 4 at the public boundary — `--discard` unfreezes a record, so a leaf actor is
+    // refused by the same seat rule the move uses, before the store is touched.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "discard-seat-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const storeRevision = (page.data as { storeRevision: number }).storeRevision;
+    const before = await issueState(context);
+    const refused = await definition("issue.move").execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "leaf-observer", operationId: "discard-without-seat", discard: true,
+      toAuthority: "github.com/acme/discard-seat-destination",
+      payload: { projectId: "proj-a", reason: "not my seat" },
+    }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    if (refused.status === "refused") expect(refused.message).toEqual(expect.stringContaining("project-manager"));
+    // invariant: Nothing moved: no ledger row, no staging, no revision change.
+    expect(await issueState(context)).toEqual(before);
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { revision: seed.revision } });
+  }, 60_000);
+
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
     const addressed = ["occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"];
     for (const verb of addressed) {

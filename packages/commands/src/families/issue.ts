@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   appendOccurrence,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
   discardMove,
@@ -253,16 +254,22 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       }
       const toAuthority = input.toAuthority.trim();
       if (toAuthority === "") throw unsupportedMove("--to-authority", `mstar issue move --id ${addressed} --to-authority <repo-key>`);
-      return await runMutation((write) => (input.discard === true
-        ? discardMove(context, {
-            operationId: write.operationId,
-            actor: write.actor,
-            sourceIssueId: addressed,
-            destinationAuthority: toAuthority,
-            destinationProject: payload.projectId,
-            reason: payload.reason,
-          })
-        : moveIssue(context, addressed, { ...payload, toAuthority }, { ...write, expectedStoreRevision: expectStore })));
+      if (input.discard === true) {
+        // invariant: Discard unfreezes a record, so it is an issue write: the same capture seat that
+        // authorizes the move authorizes abandoning it, checked before the store is touched.
+        const write = mutation(input);
+        assertIssueWriteSeat(write.actor);
+        const receipt = await discardMove(context, {
+          operationId: write.operationId,
+          actor: write.actor,
+          sourceIssueId: addressed,
+          destinationAuthority: toAuthority,
+          destinationProject: payload.projectId,
+          reason: payload.reason,
+        });
+        return ok(id, { ...receipt, operationId: write.operationId });
+      }
+      return await runMutation((write) => moveIssue(context, addressed, { ...payload, toAuthority }, { ...write, expectedStoreRevision: expectStore }));
     }
     const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
     if (defaultDisposition !== undefined) {

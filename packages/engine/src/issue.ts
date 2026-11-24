@@ -1423,7 +1423,7 @@ export async function captureIssue(
   input: CaptureInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertCaptureRequest(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return captureIssueRemote(context, input, mutation);
@@ -1625,7 +1625,7 @@ export async function appendOccurrence(
   input: OccurrenceInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   const cols = occurrenceColumns(input);
   if (resolveCollaborationLocation(context).mode === "remote") {
     const at = nowRfc3339();
@@ -2237,7 +2237,12 @@ export function issueWriteSeat(role: string): string {
   return COORDINATOR_SEAT;
 }
 
-function requireCaptureSeat(actor: string): void {
+/**
+ * note: The seat every issue write needs. It is exported because the staged move's discard branch
+ * is a public entry in its own module: authorizing it there with a second copy of this rule is how
+ * the two would drift apart.
+ */
+export function assertIssueWriteSeat(actor: string): void {
   const seat = requireNonblank("actor", actor);
   if (seat !== CAPTURE_SEAT) {
     throw new IssueError(
@@ -2487,7 +2492,7 @@ export async function triageIssue(
   patch: IssueTriage,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("reason", patch.reason);
   assertIssueTriageVocabulary(patch);
   if (resolveCollaborationLocation(context).mode === "remote") {
@@ -2678,7 +2683,7 @@ export async function closeIssue(
   evidence: ClosureEvidence,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertTerminalDisposition(disposition);
   assertClosureAuthority(disposition, evidence);
   if (resolveCollaborationLocation(context).mode === "remote") {
@@ -2726,7 +2731,7 @@ export async function reopenIssue(
   payload: IssueReopen,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("reason", payload.reason);
   if (resolveCollaborationLocation(context).mode === "remote") {
     const at = nowRfc3339();
@@ -2956,7 +2961,7 @@ export async function moveIssue(
   input: IssueMove,
   mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt | MoveReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   requireNonblank("projectId", input.projectId);
   requireNonblank("reason", input.reason);
   // invariant: `--to-authority` is the staged route. It carries the record and its history to another
@@ -2978,6 +2983,7 @@ export async function moveIssue(
       destinationAuthority: requireNonblank("toAuthority", input.toAuthority),
       destinationProject: requireNonblank("projectId", input.projectId),
       reason: requireNonblank("reason", input.reason),
+      expectedRevision: mutation.expectedRevision,
       expectedStoreRevision: mutation.expectedStoreRevision,
     });
   }
@@ -3004,7 +3010,7 @@ export async function assignIssueMilestone(
   input: { projectId: string; milestoneId: string | null; reason: string },
   mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   if (typeof input.projectId !== "string" || !input.projectId.trim() || typeof input.reason !== "string" || !input.reason.trim()) {
     throw new IssueError("milestone.invalid-input", "projectId and reason must be nonblank");
   }
@@ -3239,7 +3245,7 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return queueRemoteIssueWrite(context, {
@@ -3268,7 +3274,7 @@ export async function linkIssueScoped(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  requireCaptureSeat(mutation.actor);
+  assertIssueWriteSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
   if (resolveCollaborationLocation(context).mode === "remote") {
     return queueRemoteIssueWrite(context, {

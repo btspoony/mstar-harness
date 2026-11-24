@@ -896,6 +896,7 @@ export {
   appendOccurrence,
   assertIssueLinkVocabulary,
   assertIssueTriageVocabulary,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
   computeIdentityKey,
