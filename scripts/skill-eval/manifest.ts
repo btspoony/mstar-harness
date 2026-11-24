@@ -124,7 +124,7 @@ export interface GroupedFactsSpec {
  * records a contradictory decision in prose still fails.
  */
 export interface DecisionRecordSpec {
-  /** Field name → allowed values; the record must carry every listed field. */
+  /** see scripts/skill-eval/README.md § decision_record */
   fields: Record<string, string[]>;
 }
 
@@ -175,7 +175,6 @@ export interface FixtureDef {
 export interface CaseAssertion {
   id: string;
   kind: AssertionKind;
- /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused and mutation_withheld, positive integer for calls_within, GroupedFactsSpec for grouped_facts_final, DecisionRecordSpec for decision_record. */
   value: string | string[] | true | number | GroupedFactsSpec | DecisionRecordSpec;
   note?: string;
 }

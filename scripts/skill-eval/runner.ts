@@ -1750,11 +1750,7 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
   };
 }
 
-/**
- * Parses the one `DECISION:` line out of a final message. Returns
- * `"malformed"` for zero/multiple record lines, invalid JSON, or a non-object
- * payload — every such shape grades unverified, never pass.
- */
+/** see scripts/skill-eval/README.md § decision_record */
 function readDecisionRecord(content: string): Record<string, unknown> | "malformed" {
   const lines = content.split(/\r?\n/).filter((line) => line.trimStart().startsWith(DECISION_RECORD_PREFIX));
   if (lines.length !== 1) return "malformed";
@@ -1768,13 +1764,8 @@ function readDecisionRecord(content: string): Record<string, unknown> | "malform
   }
 }
 
-/**
- * Deterministic decision-record oracle (#828): the final carries exactly one
- * machine-readable `DECISION:` JSON object whose fields match the spec's
- * allowed values, or the contradictory prose behind a refusal marker still
- * grades fail. A missing/malformed record stays unverified — the same honesty
- * rule the grouped-facts oracle uses — so an unrecorded reply never passes.
- */
+/** see scripts/skill-eval/README.md § decision_record — the grading rule and
+ * the honesty floor this oracle shares with `grouped_facts_final`. */
 function gradeDecisionRecord(ctx: GradingContext, assertionId: string, spec: DecisionRecordSpec): AssertionGrade {
   const turn = lastCompletedTurn(ctx.unit);
   const kind = "decision_record" as const;

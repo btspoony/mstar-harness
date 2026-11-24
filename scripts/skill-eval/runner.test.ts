@@ -699,9 +699,8 @@ function basePassScript(manifest: EvalManifest, caseId: string, opts?: { omitThr
   const c = manifest.cases.find((x) => x.id === caseId)!;
   const readValues = c.assertions.filter((a) => a.kind === "tool_read_contains").map((a) => a.value as string);
   const finalValues = c.assertions.filter((a) => a.kind === "final_contains").map((a) => a.value as string);
-  // A decision_record case needs the machine-readable line to pass; derive it
-  // from each spec's first allowed value per field (the intended outcome).
-  // The spec shape is validated in manifest.ts at prepare time.
+  // see scripts/skill-eval/README.md § decision_record — an absent or malformed
+  // record stays unverified, so the synthetic adapter must emit one.
   const records = c.assertions
     .filter((a) => a.kind === "decision_record")
     .map((a) => {
@@ -2492,14 +2491,13 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
 });
 
 // ---------------------------------------------------------------------------
-// decision_record oracle (#828), synthetic
+// decision_record oracle — see scripts/skill-eval/README.md § decision_record
 // ---------------------------------------------------------------------------
 
 describe("decision_record: a contradictory record fails, a missing one stays unverified (synthetic)", () => {
   const RECORD_CASE = "close-heldout-2-changelog-fragment-only";
   const REFUSAL = "RESULT: REFUSED-PHASE-JUMP";
 
-  /** Runs the heldout split; the record case's final is supplied by the caller. */
   async function gradeRecordFinal(recordLine: string | null) {
     const { io, manifest } = await preparedRunDir();
     const spawn = syntheticSpawn(io, (req) => {
@@ -2527,7 +2525,6 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
     expect(assertion.grade).toBe("fail");
     expect(assertion.evidence.detail).toContain("delivery=");
     expect(unit.grade).toBe("fail");
-    // The reserved-token assertions still hold: the prose refusal is present.
     expect(unit.grading!.assertions.find((a) => a.kind === "final_contains")!.grade).toBe("pass");
   });
 
