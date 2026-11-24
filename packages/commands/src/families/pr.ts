@@ -22,6 +22,7 @@ const inputSchema = z.object({
   pr: z.string().optional(),
   confirm: z.string().optional(),
   maxPages: z.string().optional(),
+  provider: z.string().optional(),
 });
 type Input = z.infer<typeof inputSchema>;
 
@@ -45,13 +46,20 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     });
   }
   const { code, details, recovery } = engineErrorFacts(error);
-  // why: the shared fallback only says "correct and rerun"; a missing `gh` is
-  // repaired by installing it, and the exempted prover cannot see that cause.
-  if (code === "process.not-found") return refusalEnvelope({
-    command: id, status: "refused", code, exitCode: 1, message,
-    details: details ?? {},
-    recovery: "Install the GitHub CLI and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
-  });
+  // why: the shared fallback only says "correct and rerun"; a missing provider
+  // executable is repaired by installing the tool that binary belongs to, and
+  // the exempted prover cannot see that cause. The install hint keys off
+  // `argv[0]`'s name, which the not-found message already carries.
+  if (code === "process.not-found") {
+    const executable = /executable not found in \$PATH: (\S+)/.exec(message)?.[1];
+    const install = executable === "gh" ? "the GitHub CLI" : `${executable ?? "the provider"} executable`;
+    // reachability: manual — the recovery interpolates the missing executable's own name into one fixed `mstar pr merge-gate` instruction, and every substitution the linter cannot prove is a binary name, not a command path.
+    return refusalEnvelope({
+      command: id, status: "refused", code, exitCode: 1, message,
+      details: details ?? {},
+      recovery: `Install ${install} and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.`,
+    });
+  }
   if (code === undefined) {
     // why: the refusal builder admits only usage/refused, and an error envelope
     // is returned before the refusal normalizer reads details.recovery — so
@@ -86,50 +94,107 @@ async function spawn(context: InvocationContext, argv: string[]) {
   });
 }
 
+/** One parsed page of review-thread facts — the exact shape the decision half consumes. */
+export interface MergeGateThreadPage {
+  threads: ReviewThreadFacts[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+  readable: boolean;
+  headRefOid: string | null;
+}
+
+/** Either the value the gate consumes, or the refusal envelope it returns unchanged. */
+export type MergeGateOutcome<T> = { ok: true; value: T } | { ok: false; refusal: CommandEnvelope };
+
+/**
+ * A named forge adapter for the merge gate. `resolve` proves the requested
+ * pull request exists, reports the head the enumeration pins and the
+ * coordinate `threads` reads from; `threads` returns one parsed page. Head
+ * pinning, pagination, the confirmation record and the decision all stay in
+ * the gate — provider-neutral.
+ */
+export interface MergeGateProvider {
+  resolve(input: { pr: number; requested: string }, context: InvocationContext): Promise<MergeGateOutcome<{ head: string; host: string; owner: string; repo: string }>>;
+  threads(input: { host: string; owner: string; repo: string; pr: number; after: string | null }, context: InvocationContext): Promise<MergeGateOutcome<MergeGateThreadPage>>;
+}
+
+const mergeGateProviders = new Map<string, MergeGateProvider>();
+
+/** why: the seam exists so a second forge — or a test fixture — plugs in by id; production registers GitHub only. */
+export function registerMergeGateProvider(id: string, provider: MergeGateProvider): void {
+  mergeGateProviders.set(id, provider);
+}
+
+const unavailable = (cause: string): CommandEnvelope => refusalEnvelope({
+  command: id, status: "refused", code: `${id}.unavailable`, exitCode: 1, message: cause,
+  recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr merge-gate --pr <n>.",
+});
+
+const githubProvider: MergeGateProvider = {
+  async resolve({ pr, requested }, context) {
+    const view = await spawn(context, ["gh", "pr", "view", String(pr), "--json", "url,headRefOid"]);
+    if (view.exitCode !== 0 || view.signal !== null) return { ok: false, refusal: unavailable(view.stderr || "GitHub authentication/target lookup failed") };
+    const parsedView: unknown = JSON.parse(view.stdout);
+    const viewRecord: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
+    const url = typeof viewRecord.url === "string" ? viewRecord.url : "";
+    const head = typeof viewRecord.headRefOid === "string" ? viewRecord.headRefOid : "";
+    // why: `gh pr view` and `gh api` may select different hosts when the
+    // environment sets one for each, so the host that served the PR is the
+    // only host the thread scan may read.
+    const target = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(url);
+    if (target === null || !/^[0-9a-f]{7,40}$/.test(head)) return { ok: false, refusal: unavailable("pr view returned no resolvable repository url/head") };
+    if (Number(target[4]) !== pr) {
+      return { ok: false, refusal: refusalEnvelope({
+        command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1,
+        message: `resolved PR ${target[4]} does not match requested PR ${requested}`,
+        recovery: "Select the pull request matching the requested number. Run mstar pr merge-gate --pr <n>.",
+      }) };
+    }
+    return { ok: true, value: { head, host: target[1]!, owner: target[2]!, repo: target[3]! } };
+  },
+  async threads({ host, owner, repo, pr, after }, context) {
+    const query = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated path line comments(first:1){nodes{author{login} body}}}}}}}";
+    const argv = ["gh", "api", "graphql", "--hostname", host, "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${repo}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
+    const response = await spawn(context, argv);
+    if (response.exitCode !== 0 || response.signal !== null) return { ok: false, refusal: unavailable(response.stderr || "gh api graphql failed") };
+    return { ok: true, value: parseReviewThreads(JSON.parse(response.stdout)) };
+  },
+};
+mergeGateProviders.set("github", githubProvider);
+
 async function mergeGate(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
-  // why: `gh` resolves the repository from its working directory, so an
+  // why: a provider resolves the repository from its working directory, so an
   // undeclared workspace would read the HOST checkout's pull request.
   const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the pull request whose review threads are read" });
   if (unnamedRepository !== undefined) return unnamedRepository;
   const prText = need(input.pr, "--pr");
   if (!/^\d+$/.test(prText) || Number(prText) < 1) throw new UsageError("--pr requires a positive integer");
   const pr = Number(prText);
-  const unavailable = (cause: string) => refusalEnvelope({
-    command: id, status: "refused", code: `${id}.unavailable`, exitCode: 1, message: cause,
-    recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr merge-gate --pr <n>.",
-  });
+  const providerId = input.provider ?? "github";
+  const provider = mergeGateProviders.get(providerId);
+  if (provider === undefined) {
+    // reachability: manual — the interpolation lists registered provider ids (names, not command paths); the runnable retry is the literal `mstar pr merge-gate --pr <n> --provider <id>` this recovery names.
+    return refusalEnvelope({
+      command: id, status: "refused", code: `${id}.unsupported-provider`, exitCode: 1,
+      message: `merge-gate provider ${providerId} is not registered`,
+      details: { provider: providerId, registered: [...mergeGateProviders.keys()] },
+      recovery: `Rerun with a registered provider id (${[...mergeGateProviders.keys()].join(", ")}). Run mstar pr merge-gate --pr <n> --provider <id>.`,
+    });
+  }
   // why: a truncated or paginated response is not an access failure; each such
   // refusal builds its own literal recovery below, because the envelope's
   // declared retry must name the action that can change that outcome.
-  const view = await spawn(context, ["gh", "pr", "view", String(pr), "--json", "url,headRefOid"]);
-  if (view.exitCode !== 0 || view.signal !== null) return unavailable(view.stderr || "GitHub authentication/target lookup failed");
-  const parsedView: unknown = JSON.parse(view.stdout);
-  const viewRecord: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
-  const url = typeof viewRecord.url === "string" ? viewRecord.url : "";
-  const head = typeof viewRecord.headRefOid === "string" ? viewRecord.headRefOid : "";
-  // why: `gh pr view` and `gh api` may select different hosts when the
-  // environment sets one for each, so the host that served the PR is the only
-  // host the thread scan may read.
-  const target = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(url);
-  if (target === null || !/^[0-9a-f]{7,40}$/.test(head)) return unavailable("pr view returned no resolvable repository url/head");
-  if (Number(target[4]) !== pr) {
-    return refusalEnvelope({
-      command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1,
-      message: `resolved PR ${target[4]} does not match requested PR ${prText}`,
-      recovery: "Select the pull request matching the requested number. Run mstar pr merge-gate --pr <n>.",
-    });
-  }
-  const [host, owner, repo] = [target[1]!, target[2]!, target[3]!];
+  const resolved = await provider.resolve({ pr, requested: prText }, context);
+  if (!resolved.ok) return resolved.refusal;
+  const { head, host, owner, repo } = resolved.value;
   const maxPages = Number(input.maxPages ?? "50");
   if (!Number.isInteger(maxPages) || maxPages < 1) throw new UsageError("--max-pages requires a positive integer");
-  const query = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated path line comments(first:1){nodes{author{login} body}}}}}}}";
   const threads: ReviewThreadFacts[] = [];
   let after: string | null = null;
   for (let page = 0; ; page += 1) {
-    const argv = ["gh", "api", "graphql", "--hostname", host, "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${repo}`, "-F", `number=${pr}`, ...(after === null ? [] : ["-f", `after=${after}`])];
-    const response = await spawn(context, argv);
-    if (response.exitCode !== 0 || response.signal !== null) return unavailable(response.stderr || "gh api graphql failed");
-    const pageResult = parseReviewThreads(JSON.parse(response.stdout));
+    const pageResponse = await provider.threads({ host, owner, repo, pr, after }, context);
+    if (!pageResponse.ok) return pageResponse.refusal;
+    const pageResult = pageResponse.value;
     if (!pageResult.readable) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads response carried no readable thread page (missing connection or nodes array)",
@@ -215,6 +280,7 @@ const options = [
   { key: "pr", flags: "--pr <n>", required: true },
   { key: "confirm", flags: "--confirm <file.json>", required: false, help: "Optional; the two-confirmation record {head, confirmations: 2, threads: [<thread id>...], digest} that authorizes merging while threads stay unresolved." },
   { key: "maxPages", flags: "--max-pages <n>", required: false, defaultValue: "50", help: "Optional; page cap for the thread scan (100 threads per page). Defaults to 50; raise it when a PR reports more." },
+  { key: "provider", flags: "--provider <id>", required: false, defaultValue: "github", help: "Optional; the registered forge adapter that resolves the PR and enumerates its review threads. Defaults to github; an unregistered id refuses." },
 ] as const;
 
 export function getPrCommandDefinitions(): readonly CommandDefinition[] {
@@ -230,6 +296,8 @@ export function getPrCommandDefinitions(): readonly CommandDefinition[] {
       { name: "confirm", ownership: "caller" as const, route: "mcp" as const, required: false, constraint: "optional; required only when unresolved threads stay open" },
       { name: "maxPages", ownership: "derivable" as const, route: "cli" as const, required: false, constraint: "defaults to 50 pages (100 threads per page)" },
       { name: "maxPages", ownership: "derivable" as const, route: "mcp" as const, required: false, constraint: "defaults to 50 pages (100 threads per page)" },
+      { name: "provider", ownership: "derivable" as const, route: "cli" as const, required: false, constraint: "defaults to github; a named registered adapter id" },
+      { name: "provider", ownership: "derivable" as const, route: "mcp" as const, required: false, constraint: "defaults to github; a named registered adapter id" },
     ],
     effects: ["read", "validate", "process", "service"],
     description: "Decide the review-thread half of the merge gate: enumerate every review thread on the PR's current head and refuse while any stays unresolved, unless a confirmation record binds that head, records two confirmations, names exactly those thread ids and matches their digest. Merge authorization itself also needs the recorded policy or the owner's approval; this is not a review action.",

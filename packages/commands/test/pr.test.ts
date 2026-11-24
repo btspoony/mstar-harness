@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
+import { registerMergeGateProvider, type MergeGateProvider } from "../src/families/pr.js";
 import type { CommandDefinition, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -135,5 +136,55 @@ describe("pr merge-gate", () => {
     pages = 0;
     const completed = await gate.execute({ pr: "42", maxPages: "2" }, context);
     expect(completed).toMatchObject({ status: "ok" });
+  });
+
+  test("an unregistered provider refuses and names the registered ids", async () => {
+    const { context } = fixture();
+    const refused = await command("pr.merge-gate").execute({ pr: "42", provider: "gitlab" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unsupported-provider", exitCode: 1 });
+    expect(refused.status === "ok" ? "" : refused.message).toContain("github");
+    expect(refused.status === "ok" ? "" : refused.message).toContain("--provider");
+  });
+
+  test("a registered fixture provider drives the gate without spawning", async () => {
+    const { cwd, context, calls } = fixture();
+    const head = "abcdef0123456";
+    const nodes = [
+      { id: "FX1", isResolved: false, isOutdated: false, path: "src/f.ts", line: 9, author: "fixture-bot", body: "fix this" },
+    ];
+    const threadCalls: Array<{ owner: string; repo: string; pr: number; after: string | null }> = [];
+    let pageHead = head;
+    // why: the gate must ask the named adapter for the head and every thread
+    // page; a fixture proves the seam drives the same pinning, digest and
+    // refusal path without any spawn.
+    const fixtureProvider: MergeGateProvider = {
+      async resolve() {
+        return { ok: true, value: { head, host: "fixture.example", owner: "fix", repo: "ture" } };
+      },
+      async threads({ owner, repo, pr, after }) {
+        threadCalls.push({ owner, repo, pr, after });
+        return { ok: true, value: { threads: nodes, hasNextPage: false, endCursor: null, readable: true, headRefOid: pageHead } };
+      },
+    };
+    registerMergeGateProvider("fixture", fixtureProvider);
+    const gate = command("pr.merge-gate");
+    const refused = await gate.execute({ pr: "7", provider: "fixture" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr.merge-gate.unresolved", exitCode: 1 });
+    expect(refused.status === "ok" ? {} : refused.details).toMatchObject({ head, unresolved: [{ id: "FX1", author: "fixture-bot" }] });
+    expect(calls).toHaveLength(0);
+    expect(threadCalls).toEqual([{ owner: "fix", repo: "ture", pr: 7, after: null }]);
+
+    const digest = (refused.status === "ok" ? {} : refused.details)?.digest as string;
+    expect(digest).toMatch(/^[0-9a-f]{16}$/);
+    const confirm = path.join(cwd, "confirm.json");
+    writeFileSync(confirm, JSON.stringify({ head, confirmations: 2, threads: ["FX1"], digest }));
+    const allowed = await gate.execute({ pr: "7", provider: "fixture", confirm }, context);
+    expect(allowed).toMatchObject({ status: "ok" });
+
+    // why: a head the provider reports differently on the next scan makes the
+    // confirmed enumeration stale, so the seam must refuse the same way.
+    pageHead = "9999999999999";
+    const moved = await gate.execute({ pr: "7", provider: "fixture", confirm }, context);
+    expect(moved).toMatchObject({ status: "refused", code: "pr.merge-gate.head-moved" });
   });
 });
