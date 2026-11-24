@@ -1812,9 +1812,8 @@ function gradeDecisionRecord(ctx: GradingContext, assertionId: string, spec: Dec
       violations.push(`${field}=${JSON.stringify(actual)} (allowed: ${allowed.join("|")})`);
     }
   }
-  // Literal case-authored phrase list, not a proximity or semantic heuristic:
-  // a correct record beside prose that states the forbidden decision still
-  // fails, which is exactly what the record-only check could not see.
+  // see scripts/skill-eval/README.md § decision_record — forbidProse is the
+  // literal-phrase arm; a correct record does not exempt the prose.
   const normalised = content.toLowerCase().replace(/\s+/g, " ");
   for (const phrase of spec.forbidProse ?? []) {
     if (normalised.includes(phrase.toLowerCase().replace(/\s+/g, " "))) {

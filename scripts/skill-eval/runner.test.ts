@@ -2569,7 +2569,6 @@ describe("decision_record: a contradictory record fails, a missing one stays unv
   });
 
   test("a correct record beside prose that states the forbidden decision still fails", async () => {
-    // Greptile P1: the record is right, the prose is the contradiction.
     const { unit, assertion, result } = await gradeRecordFinal(
       'DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}',
       ["收尾其实已经齐了，The   ITERATION is delivered."],
