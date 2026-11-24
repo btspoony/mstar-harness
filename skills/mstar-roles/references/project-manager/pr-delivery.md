@@ -27,11 +27,11 @@ A stack delivers an iteration as a chain of stacked PRs, never as one aggregate 
 
 ## Fix boundary
 
-- **Iteration.** 修复在 PR head（该 PR 的 layer ref）上 push；**禁止**另开替代分支
-- **Checkout / worktree（HARD，iteration）**：本 loop 是 PR 级 **hotfix** loop。产品修复在从**该 PR 的 layer ref** 出的独立 **fix feature worktree** 上编辑、commit；review 后由**该 PR 的单一 pusher** fast-forward 或 merge 到该 layer ref，再按 「Push cadence」 push。禁止在 layer ref、integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
+- **Iteration.** Stacked layer 的修复在 PR head（该 PR 的 layer ref）上 push；**禁止**另开替代分支。聚合 PR 的修复位置是 `branch.integration`，按 `mstar-iteration/references/pr-stack.md`「Rollout」。
+- **Checkout / worktree（HARD，iteration）**：本 loop 是 PR 级 **hotfix** loop。Stacked layer 的产品修复在从**该 PR 的 layer ref** 出的独立 **fix feature worktree** 上编辑、commit；review 后由**该 PR 的单一 pusher** fast-forward 或 merge 到该 layer ref，再按 「Push cadence」 push。禁止在 layer ref、integration 或主 checkout 直接编辑产品代码（聚合 PR 的修复边界见「Rollout」）；三域表 → `mstar-branch-worktree`。
   Hotfix commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
 - **Coordinator integration.** `branch.integration` 由 coordinator 在 checkpoint 串行写入（integration worktree，路径取 ACTIVE workflow 执行行 `integration_worktree_path`），并向受影响的上层 layer 传播 → `mstar-iteration/references/pr-stack.md`（Propagation）。它是 integration 的写入点，不是任何 stacked layer 的 head 或修复位置（聚合 PR 的修复边界按 `mstar-iteration/references/pr-stack.md`「Rollout」）。
-- **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges the reviewed fix onto that PR's layer ref.
+- **Iteration.** Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; for a stacked layer the PM merges the reviewed fix onto that PR's layer ref, and for an aggregate PR the coordinator merges it on `branch.integration` per 「Rollout」.
 - **Standalone development.** The fix is committed on the registered delivery branch in its dedicated worktree and pushed under 「Push cadence」, never the primary checkout (fix sites table → `mstar-pr-loop/SKILL.md`); the hotfix identity rule above still applies.
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → 下一节（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
