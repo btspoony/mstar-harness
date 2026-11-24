@@ -56,4 +56,17 @@ describe("mcp process effects", () => {
     });
     expect(result).toMatchObject({ exitCode: 0, signal: null });
   });
+
+  test("a missing executable rejects with the shared process.not-found shape", async () => {
+    // see packages/commands/src/families/pr.ts
+    // why: `pr merge-gate` builds its install hint off the `executable` field;
+    // an MCP-side ENOENT that keeps the raw spawn message would lose the name.
+    const error = await createMcpEffects([]).spawn({
+      argv: ["mstar-no-such-executable-for-test"],
+      cwd: process.cwd(),
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.not-found", exitCode: 127, executable: "mstar-no-such-executable-for-test" });
+  });
 });

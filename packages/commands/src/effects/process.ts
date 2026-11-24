@@ -13,7 +13,7 @@ export type ProcessResult = { exitCode: number | null; signal: string | null; st
  * or delivered on the error event); normalize both to one deterministic string. */
 function normalizeNotFound(error: unknown, executable: string): Error {
   if (error !== null && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-    return Object.assign(new Error(`executable not found in $PATH: ${executable}`), { code: "process.not-found", exitCode: 127 });
+    return Object.assign(new Error(`executable not found in $PATH: ${executable}`), { code: "process.not-found", exitCode: 127, executable });
   }
   return error as Error;
 }

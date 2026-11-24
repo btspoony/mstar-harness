@@ -88,5 +88,17 @@
     "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter after family-refusal.ts type-checks it; strict static proof cannot evaluate the `recovery ?? literal` expression, the same class as pr-review.ts — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/pr.ts:daec344fc54e",
+    "justification": "The refusal interpolates the missing provider executable's own name into the recovery template, so strict static proof cannot evaluate the `${install}` substitution; the site carries a `reachability: manual` note — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/pr.ts:52c2e29a0db1",
+    "justification": "The refusal interpolates the registered provider-id list (`[...mergeGateProviders.keys()]`) into the recovery template, so strict static proof cannot evaluate the substitution; the site carries a `reachability: manual` note — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
   }
 ]

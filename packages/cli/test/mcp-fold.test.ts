@@ -10,6 +10,7 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
+ * see docs/knowledge/best-practices/mcp-published-surface-measurement.md
  * why: the folded published surface — every folded tool's description plus its
  * input JSON schema, read back from `tools/list` — is a deliberate product
  * budget, not a measurement to re-pin: `tools/list` is paid on every request of
@@ -24,10 +25,12 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  *
  * Re-taken once for the `pr` family: the §5.3a review-thread gate publishes as
  * its own tool rather than folding into `mstar_pr_review`, so a pre-merge check
- * does not read as a review action (measured 33_935; later prose stays inside
- * this budget rather than re-taking it).
+ * does not read as a review action (measured 33_935).
+ * Re-taken again for `pr.merge-gate`: routing the gate through a named provider
+ * adapter adds one option field, `--provider <id>` (measured 33_962; later prose
+ * stays inside this budget rather than re-taking it).
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_935;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_962;
 
 type PublishedTool = Readonly<{
   name: string;
