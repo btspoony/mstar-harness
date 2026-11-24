@@ -2341,6 +2341,28 @@ describe("findRetiredStageSpellings — Guard 16 retired stage names", () => {
   test("a numeric character reference is decoded on the markdown path", () => {
     expect(findRetiredStageSpellings("Phase &#52; step").length).toBeGreaterThan(0);
   });
+
+  test("only the named probe is exempt, not a longer identifier", () => {
+    expect(findRetiredStageSpellings("run `phase-4-pr-delivery-extra`").length).toBeGreaterThan(0);
+    expect(findRetiredStageSpellings("`PHASE6_DELIVERY_MISSING` is the code")).toEqual([]);
+  });
+});
+
+describe("checkRetiredStageNames — quoted fences and escaped prompts", () => {
+  test("a fenced probe inside a blockquote passes", () => {
+    const text = ["> ```text", "> " + RETIRED_STAGE_MACHINE_LITERALS[0], "> ```"].join("\n");
+    expect(checkRetiredStageNames([{ rel: "skills/x/a.md", text }]).hits).toEqual([]);
+  });
+
+  test("a stage number written as a json escape is decoded", () => {
+    const result = checkRetiredStageNames([{ rel: ".cursor/skills/mstar-routing-eval/a.json", text: '{"prompt":"Phase \\u0034"}' }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
+
+  test("svg inline markup does not break the rendered name", () => {
+    const result = checkRetiredStageNames([{ rel: "assets/workflow.svg", text: "<text>Pha<tspan>se</tspan> 4</text>" }]);
+    expect(result.hits.length).toBeGreaterThan(0);
+  });
 });
 
 describe("checkRetiredStageNames — a name split across a line break", () => {

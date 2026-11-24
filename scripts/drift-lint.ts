@@ -1613,8 +1613,9 @@ export const RETIRED_STAGE_ROOTS = [
 ] as const;
 /** Prompt-face files outside those roots. */
 export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
-/** Text faces read from that set: Markdown, diagram text, and evaluation cases. */
-export const RETIRED_STAGE_EXTS = [".md", ".svg", ".json"] as const;
+/** Text faces read from that set: Markdown, diagram text, evaluation cases,
+ * and the Codex prompt sources. */
+export const RETIRED_STAGE_EXTS = [".md", ".svg", ".json", ".toml"] as const;
 /** Tracked trees the scan skips: generated bundles and changelog history. */
 export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
 /** The three engine probes that stay, only inside a code span or fenced block. */
@@ -1648,6 +1649,18 @@ const INLINE_CODE = /`([^`\n]*)`/g;
  * `desc` is reader-visible too (tooltip and screen-reader text). */
 const SVG_NODE = /<(?:text|title|desc)\b[^>]*>([\s\S]*?)<\/(?:text|title|desc)>/gi;
 const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
+/** why: a probe exemption must name the probe, not a longer identifier that
+ * starts with it — `phase-4-pr-delivery-extra` is a retired spelling. The
+ * `PHASE6_` code family is exempt by prefix because the CLI names its
+ * delivery codes that way. */
+const PROBE_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w])--phase 6(?![\w])`,
+    String.raw`PHASE6_`,
+    String.raw`(?<![\w-])phase-4-pr-delivery(?![\w-])`,
+  ].join("|"),
+  "g",
+);
 /** An HTML code element; render-equivalent to a backtick span. */
 const HTML_CODE = /<code\b[^>]*>([\s\S]*?)<\/code>/gi;
 /** why: a diagram may spell a stage as a numeric character reference, which
@@ -1672,11 +1685,7 @@ export function findRetiredStageSpellings(line: string, inFence = false): string
   // A render-equivalent spelling may be written as `&#52;`; decode before any
   // shape is judged, on the Markdown path as well as in a diagram.
   let rest = decodeXmlEntities(line);
-  const stripProbes = (inner: string): string => {
-    let content = inner;
-    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) content = content.split(literal).join(" ");
-    return content;
-  };
+  const stripProbes = (inner: string): string => inner.replace(PROBE_PATTERN, " ");
   if (inFence) {
     rest = stripProbes(rest);
   } else {
@@ -1704,13 +1713,23 @@ export function findRetiredStageSpellings(line: string, inFence = false): string
   return unique.filter((hit) => !unique.some((other) => other !== hit && other.includes(hit)));
 }
 
-/** Text a reader of a diagram sees: `<text>`/`<title>` bodies and `aria-label`
- * values (either quote style), entity-decoded and flattened. */
+/** Text a reader of a diagram sees: `<text>`/`<title>`/`<desc>` bodies and
+ * `aria-label` values (either quote style), entity-decoded, inline markup
+ * dropped without adding whitespace, each with its source line. */
+function svgTextSegments(text: string): Array<{ text: string; line: number }> {
+  const segments: Array<{ text: string; line: number }> = [];
+  const lineAt = (index: number): number => text.slice(0, index).split("\n").length;
+  for (const match of text.matchAll(SVG_NODE)) {
+    segments.push({ text: decodeXmlEntities(match[1].replace(/<[^>]*>/g, "")), line: lineAt(match.index ?? 0) });
+  }
+  for (const match of text.matchAll(SVG_ARIA)) {
+    segments.push({ text: decodeXmlEntities(match[2]), line: lineAt(match.index ?? 0) });
+  }
+  return segments;
+}
+
 export function extractSvgText(text: string): string[] {
-  const out: string[] = [];
-  for (const match of text.matchAll(SVG_NODE)) out.push(decodeXmlEntities(match[1].replace(/<[^>]*>/g, " ")));
-  for (const match of text.matchAll(SVG_ARIA)) out.push(decodeXmlEntities(match[2]));
-  return out;
+  return svgTextSegments(text).map((segment) => segment.text);
 }
 
 /**
@@ -1722,15 +1741,23 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
   const hits: string[] = [];
   for (const file of files) {
     if (file.rel.endsWith(".svg")) {
-      extractSvgText(file.text).forEach((segment, index) => {
-        for (const hit of findRetiredStageSpellings(segment)) {
+      // SVG label text is not Markdown: nothing here is a code span, and only
+      // the exact probes leave it.
+      for (const segment of svgTextSegments(file.text)) {
+        for (const hit of findRetiredStageSpellings(segment.text, true)) {
           hits.push(
-            `Guard 16 retired-stage-name: ${file.rel} text node ${index + 1} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+            `Guard 16 retired-stage-name: ${file.rel}:${segment.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
           );
         }
-      });
+      }
       continue;
     }
+    // why: an evaluated prompt may carry a stage number as a `\uXXXX` escape
+    // in JSON and still reach the model as the rendered character.
+    const decodeEscapes = (line: string): string =>
+      file.rel.endsWith(".json")
+        ? line.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+        : line;
     // why: a fence closes only on its own delimiter character, at least as
     // long as the opener, with nothing after it — a tilde line inside a
     // backtick fence is content, not a close.
@@ -1744,7 +1771,9 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
       );
     };
     file.text.split("\n").forEach((line, index) => {
-      const delimiter = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+      // A fence may sit inside a blockquote; its `> ` prefix is not content.
+      const delimiter = line.match(/^(\s*(?:>\s*)*)(`{3,}|~{3,})(.*)$/);
+      const text = decodeEscapes(line);
       if (fence !== null) {
         previous = "";
         const closes =
@@ -1753,7 +1782,7 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
           fence = null;
           return;
         }
-        for (const hit of findRetiredStageSpellings(line, true)) report(`${index + 1} "${hit}"`);
+        for (const hit of findRetiredStageSpellings(text, true)) report(`${index + 1} "${hit}"`);
         return;
       }
       if (delimiter !== null) {
@@ -1763,14 +1792,14 @@ export function checkRetiredStageNames(files: Array<{ rel: string; text: string 
         for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(`${index + 1} "${hit}"`);
         return;
       }
-      const lineHits = findRetiredStageSpellings(line, false);
+      const lineHits = findRetiredStageSpellings(text, false);
       for (const hit of lineHits) report(`${index + 1} "${hit}"`);
-      if (previous !== "" && line.trim() !== "") {
-        for (const hit of findRetiredStageSpellings(`${previous} ${line}`, false)) {
+      if (previous !== "" && text.trim() !== "") {
+        for (const hit of findRetiredStageSpellings(`${previous} ${text}`, false)) {
           if (!lineHits.includes(hit)) report(`${index + 1} "${hit}" (split across the line break)`);
         }
       }
-      previous = line.trim() === "" ? "" : line;
+      previous = text.trim() === "" ? "" : text;
     });
   }
   return { filesScanned: files.length, hits };
