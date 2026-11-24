@@ -41,7 +41,7 @@ export { DASHBOARD_CSP, startDashboard } from "./dashboard/index.js";
 export type { RunningDashboard, StartDashboardOptions } from "./dashboard/index.js";
 export { getProcessCommandDefinitions } from "./families/process.js";
 export { getLocalCommandDefinitions } from "./families/local.js";
-export { spawnProcess } from "./effects/process.js";
+export { spawnFailure, spawnProcess } from "./effects/process.js";
 export type { CommandSchemaDescriptor, PayloadSchemaQuery } from "./families/schema.js";
 export { createReport, reportInputSchema } from "./report.js";
 export { getReportCommandDefinitions } from "./families/report.js";

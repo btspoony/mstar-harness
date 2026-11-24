@@ -64,6 +64,21 @@ const failure = (error: unknown): CommandEnvelope<never> => {
       recovery: `Install ${install} and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.`,
     });
   }
+  if (code === "process.cwd-not-found") {
+    // see packages/commands/src/effects/process.ts
+    // why: the gate inherits the invocation workspace, so a vanished directory
+    // is repaired by running from an existing one — installing a tool cannot.
+    // why: an MCP connection does not read the operator's shell directory; its
+    // per-call workspace is the `--workspace` path the launcher declared
+    // (packages/cli/src/mcp/stdio.ts), so "change directory and retry" repeats
+    // the same failure there and the recovery has to name the reconnection.
+    // reachability: manual — the recovery names the launcher's `mstar mcp --workspace` reconnection, which the command-catalog grammar the linter reads does not model (`mstar mcp` is not a catalog command); the CLI half stays statically provable and the behavioural suite pins both halves.
+    return refusalEnvelope({
+      command: id, status: "refused", code, exitCode: 1, message,
+      details: details ?? {},
+      recovery: "The gate runs in this invocation's workspace, which no longer exists. From the CLI, rerun mstar pr merge-gate --pr <n> in a valid checkout of the intended repository. On an MCP connection the server keeps the --workspace path it was launched with, so restore that directory, or reconnect with mstar mcp --workspace <absolute checkout path> and rerun there.",
+    });
+  }
   if (code === undefined) {
     // why: the refusal builder admits only usage/refused, and an error envelope
     // is returned before the refusal normalizer reads details.recovery — so
@@ -196,7 +211,12 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
   // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
   // why: a truncated or paginated response is not an access failure; each such
   // refusal builds its own literal recovery below, because the envelope's
-  // declared retry must name the action that can change that outcome.
+  // declared retry must name the action that can change that outcome. Those
+  // retries re-run this invocation, so each one keeps `--provider`: omitting it
+  // would rescan through the default GitHub adapter. The concrete id travels on
+  // `details.provider`, so the retry text stays a literal the reachability
+  // check can prove while the operator still learns which adapter to pass.
+  const providerDetails = { provider: providerId };
   const resolved = await provider.resolve({ pr, requested: prText }, context);
   if (!resolved.ok) return resolved.refusal;
   const { head, host, owner, repo } = resolved.value;
@@ -211,12 +231,14 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     if (!pageResult.readable) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads response carried no readable thread page (missing connection or nodes array)",
-      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
+      details: providerDetails,
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify that the host serving this PR returns reviewThreads. Run mstar pr merge-gate --pr <n> --provider <id>, passing details.provider.",
     });
     if (pageResult.headRefOid === null) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads response carried no headRefOid",
-      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
+      details: providerDetails,
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify that the host serving this PR returns reviewThreads. Run mstar pr merge-gate --pr <n> --provider <id>, passing details.provider.",
     });
     // why: threads are read across several requests, so a head that moves
     // mid-scan makes the enumeration — and any waiver bound to it — stale.
@@ -224,8 +246,8 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       return refusalEnvelope({
         command: id, status: "refused", code: `${id}.head-moved`, exitCode: 1,
         message: `PR head moved from ${head} to ${pageResult.headRefOid} while reading review threads`,
-        details: { expected: head, actual: pageResult.headRefOid },
-        recovery: "A confirmation bound to the earlier head cannot merge; rerun the gate against the new head. Run mstar pr merge-gate --pr <n>.",
+        details: { expected: head, actual: pageResult.headRefOid, ...providerDetails },
+        recovery: "A confirmation bound to the earlier head cannot merge; rerun the gate against the new head. Run mstar pr merge-gate --pr <n> --provider <id>, passing details.provider.",
       });
     }
     threads.push(...pageResult.threads);
@@ -233,33 +255,32 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     if (pageResult.endCursor === null) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
       message: "reviewThreads reported more pages without an end cursor",
-      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify GitHub access to this PR. Run mstar pr merge-gate --pr <n>.",
+      details: providerDetails,
+      recovery: "The thread payload could not be read. Rerun the scan; if it repeats, verify that the host serving this PR returns reviewThreads. Run mstar pr merge-gate --pr <n> --provider <id>, passing details.provider.",
     });
     after = pageResult.endCursor;
     if (page >= maxPages - 1) return refusalEnvelope({
       command: id, status: "refused", code: `${id}.page-cap`, exitCode: 1,
       message: `review thread scan exceeded ${maxPages} page(s) (${maxPages * 100} threads); increase the page cap`,
-      recovery: "Raise the page cap for this scan. Run mstar pr merge-gate --pr <n> --max-pages <n>.",
+      details: providerDetails,
+      recovery: "Raise the page cap for this scan. Run mstar pr merge-gate --pr <n> --provider <id> --max-pages <n>, passing details.provider.",
     });
   }
   let confirmation: ThreadGateConfirmation | undefined;
   if (input.confirm !== undefined) {
     const file = abs(context.cwd, input.confirm);
-    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
-    // why: each retry below re-runs this same invocation, so it must name the
-    // selected provider id — dropping it would silently switch to GitHub.
-    const retry = `mstar pr merge-gate --pr <n> --provider ${providerId} --confirm <file>`;
+    const confirmRetry = `mstar pr merge-gate --pr <n> --provider ${providerId} --confirm <file>`;
     if (!existsSync(file)) throw new UsageError(
       `confirmation file not found: ${file}`,
       undefined,
-      `Resolve every unresolved thread and rerun without the flag: Run mstar pr merge-gate --pr <n> --provider ${providerId}. To merge with a named waiver, supply the record: Run ${retry}.`,
+      `Resolve every unresolved thread and rerun without the flag: Run mstar pr merge-gate --pr <n> --provider ${providerId}. To merge with a named waiver, supply the record: Run ${confirmRetry}.`,
     );
     let raw: string;
     try { raw = readFileSync(file, "utf8"); } catch (error) {
       throw new UsageError(
         `cannot read the confirmation file ${file}: ${error instanceof Error ? error.message : String(error)}`,
         undefined,
-        `Pass a readable confirmation file. Run ${retry}.`,
+        `Pass a readable confirmation file. Run ${confirmRetry}.`,
       );
     }
     let parsed: unknown;
@@ -267,7 +288,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       throw new UsageError(
         `--confirm must contain valid JSON: ${file}`,
         undefined,
-        `Fix the confirmation record. Run ${retry}.`,
+        `Fix the confirmation record. Run ${confirmRetry}.`,
       );
     }
     const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
@@ -275,7 +296,7 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
       throw new UsageError(
         "--confirm must be a JSON object {head: string, confirmations: number, threads: string[], digest?: string}",
         undefined,
-        `Correct the record shape. Run ${retry}.`,
+        `Correct the record shape. Run ${confirmRetry}.`,
       );
     }
     confirmation = { head: row.head, confirmations: row.confirmations, threads: row.threads as string[], ...(typeof row.digest === "string" ? { digest: row.digest } : {}) };
@@ -289,9 +310,13 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     message: decision.code === "pr.merge-gate.unresolved"
       ? `${decision.unresolved.length} unresolved review thread(s) on ${head} - merge is not authorized`
       : `the confirmation record does not authorize a merge on ${head}`,
-    details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems },
     // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
-    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider <id> --confirm <file>, passing the provider id this invocation selected.`,
+    // why: the recovery asks for the provider id this invocation selected, so
+    // the refusal has to carry it — an operator holding only the refusal cannot
+    // otherwise tell which adapter the retry must name.
+    details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems, provider: providerId },
+    // see docs/adr/implemented/architecture/2026-09-28-recovery-first-operations.md
+    recovery: `Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr merge-gate --pr <number> --provider <id> --confirm <file>, passing the provider id this invocation selected (reported as details.provider).`,
   });
 }
 
