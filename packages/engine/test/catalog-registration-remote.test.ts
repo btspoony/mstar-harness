@@ -114,7 +114,7 @@ describe("a remote checkout's catalog journal", () => {
 
     // invariant: A genuinely pending journal on the cache is still reported.
     insertPrepared(location.dbPath, { operationId: "remote-pending", workflowId: "wf-remote-journal" });
-    expect(await readPendingRegistration(context, "wf-remote-journal")).toEqual({ operationId: "remote-pending", phase: "prepared" });
+    expect(await readPendingRegistration(context, "wf-remote-journal")).toEqual({ operationId: "remote-pending", phase: "prepared", hasIdentityFailure: false });
   });
 
   test("settles pending registrations on the cache lane that owns the journal", async () => {
