@@ -1354,6 +1354,59 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
+  test("a nested refs/heads/ branch name normalizes exactly once, so an unrelated branch cannot satisfy the proof", async () => {
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the close route strips the qualified record prefix ONCE; the ref
+    // resolution must not strip again, or a branch literally named
+    // `refs/heads/release` (ref refs/heads/refs/heads/release) collapses onto
+    // the unrelated branch `release`, and a chain that landed only there
+    // would close an iteration whose recorded target never received it.
+    const fixture = await workflowFixture("iteration-nested-qualified-target", [], "iteration");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — both branches exist at the init commit, with divergent ancestry ahead.
+    runGit(["branch", "release"], fixture.repoRoot);
+    runGit(["branch", "refs/heads/release"], fixture.repoRoot);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the chain advances past the target: one landed layer on the delivery line.
+    writeText(join(fixture.integrationPath, "layer.txt"), "a landed layer the target never received\n");
+    runGit(["add", "-A"], fixture.integrationPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "layer one"], fixture.integrationPath);
+    const tip = headOf(fixture.integrationPath);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the chain lands on the unrelated branch `release` ONLY (fast-forward);
+    // the recorded target `refs/heads/release` stays at the init commit.
+    runGit(["worktree", "add", "-q", join(fixture.repoRoot, "wt-release"), "release"], fixture.repoRoot);
+    runGit(["merge", "-q", "--ff-only", INTEGRATION_BRANCH], join(fixture.repoRoot, "wt-release"));
+    await workflowMutation(fixture, "op-nested-anchor", {
+      kind: "delivery-anchors",
+      branch: { target: "refs/heads/refs/heads/release" },
+      reason: "the target branch is literally named refs/heads/release",
+    });
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — landing on `release` alone must NOT satisfy the proof: the recorded
+    // target is the nested branch, and only a double strip would read it.
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-nested-unproven-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    expect(JSON.stringify(refused.details)).toContain(`the delivery line ${INTEGRATION_BRANCH} tip ${tip} is not on refs/heads/release`);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — the refusal names the recorded target, never the collapsed short branch.
+    expect(JSON.stringify(refused.details)).not.toContain(`is not on release`);
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
+    // §4f — when the chain reaches the recorded nested branch too, the close proves
+    // itself against THAT ref: the resolution reads the intended branch.
+    runGit(["update-ref", "refs/heads/refs/heads/release", tip], fixture.repoRoot);
+    const closed = await workflowMutation(fixture, "op-nested-proven-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the chain landed on the recorded nested target",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
 
   test("an iteration whose delivery line never advanced still closes", async () => {
     // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md §4f —

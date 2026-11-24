@@ -1392,11 +1392,15 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string | 
  */
 function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string | undefined {
   // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md
-  // §4f — a recorded anchor may carry the qualified `refs/heads/<name>` form;
-  // normalize so it names the same branch, not a nested ref that cannot exist.
-  const name = branch.replace(/^refs\/(heads|remotes\/origin)\//, "");
-  const local = `refs/heads/${name}`;
-  const remote = `refs/remotes/origin/${name}`;
+  // §4f — callers hand the ALREADY-normalized branch name: both close routes
+  // strip the qualified `refs/heads/<name>` / `refs/remotes/origin/<name>`
+  // record form exactly once. Stripping here too would turn a legitimate
+  // nested branch name (`refs/heads/refs/heads/x` names the branch literally
+  // called `refs/heads/x`) into the unrelated short branch `x`, and a merge
+  // into that branch would satisfy the proof without ever reaching the
+  // recorded target.
+  const local = `refs/heads/${branch}`;
+  const remote = `refs/remotes/origin/${branch}`;
   for (const ref of remoteFirst ? [remote, local] : [local, remote]) {
     const sha = gitRead(cwd, ["rev-parse", "--verify", "--quiet", ref]);
     if (sha !== undefined && sha !== "") return sha;
