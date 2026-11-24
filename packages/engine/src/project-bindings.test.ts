@@ -274,14 +274,14 @@ describe("collaboration governance", () => {
 
     const milestone = await addMilestone(
       context,
-      { projectId: "_default", name: "Fallback milestone", target: null, ordinal: 0 },
+      { projectId: "_default", name: "Fallback milestone", effortSessions: null, ordinal: 0 },
       { operationId: nextOperation(), expectedStoreRevision: await collaborationRevision(context) },
     );
     expect(milestone.storeRevision).toBe(captured.storeRevision + 1);
 
     // invariant: A milestone never adopts a project the catalog does not hold.
     await expect(
-      addMilestone(context, { projectId: "missing", name: "Orphan", target: null, ordinal: 0 }, {
+      addMilestone(context, { projectId: "missing", name: "Orphan", effortSessions: null, ordinal: 0 }, {
         operationId: nextOperation(),
         expectedStoreRevision: milestone.storeRevision,
       }),
