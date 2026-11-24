@@ -366,8 +366,9 @@ describe("collaboration authority — ADR acceptance", () => {
   }, 240_000);
 
   test("criterion 7 boundary only — a remote project move refuses collaboration.mode-unavailable", () => {
-    // note: The unsupported-move surface is NOT a criterion-7 pass: a move neither topology admits
-    // must refuse by code, and this keeps that refusal from regressing while the staged move exists.
+    // note: The unsupported-move surface is NOT a criterion-7 pass: a move this checkout's topology
+    // does not admit must refuse by code, and this keeps that refusal from regressing while the staged
+    // move exists.
     const fixture = new RemoteCollaborationFixture("acceptance-move-boundary");
     const moveOperation = "11111111-1111-4111-8111-1111111111aa";
     try {

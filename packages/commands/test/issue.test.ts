@@ -894,25 +894,6 @@ describe("issue command family", () => {
       payload: { projectId: "proj-b", reason: "abandon with a lane base" },
     }, context);
     expect(storeBase).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expectStore"] } });
-    // invariant: The two-checkout flags belong to the staged route alone. Without `--to-authority`
-    // neither is read, so each refuses by code BEFORE the local project reassignment would run
-    // instead of it — a request is never answered by a different mutation than it names.
-    for (const flag of ["input", "out"] as const) {
-      const handoffOnly = await command.execute({
-        id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
-        actor: "project-manager", operationId: `move-handoff-no-authority-${flag}`,
-        ...(flag === "input" ? { input: "/nonexistent/handoff.json" } : { out: "/nonexistent/handoff.json" }),
-        payload: { projectId: "proj-b", reason: "handoff without an authority" },
-      }, context);
-      expect(handoffOnly).toMatchObject({
-        status: "refused",
-        code: "issue.scope-refused",
-        details: { paths: [flag] },
-      });
-      if (handoffOnly.status === "refused") {
-        expect(handoffOnly.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
-      }
-    }
     // invariant: Neither refusal wrote anything: the record keeps its project and its revision.
     const after = await executeCommand("issue.show", { id: seed.issueId }, context);
     expect(after).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
@@ -955,10 +936,9 @@ describe("issue command family", () => {
     expect(shown).toMatchObject({ status: "ok", data: { revision: seed.revision } });
   }, 60_000);
 
-  test("the move verb refuses a missing --expect at runtime unless a handoff document supplies the peer half", async () => {
-    // invariant: The flag stays schema-optional ONLY because the exchange's destination half addresses a
-    // record another authority holds. Nothing else may reach a route that reads a local record without its
-    // revision CAS, so the missing flag refuses at execute with the recovery an operator can run.
+  test("the move verb refuses a missing --expect", async () => {
+    // invariant: Every route of the verb reads a local record, so nothing may reach a route without its
+    // revision CAS, and the missing flag refuses at execute with the recovery an operator can run.
     const context = await testContext();
     const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-expect-seed", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
@@ -985,7 +965,7 @@ describe("issue command family", () => {
     // invariant: The refusal happens before anything is frozen or written.
     expect(await issueState(context)).toEqual(before);
 
-    // note: The staged route without `--input` is the same shape: it reads a local record, so it needs the CAS.
+    // note: The staged route is the same shape: it reads a local record, so it needs the CAS.
     const stagedNoExpect = await command.execute({
       id: seed.issueId, expectStore,
       actor: "project-manager", operationId: "move-expect-staged",
@@ -993,17 +973,6 @@ describe("issue command family", () => {
       payload: { projectId: "proj-b", reason: "staged without a CAS" },
     }, context);
     expect(stagedNoExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expect"] } });
-
-    // invariant: With `--input` the flag check is skipped: the destination half carries the peer's record,
-    // so the refusal that comes back names the document it could not read, never a missing `expect`.
-    const handoff = await command.execute({
-      id: seed.issueId, expectStore,
-      actor: "project-manager", operationId: "move-expect-handoff",
-      toAuthority: "github.com/acme/never-created-authority",
-      input: "/nonexistent/handoff.json",
-      payload: { projectId: "proj-b", reason: "peer half" },
-    }, context);
-    expect(handoff).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["input"] } });
   }, 60_000);
 
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
@@ -1023,29 +992,19 @@ describe("issue command family", () => {
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
     }
     for (const verb of ["triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"]) {
-      // invariant: `issue move`'s destination half of the two-checkout exchange addresses a record
-      // another authority holds, so its revision CAS is required only when no handoff is supplied;
-      // every other route reads the record it writes and requires it unconditionally.
-      const conditional = verb === "move"
-        ? { condition: { field: "input", present: false } }
-        : {};
       expect(definition(`issue.${verb}`).requirements).toContainEqual(
-        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show"), ...conditional }),
+        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
       );
       const missingCas = definition(`issue.${verb}`).input.safeParse({
         id: "I-000001", actor: "project-manager", payload: {},
       });
       if (verb === "move") {
-        // note: the move verb's own admission requires the CAS unless a handoff names the record.
-        const conditionalRequired = definition(`issue.${verb}`).requirements.filter(
-          (entry) => entry.required === true && entry.condition !== undefined,
-        );
-        expect(conditionalRequired).toContainEqual(
-          expect.objectContaining({ name: "expect", condition: { field: "input", present: false } }),
-        );
         // note: `--expect-store` stays required on this verb, so the CAS-free shape is proved with it.
         expect(definition(`issue.${verb}`).input.safeParse({
           id: "I-000001", actor: "project-manager", expectStore: 0, payload: {},
+        }).success).toBe(false);
+        expect(definition(`issue.${verb}`).input.safeParse({
+          id: "I-000001", actor: "project-manager", expect: 0, expectStore: 0, payload: {},
         }).success).toBe(true);
         continue;
       }
