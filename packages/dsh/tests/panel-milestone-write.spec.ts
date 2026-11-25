@@ -15,7 +15,11 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import { rm } from 'node:fs/promises'
 import { bootApp, seedOpenIssue, seedStore, type BootResult } from './harness.ts'
 import { stubGateway } from './gateway-stub.ts'
-import { MstarPanelSnapshotClient } from '../src/client/panel/panel-snapshot-client.ts'
+import {
+  MstarPanelSnapshotClient,
+  type MstarPanelSnapshotConnection,
+} from '../src/client/panel/panel-snapshot-client.ts'
+import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import { createMilestoneWrites, writeOperationIds } from '../src/client/panel/panel-shell.tsx'
 import { registerCatalogEntity, withCollaborationWrite } from '@mstar-harness/engine'
 import {
@@ -126,6 +130,55 @@ async function observedRevision(endpoint: WriteEndpoint, sessionId: string, cwd:
   const read = await endpoint.dashboardView(sessionId, cwd, 'roadmap', { project: '_default' })
   if (read.kind !== 'ok' || read.envelope === undefined) throw new Error('roadmap read failed in fixture')
   return read.envelope.storeRevision
+}
+
+/** One milestone row as the panel's roadmap read states it. */
+interface RoadmapMilestone {
+  milestoneId: string
+  name: string
+  status: string
+  effortSessions: number | null
+}
+
+/** The store's milestone rows, read back through the panel's own roadmap view. */
+async function roadmapMilestones(endpoint: WriteEndpoint, sessionId: string, cwd: string): Promise<RoadmapMilestone[]> {
+  const read = await endpoint.dashboardView(sessionId, cwd, 'roadmap', { project: '_default' })
+  if (read.envelope === undefined) throw new Error('roadmap read failed in fixture')
+  return (read.envelope.data as { milestones: { milestones: RoadmapMilestone[] } }).milestones.milestones
+}
+
+/**
+ * Route the production client's RPC at the REAL panel service, so a spec drives the
+ * client and shell over the real store: only the transport is local. A dropped or
+ * coerced `effortSessions` in either half then fails the readback below.
+ */
+function serviceConnection(service: WriteEndpoint): MstarPanelSnapshotConnection {
+  return {
+    rpc: {
+      async call(_channel: string, endpoint: string, payload: unknown): Promise<ConnectionRpcResult<unknown>> {
+        const args = (payload as { args: Record<string, unknown> }).args
+        const sessionId = String(args.sessionId)
+        const cwd = String(args.cwd)
+        const projectId = String(args.projectId)
+        const mutation = args.mutation as { operationId: string; expectedStoreRevision: number }
+        if (endpoint === MILESTONE_ADD_ENDPOINT) {
+          const input = args.input as { name: string; effortSessions: number | null; ordinal: number }
+          return { ok: true, value: await service.milestoneAdd(sessionId, cwd, projectId, input, mutation) }
+        }
+        if (endpoint === MILESTONE_UPDATE_ENDPOINT) {
+          const patch = args.patch as { name?: string; effortSessions?: number | null; status?: string }
+          return {
+            ok: true,
+            value: await service.milestoneUpdate(sessionId, cwd, projectId, String(args.milestoneId), patch, mutation),
+          }
+        }
+        return {
+          ok: false,
+          error: { code: 'spec/unrouted', message: `spec bridge: unrouted endpoint ${endpoint}`, details: {} },
+        }
+      },
+    },
+  }
 }
 
 describe('milestone write descriptors', () => {
@@ -293,11 +346,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     liveSession(app, 'ses_ms2', app.root)
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
-    const milestonesOf = async (): Promise<Array<{ name: string; status: string; effortSessions: number | null }>> => {
-      const read = await endpoint.dashboardView('ses_ms2', app.root, 'roadmap', { project: '_default' })
-      return (read.envelope?.data as { milestones: { milestones: Array<{ name: string; status: string; effortSessions: number | null }> } })
-        .milestones.milestones
-    }
+    const milestonesOf = () => roadmapMilestones(endpoint, 'ses_ms2', app.root)
 
     const created = await endpoint.milestoneAdd(
       'ses_ms2',
@@ -338,6 +387,43 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     )
     expect(cleared.ok).toBe(true)
     expect((await milestonesOf())[0]).toMatchObject({ name: 'Renamed', status: 'active', effortSessions: null })
+  })
+
+  it('carries a count and an explicit clear from the CHANNEL to the store', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_ms_chain', app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+
+    // The seat re-arms the channel after every write with the freshly observed revision,
+    // so the spec does the same: one channel per write, the production client throughout.
+    const channelAt = (expectedStoreRevision: number) =>
+      createMilestoneWrites({
+        client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
+        sessionId: 'ses_ms_chain',
+        cwd: app.root,
+        projectId: '_default',
+        expectedStoreRevision,
+        reload: () => {},
+        onState: () => {},
+        ids: writeOperationIds<{ expectedStoreRevision: number }>(),
+      })
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+    const revision = () => observedRevision(endpoint, 'ses_ms_chain', app.root)
+
+    channelAt(await revision()).create({ name: 'Chained', effortSessions: 12, ordinal: 0 })
+    await settle()
+    const created = await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)
+    expect(created).toMatchObject([{ name: 'Chained', effortSessions: 12 }])
+
+    // The clear travels as an explicit `null` — not an omitted field, which would leave
+    // the stored 12 alone — and the STORE holds null afterwards.
+    channelAt(await revision()).update(created[0]!.milestoneId, { effortSessions: null })
+    await settle()
+    expect(await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)).toMatchObject([
+      { name: 'Chained', effortSessions: null },
+    ])
   })
 
   it('removes an EMPTY milestone, and a non-empty one is refused verbatim', async () => {
