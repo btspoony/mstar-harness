@@ -70,6 +70,43 @@ describe("planDeclaredHeadersFromContent", () => {
     expect((error as PlanPathError).code).toBe("plan-path.identity-mismatch");
     expect((error as PlanPathError).message).toContain("main_worktree_branch");
   });
+  test("an explicit empty `[]` or `{}` consulted declaration refuses identity-mismatch, never reads as absent", () => {
+    // CF-02 regression: the explicit empty shapes declare a structural value
+    // all the same — they are present-but-invalid, never the absent key the
+    // snapshot fallback reads.
+    for (const declaration of ["main_worktree_branch: []", "main_worktree_branch: {}"]) {
+      const content = ["---", `plan_id: ${PLAN_ID}`, declaration, "---", ""].join("\n");
+      let error: unknown;
+      try {
+        planDeclaredHeadersFromContent(content, "my-plan.md");
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(PlanPathError);
+      expect((error as PlanPathError).code).toBe("plan-path.identity-mismatch");
+      expect((error as PlanPathError).message).toContain("main_worktree_branch");
+    }
+  });
+
+  test("a `null`, `~` or empty scalar consulted declaration reads as absent", () => {
+    // CF-02 regression: the empty null-like scalars carry no declaration —
+    // the key reads as absent exactly like a missing one, so the snapshot
+    // fallback applies unchanged.
+    for (const declaration of ["main_worktree_branch: null", "main_worktree_branch: ~", "main_worktree_branch:"]) {
+      const content = ["---", `plan_id: ${PLAN_ID}`, declaration, "---", ""].join("\n");
+      const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
+      expect(headers.get("main worktree branch")).toBeUndefined();
+    }
+  });
+
+  test("a numeric-looking `5.0` scalar is never read as the literal null or the typed number", () => {
+    // CF-02 regression companion of the CF-01 verbatim rule: `5.0` survives
+    // as the exact written branch spelling.
+    const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: 5.0", "---", ""].join("\n");
+    const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
+    expect(headers.get("main worktree branch")).toBe("5.0");
+  });
+
 
   test("an unterminated front matter fence refuses identity-mismatch, never absent declarations", () => {
     // CF-02 regression: an opening fence without a closing one is invalid —

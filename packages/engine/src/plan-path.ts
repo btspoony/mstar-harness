@@ -136,7 +136,18 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
     // numeric-looking plan id keeps its written form. One surrounding pair of
     // matching quotes still strips (the quotes are the spelling's syntax, not
     // the branch's text).
+    // Bare `key:` declares nothing — the value carries no raw lexeme at all,
+    // so it is absent exactly as a missing key is (the snapshot fallback
+    // reads it identically). Nested children are not a consulted-key shape,
+    // and the parser's empty-raw lexeme is the one observable of that
+    // declaration form.
+    if (entry.rawText === "") continue;
     if (entry.kind === "scalar") {
+      // A `null` or `~` scalar carries no declaration — it is absent exactly
+      // as the snapshot fallback reads it. Any other scalar uses its raw text
+      // verbatim: `5.0` stays `5.0`, never the typed scalar `5` or the
+      // literal `null`.
+      if (entry.rawText === "null" || entry.rawText === "~") continue;
       const raw = entry.rawText;
       const value =
         raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
@@ -147,13 +158,9 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
     }
     // A present but non-scalar declaration (a list, a nested map, a block
     // scalar) is invalid — never dropped to an absent key, because the absent
-    // key is exactly what the consumer's snapshot fallback reads. An EMPTY
-    // list or map carries no content at all and counts as absent exactly as
-    // the schema validator's usable-content rule reads it.
-    const emptyShape =
-      (entry.kind === "list" && Array.isArray(entry.value) && entry.value.length === 0) ||
-      (entry.kind === "map" && typeof entry.value === "object" && entry.value !== null && Object.keys(entry.value as object).length === 0);
-    if (emptyShape) continue;
+    // key is exactly what the consumer's snapshot fallback reads. An explicit
+    // empty `[]` or `{}` is present all the same and refuses exactly like a
+    // populated one.
     throw new PlanPathError(
       "plan-path.identity-mismatch",
       `plan markdown ${planPath}:${entry.line} declares an invalid ${key} \u2014 accepted value: a single scalar, not a ${entry.kind}; rewrite the declaration as ${key}: <branch>`,
