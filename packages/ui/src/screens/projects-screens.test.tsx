@@ -217,6 +217,7 @@ const renderDetail = (
     identity?: ReturnType<typeof projectIdentity>;
     writes?: ProjectDetailProps["writes"];
     assignableIssues?: ProjectDetailProps["assignableIssues"];
+    drafts?: ProjectDetailProps["drafts"];
   },
   onClearScope?: () => void,
 ): string =>
@@ -231,6 +232,7 @@ const renderDetail = (
       copy={detailCopy}
       {...(input.writes === undefined ? {} : { writes: input.writes })}
       {...(input.assignableIssues === undefined ? {} : { assignableIssues: input.assignableIssues })}
+      {...(input.drafts === undefined ? {} : { drafts: input.drafts })}
       onBack={() => {}}
       onClearScope={onClearScope}
     />,
@@ -1055,16 +1057,24 @@ describe("ProjectDetail — the host-owned draft store", () => {
   });
 
   test("a re-mounted form seeds from the store: the draft survives the refresh", () => {
-    // why: the unmount/remount cycle itself needs a DOM runtime this suite does not have; the
-    // contract it proves is the seeding rule — the value a re-mounted editor opens with is
-    // the store's entry, and milestonePatch turns it into the write the retry sends.
+    // why: the unmount/remount cycle itself needs a DOM runtime this suite does not have, but
+    // the mount-half of the cycle IS observable here — the first render IS the re-mounted form's
+    // open, and the input values it prints are exactly what the useState seeding produced. The
+    // draft is keyed by the page's identity: this fixture's project is `engine`.
     const store = createMilestoneDraftStore();
-    store.write("create", { name: "Typed before the conflict", effort: "4" });
-    const seed = store.read("create");
-    expect(seed).toEqual({ name: "Typed before the conflict", effort: "4" });
-    // invariant: the create input the re-mounted form submits carries the SAME typed values.
-    const input = milestoneCreateInput(seed!.name, seed!.effort, 1);
-    expect(input).toEqual({ kind: "input", input: { name: "Typed before the conflict", effortSessions: 4, ordinal: 1 } });
+    store.write("engine:create", { name: "Typed before the conflict", effort: "4" });
+    const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} };
+    const html = renderDetail({ writes, drafts: store });
+    // invariant: the rendered inputs carry the typed text — removing the component's seeding
+    // turns both values empty and fails this test, because the store lookup is then dead code.
+    expect(html).toContain('value="Typed before the conflict"');
+    expect(html).toContain('value="4"');
+    // invariant: with the entry gone the form opens empty — the seed is the store entry itself,
+    // not a fallback that happens to echo it.
+    store.clear("engine:create");
+    const empty = renderDetail({ writes, drafts: store });
+    expect(empty).toContain('data-ms-milestone-create=""');
+    expect(empty).not.toContain('value="Typed before the conflict"');
   });
 
   test("the edit editor's seed prefers the stored draft's status over the milestone's", () => {
