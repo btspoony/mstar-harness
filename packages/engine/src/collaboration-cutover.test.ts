@@ -421,6 +421,10 @@ function ids(rows: Array<Record<string, unknown>>, column: string): string[] {
 
 describe("collaboration cutover", () => {
   test("a combined source below the cutover source floor is refused with the store-upgrade recovery", async () => {
+    // invariant: The source floor is the CURRENT schema: extraction copies the collaboration
+    // tables' exact current columns, so a source one migration behind is not extractable and is
+    // told to run the public `store upgrade` - the fence advances nothing. A source AT the floor
+    // (the current schema, as every seeded cutover source holds) is extractable without one.
     const repo = makeRepo("https://github.com/acme/cutover-below-floor.git");
     const context = contextAt(repo);
     const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
@@ -1549,7 +1553,8 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(receipt.phase).toBe("active");
     expect(receipt.source.schemaVersion).toBe(MIGRATIONS.length);
 
-    // note: The source advanced through the last migration inside the fence transaction.
+    // note: The source reached the current schema through the public upgrade before planning; the
+    // fence validates it and advances nothing.
     const after = await openStore(source.context, "read");
     try {
       const schema = after.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };

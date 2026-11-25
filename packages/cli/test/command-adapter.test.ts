@@ -318,7 +318,7 @@ describe("generated CLI adapter", () => {
         token: "BADPOS",
         code: "commander.excessArguments",
         message: error.message,
-        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --to-authority <repo-key> --discard --payload <json>",
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --to-authority <repo-key> --discard --input <path> --out <path> --payload <json>",
         helpRoute: "mstar issue show --help",
       }],
     });

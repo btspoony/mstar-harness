@@ -30,6 +30,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
+  collaborationLocationOfRepoKey,
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationMode,
@@ -40,6 +41,7 @@ import {
   assertIssueRef,
   COLLABORATION_MIGRATIONS,
   initializeCollaborationStore,
+  initializeRemoteCacheStore,
   localPredecessorRetiredPath,
   openCollaborationStore,
   probeCollaborationAuthority,
@@ -123,7 +125,7 @@ import type { WorkflowEntry } from "./status.js";
 import type { ResidualInput } from "./coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
-import { recordIssueMove } from "./cross-authority-move.js";
+import { discardAcrossAuthorities, moveAcrossByDocument, recordIssueMove, remoteMoveOperationId, setMoveGapForTest } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -511,6 +513,7 @@ describe("collaboration store", () => {
     await initializeCollaborationStore(location);
     const writer = new DatabaseSync(location.dbPath);
     try {
+      // note: one row past THIS build's ladder, whichever version that is.
       writer
         .prepare(
           "insert into schema_version(version, name, checksum, applied_at) values (?, 'future', 'x', ?)",
@@ -1471,19 +1474,24 @@ function writeV3Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: A real v4 lane: the v3 body, the cross-authority move ledger and its row. */
+/** note: A real v4 lane: the immutable v1-v4 migrations in order, their ledger rows and one issue. */
 function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
-  writeV3Lane(location);
+  writeV1Lane(location);
   const db = new DatabaseSync(location.dbPath);
   try {
-    const v4 = COLLABORATION_MIGRATIONS[3]!;
-    db.exec(v4.sql);
-    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-      v4.version,
-      v4.name,
-      migrationChecksum(v4),
-      "2026-11-21T00:00:00.000Z",
-    );
+    for (const migration of COLLABORATION_MIGRATIONS.slice(1, 4)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "2026-11-21T00:00:00.000Z",
+      );
+    }
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+        "values ('project', 'p-dest', 'Destination', 'projects', 'projects/p-dest', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+    ).run();
     seed?.(db);
   } finally {
     db.close();
@@ -1501,6 +1509,36 @@ function writeV3RemoteLane(location: CollaborationLocation): void {
     db.close();
   }
   chmodSync(location.dbPath, 0o600);
+}
+
+/** note: One v4 `issue_moves` half row, exactly as the v4 writers recorded it — no `route` column. */
+function seedV4MoveRow(
+  db: DatabaseSync,
+  row: Readonly<{
+    issueRef?: string;
+    operationId: string;
+    role: "source" | "destination";
+    sourceAuthority: string;
+    destinationAuthority: string;
+    sourceIssueId?: string;
+    phase?: string;
+  }>,
+): void {
+  db.prepare(
+    "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+      "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+      "staged_counts, source_store_id, source_epoch, removed_sync_rows, created_at, updated_at) " +
+      "values (?, ?, 'hash', ?, ?, null, ?, ?, 'p-dest', " +
+      "'project-manager', 'v4 move', ?, '{}', 'digest', '{}', 'v4-store', 1, 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+  ).run(
+    row.operationId,
+    row.role,
+    row.issueRef ?? "mstar:issue:99999999-9999-4999-8999-999999999999",
+    row.sourceIssueId ?? null,
+    row.sourceAuthority,
+    row.destinationAuthority,
+    row.phase ?? "staged",
+  );
 }
 
 /** note: Two issues with one occurrence: the history the upgrade must preserve. */
@@ -1540,6 +1578,10 @@ function issueCount(dbPath: string): number {
     db.close();
   }
 }
+
+/** note: The applied ladder every current lane carries, derived from this build's migrations. */
+const LADDER_VERSIONS: readonly number[] = COLLABORATION_MIGRATIONS.map((migration) => migration.version);
+const CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
 
 function ledgerVersions(dbPath: string): number[] {
   const db = new DatabaseSync(dbPath);
@@ -1935,6 +1977,7 @@ describe("collaboration remote schema ladder", () => {
         "2026-11-21T00:00:00.000Z",
       );
       db.exec(COLLABORATION_MIGRATIONS[4]!.sql);
+      db.exec(COLLABORATION_MIGRATIONS[5]!.sql);
     });
     activate(location.dbPath);
     const before = ledgerRows(location.dbPath);
@@ -4718,7 +4761,8 @@ describe("remote outbox intents", () => {
 test("a frozen pre-upgrade request that carried a milestone target settles as unestimated", async () => {
     // invariant: A frozen request outlives the contract that froze it. The predecessor froze each
     // milestone with a calendar `target`; a date is not a count of sessions, so the stored row must
-    // settle as unestimated instead of refusing every settlement verb as input-invalid.
+    // settle as unestimated instead of refusing every settlement verb as input-invalid. The rewrite
+    // is visible: the row reads as normalized-from-legacy, never as a current contract row.
     const fixture = remoteFixture("outbox-frozen-target");
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
@@ -4726,6 +4770,8 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
     const operationId = "00000000-0000-4000-8000-0000000000f1";
     await prepareRemoteIntent(context, intentRequest(fixture, commit, operationId));
+    // invariant: A CURRENT row reads untouched - no normalization is reported for it.
+    expect((await readRemoteIntent(context, operationId)).normalizedFromLegacy).toBe(false);
     const db = new DatabaseSync(location.dbPath);
     try {
       const row = db.prepare("select request_json from remote_outbox where operation_id = ?").get(operationId) as {
@@ -4747,9 +4793,32 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     if (shown.event?.change.kind !== "project-replace") throw new Error("expected a frozen project replacement");
     const milestones = shown.event.change.project.milestones as Array<{ effortSessions: unknown }>;
     expect(milestones.map((entry) => entry.effortSessions)).toEqual([null]);
+    expect(shown.normalizedFromLegacy).toBe(true);
     await expect(abandonRemoteIntent(context, { operationId, reason: "superseded" })).resolves.toMatchObject({
       state: "abandoned",
     });
+
+    // invariant: A row that MIXES the pre-upgrade and current shapes - some milestones carrying
+    // `target`, or one carrying both members - is damage no writer produced: it refuses as
+    // unreadable instead of being laundered through the legacy rewrite.
+    const mixed = "00000000-0000-4000-8000-0000000000f3";
+    await prepareRemoteIntent(context, intentRequest(fixture, commit, mixed));
+    const mixedDb = new DatabaseSync(location.dbPath);
+    try {
+      const row = mixedDb.prepare("select request_json from remote_outbox where operation_id = ?").get(mixed) as {
+        request_json: string;
+      };
+      const body = JSON.parse(row.request_json) as {
+        event: { change: { project: { milestones: Array<Record<string, unknown>> } } };
+      };
+      // note: ONE row carrying both the retired `target` and the current `effortSessions`:
+      // no writer ever produced that shape, uniform or current.
+      body.event.change.project.milestones[0]!.target = "2026-12-01";
+      mixedDb.prepare("update remote_outbox set request_json = ? where operation_id = ?").run(JSON.stringify(body), mixed);
+    } finally {
+      mixedDb.close();
+    }
+    await expect(readRemoteIntent(context, mixed)).rejects.toMatchObject({ code: "collaboration.unreadable" });
 
     // invariant: The legacy reading is the STORED path's alone: a new submission carrying the
     // retired member is still refused at the boundary.
@@ -9814,6 +9883,7 @@ describe("remote move fence", () => {
       recordIssueMove(handle.db, {
         operationId,
         role: "source",
+        route: "remote-unknown",
         requestHash: "request-hash",
         issueRef,
         sourceIssueId: null,
@@ -9866,6 +9936,41 @@ describe("remote move fence", () => {
     expect(outboxRows(cache.dbPath)).toEqual([]);
   }, 30_000);
 
+  test("remote-to-remote is decided by the destination lane's recorded mode, not by a file's presence", async () => {
+    // invariant: A destination addressed by `repoKey` resolves the SAME database path in every mode, so
+    // "the file exists" says nothing about which mode that lane records. The refusal must read the mode.
+    const cache = await outboxCache("fence-destination-mode");
+    const localKey = `github.com/remote-fixture/move-destination-${sequence++}`;
+    const localLane = collaborationLocationOfRepoKey(localKey, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+    const request = {
+      operationId: "00000000-0000-4000-8000-000000000921",
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: localKey,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    // invariant: An existing LOCAL destination lane is not a remote one, so the first step stages and
+    // emits its request document instead of being refused as remote-to-remote.
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    expect(staged).toMatchObject({ phase: "staged", side: "source", destinationAuthority: localKey });
+    expect(staged.document).toMatchObject({ phase: "request", destinationAuthority: localKey });
+
+    // note: The same destination key now RECORDS remote collaboration, which is the only fact that
+    // makes the pair remote-to-remote; the refusal names it.
+    const remoteKey = `github.com/remote-fixture/move-remote-destination-${sequence++}`;
+    const remoteLane = collaborationLocationOfRepoKey(remoteKey, "remote");
+    mkdirSync(join(remoteLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeRemoteCacheStore(remoteLane);
+    const refused = await refusalOf(() =>
+      moveAcrossByDocument(cache.context, { ...request, operationId: "00000000-0000-4000-8000-000000000922", destinationAuthority: remoteKey }, null),
+    );
+    expect(refused.code).toBe("collaboration.mode-unavailable");
+    expect(refused.details).toMatchObject({ repoKey: remoteKey });
+  }, 30_000);
+
   test("the fence is read inside the freeze transaction, not before it", async () => {
     const cache = await outboxCache("fence-inside-freeze");
     const actor = "project-manager";
@@ -9900,12 +10005,520 @@ describe("remote move fence", () => {
   }, 30_000);
 });
 
+describe("remote move conflict settlement", () => {
+  // note: The reviewed-fork fixture for one move tombstone: the tombstone intent is frozen, sent,
+  // answered with a competing fork and left `conflict`, then `outbox-resolve` freezes the reviewed
+  // repair linked through `resolved_by`.
+  async function conflictedTombstone(cache: { commit: string; context: StoreContext; dbPath: string }, operationId: string): Promise<{
+    heads: string[];
+    tombstoneId: string;
+  }> {
+    const tombstoneId = remoteMoveOperationId(operationId, "obsolete");
+    const intent = await readRemoteIntent(cache.context, tombstoneId);
+    const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, tombstoneId));
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    const competing = [
+      {
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01",
+        event: { ...frozen, operationId: "00000000-0000-4000-8000-00000000aaaa", parents: ["8".repeat(64)] },
+      },
+    ];
+    const heads = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, tombstoneId, attemptId, intent.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_ISSUE_HEAD],
+        observedHeads: heads,
+        observedRecords: competing,
+      }),
+    );
+    return { heads, tombstoneId };
+  }
+
+  /**
+   * note: One exchange whose tombstone fork a reviewed repair settles, so the switch document the
+   * source emits is the repaired subject. The repair transform receives the frozen subject and
+   * returns the confirmed one, which is how each carry test states exactly one difference.
+   */
+  async function switchThroughRepair(
+    name: string,
+    operationId: string,
+    repair: (mstar: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<{
+    switched: Awaited<ReturnType<typeof moveAcrossByDocument>>;
+    destinationContext: StoreContext;
+    request: Parameters<typeof moveAcrossByDocument>[1];
+  }> {
+    const cache = await outboxCache(name);
+    const destinationKey = `github.com/remote-fixture/${name}-destination-${sequence++}`;
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: destinationKey,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const destinationContext = contextAt(makeRepo(`https://${destinationKey}.git`));
+    await initializeCollaborationStore(resolveCollaborationLocation(destinationContext));
+    activate(resolveCollaborationLocation(destinationContext).dbPath);
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const destinationStaged = await moveAcrossByDocument(destinationContext, request, staged.document!);
+    const stagedDoc = destinationStaged.document!;
+    // note: The first switch enqueues the tombstone; the fork below replaces it with a reviewed repair.
+    await moveAcrossByDocument(cache.context, request, stagedDoc).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
+    const repairId = "00000000-0000-4000-8000-000000000b01";
+    const mstar = repair({ ...(frozen.change.mstar as Record<string, unknown>) });
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "settle the fork",
+      event: { ...frozen, operationId: repairId, parents: heads, change: { ...frozen.change, mstar } },
+    });
+    const repairAttempt = attemptOf(
+      await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)),
+    );
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, (await readRemoteIntent(cache.context, repairId)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee02",
+        event: recordedEvent(cache.dbPath, repairId),
+      }),
+    );
+    return { switched: await moveAcrossByDocument(cache.context, request, stagedDoc), destinationContext, request };
+  }
+
+  test("a repair that interleaves its rows still switches: the carried copy is a set-preserving extension", async () => {
+    // invariant: Finding 6. A reviewed repair may place its rows before the staged history, because
+    // the confirmed event is an extension of the record, not of a list position. The handoff gate
+    // proves every staged row SURVIVES — order is not part of that proof.
+    const prepended = {
+      eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab1",
+      occurrenceKey: "occ-prepended",
+      sourceKind: "test",
+      sourceIdentity: "review:fixture",
+      rootCauseKey: "remote.observation",
+      acceptanceKey: "remote.observation.stored",
+      location: "packages/engine/src/collaboration-store.test.ts",
+      observedBehavior: "the repair wrote this row before the staged history",
+      evidence: [],
+      discoveredAt: "2026-11-22T00:00:00.000Z",
+      recordedAt: "2026-11-22T00:00:00.000Z",
+      imported: false,
+    };
+    const { switched, destinationContext, request } = await switchThroughRepair(
+      "move-carry-set",
+      "00000000-0000-4000-8000-000000000b11",
+      (mstar) => ({ ...mstar, occurrences: [prepended, ...(mstar.occurrences as unknown[])] }),
+    );
+    expect(switched.phase).toBe("switched");
+    const carried = JSON.parse(switched.document!.payloadJson) as { occurrences: Array<{ occurrence_key: string }> };
+    expect(carried.occurrences.map((row) => row.occurrence_key)).toEqual(["occ-prepended", "occurrence-one"]);
+    // invariant: the DESTINATION accepts the interleaved copy and admits both rows — the gate every
+    // handoff crosses after a repair, not just the document the source emitted.
+    const admitted = await moveAcrossByDocument(destinationContext, request, switched.document!);
+    expect(admitted.phase).toBe("switched");
+    const admittedDb = new DatabaseSync(resolveCollaborationLocation(destinationContext).dbPath);
+    try {
+      expect(
+        admittedDb.prepare("select occurrence_key from occurrences order by occurrence_key").all(),
+      ).toEqual([{ occurrence_key: "occ-prepended" }, { occurrence_key: "occurrence-one" }]);
+    } finally {
+      admittedDb.close();
+    }
+  }, 30_000);
+
+  test("a repair's field edits cross into the admitted subject, and its tombstone write never does", async () => {
+    // invariant: Finding 7. The confirmed subject's FIELDS are the record's current truth, so a
+    // reviewed edit reaches the destination; the tombstone's own `obsolete`/closed write belongs to
+    // the provider record leaving this authority and must not become the member's state.
+    const { switched } = await switchThroughRepair("move-carry-fields", "00000000-0000-4000-8000-000000000b21", (mstar) => ({
+      ...mstar,
+      fields: {
+        ...(mstar.fields as Record<string, unknown>),
+        title: "Repaired title",
+        disposition: "obsolete",
+        closedAt: "2026-11-22T00:00:00.000Z",
+        closureNote: "left this authority",
+      },
+    }));
+    const carried = JSON.parse(switched.document!.payloadJson) as { issue: Record<string, unknown> };
+    expect(carried.issue.title).toBe("Repaired title");
+    expect(carried.issue.disposition).toBe("open");
+    expect(carried.issue.closed_at).toBeNull();
+    expect(carried.issue.closure_note).toBeNull();
+  }, 30_000);
+
+  test("an imported legacy record on a repaired row crosses to the destination", async () => {
+    // invariant: Finding 8. A confirmed provider subject carries the imported row's PARSED legacy
+    // record, not the observed JSON text; reading only `legacyJson` dropped the imported document on
+    // every repaired move, stranding a record whose provenance the destination then never held.
+    const { switched } = await switchThroughRepair("move-carry-legacy", "00000000-0000-4000-8000-000000000b31", (mstar) => ({
+      ...mstar,
+      provenance: [
+        ...(mstar.provenance as unknown[]),
+        {
+          eventId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          kind: "migration",
+          target: "legacy-entry-2",
+          sourceHash: "7".repeat(64),
+          origin: "scoped",
+          legacyProject: "legacy-project",
+          legacyBucket: null,
+          legacyEntryId: "legacy-entry-2",
+          legacyRecord: { legacyId: "legacy-2", title: "Imported finding" },
+          importedAt: "2026-11-22T00:00:00.000Z",
+        },
+      ],
+    }));
+    const carried = JSON.parse(switched.document!.payloadJson) as { provenance: Array<Record<string, unknown>> };
+    const imported = carried.provenance.find((row) => row.legacy_entry_id === "legacy-entry-2");
+    expect(JSON.parse(String(imported?.legacy_json))).toMatchObject({ legacyId: "legacy-2" });
+  }, 30_000);
+
+  test("a repaired tombstone closes the move and blocks discard, carrying the reviewed history", async () => {
+    // invariant: Critical 2 (review wave 3) — a conflict is terminal for its own ROW only. Once a
+    // reviewed repair confirms the same tombstone under a different operation id, the move completes
+    // its switch through the `resolved_by` chain, and the discard refuses: the provider record is
+    // already closing, so abandoning the move would strand it.
+    // invariant: Critical 1 (review wave 4) — the subject the switch carries is the CONFIRMED one,
+    // not the pre-conflict freeze: the repair's rows reach the destination copy it admits.
+    const cache = await outboxCache("move-repair-obsolete");
+    const operationId = "00000000-0000-4000-8000-000000000941";
+    const destinationKey = `github.com/remote-fixture/move-destination-${sequence++}`;
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: destinationKey,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    // note: A real local destination checkout bound to the same key, so the exchange halves meet
+    // over the documents rather than a faked ledger row.
+    const destinationContext = contextAt(makeRepo(`https://${destinationKey}.git`));
+    await initializeCollaborationStore(resolveCollaborationLocation(destinationContext));
+    activate(resolveCollaborationLocation(destinationContext).dbPath);
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const doc = staged.document;
+    expect(doc).not.toBeNull();
+    // note: The destination half of the staged exchange: its row and `staged` document are written
+    // in ITS lane from the real request document.
+    const destinationStaged = await moveAcrossByDocument(destinationContext, request, staged.document!);
+    expect(destinationStaged.phase).toBe("verified");
+    const stagedDoc = destinationStaged.document;
+    expect(stagedDoc?.phase).toBe("staged");
+
+    const enqueued = await moveAcrossByDocument(cache.context, request, stagedDoc!).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(enqueued?.code).toBe("remote.effect-pending");
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
+    const repairId = "00000000-0000-4000-8000-000000000942";
+    // note: The reviewed resolution carries the record plus the rows the reviewer kept: one extra
+    // occurrence and one extra provenance row over the freeze, so the carried copy is provably the
+    // repair's subject rather than the request's.
+    const repairMstar = {
+      ...(frozen.change.mstar as Record<string, unknown>),
+      occurrences: [
+        ...(frozen.change.mstar.occurrences as unknown[]),
+        {
+          eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaad1",
+          occurrenceKey: "occ-repaired",
+          sourceKind: "test",
+          sourceIdentity: "review/repair",
+          rootCauseKey: "root-repair",
+          acceptanceKey: "accept-repair",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "The reviewed repair added this row.",
+          evidence: [],
+          discoveredAt: "2026-11-22T00:00:00.000Z",
+          recordedAt: "2026-11-22T00:00:00.000Z",
+          imported: false,
+        },
+      ],
+      provenance: [
+        ...(frozen.change.mstar.provenance as unknown[]),
+        {
+          eventId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbd1",
+          kind: "plan",
+          target: "repair-plan",
+          sourceHash: "5".repeat(64),
+          origin: "scoped",
+          legacyProject: null,
+          legacyBucket: null,
+          legacyEntryId: null,
+          legacyRecord: null,
+          importedAt: null,
+        },
+      ],
+    };
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the tombstone",
+      event: {
+        ...frozen,
+        operationId: repairId,
+        parents: heads,
+        change: { ...frozen.change, mstar: repairMstar },
+      },
+    });
+    const repairAttempt = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)));
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, (await readRemoteIntent(cache.context, repairId)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee02",
+        event: recordedEvent(cache.dbPath, repairId),
+      }),
+    );
+
+    // invariant: The repaired confirmation IS the tombstone this move needed: the same exchange
+    // advances the source row to `switched` and emits the switch document under the repair's id.
+    const switched = await moveAcrossByDocument(cache.context, request, stagedDoc!);
+    expect(switched.phase).toBe("switched");
+    expect(switched.pendingOperationId).toBe(repairId);
+    // invariant: The switch document carries the CONFIRMED subject — the repair's added rows are in
+    // its payload and counts, so the digest legitimately outgrew the staged freeze.
+    const switchDoc = switched.document;
+    expect(switchDoc?.phase).toBe("switch");
+    expect(switchDoc?.payloadDigest).not.toBe(stagedDoc!.payloadDigest);
+    const carriedCopy = JSON.parse(switchDoc!.payloadJson) as {
+      occurrences: Array<{ occurrence_key: string }>;
+      provenance: Array<Record<string, unknown>>;
+      issue: Record<string, unknown>;
+    };
+    expect(carriedCopy.occurrences.length).toBe(2);
+    expect(carriedCopy.occurrences.some((row) => row.occurrence_key === "occ-repaired")).toBe(true);
+    expect(carriedCopy.provenance.length).toBe(2);
+    expect(carriedCopy.issue.disposition).toBe("open");
+
+    const refused = await discardAcrossAuthorities(cache.context, request).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(refused?.code).toBe("collaboration.move-phase-invalid");
+
+    // invariant: The destination's admission is the end of the chain the finding tested: the copy it
+    // admits is the confirmed one, so the repaired rows land in the local lane with the record.
+    const admitted = await moveAcrossByDocument(destinationContext, request, switchDoc!);
+    expect(admitted.phase).toBe("switched");
+    expect(admitted.document?.phase).toBe("admission");
+    const destinationDb = new DatabaseSync(resolveCollaborationLocation(destinationContext).dbPath);
+    try {
+      expect(destinationDb.prepare("select count(*) as n from occurrences where occurrence_key = 'occ-repaired'").get()).toEqual({ n: 1 });
+      expect(
+        destinationDb
+          .prepare("select disposition from issues where issue_ref = ?")
+          .get(FORGED_ISSUE_REF),
+      ).toEqual({ disposition: "open" });
+      expect(
+        destinationDb
+          .prepare("select count(*) as n from provenance where issue_id = (select id from issues where issue_ref = ?)")
+          .get(FORGED_ISSUE_REF),
+      ).toEqual({ n: 2 });
+    } finally {
+      destinationDb.close();
+    }
+    // invariant: The admission handoff completes the move on the source half too.
+    const published = await moveAcrossByDocument(cache.context, request, admitted.document!);
+    expect(published.phase).toBe("published");
+  }, 30_000);
+  test("an enqueued repair names the fork-evidence route, not the original's dispatch", async () => {
+    // invariant: Critical 3 (review wave 4) — once `outbox-resolve` enqueued a repair for the
+    // conflicted tombstone, the live leaf IS that repair: an ordinary dispatch refuses it because a
+    // reviewed resolution must carry the host's fork observation through `--input`. The refusal's
+    // recovery must name that route, and the original's abandon+dispatch text must never appear.
+    const cache = await outboxCache("move-repair-pending");
+    const operationId = "00000000-0000-4000-8000-000000000946";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const enqueued = await moveAcrossByDocument(cache.context, request, { ...staged.document!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(enqueued?.code).toBe("remote.effect-pending");
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    const repairId = "00000000-0000-4000-8000-000000000947";
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the tombstone",
+      event: { ...frozen, operationId: repairId, parents: heads },
+    });
+
+    // invariant: The repair is enqueued but never dispatched, so the chain's live leaf is the
+    // repair itself: the refusal's recovery names the fork-evidence route an enqueued resolution
+    // takes, never the original intent's dispatch-without-input route.
+    const pending = await moveAcrossByDocument(cache.context, request, { ...staged.document!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+    );
+    expect(pending?.code).toBe("remote.effect-pending");
+    expect(pending?.details).toMatchObject({ operationId: repairId, state: "enqueued" });
+    const recovery = String(pending?.details?.recovery ?? "");
+    expect(recovery).toContain(`outbox-dispatch --harness <abs> --operation ${repairId} --input <file|->`);
+    expect(recovery).toContain("outbox-receipt");
+    expect(recovery).toContain("outbox-resolve");
+    expect(recovery).not.toContain("outbox-abandon");
+    expect(recovery).not.toContain(`--operation ${tombstoneId}`);
+  }, 30_000);
+
+
+  test("a reviewed repair that keeps the record open lets the discard and never switches", async () => {
+    // invariant: Critical 2 (review wave 3) — the chain's terminal repair confirmed a DIFFERENT
+    // event that left the record live: the provider record stays authoritative here, so abandoning
+    // the move loses nothing and the exchange must not claim a tombstone that never landed.
+    const cache = await outboxCache("move-repair-open");
+    const operationId = "00000000-0000-4000-8000-000000000943";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const doc = staged.document;
+    expect(doc).not.toBeNull();
+    await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+
+    const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
+    const frozen = recordedEvent(cache.dbPath, tombstoneId);
+    // note: The reviewed resolution keeps the record authoritative: same carried history, but the
+    // disposition the reviewer confirmed is `open`, not the move's `obsolete`.
+    const repairId = "00000000-0000-4000-8000-000000000944";
+    if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
+    const frozenMstar = frozen.change.mstar;
+    const openEvent = {
+      ...frozen,
+      operationId: repairId,
+      parents: heads,
+      change: {
+        ...frozen.change,
+        mstar: { ...frozenMstar, fields: { ...(frozenMstar.fields as Record<string, unknown>), disposition: "open" } },
+      },
+    };
+    await prepareRemoteResolution(cache.context, tombstoneId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "keep the record",
+      event: openEvent as RemoteEvent,
+    });
+    const repairAttempt = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, tombstoneId, heads)));
+    await recordRemoteReceipt(
+      cache.context,
+      receiptInput(cache.commit, repairId, repairAttempt, (await readRemoteIntent(cache.context, repairId)).requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee03",
+        event: recordedEvent(cache.dbPath, repairId),
+      }),
+    );
+
+    // invariant: The repaired confirmation did not tombstone the record, so the exchange refuses
+    // the switch as the mismatch it is instead of claiming a tombstone that never landed.
+    const mismatched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(mismatched?.code).toBe("remote.effect-mismatch");
+
+    // invariant: The record never left this authority, so the discard completes instead of
+    // stranding it, and a reissued exchange refuses the switch instead of inventing a tombstone.
+    const discarded = await discardAcrossAuthorities(cache.context, request);
+    expect(discarded.phase).toBe("discarded");
+    const switched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(switched?.code).toBe("collaboration.move-phase-invalid");
+  }, 30_000);
+
+  test("a successor generation carrying the same revision sum inside the stage window refuses as stale", async () => {
+    // invariant: Critical 3 (review wave 3) — the sampled revision sum alone cannot name the
+    // observation the copy was frozen from: a rollover landing between the read and the freeze can
+    // carry the same sum under a successor generation, and only the pinned generation refuses it.
+    const cache = await outboxCache("move-same-sum-rollover");
+    const operationId = "00000000-0000-4000-8000-000000000945";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/remote-fixture/move-destination-${sequence++}`,
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const localLane = collaborationLocationOfRepoKey(request.destinationAuthority, "local");
+    mkdirSync(join(localLane.dbPath, ".."), { recursive: true, mode: 0o700 });
+    await initializeCollaborationStore(localLane);
+
+    const check = positiveCheck();
+    let rolled = false;
+    setMoveGapForTest(async (point) => {
+      if (point !== "stage" || rolled) return;
+      rolled = true;
+      setMoveGapForTest(undefined);
+      // note: The successor lineage is genuine: the publish names the bound generation as its
+      // previous, so the rebind admits it and the new generation holds the same observation sum.
+      const second = cache.fixture.publish(
+        cache.fixture.payload({ generation: 4, previous: { selectorCommit: cache.commit, generation: 3, mode: "remote" }, cutover: FENCED }),
+      );
+      await bindRemoteAuthority(cache.context, { version: 1, selectorCommit: second, generation: 4, checks: [check] });
+      await ingestRemoteObservation(cache.context, observation(check, { selectorCommit: second, generation: 4 }));
+    });
+    const refused = await moveAcrossByDocument(cache.context, request, null).then(
+      () => null,
+      (error: unknown) => error as { code?: string },
+    );
+    expect(refused?.code).toBe("collaboration.observation-stale");
+    // invariant: The refusal staged nothing: the move has no row to resume under this operation id.
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      expect(db.prepare("select count(*) as n from issue_moves where operation_id = ?").get(operationId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+});
+
 describe("pre-v3 remote cache recovery", () => {
   // note: The predecessor ledger is this fixture's own input; the destination ledger is the WHOLE
   // migration registry, so adding an intermediate migration never reddens these cases or hides one.
   const PREDECESSOR_VERSIONS = COLLABORATION_MIGRATIONS.slice(0, 2).map(({ version }) => version);
   const REGISTRY_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
-  const CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
 
   /** note: The generation the predecessor cache itself records, read from its own meta row. */
   function recordedGeneration(location: CollaborationLocation): { storeId: string; epoch: number } {
@@ -11706,4 +12319,297 @@ describe("pre-v3 remote cache recovery", () => {
     // the replacement until its intent is settled.
     expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
   }, 30_000);
+});
+
+/**
+ * invariant: Review wave 5. The exchange decides its topology from the `route` each ledger row
+ * recorded at stage — never from a peer-lane probe, which a two-checkout exchange cannot answer —
+ * and no discard may leave provider work alive. These are the refusals and releases an operator
+ * recovers from, asserted at the engine boundary the CLI delegates to.
+ */
+describe("cross-authority move route and discard", () => {
+  const actor = "project-manager";
+
+  /** note: One activated local lane plus one captured record, the source half a local exchange stages. */
+  async function localSourceLane(name: string) {
+    const key = `github.com/local-fixture/${name}`;
+    const context = contextAt(makeRepo(`https://${key}.git`));
+    const location = resolveCollaborationLocation(context);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const created = await captureIssue(context, fixtureCapture(`Route source ${name}`) as never, {
+      operationId: "00000000-0000-4000-8000-000000000a01",
+      actor,
+    });
+    return { context, dbPath: location.dbPath, issueId: created.issueId };
+  }
+
+  function routeOfRow(dbPath: string, operationId: string, role: "source" | "destination"): unknown {
+    const db = new DatabaseSync(dbPath);
+    try {
+      return db.prepare("select route from issue_moves where operation_id = ? and role = ?").get(operationId, role)?.route;
+    } finally {
+      db.close();
+    }
+  }
+
+  test("a local exchange source records its route and releases only its own half", async () => {
+    // invariant: Finding 1. The peer's lane is unreachable from this checkout, so the discard reads
+    // the staged row's route instead of probing: an exchange source releases its half, and the record
+    // it fenced becomes writable again. A probe answers nothing here and the old path delegated to a
+    // one-checkout release that refuses.
+    const cache = await outboxCache("route-local-source");
+    const source = await localSourceLane("route-local-source");
+    const operationId = "00000000-0000-4000-8000-000000000a11";
+    const request = {
+      operationId,
+      actor,
+      sourceIssueId: source.issueId,
+      destinationAuthority: cache.fixture.repoKey,
+      destinationProject: "fixture-project",
+      reason: "cross to the provider",
+    };
+    const staged = await moveAcrossByDocument(source.context, request, null);
+    expect(staged).toMatchObject({ phase: "staged", side: "source" });
+    expect(routeOfRow(source.dbPath, operationId, "source")).toBe("local-remote");
+
+    const released = await discardAcrossAuthorities(source.context, request);
+    expect(released.phase).toBe("discarded");
+    // invariant: The fence is gone with the row: the record this authority kept is writable again.
+    await appendOccurrence(
+      source.context,
+      source.issueId,
+      // note: the same identity triple the capture established, with a fresh observation key.
+      { ...fixtureCapture("Route source route-local-source"), occurrenceKey: "run-after-route-discard" } as never,
+      { operationId: "00000000-0000-4000-8000-000000000a12", actor, expectedRevision: 2 },
+    );
+  }, 30_000);
+
+  test("a remote destination refuses a remote-sourced request before staging anything", async () => {
+    // invariant: Finding 2. The source's recorded route says it was staged by a remote checkout, and
+    // the request document carries it, so the destination refuses remote-to-remote before writing a
+    // row or freezing a create. A probe cannot see a separate-home source and lets the move through.
+    const source = await outboxCache("route-remote-source");
+    // note: The destination's selector is created only AFTER the source staged, which is exactly a
+    // two-checkout exchange: the source's own home cannot answer for the peer lane at all.
+    const destination = remoteFixture("route-remote-destination");
+    const operationId = "00000000-0000-4000-8000-000000000a21";
+    const request = {
+      operationId,
+      actor,
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: destination.repoKey,
+      destinationProject: "fixture-project",
+      reason: "remote to remote",
+    };
+    const staged = await moveAcrossByDocument(source.context, request, null);
+    expect(staged.phase).toBe("staged");
+    expect(staged.document?.route).toBe("remote-unknown");
+    expect(routeOfRow(source.dbPath, operationId, "source")).toBe("remote-unknown");
+
+    const destinationContext = contextAt(destination.repo);
+    const commit = destination.publish(destination.payload());
+    await bindRemoteAuthority(destinationContext, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    await ingestRemoteObservation(destinationContext, observation(positiveCheck(), { selectorCommit: commit, generation: 3 }));
+    const destinationDbPath = locationAt(destination.repo).dbPath;
+    const refused = await refusalOf(() => moveAcrossByDocument(destinationContext, request, staged.document!));
+    expect(refused.code).toBe("collaboration.mode-unavailable");
+    // invariant: Nothing was staged and nothing was enqueued: no provider create can ever land.
+    const db = new DatabaseSync(destinationDbPath);
+    try {
+      expect(db.prepare("select count(*) as n from issue_moves").get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+    expect(outboxRows(destinationDbPath)).toEqual([]);
+  }, 30_000);
+
+  test("a remote destination cannot discard while its provider create may still land", async () => {
+    // invariant: Finding 3. The create intent is enqueued and the admission was never recorded, so
+    // abandoning the move here would leave a provider record no ledger admits. Only a create that can
+    // never land lets this half release — and then it does, without touching the source's half.
+    const cache = await outboxCache("route-live-create");
+    const source = await localSourceLane("route-live-create");
+    const operationId = "00000000-0000-4000-8000-000000000a31";
+    const request = {
+      operationId,
+      actor,
+      sourceIssueId: source.issueId,
+      destinationAuthority: cache.fixture.repoKey,
+      destinationProject: "fixture-project",
+      reason: "cross to the provider",
+    };
+    const staged = await moveAcrossByDocument(source.context, request, null);
+    const destinationRequest = { ...request, sourceIssueId: staged.document!.issueRef };
+    const destinationStaged = await refusalOf(() => moveAcrossByDocument(cache.context, destinationRequest, staged.document!));
+    expect(destinationStaged.code).toBe("remote.effect-pending");
+    expect(outboxRows(cache.dbPath).filter((row) => row.state === "enqueued").length).toBe(1);
+
+    const refused = await refusalOf(() => discardAcrossAuthorities(cache.context, destinationRequest));
+    expect(refused.code).toBe("collaboration.move-phase-invalid");
+    expect(refused.message).toContain("provider create");
+
+    await abandonRemoteIntent(cache.context, {
+      operationId: remoteMoveOperationId(operationId, "create"),
+      reason: "the exchange was abandoned before the provider create was sent",
+    });
+    const released = await discardAcrossAuthorities(cache.context, destinationRequest);
+    expect(released.phase).toBe("discarded");
+  }, 30_000);
+
+  test("an occurrence key another record holds refuses the move before the source can tombstone", async () => {
+    // invariant: Finding 5. `occurrences.occurrence_key` is lane-unique, so a colliding row fails the
+    // admission INSERT — for an exchange that refusal would land after the source's irreversible
+    // tombstone. The destination proves the keys free while it emits `staged`, so the source row stays
+    // `staged` and the record is never closed on either authority.
+    const cache = await outboxCache("route-collision");
+    const destination = await localSourceLane("route-collision");
+    const occupant = await captureIssue(
+      destination.context,
+      {
+        ...fixtureCapture("The record already holding the key"),
+        sourceIdentity: "other/review",
+        rootCauseKey: "other.root",
+        acceptanceKey: "other.accept",
+        occurrenceKey: "occurrence-one",
+      } as never,
+      { operationId: "00000000-0000-4000-8000-000000000a41", actor },
+    );
+    expect(occupant.created).toBe(true);
+
+    const operationId = "00000000-0000-4000-8000-000000000a42";
+    const request = {
+      operationId,
+      actor,
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: `github.com/local-fixture/route-collision`,
+      destinationProject: "fixture-project",
+      reason: "collide on the occurrence key",
+    };
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    const refused = await refusalOf(() =>
+      moveAcrossByDocument(destination.context, { ...request, sourceIssueId: staged.document!.issueRef }, staged.document!),
+    );
+    expect(refused.code).toBe("issue.ambiguous-identity");
+    expect(detailsOf(refused)).toMatchObject({ colliding_occurrence_keys: ["occurrence-one"] });
+    // invariant: no `staged` memo came back, so the source never froze its tombstone for this move.
+    expect(routeOfRow(cache.dbPath, operationId, "source")).toBe("remote-unknown");
+    const db = new DatabaseSync(cache.dbPath);
+    try {
+      expect(db.prepare("select phase from issue_moves where operation_id = ? and role = 'source'").get(operationId)).toEqual({
+        phase: "staged",
+      });
+    } finally {
+      db.close();
+    }
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+  test("a v4 one-checkout move backfills its route from the reachable destination half", async () => {
+    // invariant: Review wave 6. A v4 source row names the move only by the peer it was staged
+    // against, and its destination half lives in a lane this checkout can open — the one fact that
+    // distinguishes the one-checkout topology from an exchange. A `local-remote` label would make
+    // the discard release only the source half and strand the staged destination row beside an
+    // unfenced record.
+    const sourceRepo = makeRepo("https://v4-move.invalid/acme/source.git");
+    const sourceContext = contextAt(sourceRepo);
+    const sourceLocation = locationAt(sourceRepo);
+    const destRepo = makeRepo("https://v4-move.invalid/acme/dest.git");
+    const destContext = contextAt(destRepo);
+    const destLocation = locationAt(destRepo);
+    const operationId = "v4-move-one-checkout";
+    writeV4Lane(sourceLocation, (db) => {
+      db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref) " +
+          "values ('I-000001', 'fixture-project', 'Moved finding', 'bug', 'high', 'resolved', 'i', 'a', " +
+          "'2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z', 'key-one', " +
+          "'mstar:issue:99999999-9999-4999-8999-999999999999')",
+      ).run();
+      seedV4MoveRow(db, {
+        operationId,
+        role: "source",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: destLocation.repoKey,
+        sourceIssueId: "I-000001",
+      });
+    });
+    writeV4Lane(destLocation, (db) => {
+      seedV4MoveRow(db, {
+        operationId,
+        role: "destination",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: destLocation.repoKey,
+      });
+    });
+    activate(sourceLocation.dbPath);
+    activate(destLocation.dbPath);
+    (await initializeStore(sourceContext)).close();
+
+    const sourceReceipt = await upgradeCollaborationStore(sourceContext, "ops-engineer");
+    expect(sourceReceipt.fromVersion).toBe(4);
+    expect(routeOfRow(sourceLocation.dbPath, operationId, "source")).toBe("local-local");
+    const destReceipt = await upgradeCollaborationStore(destContext, "ops-engineer");
+    expect(destReceipt.fromVersion).toBe(4);
+    expect(routeOfRow(destLocation.dbPath, operationId, "destination")).toBe("local-local");
+
+    // invariant: The relabelled route is the discard's own admission check: one run releases BOTH
+    // halves, and the frozen record is writable again once its source row leaves the blocking set.
+    const discarded = await discardAcrossAuthorities(sourceContext, {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: "I-000001",
+      destinationAuthority: destLocation.repoKey,
+      destinationProject: "p-dest",
+      reason: "v4 move",
+    });
+    expect(discarded.phase).toBe("discarded");
+    const sourceDb = new DatabaseSync(sourceLocation.dbPath);
+    try {
+      sourceDb.prepare("update issues set updated_at = ? where id = 'I-000001'").run("2026-11-24T00:00:00.000Z");
+      expect(
+        sourceDb.prepare("select phase from issue_moves where operation_id = ?").get(operationId),
+      ).toEqual({ phase: "discarded" });
+    } finally {
+      sourceDb.close();
+    }
+    const destDb = new DatabaseSync(destLocation.dbPath);
+    try {
+      expect(destDb.prepare("select count(*) as n from issue_moves").get()).toEqual({ n: 0 });
+    } finally {
+      destDb.close();
+    }
+  });
+
+  test("a v4 exchange half keeps the route its own side names when no reachable peer row exists", async () => {
+    // invariant: The same backfill must not relabel an exchange: a v4 source whose destination
+    // lane this checkout cannot open is a two-checkout move, so it keeps `local-remote` — the label
+    // that makes the discard release only the half this checkout holds.
+    const sourceRepo = makeRepo("https://v4-move.invalid/acme/exchange-source.git");
+    const sourceContext = contextAt(sourceRepo);
+    const sourceLocation = locationAt(sourceRepo);
+    const operationId = "v4-move-exchange";
+    writeV4Lane(sourceLocation, (db) => {
+      seedV4MoveRow(db, {
+        operationId,
+        role: "source",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: "v4-move.invalid/acme/never-present",
+      });
+      // note: A v4 ledger may carry any string an older build wrote; a peer key that fails
+      // resolution must read as "not present", never abort the ladder.
+      seedV4MoveRow(db, {
+        operationId: "v4-move-bad-peer",
+        role: "source",
+        issueRef: "mstar:issue:88888888-8888-4888-8888-888888888888",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: "not-a-canonical-key",
+      });
+    });
+    activate(sourceLocation.dbPath);
+
+    const receipt = await upgradeCollaborationStore(sourceContext, "ops-engineer");
+    expect(receipt.fromVersion).toBe(4);
+    expect(routeOfRow(sourceLocation.dbPath, operationId, "source")).toBe("local-remote");
+    expect(routeOfRow(sourceLocation.dbPath, "v4-move-bad-peer", "source")).toBe("local-remote");
+  });
+
 });
