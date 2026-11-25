@@ -233,7 +233,7 @@ describe("Overview — the fact set of §8.2", () => {
     expect(zeros.total).toBe(0);
   });
 
-  test("milestones are capped at three and carry status, effort sessions, progress and open count", () => {
+  test("milestones are capped at three and carry status, effort, progress and open count", () => {
     if (model.milestones.kind !== "populated") throw new Error("expected milestones");
     expect(model.milestones.value).toHaveLength(3);
     expect(model.milestones.value[0]).toEqual({

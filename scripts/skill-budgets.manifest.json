@@ -30,7 +30,7 @@
   { "file": "skills/mstar-coding-behavior/references/test-reliability.md", "maxLines": 78 },
   { "file": "skills/mstar-conventions/SKILL.md", "maxLines": 270 },
   { "file": "skills/mstar-conventions/references/artifact-storage-paths.md", "maxLines": 60 },
-  { "file": "skills/mstar-conventions/references/effort-estimation.md", "maxLines": 40 },
+  { "file": "skills/mstar-conventions/references/effort-estimation.md", "maxLines": 44 },
   { "file": "skills/mstar-conventions/references/git-tracking-and-gitignore.md", "maxLines": 80 },
   { "file": "skills/mstar-conventions/references/harness-bootstrap-and-agents-layering.md", "maxLines": 100 },
   { "file": "skills/mstar-design-md/SKILL.md", "maxLines": 160 },

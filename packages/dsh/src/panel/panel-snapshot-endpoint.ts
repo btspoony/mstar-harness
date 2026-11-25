@@ -351,7 +351,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
       }
       const receipt = await addMilestone(
         { harnessDir: target.harnessDir },
-        { projectId, name: input.name, effortSessions: input.effortSessions, ordinal: input.ordinal },
+        { projectId, name: input.name, effortSessions: input.effortSessions ?? null, ordinal: input.ordinal },
         mutation,
       )
       return { ok: true, receipt }

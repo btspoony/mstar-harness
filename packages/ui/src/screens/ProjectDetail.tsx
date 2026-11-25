@@ -15,7 +15,7 @@
  * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
  * `checkedAt`, the catalog `revision`, `sourceHash`.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -43,6 +43,186 @@ export type AssignableIssue = { id: string; title: string; severity: string; rev
  * silently.
  */
 export const ASSIGNABLE_ISSUE_LIMIT = 50;
+
+/**
+ * An effort field's text, screened BEFORE any write: empty means unestimated
+ * (`null`), a whole number is sent as that number — the engine stays the
+ * authority for the range — and anything else is refused locally. A browser
+ * `type="number"` input sanitises bad text to an empty value, which would turn
+ * garbage into `{ effortSessions: null }` and silently clear the stored
+ * estimate, so the raw text is kept in a plain input and screened here.
+ */
+export function effortInput(value: string): { kind: "empty" } | { kind: "count"; sessions: number } | { kind: "invalid" } {
+  const trimmed = value.trim();
+  if (trimmed === "") return { kind: "empty" };
+  if (!/^[+-]?\d+$/.test(trimmed)) return { kind: "invalid" };
+  const sessions = Number(trimmed);
+  // safety: a digit string beyond the safe range loses precision to Number() and the
+  // browser JSON encoding then sends null, which the engine reads as a
+  // legitimate clear — so it must be refused before any write.
+  return Number.isSafeInteger(sessions) ? { kind: "count", sessions } : { kind: "invalid" };
+}
+
+function effortPatch(milestone: RoadmapModel["milestones"][number], value: string): { effortSessions?: number | null } {
+  const effort = effortInput(value);
+  if (effort.kind === "invalid") return {};
+  if (effort.kind === "empty") return milestone.effortSessions === null ? {} : { effortSessions: null };
+  return effort.sessions === milestone.effortSessions ? {} : { effortSessions: effort.sessions };
+}
+
+/** The draft's touched set with one more field, so a handler records the edit it makes. */
+export function withTouched(
+  touched: ReadonlySet<MilestoneDraftField>,
+  field: MilestoneDraftField,
+): ReadonlySet<MilestoneDraftField> {
+  const next = new Set(touched);
+  next.add(field);
+  return next;
+}
+
+/** The draft fields an operator can edit; only these travel in a patch. */
+export type MilestoneDraftField = "name" | "effort" | "status";
+
+/**
+ * One milestone editor's text, as the operator typed it, plus the fields they actually
+ * changed. The draft is seeded from the milestone on open, so it holds fields nobody
+ * touched: after a conflict refresh those values are stale, and comparing them against
+ * the fresh milestone would send a revert of another writer's change.
+ */
+export type MilestoneDraft = {
+  name: string;
+  effort: string;
+  status: string;
+  touched: ReadonlySet<MilestoneDraftField>;
+};
+
+/**
+ * The draft the editor opens with: seeded from the milestone on EVERY open, so a
+ * cancelled edit cannot survive into the next one and emit a stale delta.
+ */
+export function milestoneDraft(milestone: RoadmapModel["milestones"][number]): MilestoneDraft {
+  return {
+    name: milestone.name,
+    effort: milestone.effortSessions === null ? "" : String(milestone.effortSessions),
+    status: milestone.status ?? "planned",
+    touched: new Set(),
+  };
+}
+
+/** One target's draft text. The editor carries its status too; the create form never sets it. */
+export type CreateDraft = {
+  name: string;
+  effort: string;
+  status?: string;
+  /** note: the fields the operator edited, so a kept draft can re-open with its intent. */
+  touched?: readonly MilestoneDraftField[];
+};
+
+/**
+ * The draft store the host owns OUTSIDE the read's subtree. The forms live under the
+ * roadmap read, so a refresh (an accepted write, a revision conflict) unmounts and
+ * re-mounts them — a draft held in component state dies with the form, and the
+ * operator's typed text is lost exactly when they need it back (the conflict retry).
+ * The host holds one entry per target instead: the create form under `create`, each
+ * milestone editor under its milestone id. A form seeds its state from the entry on
+ * mount and writes every keystroke back, so a re-mounted form opens over the typed
+ * values; an ACCEPTED write clears the entry, because the stored milestone is then
+ * the truth the editor re-seeds from.
+ */
+export type MilestoneDraftStore = {
+  // note: the stored draft for one target, or undefined when none was typed.
+  read(target: string): CreateDraft | undefined;
+  // note: merges one field change into the target's draft.
+  write(target: string, patch: Partial<CreateDraft>): void;
+  // note: drops the target's draft (an accepted write, a cancelled edit).
+  clear(target: string): void;
+};
+
+/**
+ * The draft-store key one form targets: the identity the form was opened over
+ * (its project, when the host supplies one) plus its own target — the create
+ * slot, or a milestone id. The project belongs IN the key because milestones
+ * are globally unique but the create draft is not: a bare `create` re-seeds
+ * every project's create form with what was typed in one of them. The key is
+ * computed once on the render that receives the identity, never re-derived from
+ * the host's CURRENT selection — a late re-read of the selection would relabel
+ * an existing draft under a different project and lose the typed text.
+ */
+export function milestoneDraftTargetKey(projectId: string | undefined, target: string): string {
+  return projectId === undefined ? target : `${projectId}:${target}`;
+}
+
+/** The store's plain implementation: one record keyed per target. */
+export function createMilestoneDraftStore(): MilestoneDraftStore {
+  const entries = new Map<string, CreateDraft>();
+  return {
+    read: (target) => entries.get(target),
+    write: (target, patch) => entries.set(target, { ...entries.get(target), ...patch } as CreateDraft),
+    clear: (target) => {
+      entries.delete(target);
+    },
+  };
+}
+
+/** What Save sends: only the fields whose text differs from the stored milestone. */
+export function milestonePatch(
+  milestone: RoadmapModel["milestones"][number],
+  draft: MilestoneDraft,
+): { name?: string; effortSessions?: number | null; status?: string } {
+  // invariant: only a field the operator touched can travel, and only while its typed value
+  // still differs from the milestone the refresh just read — an untouched field is never
+  // sent, whatever another writer changed it to.
+  const touched = draft.touched;
+  return {
+    ...(touched.has("name") && draft.name.trim() !== milestone.name ? { name: draft.name.trim() } : {}),
+    ...(touched.has("effort") ? effortPatch(milestone, draft.effort) : {}),
+    ...(touched.has("status") && draft.status !== milestone.status ? { status: draft.status } : {}),
+  };
+}
+
+/**
+ * The create form's input, screened the same way: a count reaches the channel
+ * as that number, an empty field as `null`, and an invalid text refuses the
+ * submit instead of being coerced. `0` and negatives ARE whole numbers, so
+ * they travel to the engine and ITS range validator refuses them.
+ */
+export function milestoneCreateInput(
+  name: string,
+  effort: string,
+  nextOrdinal: number,
+): { kind: "invalid" } | { kind: "input"; input: { name: string; effortSessions: number | null; ordinal: number } } {
+  if (name.trim() === "") return { kind: "invalid" };
+  const parsed = effortInput(effort);
+  if (parsed.kind === "invalid") return { kind: "invalid" };
+  return {
+    kind: "input",
+    input: { name: name.trim(), effortSessions: parsed.kind === "empty" ? null : parsed.sessions, ordinal: nextOrdinal },
+  };
+}
+
+/**
+ * The ordinal a NEW milestone takes: one past the highest ordinal on the board,
+ * and 0 for an empty one. The count is not the answer — deletions leave gaps
+ * (ordinals 0, 2), where the count would sort the new milestone alongside or
+ * ahead of existing work instead of after it.
+ */
+export function nextMilestoneOrdinal(milestones: readonly { ordinal: number }[]): number {
+  let highest = -1;
+  for (const milestone of milestones) if (milestone.ordinal > highest) highest = milestone.ordinal;
+  return highest + 1;
+}
+
+/**
+ * What a settled write does to the operator's draft: a REFUSED write keeps it —
+ * the name/status/effort edits the operator typed are not the engine's to throw
+ * away, and the refusal message arrives while the editor is still open to fix
+ * the offending value. An accepted write clears it (null), as before. The write
+ * surface's refusal prop is the verdict: null after a successful write, the
+ * store's own message after a refused one.
+ */
+export function draftAfterWrite<T>(draft: T, refusal: string | null): T | null {
+  return refusal === null ? null : draft;
+}
 
 /**
  * The milestone write surface, declared structurally so this screen stays
@@ -85,9 +265,10 @@ export type ProjectDetailCopy = {
     unassignedUnit: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
+    effort: (sessions: number) => string;
+    unestimated: string;
     /** The four tallies of the prototype's board row. */
     countLabels: { open: string; resolved: string; retired: string; total: string };
-    noSessions: string;
     unassigned: (count: number) => string;
     /** The trailing timeline node's name for issues with no milestone. */
     timelineUnassigned: string;
@@ -96,7 +277,8 @@ export type ProjectDetailCopy = {
     writes: {
       create: string;
       nameLabel: string;
-      sessionsLabel: string;
+      effortLabel: string;
+      effortInvalid: string;
       statusLabel: string;
       edit: string;
       save: string;
@@ -145,6 +327,8 @@ export type ProjectDetailProps = {
   copy: ProjectDetailCopy;
   /** The milestone write channel, when the host can write (plan Task 4). */
   writes?: MilestoneWriteSurface;
+  /** note: the host-owned draft store; absent, drafts live in component state as before. */
+  drafts?: MilestoneDraftStore;
   /** The project's open, unassigned issues, as the assign picker's options. */
   assignableIssues?: readonly AssignableIssue[];
   onBack?: () => void;
@@ -159,17 +343,73 @@ function MilestoneActions(props: {
   /** The assign picker's options; absent means this host offers no picker here. */
   assignable: readonly AssignableIssue[] | undefined;
   copy: ProjectDetailCopy;
+  /** note: the host-owned draft store (absent: drafts live in component state, as before). */
+  drafts?: MilestoneDraftStore;
+  /** note: the identity the host opened this page over — it scopes every draft key. */
+  draftsProject?: string;
 }) {
   const { milestone, writes, assignable, copy } = props;
-  const [editing, setEditing] = useState(false);
+  // why: the key the host scoped to this page's identity — milestone ids are globally
+  // unique, but the key still comes from the identity the form was opened over, never the
+  // host's current selection at read time.
+  const targetKey = milestoneDraftTargetKey(props.draftsProject, milestone.milestoneId);
+  // invariant: one state, the OPEN draft — `null` is the closed editor. Seeded from the
+  // host's store when it holds one for this milestone (a re-mount after a refresh), else
+  // closed; a cancelled edit clears the entry, so the next open re-seeds from the milestone.
+  const [draft, setDraftState] = useState<MilestoneDraft | null>(() => {
+    const kept = props.drafts?.read(targetKey);
+    // invariant: a re-mounted editor shows the FRESH milestone for every field the operator did
+    // not touch — a stale displayed value would silently win over a status another writer changed —
+    // and keeps only the fields they did touch, so a retry still sends exactly their edits.
+    if (kept === undefined) return null;
+    const touched = new Set(kept.touched ?? []);
+    const fresh = milestoneDraft(milestone);
+    return {
+      name: touched.has("name") ? kept.name : fresh.name,
+      effort: touched.has("effort") ? kept.effort : fresh.effort,
+      status: touched.has("status") ? (kept.status ?? fresh.status) : fresh.status,
+      touched,
+    };
+  });
+  // why: the host store shadows the component state — a refresh unmounts this editor and
+  // the re-mounted one seeds from the store, so the typed text survives. The sync is an
+  // effect (not the state setter), because a state updater must stay pure.
+  useEffect(() => {
+    if (props.drafts === undefined) return;
+    if (draft === null) props.drafts.clear(targetKey);
+    else
+      props.drafts.write(targetKey, {
+        name: draft.name,
+        effort: draft.effort,
+        status: draft.status,
+        touched: [...draft.touched],
+      });
+  }, [draft, props.drafts, targetKey]);
+  const setDraft = setDraftState;
   const [removing, setRemoving] = useState(false);
-  const [name, setName] = useState(milestone.name);
-  const [sessions, setSessions] = useState(milestone.effortSessions === null ? "" : String(milestone.effortSessions));
-  const [status, setStatus] = useState(milestone.status ?? "planned");
-  if (!editing) {
+  const [effortError, setEffortError] = useState(false);
+  // why: the surface's refusal verdict, not the submit itself, decides whether the draft closes,
+  // so a refused count never throws away the operator's other edits.
+  const [writeInFlight, setWriteInFlight] = useState(false);
+  useEffect(() => {
+    if (!writeInFlight || writes.busy) return;
+    setWriteInFlight(false);
+    setDraft((current) => (current === null ? null : draftAfterWrite(current, writes.refusal)));
+  });
+  if (draft === null) {
     return (
       <span className={"ms-actions"}>
-        <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-edit="" onClick={() => setEditing(true)}>
+        <button
+          type="button"
+          className={"link"}
+          disabled={writes.busy}
+          data-ms-milestone-edit=""
+          onClick={() => {
+            // why: a reopened editor never shows a verdict about a value it no longer holds
+            setEffortError(false);
+            setDraft(milestoneDraft(milestone));
+          }}
+        >
           {copy.roadmap.writes.edit}
         </button>
         {removing ? (
@@ -236,28 +476,47 @@ function MilestoneActions(props: {
       data-ms-milestone-edit-form={milestone.milestoneId}
       onSubmit={(event) => {
         event.preventDefault();
-        writes.update(
-          milestone.milestoneId,
-          {
-            ...(name.trim() === milestone.name ? {} : { name: name.trim() }),
-            ...(sessions === (milestone.effortSessions === null ? "" : String(milestone.effortSessions)) ? {} : { effortSessions: sessions === "" ? null : Number(sessions) }),
-            ...(status === milestone.status ? {} : { status }),
-          },
-        );
-        setEditing(false);
+        if (effortInput(draft.effort).kind === "invalid") {
+          setEffortError(true);
+          return;
+        }
+        setEffortError(false);
+        const patch = milestonePatch(milestone, draft);
+        // why: nothing the operator edited still differs from the milestone a refresh just read, so
+        // there is nothing to write — submitting an empty patch would be refused and look like a
+        // failure to the operator who only retried an edit another writer already applied.
+        if (Object.keys(patch).length === 0) {
+          setDraft(null);
+          return;
+        }
+        writes.update(milestone.milestoneId, patch);
+        setWriteInFlight(true);
       }}
     >
       <label>
         {copy.roadmap.writes.nameLabel}
-        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+        <input value={draft.name} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, name: event.target.value, touched: withTouched(draft.touched, "name") })} />
       </label>
       <label>
-        {copy.roadmap.writes.sessionsLabel}
-        <input type="number" min="1" value={sessions} disabled={writes.busy} onChange={(event) => setSessions(event.target.value)} />
+        {copy.roadmap.writes.effortLabel}
+        {/* why: plain text keeps the raw keystrokes — a number input sanitises bad text
+            to "", which would coerce garbage into a null (a cleared estimate). */}
+        <input
+          type="text"
+          inputMode="numeric"
+          value={draft.effort}
+          disabled={writes.busy}
+          onChange={(event) => setDraft({ ...draft, effort: event.target.value, touched: withTouched(draft.touched, "effort") })}
+        />
+        {effortError ? (
+          <span className="muted t-11" role="alert" data-ms-effort-invalid="">
+            {copy.roadmap.writes.effortInvalid}
+          </span>
+        ) : null}
       </label>
       <label>
         {copy.roadmap.writes.statusLabel}
-        <select value={status} disabled={writes.busy} onChange={(event) => setStatus(event.target.value)}>
+        <select value={draft.status} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, status: event.target.value, touched: withTouched(draft.touched, "status") })}>
           {MILESTONE_STATUSES.map((option) => (
             <option key={option} value={option}>
               {option}
@@ -268,19 +527,28 @@ function MilestoneActions(props: {
       <button type="submit" className={"link"} disabled={writes.busy}>
         {copy.roadmap.writes.save}
       </button>
-      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setEditing(false)}>
+      <button
+        type="button"
+        className={"link"}
+        disabled={writes.busy}
+        onClick={() => {
+          setEffortError(false);
+          setDraft(null);
+        }}
+      >
         {copy.roadmap.writes.cancel}
       </button>
     </form>
   );
 }
 
-/** One milestone of the roadmap board: status, target, progress, open, issues. */
 function Milestone(props: {
   milestone: RoadmapModel["milestones"][number];
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
+  draftsProject?: string;
 }) {
   const { milestone, copy } = props;
   const writes = props.writes;
@@ -297,7 +565,7 @@ function Milestone(props: {
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
         <span className={"detail-meta"} data-ms-effort={milestone.effortSessions ?? ""}>
-          {milestone.effortSessions ?? copy.roadmap.noSessions}
+          {milestone.effortSessions === null ? copy.roadmap.unestimated : copy.roadmap.effort(milestone.effortSessions)}
         </span>
         {/* The prototype prints four tallies, each a number over its label. */}
         <span className={"milestone-block-counts"}>
@@ -358,26 +626,58 @@ function Milestone(props: {
         </div>
       )}
       {writes === undefined ? null : (
-        <MilestoneActions milestone={milestone} writes={writes} assignable={props.assignable} copy={copy} />
+        <MilestoneActions
+          milestone={milestone}
+          writes={writes}
+          assignable={props.assignable}
+          copy={copy}
+          {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
+        />
       )}
     </section>
   );
 }
 
-function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore; draftsProject?: string }) {
   const { writes, copy } = props;
-  const [name, setName] = useState("");
-  const [sessions, setSessions] = useState("");
+  // why: the create draft is keyed by the identity the form was opened over — a bare
+  // `create` would re-seed every project's create form from the one draft that exists.
+  const targetKey = milestoneDraftTargetKey(props.draftsProject, "create");
+  // why: seeded from the host store — a refresh re-mounts the form over the typed values.
+  const [name, setName] = useState(() => props.drafts?.read(targetKey)?.name ?? "");
+  const [effort, setEffort] = useState(() => props.drafts?.read(targetKey)?.effort ?? "");
+  const [effortError, setEffortError] = useState(false);
+  // why: every keystroke reaches the host store, so the draft is the host's, not the
+  // unmounted subtree's.
+  useEffect(() => {
+    if (name === "" && effort === "") props.drafts?.clear(targetKey);
+    else props.drafts?.write(targetKey, { name, effort });
+  }, [name, effort, props.drafts, targetKey]);
+  // why: same rule as the editor — the form clears only when the write is accepted, so a refusal
+  // keeps what the operator typed and the store's own message arrives beside the open form.
+  const [writeInFlight, setWriteInFlight] = useState(false);
+  useEffect(() => {
+    if (!writeInFlight || writes.busy) return;
+    setWriteInFlight(false);
+    if (draftAfterWrite({ name, effort }, writes.refusal) !== null) return;
+    setName("");
+    setEffort("");
+  });
   return (
     <form
       className={"ms-create"}
       data-ms-milestone-create=""
       onSubmit={(event) => {
         event.preventDefault();
-        if (name.trim() === "") return;
-        writes.create({ name: name.trim(), effortSessions: sessions === "" ? null : Number(sessions), ordinal: props.nextOrdinal });
-        setName("");
-        setSessions("");
+        const created = milestoneCreateInput(name, effort, props.nextOrdinal);
+        if (created.kind === "invalid") {
+          if (name.trim() !== "") setEffortError(true);
+          return;
+        }
+        setEffortError(false);
+        writes.create(created.input);
+        setWriteInFlight(true);
       }}
     >
       <label>
@@ -385,8 +685,19 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
         <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
       </label>
       <label>
-        {copy.roadmap.writes.sessionsLabel}
-        <input type="number" min="1" value={sessions} disabled={writes.busy} onChange={(event) => setSessions(event.target.value)} />
+        {copy.roadmap.writes.effortLabel}
+        <input
+          type="text"
+          inputMode="numeric"
+          value={effort}
+          disabled={writes.busy}
+          onChange={(event) => setEffort(event.target.value)}
+        />
+        {effortError ? (
+          <span className="muted t-11" role="alert" data-ms-effort-invalid="">
+            {copy.roadmap.writes.effortInvalid}
+          </span>
+        ) : null}
       </label>
       <button type="submit" className={"link"} disabled={writes.busy || name.trim() === ""}>
         {copy.roadmap.writes.create}
@@ -427,12 +738,15 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-// invariant: the timeline is one node per milestone in the read's order, plus one
-// trailing node for the unassigned issues; every number is the read's own — the
+// invariant: the timeline is one node per milestone in the read's order (ordinal,
+// then id — the comparator `readMilestonesOn` sorts with) plus one trailing node for
+// the unassigned issues; every number is the read's own — the effort line, the
 // retired-over-total pair and the open count.
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
-  const ordered = model.milestones;
+  const ordered = [...model.milestones].sort(
+    (a, b) => a.ordinal - b.ordinal || (a.milestoneId < b.milestoneId ? -1 : a.milestoneId > b.milestoneId ? 1 : 0),
+  );
   return (
     <div className="timeline" data-ms-milestone-timeline="" role="list">
       {ordered.map((milestone) => (
@@ -450,7 +764,7 @@ function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy
         >
           <div className="tl-name">{milestone.name}</div>
           <div className="tl-date">
-            {milestone.effortSessions ?? copy.roadmap.noSessions}
+            {milestone.effortSessions === null ? copy.roadmap.unestimated : copy.roadmap.effort(milestone.effortSessions)}
             {milestone.status === null ? "" : ` · ${milestone.status}`}
           </div>
           <div className="tl-counts" data-ms-timeline-counts="">
@@ -461,7 +775,6 @@ function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy
       ))}
       <div className="tl-node" role="listitem" data-ms-timeline-node="unassigned">
         <div className="tl-name muted">{copy.roadmap.timelineUnassigned}</div>
-        <div className="tl-date">{copy.roadmap.noSessions}</div>
         <div className="tl-counts">{copy.roadmap.timelineUnassignedIssues(model.unassignedIssues)}</div>
       </div>
     </div>
@@ -480,6 +793,8 @@ function RoadmapFeature(props: {
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
+  draftsProject?: string;
 }) {
   const { model, copy } = props;
   return (
@@ -510,6 +825,8 @@ function RoadmapFeature(props: {
               copy={copy}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+              {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
             />
           ))}
           {model.unassignedIssues === 0 ? null : (
@@ -531,7 +848,7 @@ function RoadmapFeature(props: {
  * roadmap row must not make the project unwritable. The store is the authority on
  * whether the write lands, so the form is offered and a refusal is surfaced.
  */
-function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore; draftsProject?: string }) {
   if (props.writes === undefined) return null;
   const writes = props.writes;
   return (
@@ -543,7 +860,13 @@ function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: num
           {props.copy.roadmap.writes.refusalLead} {writes.refusal}
         </p>
       )}
-      <MilestoneCreateForm writes={writes} nextOrdinal={props.nextOrdinal} copy={props.copy} />
+      <MilestoneCreateForm
+        writes={writes}
+        nextOrdinal={props.nextOrdinal}
+        copy={props.copy}
+        {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
+      />
     </>
   );
 }
@@ -562,6 +885,8 @@ function RoadmapArm(props: {
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
+  draftsProject?: string;
 }) {
   const { roadmap, copy } = props;
   // The write controls sit OUTSIDE the arm: a roadmap with no milestone (or no
@@ -571,8 +896,10 @@ function RoadmapArm(props: {
     props.writes === undefined ? null : (
       <RoadmapWrites
         writes={props.writes}
-        nextOrdinal={roadmap.kind === "populated" ? roadmap.value.milestones.length : 0}
+        nextOrdinal={roadmap.kind === "populated" ? nextMilestoneOrdinal(roadmap.value.milestones) : 0}
         copy={copy}
+        {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
       />
     );
   switch (roadmap.kind) {
@@ -585,6 +912,8 @@ function RoadmapArm(props: {
             copy={copy}
             {...(props.writes === undefined ? {} : { writes: props.writes })}
             {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+            {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
           />
         </div>
       );
@@ -754,6 +1083,8 @@ export function ProjectDetail(props: ProjectDetailProps) {
           copy={copy}
           {...(props.writes === undefined ? {} : { writes: props.writes })}
           {...(props.assignableIssues === undefined ? {} : { assignable: props.assignableIssues })}
+          {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+          draftsProject={identity.projectId}
         />
       ) : (
         <div className={"feature-body"} data-ms-feature={feature}>

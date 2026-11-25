@@ -1012,7 +1012,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-active" aria-label="active"><span class="dot"></span></span>
                 <span class="milestone-name">Unified frontend, one implementation</span>
-                <span class="milestone-target">2026-11-07</span>
+                <span class="milestone-target"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
               </div>
               <div class="milestone-foot">
                 <span class="bar"><i style="width:36%"></i></span>
@@ -1023,7 +1023,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-todo" aria-label="planned"><span class="dot"></span></span>
                 <span class="milestone-name">Read-path correctness</span>
-                <span class="milestone-target">2026-10-31</span>
+                <span class="milestone-target" data-t="rm.unestimated">unestimated</span>
               </div>
               <div class="milestone-foot">
                 <span class="bar"><i style="width:33%"></i></span>
@@ -1034,7 +1034,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-done" aria-label="delivered"><span class="dot"></span></span>
                 <span class="milestone-name">Issue store authority v4</span>
-                <span class="milestone-target">2026-10-18</span>
+                <span class="milestone-target"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
               </div>
               <div class="milestone-foot">
                 <span class="bar is-done"><i style="width:100%"></i></span>
@@ -2038,30 +2038,29 @@ select.ctl { cursor: pointer; max-width: 180px; }
         <section class="panel" style="margin-bottom:12px">
           <div class="panel-head"><h2 class="panel-title" data-t="rm.timeline">Milestone timeline</h2><span class="panel-meta"><span class="num mono">3</span> <span data-t="f.milestonesLower">milestones</span></span></div>
           <div class="panel-body">
-            <!-- Target-ordered nodes; missing targets last; one trailing unassigned node. -->
+            <!-- Ordinal-ordered nodes (the milestone's stored position); one trailing unassigned node. -->
             <div class="timeline" data-ms-milestone-timeline="">
               <div class="tl-node done">
                 <div class="tl-name">Issue store authority v4</div>
-                <div class="tl-date">2026-10-18 · delivered</div>
+                <div class="tl-date"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span> · delivered</div>
                 <div class="tl-counts">13/13 · 0 open</div>
               </div>
               <div class="tl-node">
                 <div class="tl-name">Read-path correctness</div>
-                <div class="tl-date">2026-10-31 · planned</div>
+                <div class="tl-date"><span data-t="rm.unestimated">unestimated</span> · planned</div>
                 <div class="tl-counts">2/6 · 4 open</div>
               </div>
               <div class="tl-node run">
                 <div class="tl-name">Unified frontend, one implementation</div>
-                <div class="tl-date">2026-11-07 · active</div>
+                <div class="tl-date"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span> · active</div>
                 <div class="tl-counts">5/14 · 9 open</div>
               </div>
               <div class="tl-node">
                 <div class="tl-name" style="color:var(--ms-text-muted)">unassigned</div>
-                <div class="tl-date">no target</div>
                 <div class="tl-counts">3 issues</div>
               </div>
             </div>
-            <p class="sec-note">Nodes are ordered by target date; each carries retired/total and the open count. Unassigned issues sit at the end as one node.</p>
+            <p class="sec-note">Nodes are ordered by the milestone's stored position (ordinal), never by a date; each carries retired/total and the open count, and its status line reads <span class="mono">&lt;n&gt; sessions · &lt;status&gt;</span>, or <span class="mono">unestimated · &lt;status&gt;</span>. Unassigned issues sit at the end as one node and carry no effort text.</p>
           </div>
         </section>
 
@@ -2073,9 +2072,12 @@ select.ctl { cursor: pointer; max-width: 180px; }
 
           <form class="ms-create" data-ms-milestone-create="">
             <label><span data-t="rm.wName">Milestone name</span><input type="text" placeholder="Milestone name"></label>
-            <label><span data-t="rm.wTarget">Target</span><input type="date" placeholder="2026-11-30"></label>
-            <!-- Creation is name + target: the engine's add verb has no status field and
-                 always inserts `planned`. Status changes are the edit control's. -->
+            <label><span data-t="rm.wEffort">Sessions</span><input type="text" inputmode="numeric" placeholder="12"></label>
+            <!-- Creation is name + effort sessions: the engine's add verb has no status field and
+                 always inserts `planned`. Status changes are the edit control's. The effort field
+                 is a numeric-mode text input, never a number-typed one, which sanitises text that
+                 is not a number to an empty value and would pass a typo off as an unestimated row.
+                 An empty value means unestimated (null). -->
             <button class="btn" type="button" data-t="rm.wCreate">Create</button>
           </form>
 
@@ -2085,7 +2087,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Unified frontend, one implementation</span>
               <span class="milestone-block-id">9f2c4a10-7d3e-4b62-8a51-0c9d2e7f4b13</span>
               <span class="chip">active</span>
-              <span class="mono t-11 muted">2026-11-07</span>
+              <span class="mono t-11 muted"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
               <span class="milestone-block-counts">
                 <span><span class="num">9</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">4</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2119,7 +2121,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Read-path correctness</span>
               <span class="milestone-block-id">2b8e4067-3c91-4f88-b0d4-6e5a17c9d2ab</span>
               <span class="chip">planned</span>
-              <span class="mono t-11 muted">2026-10-31</span>
+              <span class="mono t-11 muted" data-t="rm.unestimated">unestimated</span>
               <span class="milestone-block-counts">
                 <span><span class="num">4</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">2</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2142,7 +2144,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Issue store authority v4</span>
               <span class="milestone-block-id">91cc5511-8a4d-4d3e-9a77-5b0c8e2f6d40</span>
               <span class="chip">delivered</span>
-              <span class="mono t-11 muted">2026-10-18</span>
+              <span class="mono t-11 muted"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
               <span class="milestone-block-counts">
                 <span><span class="num">0</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">11</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2436,7 +2438,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-active" aria-label="active"><span class="dot"></span></span>
             <span class="milestone-name">Unified frontend, one implementation</span>
-            <span class="milestone-target">2026-11-07</span>
+            <span class="milestone-target"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
           </div>
           <div class="milestone-foot">
             <span class="bar"><i style="width:36%"></i></span>
@@ -2447,7 +2449,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-todo" aria-label="planned"><span class="dot"></span></span>
             <span class="milestone-name">Read-path correctness</span>
-            <span class="milestone-target">2026-10-31</span>
+            <span class="milestone-target" data-t="rm.unestimated">unestimated</span>
           </div>
           <div class="milestone-foot">
             <span class="bar"><i style="width:33%"></i></span>
@@ -2458,7 +2460,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-done" aria-label="delivered"><span class="dot"></span></span>
             <span class="milestone-name">Issue store authority v4</span>
-            <span class="milestone-target">2026-10-18</span>
+            <span class="milestone-target"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
           </div>
           <div class="milestone-foot">
             <span class="bar is-done"><i style="width:100%"></i></span>
@@ -2925,6 +2927,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "rm.openIssues": "open issues",
             "rm.authority": "Roadmap authority", "rm.contentHash": "Content hash", "rm.frontmatter": "Frontmatter",
       "rm.unassigned": "unassigned issues", "rm.unassignedNote": "issues are not assigned to a milestone",
+      "rm.wEffort": "Sessions", "rm.unitSessions": "sessions", "rm.unestimated": "unestimated",
       "rm.direction": "Direction", "rm.markdown": "Stored markdown",
       "rm.freshnessProjection": "projection current", "rm.storedFacts": "Stored facts",
       "rm.projectStatus": "Frontmatter status", "rm.createdAt": "Created at", "rm.residualsRef": "Residuals ref",
@@ -3114,6 +3117,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "rm.openIssues": "未解决问题",
             "rm.authority": "路线图权威", "rm.contentHash": "内容哈希", "rm.frontmatter": "frontmatter",
       "rm.unassigned": "未分配问题", "rm.unassignedNote": "条问题未分配到里程碑",
+      "rm.wEffort": "会话数", "rm.unitSessions": "个会话", "rm.unestimated": "未估算",
       "rm.direction": "方向", "rm.markdown": "存储的 Markdown",
       "rm.freshnessProjection": "投影最新", "rm.storedFacts": "存储事实",
       "rm.projectStatus": "Frontmatter 状态", "rm.createdAt": "创建时间",

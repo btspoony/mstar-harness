@@ -81,6 +81,7 @@ export type RoadmapMilestone = {
   name: string;
   status: string | null;
   effortSessions: number | null;
+  ordinal: number;
   progress: { done: number; total: number } | null;
   openIssues: number;
   /** The four tallies the prototype's board row prints. */
@@ -131,6 +132,7 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
       name: milestone.name,
       status: milestone.status,
       effortSessions: milestone.effortSessions,
+      ordinal: milestone.ordinal,
       progress: milestone.totalIssues === 0 ? null : { done: milestone.resolvedIssues, total: milestone.totalIssues },
       openIssues: milestone.openIssues,
       counts: {
