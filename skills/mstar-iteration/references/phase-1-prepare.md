@@ -33,7 +33,7 @@ PM 在新迭代启动时执行。
 | **非目标** | 明确排除在本次迭代外的事项 |
 | **Roadmap 上下文** | 从 store envelope 的 Direction + project milestones 确定 current / next iteration 位置，引用 milestone ID + 关联 issue 证据；缺失明确记录。compass `## Milestones` 是迭代交付节点，区别于 store 的项目 `project_milestones`，互不替代。 |
 | **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
-| **PR merge policy** | 该 policy 适用于本迭代链中的**每个 PR**。`reviewed-auto` — 本地 review 路径：按此 policy 运行 PR 级 review loop（`mstar-pr-loop`），其 `ship it` 结论即该 PR 的 merge 授权（须 settled、已 posted、且 `head` 等于当前 PR head；谓词定义见 `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」）。`reviewed-bot` — 外部 bot review 路径：PR 上挂载的自动 review bot（自托管 mstar-inspector，或 Greptile / Bugbot 等价物）按**其自身触发模式**（push 触发或手动触发）产出 review，该层**不**自起 review loop，只接收并监控它在新 head 上的最新 review 达到其自身门（Inspector 为 `mstar-inspector review` check 的 `success`），其 findings 按普通第三方 reviewer 处理；该面即 merge 授权。`owner-gated` — 不起任何 review loop；该层停在 merge-ready，等待**人类 owner**（操作者/用户，不是 coordinator 席位）对当前 PR head 的显式 merge 批准。**必须与用户显式确认，绝不默认。** 记入 compass frontmatter `pr_merge_policy`，并在 `## Decisions` 中带 `source` 记录。 |
+| **PR merge policy** | 三选一，适用于本迭代链中的每个 PR：`reviewed-auto` — 本地 `mstar-pr-loop` 提供 PR 级 review；`reviewed-bot` — 挂载的外部 review bot 提供 review，不跑本地 loop；`owner-gated` — 不起 review loop，等人类 owner 对当前 PR head 的 merge 批准。授权谓词与证据读取 → `mstar-roles/references/project-manager/pr-delivery.md`「Merge authorization」。`interactive` 下与用户显式确认；`autonomous` 下按 `references/autonomous-direction-lock.md`「Autonomous policy resolve」推荐并落盘 rationale，不询问用户。任何模式都不得静默默认。记入 compass frontmatter `pr_merge_policy`，并在 `## Decisions` 中带 `source` 记录。 |
 | **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（上限 4）；`XL` = **>4**（5+）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / PM Acceptance / compound / close / PR 等）。**interactive 默认不强制** S/M/L/XL。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
 
 ### Direction lock modes
@@ -58,7 +58,7 @@ The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey
 
 **Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR（默认分支门禁与 `Branch policy: direct on <branch>` 例外写法 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））。
 
-**Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
+**Autonomous policy resolve**：仅 `autonomous` 模式。branch 的解析顺序与缺失时的 STOP → `references/autonomous-direction-lock.md`「Autonomous policy resolve」；`pr_merge_policy` 按同节证据顺序推荐，无 STOP（无 bot 证据时落到 `reviewed-auto`）。勿把这套顺序套用到 interactive 以跳过用户确认。
 
 
 ### 1.2.5 Prototype checkpoint — before formal authoring
@@ -241,7 +241,7 @@ Pre-integration gate — every `[x]` before walking §2.3:
 - [ ] product-manager / architect include/skip reasons recorded; every selected role returned, writing-specialist last; no fake skip receipts, omitted-role markers or unresolved blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked` and each plan's Prepare gate passes (blocked plans documented)
 - [ ] Branch policy locked (`iteration_base_branch` / `spec_integration_branch` / `target_branch`) in the compass and the ACTIVE workflow; never a silent `main`/`master`
-- [ ] `pr_merge_policy` locked (`reviewed-auto` | `reviewed-bot` | `owner-gated`) in compass frontmatter, explicitly confirmed with the user and never defaulted, with `source` logged in `## Decisions` — its absence later stops a layer's merge-ready and returns here
+- [ ] `pr_merge_policy` locked (`reviewed-auto` | `reviewed-bot` | `owner-gated`) in compass frontmatter — explicitly confirmed with the user (`interactive`) or recommended with recorded rationale (`autonomous`), never defaulted, with `source` logged in `## Decisions` — its absence later stops a layer's merge-ready and returns here
 
 **Then** walk **`phase-2-worktree-lease.md` §2.3** checklist steps 1–7 and mark the closing item once the branch push has happened:
 

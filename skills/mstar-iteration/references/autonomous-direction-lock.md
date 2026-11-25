@@ -71,7 +71,7 @@ When a free-text direction / feedback constraint is supplied by the caller:
 - Still require code/roadmap evidence; do not lock a direction that contradicts the repo without documenting the conflict
 - If constraint and evidence conflict irreconcilably → **Blocked**（escalate）
 
-## Autonomous branch resolve
+## Autonomous policy resolve
 
 **Only in `autonomous` mode.** Do not use this order to skip user confirmation under `interactive`.
 
@@ -83,6 +83,8 @@ Resolve `iteration_base_branch` and `target_branch` in order（first hit wins pe
 4. Still missing → **STOP** — escalate; **never** substitute `main` / `master` because those names exist
 
 `spec_integration_branch` defaults to `iteration/<iteration-id>` once base/target are known.
+
+`pr_merge_policy` resolves the same evidence-first way: carry an existing value; otherwise `reviewed-bot` when an external review bot is attached to the PR flow, else `reviewed-auto`. Never recommend `owner-gated` — it waits for the human — unless the caller's written opt-in names it. No STOP: without bot evidence, fall through to `reviewed-auto`. Record value and evidence in `## Decisions` (`source: autonomous ranking`) and do not ask the user.
 
 ## Anti-patterns
 
