@@ -14,8 +14,10 @@ export type JsonObject = Record<string, unknown>;
 export type FrontmatterAndBody = { frontmatter: string; body: string };
 
 /** Refusal of a frontmatter line outside the accepted subset. `source` is a
- * diagnostic label only (the caller names the document); `line` is 1-based
- * inside the frontmatter text and `lineText` is the offending raw line. */
+ * diagnostic label only (the caller names the document); `line` is the
+ * 1-based line in the source document — the opening fence is document
+ * line 1, so the first frontmatter text line is line 2 — and `lineText`
+ * is the offending raw line. */
 export class DocumentFrontmatterError extends Error {
   readonly source: string;
   readonly line: number;
@@ -64,6 +66,18 @@ function unquote(value: string): string {
     }
   }
   return value;
+}
+
+/** Assign as an own data property: a plain `target[key] = value` write for
+ * the accepted key `__proto__` would invoke the inherited prototype setter
+ * instead of storing the key. */
+function setOwn(target: JsonObject, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 interface Level {
@@ -120,11 +134,14 @@ function parseFlowArray(raw: string, fail: () => never): string[] {
 
 /** Parse the strict accepted subset of harness frontmatter. Any other line
  * form throws `DocumentFrontmatterError` with the source label, the 1-based
- * line inside the frontmatter text and the offending raw line. */
+ * line in the document the frontmatter was extracted from and the offending
+ * raw line. */
 export function parseDocumentFrontmatter(frontmatter: string, source: string): JsonObject {
   const lines = frontmatter.split(/\r?\n/);
   const fail = (lineIndex: number, lineText: string, reason: string): never => {
-    throw new DocumentFrontmatterError(source, lineIndex + 1, lineText, reason);
+    // `+ 2` because the diagnostic contract is document-relative: the
+    // opening `---` fence is document line 1, frontmatter line 0 is line 2.
+    throw new DocumentFrontmatterError(source, lineIndex + 2, lineText, reason);
   };
 
   const root: JsonObject = {};
@@ -153,12 +170,19 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
         // The first child of a bare `key:` is a dash item: the key is a
         // block list, not the tentative empty map.
         const list: string[] = [];
-        top.parent![top.key!] = list;
+        setOwn(top.parent!, top.key!, list);
         top.kind = "list";
         top.target = list;
       }
       if (top.kind !== "list") {
         fail(i, raw, "list item outside a list key");
+      }
+      // The first item's indent is the sibling indent for the whole list;
+      // a deeper or inconsistent indent is not a sibling of the open list.
+      if (top.childIndent === null) {
+        top.childIndent = indent;
+      } else if (indent !== top.childIndent) {
+        fail(i, raw, "list item indent does not match the first item of its list");
       }
       const item = trimmed.replace(/^-\s*/, "").trim();
       if (
@@ -198,7 +222,26 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       fail(i, raw, "indent is not the child indent of the open map level");
     }
 
-    const separator = trimmed.indexOf(":");
+    // The separator colon terminates the key; for a quoted key it is the
+    // colon after the closing quote, so a colon inside the quotes stays
+    // part of the key.
+    let separator: number;
+    const firstChar = trimmed[0]!;
+    if (firstChar === '"' || firstChar === "'") {
+      const closingQuote = trimmed.indexOf(firstChar, 1);
+      if (closingQuote < 0) {
+        fail(i, raw, "unsupported key");
+      }
+      separator = closingQuote + 1;
+      while (separator < trimmed.length && trimmed[separator] === " ") {
+        separator += 1;
+      }
+      if (separator >= trimmed.length || trimmed[separator] !== ":") {
+        fail(i, raw, "line is not a key: line");
+      }
+    } else {
+      separator = trimmed.indexOf(":");
+    }
     if (separator <= 0) {
       fail(i, raw, "line is not a key: line");
     }
@@ -229,23 +272,28 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       // Bare `key:` opens either a nested map or a `- item` list; until the
       // first child line decides, it is the host's empty-map result.
       const child: JsonObject = {};
-      target[key] = child;
+      setOwn(target, key, child);
       stack.push({ indent, kind: "pending", target: child, key, parent: target, childIndent: null });
       continue;
     }
     if (rawValue === "{}") {
-      target[key] = {};
+      setOwn(target, key, {});
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
     if (rawValue === "|" || rawValue === "|-") {
       // Block scalar: deeper-indented lines join with `\n`; blank lines
       // inside the block stay empty, the block ends at the first nonblank
-      // line indented at or below the key.
+      // line indented at or below the key. Every consumed line gets the
+      // same tab-in-indentation refusal as any other frontmatter line.
       const blockLines: string[] = [];
       for (let j = i + 1; j < lines.length; j += 1) {
         const blockLine = lines[j];
-        const blockIndent = blockLine.match(/^ */)?.[0]?.length ?? 0;
+        const blockLeading = blockLine.match(/^[ \t]*/)?.[0] ?? "";
+        if (blockLine.trim() && blockLeading.includes("\t")) {
+          fail(j, blockLine, "tab in indentation");
+        }
+        const blockIndent = blockLeading.length;
         if (blockLine.trim() && blockIndent <= indent) break;
         const normalized = blockLine.startsWith(" ".repeat(indent + 2))
           ? blockLine.slice(indent + 2)
@@ -255,7 +303,7 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
         blockLines.push(normalized);
         i = j;
       }
-      target[key] = blockLines.join("\n");
+      setOwn(target, key, blockLines.join("\n"));
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
@@ -269,12 +317,12 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       fail(i, raw, "inline flow map");
     }
     if (rawValue.startsWith("[")) {
-      target[key] = parseFlowArray(rawValue, () => fail(i, raw, "unsupported flow array"));
+      setOwn(target, key, parseFlowArray(rawValue, () => fail(i, raw, "unsupported flow array")));
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
 
-    target[key] = parseScalar(rawValue);
+    setOwn(target, key, parseScalar(rawValue));
     stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
   }
 
