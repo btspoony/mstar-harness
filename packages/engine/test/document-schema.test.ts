@@ -3,8 +3,8 @@
  * front matter declared in the plan documents (compass D15/D17).
  *
  * Spec sources:
- * - Field tables: plan `20261125-frontmatter-core` Task 3 brief — the four
- *   kind schemas, the assignment conditional budget rule
+ * - Field tables: the schema plan brief — the four kind schemas, the
+ *   assignment conditional budget rule
  *   (`packages/engine/src/dispatch.ts` `validateAssignmentFields` /
  *   `REVIEW_SEAT_ROLES`), the canonical-PM-template unknown-field rule
  *   (`skills/mstar-roles/references/project-manager/dispatch-and-assignment.md`
@@ -24,9 +24,9 @@ function doc(fm: string, body = "# Body\n"): string {
 }
 
 const PLAN_FM = [
-  "plan_id: 20261125-frontmatter-core",
+  "plan_id: 20261201-synthetic-plan",
   "execution: sdd",
-  "working_branch: iteration/iter-20261125-frontmatter",
+  "working_branch: iteration/iter-synthetic-branch",
   "main_worktree_branch: 5.0",
   "delivery_kind: development",
   "status: Todo",
@@ -37,13 +37,13 @@ const ASSIGNMENT_FM = [
   "delegation: forbidden",
   "task_category: logic",
   "task_budget: M — one implementer round",
-  "working_branch: feature/20261125-frontmatter-core",
+  "working_branch: feature/synthetic-branch",
 ].join("\n");
 
-const BRIEF_FM = ["plan_id: 20261125-frontmatter-core", "task: 3", "files:", "- packages/engine/src/document-schema.ts"].join("\n");
+const BRIEF_FM = ["plan_id: 20261201-synthetic-plan", "task: 3", "files:", "- packages/engine/src/example.ts"].join("\n");
 
 const ACCEPTANCE_FM = [
-  "plan_id: 20261125-frontmatter-core",
+  "plan_id: 20261201-synthetic-plan",
   "gate: pm-acceptance",
   "verdict: Approve",
   "generated_at: 2026-11-26T08:00:00Z",
@@ -70,8 +70,8 @@ describe("validateDocumentFrontmatter — complete documents pass", () => {
       "assignment",
       doc(
         `${ASSIGNMENT_FM}\nexecution_mode: sdd\nwrite_domain: work\nenforcement: hard\n` +
-          "worktree_path: /repo.worktrees/example\nplan_id: 20261125-frontmatter-core\n" +
-          "iteration_id: iter-20261125-frontmatter\nworkflow_id: wf-1\ncontrol_write_paths:\n- .mstar/notes/x.jsonl\n" +
+          "worktree_path: /repo.worktrees/example\nplan_id: 20261201-synthetic-plan\n" +
+          "iteration_id: iter-synthetic\nworkflow_id: wf-1\ncontrol_write_paths:\n- .mstar/notes/x.jsonl\n" +
           "skill_presets: standard\nprimary: Small feature\nacceptance_criteria: done\nreport_format: Completion Report",
       ),
       "sample-assignment",
@@ -258,6 +258,21 @@ describe("validateDocumentFrontmatter — invalid values", () => {
     expect(v.message).toContain("report-only");
   });
 
+  test("delivery_kind accepts the compound verification/report-only token", () => {
+    const fm = PLAN_FM.replace("delivery_kind: development", "delivery_kind: verification/report-only");
+    expect(validateDocumentFrontmatter("plan", doc(fm), "plan").ok).toBe(true);
+  });
+
+  test.each(["verification", "report-only"])("split delivery_kind token %s refuses", (split) => {
+    const fm = PLAN_FM.replace("delivery_kind: development", `delivery_kind: ${split}`);
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    expect(gate.ok).toBe(false);
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("verification/report-only");
+    expect(v.message).toContain("development");
+  });
+
   test("brief task must be an integer", () => {
     const gate = validateDocumentFrontmatter("sdd-brief", doc("plan_id: p1\ntask: three"), "brief");
     const v = onlyViolation(gate);
@@ -424,13 +439,13 @@ describe("validateDocumentFrontmatter — T3-R2 canonical template allowlist", (
       ["parallelism: serial"],
       ["additional_gates: none"],
       ["phase_gate_checklist: go"],
-      ["working_branch: feature/20261125-frontmatter-core"],
+      ["working_branch: feature/synthetic-branch"],
       ["control_harness_root: /x/.mstar"],
       ["review_cwd: /x"],
       ["worktree_path: /x"],
-      ["plan_id: 20261125-frontmatter-core"],
+      ["plan_id: 20261201-synthetic-plan"],
       ["plan_scope: inherited read-only"],
-      ["review_range: 5da651986..HEAD"],
+      ["review_range: abc123def..HEAD"],
       ["diff_basis: merge-base"],
       ["write_domain: work"],
       ["main_worktree_branch: 5.0"],
@@ -564,6 +579,20 @@ describe("validateDocumentFrontmatter — T3-R4 strict ISO-8601 generated_at", (
     }
   });
 
+  test("a fractional-seconds UTC value passes", () => {
+    const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-11-26T08:00:00.000Z");
+    expect(validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance").ok).toBe(true);
+    const offset = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-11-26T08:00:00.123+02:30");
+    expect(validateDocumentFrontmatter("pm-acceptance", doc(offset), "acceptance").ok).toBe(true);
+  });
+
+  test("a malformed fractional part is rejected", () => {
+    for (const bad of ["2026-11-26T08:00:00.Z", "2026-11-26T08:00:00.", "2026-11-26T08:00:00.000"]) {
+      const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", `generated_at: "${bad}"`);
+      expect(validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance").ok).toBe(false);
+    }
+  });
+
   test("a valid numeric offset is accepted", () => {
     const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-11-26T08:00:00+02:30");
     const gate = validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance");
@@ -624,5 +653,60 @@ describe("validateDocumentFrontmatter — T3-R6 empty fenced front matter", () =
   test("an unterminated fence still reports absent", () => {
     const gate = validateDocumentFrontmatter("plan", "---\nplan_id: p1\n(no close", "plan");
     expect(codesOf(gate)).toEqual(["document.frontmatter.absent"]);
+  });
+});
+
+describe("validateDocumentFrontmatter — CF-04 usable required content", () => {
+  test('an explicit empty string refuses as missing', () => {
+    const fm = PLAN_FM.replace("execution: sdd", 'execution: ""');
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("execution"))).toBe(true);
+  });
+
+  test("whitespace-only scalar refuses as missing", () => {
+    const fm = PLAN_FM.replace("execution: sdd", "execution:    ");
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("execution"))).toBe(true);
+  });
+
+  test("an empty flow array refuses as missing", () => {
+    const fm = PLAN_FM.replace("working_branch: iteration/iter-synthetic-branch", "working_branch: []");
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("working_branch"))).toBe(true);
+  });
+
+  test("an empty map refuses as missing", () => {
+    const fm = PLAN_FM.replace("working_branch: iteration/iter-synthetic-branch", "working_branch: {}");
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("working_branch"))).toBe(true);
+  });
+
+  test("a nested map in a required textual field refuses as invalid", () => {
+    const fm = PLAN_FM.replace("plan_id: 20261201-synthetic-plan", "plan_id:\n  nested: value");
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("plan_id");
+  });
+
+  test("a numeric-looking branch scalar stays valid — the raw scalar is the carrier", () => {
+    // `main_worktree_branch: 5.0` types as a number; usable-content is read
+    // off the scalar itself, not its YAML-like typing, so no refusal fires.
+    expect(validateDocumentFrontmatter("plan", doc(PLAN_FM), "plan").ok).toBe(true);
+  });
+
+  test("task_budget of N/A counts as missing exactly as dispatch classifies it", () => {
+    const fm = ASSIGNMENT_FM.replace("task_budget: M — one implementer round", "task_budget: N/A");
+    const gate = validateDocumentFrontmatter("assignment", doc(fm), "assignment");
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("task_budget"))).toBe(true);
+  });
+
+  test("plan_id and the required assignment identifiers follow the same non-blank rule", () => {
+    const blankPlanId = PLAN_FM.replace("plan_id: 20261201-synthetic-plan", "plan_id:   ");
+    const planGate = validateDocumentFrontmatter("plan", doc(blankPlanId), "plan");
+    expect(planGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("plan_id"))).toBe(true);
+    const blank = ASSIGNMENT_FM.replace("execute_as: fullstack-dev", "execute_as:");
+    const blankGate = validateDocumentFrontmatter("assignment", doc(blank), "assignment");
+    expect(blankGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("execute_as"))).toBe(true);
   });
 });

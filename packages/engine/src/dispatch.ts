@@ -140,6 +140,21 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCa
 export const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
 
 /**
+ * Audit-category classification shared with the document schema: the raw
+ * `Task category` token is read case-insensitively after stripping leading
+ * markdown decoration, tolerating a suffix (`audit`, `audit (secondary)`,
+ * `audit_secondary`) but not a longer word (`auditing`). `Task category:
+ * audit` is an independent review-round trigger: mstar-harness-core maps
+ * `audit` to `@code-reviewer`, but nothing forces the pairing, so an audit
+ * round whose `Execute as` is outside the seat set would otherwise escape
+ * the round-bounding gate.
+ */
+export function isAuditTaskCategory(rawCategory: string): boolean {
+  const category = rawCategory.replace(/^[*_`"'\s]+/, "").toLowerCase();
+  return /^audit(?![A-Za-z0-9])/.test(category);
+}
+
+/**
  * Assignment labels carrying the review-seat Budget cap. The PM template
  * (dispatch-and-assignment.md) writes the parenthesized form; the bare
  * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
@@ -494,7 +509,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
   const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
   const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
-  const auditRound = /^audit(?![A-Za-z0-9])/.test(category);
+  const auditRound = isAuditTaskCategory(fields.taskCategory ?? "");
   if (reviewSeat || auditRound) {
     const subject = reviewSeat ? `review seat "${role}"` : `audit round (Task category: ${category})`;
     // One code per field — the PM reads which label is missing off the code.

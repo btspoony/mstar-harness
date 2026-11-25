@@ -1,7 +1,7 @@
 /**
  * Strict shared frontmatter reader — accepted subset and explicit refusal.
  *
- * Spec source: plan `20261125-frontmatter-core` Task 1 brief (accepted line
+ * Spec source: the shared-reader plan brief (accepted line
  * forms: root scalars, indentation nested maps, flat flow arrays, `- item`
  * block lists, `|`/`|-` block scalars, blank/comment lines; refused forms:
  * unknown lines, tabs, misindented children, flow/nested-comma constructs,
@@ -482,8 +482,11 @@ describe("extractFrontmatterAndBody — fence handling", () => {
 
 describe("shipped corpus — every bundled frontmatter parses", () => {
   const repoRoot = join(import.meta.dir, "..", "..", "..");
-  // A file starting with an opening fence line claims frontmatter; an
-  // unterminated fence extracts nothing and must not count as parsed.
+  // Corpus rule: a file whose first line opens a fence claims frontmatter.
+  // The extractor's `fenced` bit — after confirming that opening fence —
+  // is the single arbiter of whether frontmatter exists; no second fence
+  // grammar lives here. The sweep itself must find files, or the guard
+  // proves nothing (an empty sweep is a failure, not a green pass).
 
   const skillDir = join(repoRoot, "skills");
   const skillFiles = fs
@@ -493,6 +496,7 @@ describe("shipped corpus — every bundled frontmatter parses", () => {
 
   const collectMarkdown = (dir: string): string[] => {
     const absolute = join(repoRoot, dir);
+    if (!fs.existsSync(absolute)) return [];
     return fs
       .readdirSync(absolute)
       .filter((entry) => entry.endsWith(".md"))
@@ -500,38 +504,26 @@ describe("shipped corpus — every bundled frontmatter parses", () => {
   };
   const commandFiles = collectMarkdown("commands");
   const agentFiles = collectMarkdown("agents");
-  // `codex/agents` holds no Markdown today — the directory ships `.toml`
-  // agent definitions only — so it is not a corpus the guard can assert
-  // on; the day it gains `*.md` files they join the sweep below.
   const codexAgentFiles = collectMarkdown("codex/agents");
+  const corpusFiles = [...skillFiles, ...commandFiles, ...agentFiles, ...codexAgentFiles];
 
-  test("the skills corpus matches SKILL.md files", () => {
+  test("the sweep finds corpus files — an empty sweep proves nothing", () => {
+    expect(corpusFiles.length).toBeGreaterThan(0);
     expect(skillFiles.length).toBeGreaterThan(0);
-  });
-
-  test("the commands corpus matches Markdown files", () => {
     expect(commandFiles.length).toBeGreaterThan(0);
-  });
-
-  test("the agents corpus matches Markdown files", () => {
     expect(agentFiles.length).toBeGreaterThan(0);
   });
 
-  test("codex/agents currently holds no Markdown — update the sweep when it does", () => {
-    expect(codexAgentFiles.length).toBe(0);
-  });
-
   test("every shipped frontmatter parses without refusal", () => {
-    const corpusFiles = [...skillFiles, ...commandFiles, ...agentFiles, ...codexAgentFiles];
     const failures: string[] = [];
     for (const file of corpusFiles) {
       const content = fs.readFileSync(file, "utf8");
-      const { frontmatter } = extractFrontmatterAndBody(content);
-      if (/^---\r?\n/.test(content) && !/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(content)) {
+      const { frontmatter, fenced } = extractFrontmatterAndBody(content);
+      if (/^---\r?\n/.test(content) && !fenced) {
         failures.push(`${file}: claims an opening fence but has no complete fence`);
         continue;
       }
-      if (frontmatter === "") continue;
+      if (!fenced || frontmatter === "") continue;
       try {
         parseDocumentFrontmatter(frontmatter, file);
       } catch (error) {

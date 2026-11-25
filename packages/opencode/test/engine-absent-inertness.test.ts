@@ -175,9 +175,9 @@ import {
 } from ${JSON.stringify(engineIndexPath)};
 
 export const __readerCalls = [];
-export function parseSimpleFrontmatter(input) {
+export function parseSimpleFrontmatter(input, source) {
   __readerCalls.push({ fn: "parseSimpleFrontmatter", input });
-  return realParseSimpleFrontmatter(input);
+  return realParseSimpleFrontmatter(input, source);
 }
 export function extractFrontmatterAndBody(input) {
   __readerCalls.push({ fn: "extractFrontmatterAndBody", input });
@@ -277,10 +277,11 @@ console.log("PROBE_OK");
 /** T4-R1 probe: one command whose nested permission map carries an
  * unsupported line. The loaders whitelist scalar keys, so the loader's
  * dependence on the shared reader's nested-map parsing is observable only
- * through the refusal propagating out of the config hook with the shared
- * reader's source label and document line. */
+ * through the refusal propagating out of the config hook — attributed by the
+ * loader's file-path source label, the document line and the recovery fix. */
 const REFUSAL_PROBE = `
 import { MorningStarHarnessPlugin } from "./src/mstar.ts";
+import { join } from "node:path";
 
 const fail = (message) => {
   console.error("PROBE: " + message);
@@ -299,9 +300,14 @@ if (!thrown) fail("the unsupported nested line did not refuse");
 if (thrown.name !== "DocumentFrontmatterError") {
   fail("unexpected error type: " + String(thrown.name) + " / " + String(thrown.message));
 }
-if (thrown.source !== "frontmatter") fail("source not propagated: " + String(thrown.source));
+// The loader passes the asset file path as the reader's source label, so the
+// refusal attributes the violation: path, document line and recovery fix.
+if (typeof thrown.source !== "string" || !thrown.source.endsWith(join("harness-commands", "nested-command.md"))) {
+  fail("source not the asset path: " + String(thrown.source));
+}
 if (thrown.line !== 7) fail("line not propagated: " + String(thrown.line));
 if (thrown.lineText !== '    "*": *deny') fail("lineText not propagated: " + JSON.stringify(thrown.lineText));
+if (typeof thrown.fix !== "string" || thrown.fix.length === 0) fail("recovery fix not propagated: " + JSON.stringify(thrown.fix));
 console.log("PROBE_REFUSED_OK");
 `;
 

@@ -2,11 +2,10 @@
  * Document schema validator — plan / assignment / sdd-brief / pm-acceptance
  * front matter declared in the harness plan documents (compass D15/D17).
  *
- * Spec sources:
- * - Field tables and conditional budget rule: plan `20261125-frontmatter-core`
- *   Task 3 brief; assignment semantics mirror `dispatch.ts`
- *   `validateAssignmentFields` (`REVIEW_SEAT_ROLES`, the audit-category
- *   trigger, the exactly-one branch form, control-write glob refusal).
+ * - Field tables and conditional budget rule: the schema plan brief;
+ *   assignment semantics mirror `dispatch.ts` `validateAssignmentFields`
+ *   (the exported `REVIEW_SEAT_ROLES`, the audit-category trigger, the
+ *   exactly-one branch form, control-write glob refusal).
  * - Unknown-field rule (compass D15): every field of the canonical PM
  *   assignment template is a known optional field
  *   (`skills/mstar-roles/references/project-manager/dispatch-and-assignment.md`
@@ -21,7 +20,8 @@ import {
   parseDocumentFrontmatterEntries,
   type FrontmatterEntry,
 } from "./document-frontmatter.js";
-import { isReadOnlyAssignmentRole } from "./dispatch.js";
+import { isAuditTaskCategory, isReadOnlyAssignmentRole, REVIEW_SEAT_ROLES } from "./dispatch.js";
+import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import type { GateResult, ValidationResult } from "./core.js";
 
 export type DocumentKind = "plan" | "assignment" | "sdd-brief" | "pm-acceptance";
@@ -52,22 +52,23 @@ const PLAN_SCHEMA: DocumentSchema = {
     { name: "execution", enum: ["sdd", "inline"] },
     { name: "working_branch" },
     { name: "main_worktree_branch" },
-    { name: "delivery_kind", enum: ["development", "verification", "report-only"] },
+    { name: "delivery_kind", enum: WORKFLOW_DELIVERY_KINDS },
     { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
   ],
   optional: [{ name: "title" }],
 };
 
-const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
-
+/** Review/audit trigger shared with dispatch: the exported seat roster plus
+ * the dispatch-owned audit-category classifier — no second copy here (the
+ * schema owns only its field table). The role token normalization mirrors
+ * dispatch: strip a leading `@` mention, compare case-insensitively, take
+ * the first whitespace token. */
 function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
   const role = typeof values.execute_as === "string"
     ? values.execute_as.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? ""
     : "";
-  const category = typeof values.task_category === "string"
-    ? values.task_category.replace(/^[*_`"'\s]+/, "").toLowerCase()
-    : "";
-  return REVIEW_SEAT_ROLES.includes(role) || /^audit(?![A-Za-z0-9])/.test(category);
+  return REVIEW_SEAT_ROLES.includes(role)
+    || (typeof values.task_category === "string" && isAuditTaskCategory(values.task_category));
 }
 
 const ASSIGNMENT_SCHEMA: DocumentSchema = {
@@ -169,10 +170,11 @@ function violation(severity: ValidationResult["severity"], code: string, message
   return { ok: false, severity, code, message, ...(fix !== undefined ? { fix } : {}) };
 }
 
-/** Strict ISO-8601 date-time shape: `YYYY-MM-DDTHH:mm:ss` with `Z` or a
- * `+HH:mm` / `-HH:mm` offset. No normalization — the calendar day, the
- * time ranges and the offset range are validated against a real calendar. */
-const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})$/;
+/** Strict ISO-8601 date-time shape: `YYYY-MM-DDTHH:mm:ss` with an optional
+ * fractional-seconds part (`.fff…`) before the required `Z` or a `+HH:mm` /
+ * `-HH:mm` offset. No normalization — the calendar day, the time ranges and
+ * the offset range are validated against a real calendar. */
+const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 function isIsoDateTime(value: string): boolean {
   const match = value.match(ISO_DATETIME_RE);
@@ -249,21 +251,59 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   for (const field of schema.required) {
     const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
     if (!required) continue;
-    const present = entries.has(field.name)
-      && (entries.get(field.name)!.rawText !== ""
-        || Array.isArray(entries.get(field.name)!.value)
-        || (typeof entries.get(field.name)!.value === "object" && entries.get(field.name)!.value !== null && Object.keys(entries.get(field.name)!.value as object).length > 0));
-    if (!present) {
-      const line = entries.has(field.name) ? entries.get(field.name)!.line : 1;
+    // Usable content for a required textual field: a non-blank scalar —
+    // the raw scalar text is the carrier, so a numeric-looking value
+    // (`main_worktree_branch: 5.0`) still counts — or a non-empty list.
+    // `""`, whitespace, `{}` and `[]` count as missing exactly as the key's
+    // absence; a map refuses as invalid content. `task_budget` carries the
+    // dispatch N/A rule: presence-only, `N/A` counts as missing exactly as
+    // dispatch classifies it.
+    if (!entries.has(field.name)) {
       violations.push(violation("high", "document.frontmatter.missing",
-        `${source}:${line}: missing required field ${field.name}`,
+        `${source}:1: missing required field ${field.name}`,
+        `add a ${field.name}: line to the front matter`));
+      continue;
+    }
+    const requiredEntry = entries.get(field.name)!;
+    const value = requiredEntry.value;
+    // Enum-typed fields refuse the same shape through the enum check below
+    // (one violation per failure, naming the accepted values) — the
+    // scalar-content refusal applies to plain textual fields only.
+    if (field.enum === undefined
+      && typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value as object).length > 0) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${requiredEntry.line}: invalid ${field.name} \u2014 accepted values: a non-blank scalar, not a nested map`,
+        `write ${field.name} as a single scalar value`));
+      continue;
+    }
+    let blankOrEmpty: boolean;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      blankOrEmpty = String(value).trim() === "";
+    } else if (Array.isArray(value)) {
+      blankOrEmpty = value.length === 0;
+    } else {
+      // `null` counts as missing; a non-empty map is present-but-invalid
+      // shape (handled above), never missing.
+      blankOrEmpty = value === null || Object.keys(value as object).length === 0;
+    }
+    if (!blankOrEmpty && field.name === "task_budget" && typeof value === "string" && value.trim().toLowerCase() === "n/a") {
+      blankOrEmpty = true;
+    }
+    if (blankOrEmpty) {
+      violations.push(violation("high", "document.frontmatter.missing",
+        `${source}:${requiredEntry.line}: missing required field ${field.name}`,
         `add a ${field.name}: line to the front matter`));
     }
   }
 
+  // A required field already reported missing/invalid above is not re-fired
+  // as a second invalid violation — one violation per field failure.
+  const alreadyReported = new Set(
+    violations.map((v) => v.message.match(/(?:missing required field|invalid) ([A-Za-z_]+)/)?.[1]).filter(Boolean),
+  );
   for (const field of [...schema.required, ...schema.optional]) {
     const entry = entries.get(field.name);
-    if (entry === undefined) continue;
+    if (entry === undefined || alreadyReported.has(field.name)) continue;
     if (field.enum !== undefined && (typeof entry.value !== "string" || !field.enum.includes(entry.value))) {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ${field.enum.join(" | ")}`,
@@ -282,7 +322,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
       const valid = typeof entry.value === "string" && isIsoDateTime(entry.value);
       if (!valid) {
         violations.push(violation("high", "document.frontmatter.invalid",
-          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time YYYY-MM-DDTHH:mm:ssZ or with a +HH:mm / -HH:mm offset`,
+          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time YYYY-MM-DDTHH:mm:ssZ, optionally with a fractional-seconds part, or with a +HH:mm / -HH:mm offset`,
           `set ${field.name} to an ISO-8601 date-time such as 2026-11-26T08:00:00Z`));
       }
     }

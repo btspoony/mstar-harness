@@ -308,10 +308,11 @@ Drive the iteration.
     // T4-R1: the command loader whitelists scalar keys, so the valid fixture
     // above can pass even if the nested map were never really parsed. An
     // unsupported line INSIDE the nested map makes the loader's dependence on
-    // the shared reader observable: the refusal carries the reader's source
-    // label ("frontmatter") and the 1-based document line of the offending
-    // line ("*" alias at line 7: fence 1, name 2, description 3, agent 4,
-    // permission 5, edit 6, the offending line 7).
+    // the shared reader observable: the loader passes its file path as the
+    // reader's source label, so the refusal attributes the violation to the
+    // asset — path, 1-based document line of the offending line and the
+    // reader's recovery fix ("*" alias at line 7: fence 1, name 2,
+    // description 3, agent 4, permission 5, edit 6, the offending line 7).
     const BAD_COMMAND_SEAT = `---
 name: iteration-drive
 description: Drive the iteration.
@@ -333,11 +334,13 @@ Drive the iteration.
       thrown = error;
     }
     expect(thrown).toBeDefined();
-    const refusal = thrown as { name?: string; source?: string; line?: number; lineText?: string };
+    const refusal = thrown as { name?: string; source?: string; line?: number; lineText?: string; fix?: string };
     expect(refusal.name).toBe("DocumentFrontmatterError");
-    expect(refusal.source).toBe("frontmatter");
+    expect(refusal.source).toBe(path.join(commandsDir, "iteration-drive.md"));
     expect(refusal.line).toBe(7);
     expect(refusal.lineText).toBe('    "*": *deny');
+    expect(typeof refusal.fix).toBe("string");
+    expect(refusal.fix!.length).toBeGreaterThan(0);
   });
 
   /** The first sorted asset file whose independent parse carries a string
