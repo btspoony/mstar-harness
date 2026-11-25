@@ -14,6 +14,7 @@
  * no public entry hands out a connection that can write after the selection,
  * state or epoch changes.
  */
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import {
   accessSync,
@@ -43,6 +44,7 @@ import {
   resolveCollaborationLocation,
   type CollaborationLocation,
   type CollaborationMode,
+  collaborationLocationOfRepoKey,
 } from "./collaboration-identity.js";
 import {
   READ_OPEN_ATTEMPTS,
@@ -767,20 +769,16 @@ const COLLABORATION_MOVE_SCHEMA: Migration = {
 /**
  * invariant: v5 records each move's staged topology on its ledger row. A discard and the
  * remote-destination guard must never probe the peer's lane — a two-checkout exchange cannot open it —
- * so the route becomes a fact the staging run writes. Rows already in a v4 lane are backfilled from
- * what the lane can still prove: the two half rows of one checkout share a store id, while an
- * exchange half's peer lives in another store, and the lane's own mode names its own side.
+ * so the route becomes a fact the staging run writes. Rows already in a v4 lane are backfilled in
+ * two steps: this SQL labels every row from the fact the lane can still prove alone — a lane holds
+ * only its OWN half of a move, so an unrouted row is an exchange half, and the lane's own mode names
+ * its side — and `backfillMoveRoutes` then relabels the rows whose OTHER half provably lives in a
+ * lane this checkout can open, which is exactly the one-checkout topology `local-local` names.
  */
 const COLLABORATION_MOVE_ROUTE_SQL = `
 alter table issue_moves add column route text not null default 'local-local'
   check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'));
 update issue_moves set route = case
-  when exists (
-    select 1 from issue_moves peer
-    where peer.operation_id = issue_moves.operation_id
-      and peer.role <> issue_moves.role
-      and peer.source_store_id = issue_moves.source_store_id
-  ) then 'local-local'
   when issue_moves.role = 'source' then
     case when (select mode from collaboration_meta where id = 1) = 'remote' then 'remote-unknown' else 'local-remote' end
   else
@@ -2704,6 +2702,82 @@ export function collaborationInventoryOf(version: number): Readonly<Record<strin
 }
 
 /**
+ * invariant: The v5 route backfill's second half, run inside the ladder transaction after the SQL
+ * labelled every row from this lane's own mode. A one-checkout move is the topology whose OTHER half
+ * provably lives in a lane this checkout can open — and a lane file is present only in the same home
+ * — so a row is relabelled `local-local` only when the peer lane's file exists, declares a
+ * local/mirror mode, and holds the peer row of the same operation. An exchange half, an unreadable
+ * peer and an absent peer all keep the label the SQL derived, which is the route a discard must
+ * release one side at a time anyway. Reads run on short-lived read-only connections because this
+ * ladder is synchronous.
+ */
+function backfillMoveRoutes(db: StoreDb): void {
+  const meta = db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined;
+  const ownMode = meta?.mode;
+  if (ownMode !== "local" && ownMode !== "mirror") return;
+  const rows = db
+    .prepare("select operation_id as operationId, role, source_authority as sourceAuthority, destination_authority as destinationAuthority from issue_moves")
+    .all() as Array<{ operationId?: unknown; role?: unknown; sourceAuthority?: unknown; destinationAuthority?: unknown }>;
+  if (rows.length === 0) return;
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+    DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
+  };
+  const peers = new Map<string, { mode: string | null } | null>();
+  const peerOf = (repoKey: string): { mode: string | null } | null => {
+    const cached = peers.get(repoKey);
+    if (cached !== undefined) return cached;
+    const dbPath = collaborationLocationOfRepoKey(repoKey, "local").dbPath;
+    let peer: { mode: string | null } | null = null;
+    if (existsSync(dbPath)) {
+      let lane: StoreDb | undefined;
+      try {
+        lane = new DatabaseSync(dbPath, { readOnly: true });
+        const mode = (lane.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined)
+          ?.mode;
+        peer = { mode: typeof mode === "string" ? mode : null };
+      } catch {
+        // note: An unreadable or partially applied peer lane cannot prove the one-checkout
+        // topology; the exchange label the SQL wrote stands.
+        peer = null;
+      } finally {
+        try {
+          lane?.close();
+        } catch {
+          // note: connection-level failure only
+        }
+      }
+    }
+    peers.set(repoKey, peer);
+    return peer;
+  };
+  const relabel = db.prepare("update issue_moves set route = 'local-local' where operation_id = ?");
+  for (const row of rows) {
+    const peerKey = row.role === "source" ? row.destinationAuthority : row.sourceAuthority;
+    const peerRole = row.role === "source" ? "destination" : "source";
+    if (typeof row.operationId !== "string" || typeof peerKey !== "string") continue;
+    const peer = peerOf(peerKey);
+    if (peer === null || peer.mode === "remote") continue;
+    const dbPath = collaborationLocationOfRepoKey(peerKey, "local").dbPath;
+    let lane: StoreDb | undefined;
+    try {
+      lane = new DatabaseSync(dbPath, { readOnly: true });
+      const staged = lane
+        .prepare("select 1 as found from issue_moves where operation_id = ? and role = ?")
+        .get(row.operationId, peerRole) as { found?: number } | undefined;
+      if (staged !== undefined) relabel.run(row.operationId);
+    } catch {
+      // note: The peer opened a moment ago; a mid-migration failure keeps the exchange label.
+    } finally {
+      try {
+        lane?.close();
+      } catch {
+        // note: connection-level failure only
+      }
+    }
+  }
+}
+
+/**
  * invariant: Advance one lane's bytes through this build's supported ladder inside the caller's
  * open transaction: each recorded predecessor is re-validated, the v2 rebuild+backfill and the v3
  * outbox each run under a proof of the shape they start from, and every ledger row is appended
@@ -2777,6 +2851,7 @@ export function applyCollaborationLadder(
       migrationChecksum(COLLABORATION_MOVE_ROUTE_SCHEMA),
       nowRfc3339(),
     );
+    backfillMoveRoutes(db);
   }
   assertCurrentSchema(db, dbPath);
   return { fromVersion: appliedMax, issuesBackfilled };

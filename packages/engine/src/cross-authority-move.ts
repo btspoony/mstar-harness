@@ -860,6 +860,31 @@ function tombstoneSettlement(db: StoreDb, operationId: string): TombstoneSettlem
 }
 
 /**
+ * invariant: The move's discard-restore intents form an ordered attempt chain: `restore`, then
+ * `restore:2`, `restore:3`, …, each minted only when every earlier attempt ended `abandoned` — the
+ * one settlement that means the provider effect can never land. `latest` is the settlement of the
+ * last recorded attempt; `nextStep` is the step name the next enqueue uses. A move whose switch
+ * reads `latest` refuses to complete beside a live or landed restore, while a discard whose every
+ * attempt was abandoned re-freezes the restore under `nextStep` instead of stranding the closed
+ * record.
+ */
+function restoreAttempts(
+  db: StoreDb,
+  operationId: string,
+): { latest: TombstoneSettlement | null; nextStep: string } {
+  let step = 0;
+  let latest: TombstoneSettlement | null = null;
+  for (;;) {
+    const stepName = step === 0 ? "restore" : `restore:${String(step + 1)}`;
+    const settlement = tombstoneSettlement(db, remoteMoveOperationId(operationId, stepName));
+    if (settlement.kind === "none") return { latest, nextStep: stepName };
+    latest = settlement;
+    if (settlement.kind !== "abandoned") return { latest, nextStep: stepName };
+    step += 1;
+  }
+}
+
+/**
  * note: A provider intent frozen for this record is an admitted mirror write the host may already
  * have sent; staging a move would publish the record out from under it. `confirmed` and `abandoned`
  * are settled, so only the three live states refuse. One helper states it for both stage paths.
@@ -1320,13 +1345,14 @@ function assertAdmissible(db: StoreDb, request: MoveRequest, copy: MoveCopy, cou
   const collidingKeys = copy.occurrences
     .map((row) => row.occurrence_key)
     .filter((key): key is string => typeof key === "string")
-    // note: The record's OWN rows are not a collision: a one-checkout move preflights while its
-    // source still lives in this lane. Only a key another record holds blocks admission.
+    // note: A key this record itself already holds is not a collision: a one-checkout move preflights
+    // while its source still lives in this lane, and the frozen copy carries no lane-local id, so the
+    // owner's stable reference is what names it. Only a key another record holds blocks admission.
     .filter((key) => {
-      const owner = db.prepare("select issue_id as issueId from occurrences where occurrence_key = ?").get(key) as
-        | { issueId?: unknown }
-        | undefined;
-      return owner !== undefined && owner.issueId !== copy.issue.id;
+      const owner = db
+        .prepare("select i.issue_ref as issueRef from occurrences o join issues i on i.id = o.issue_id where o.occurrence_key = ?")
+        .get(key) as { issueRef?: unknown } | undefined;
+      return owner !== undefined && owner.issueRef !== issueRef;
     });
   if (collidingKeys.length > 0) {
     throw issueRefusal(
@@ -2020,7 +2046,7 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
       { operation_id: request.operationId, phase: row.phase, allowed: [] },
     );
   }
-  if (role === "source" && own.mode === "remote" && row.phase === "switched") {
+  if (role === "source" && row.phase === "switched") {
     // invariant: A `switched` source already handed the peer its `switch` document, so the
     // destination may have admitted — the only copy would then be there. Discarding cannot be made
     // safe from facts THIS lane can read, so it refuses and names both exits that actually exist.
@@ -2748,10 +2774,21 @@ function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): Mo
   } catch {
     return null;
   }
-  for (const column of ["project_id", "issue_ref", "disposition", "closed_at", "closure_note"] as const) {
+  for (const column of ["project_id", "issue_ref", "identity_key", "disposition", "closed_at", "closure_note"] as const) {
     // why: the gate script reads the marker on the line above the comparison; this line states the fact the comparison proves.
     // hash-gate: authorized — Canonical equality proves the carried copy keeps the record's identity and live disposition: identity columns and the tombstone's own writes must equal the staged values; every other field is the confirmed subject's own, which a reviewed repair legitimately rewrote.
     if (JSON.stringify(carried.issue[column] ?? null) !== JSON.stringify(staged.issue[column] ?? null)) return null;
+  }
+  // invariant: The record's identity is computed from its FIRST occurrence's triple at admission, so
+  // a carried copy that prepends an observation ahead of the staged first row would land under a
+  // different identity than the move staged. `identity_key` itself stays uncomputed on remote-source
+  // copies, so the triple the key derives from is compared directly.
+  const stagedFirst = staged.occurrences[0];
+  const carriedFirst = carried.occurrences[0];
+  for (const column of ["source_identity", "root_cause_key", "acceptance_key"] as const) {
+    // why: the gate script reads the marker on the line above the comparison; this line states the fact the comparison proves.
+    // hash-gate: authorized — Canonical equality proves the carried copy's first occurrence keeps the identity triple the destination admission derives `identity_key` from; a prepended observation with a different triple is a different record, not a repair.
+    if (JSON.stringify(carriedFirst?.[column] ?? null) !== JSON.stringify(stagedFirst?.[column] ?? null)) return null;
   }
   const members: Array<keyof Omit<MoveCopy, "issue">> = ["occurrences", "transitions", "provenance", "projectMoves", "relations"];
   for (const member of members) {
@@ -3222,6 +3259,47 @@ async function tombstoneRemoteSource(
   request: MoveRequest,
   source: IssueMoveRecord,
 ): Promise<string | null> {
+  // invariant: A source the discard already restored must never switch: its provider record is live
+  // again, so emitting the `switch` document would publish the move beside the member the restore
+  // re-opened. The gate reads the restore chain's LATEST attempt exactly as the discard does — a
+  // confirmed re-open or a live attempt refuses, while an attempt that can never land (`abandoned`)
+  // or no attempt at all leaves the ordinary tombstone path.
+  const restored = await readOwnLane(context, (db) => restoreAttempts(db, request.operationId));
+  if (restored.latest !== null && restored.latest.kind !== "abandoned") {
+    if (restored.latest.kind === "confirmed" && !restored.latest.obsolete) {
+      throw new StoreError(
+        "collaboration.move-phase-invalid",
+        `Move ${request.operationId} already re-opened ${source.issueRef} through restore intent ` +
+          `${restored.latest.operationId}, so this checkout's discard owns the outcome and the move can never switch ` +
+          `beside the restored record. Nothing was switched.`,
+        {
+          operation_id: request.operationId,
+          issue_ref: source.issueRef,
+          restore_operation_id: restored.latest.operationId,
+          recovery:
+            `Finish the discard instead: reissue \`mstar issue move --id ${source.issueRef} --to-authority ` +
+            `${source.destinationAuthority} --operation-id ${request.operationId} --discard\`, which releases this ` +
+            `half once the record is live on the provider.`,
+        },
+      );
+    }
+    if (restored.latest.kind === "live") {
+      const leaf = restored.latest.operationId;
+      throw new StoreError(
+        "remote.effect-pending",
+        `This move's discard froze restore intent ${leaf}, which is still ${restored.latest.state}: the provider may ` +
+          `already hold the re-open, so switching now could publish the move beside a record it restored. Nothing ` +
+          `was switched.`,
+        {
+          operation_id: request.operationId,
+          operationId: leaf,
+          state: restored.latest.state,
+          recovery:
+            `Settle or abandon the restore intent first: ${tombstoneIntentRecovery(remoteMoveOperationId(request.operationId, "restore"), { operationId: leaf, state: restored.latest.state })}`,
+        },
+      );
+    }
+  }
   const { prepareRemoteIssueWrite, pendingRemoteEffect, frozenIntent } = await import("./collaboration-remote.js");
   const copy = JSON.parse(source.payloadJson) as MoveCopy;
   const at = nowRfc3339();
@@ -3429,12 +3507,20 @@ async function restoreRemoteSource(
   const { prepareRemoteIssueWrite, pendingRemoteEffect, frozenIntent } = await import("./collaboration-remote.js");
   const copy = JSON.parse(source.payloadJson) as MoveCopy;
   const at = nowRfc3339();
-  const operationId = remoteMoveOperationId(request.operationId, "restore");
+  // invariant: The restore is a debt, never an optional step: an attempt the operator abandoned
+  // unsent leaves the provider record closed, so the discard re-freezes the SAME restore under the
+  // chain's next step id rather than refusing with a recovery that names a destination which may no
+  // longer hold the move. Only a settled-live or confirmed attempt is replayed under its own id.
+  const attempts = await readOwnLane(context, (db) => restoreAttempts(db, request.operationId));
+  const operationId = remoteMoveOperationId(request.operationId, attempts.nextStep);
   // invariant: A restore that cannot even be attempted (no provider channel on this checkout) is a
   // move-domain refusal, never the transport's `remote.unavailable`: the operator is deciding what
   // happens to a MOVE, and the only honest answer is that the provider record stays closed until the
   // move is settled by hand.
-  const outcome = await prepareRemoteIssueWrite(context, {
+  const outcome =
+    attempts.latest !== null && attempts.latest.kind !== "abandoned"
+      ? null
+      : await prepareRemoteIssueWrite(context, {
     operationId,
     kind: "issue-replace",
     issueId: source.issueRef,
@@ -3509,22 +3595,24 @@ async function restoreRemoteSource(
       },
     );
   });
-  const intent = frozenIntent(outcome);
-  if (intent.confirmed !== null) {
-    const confirmed = intent.confirmed.event;
-    if (
-      confirmed.change.kind === "issue-replace" &&
-      (confirmed.change.mstar.fields as Record<string, unknown>).disposition !== "obsolete"
-    ) {
-      // note: The record is live on the provider again — the discard may release its half.
-      return;
+  if (outcome !== null) {
+    const intent = frozenIntent(outcome);
+    if (intent.confirmed !== null) {
+      const confirmed = intent.confirmed.event;
+      if (
+        confirmed.change.kind === "issue-replace" &&
+        (confirmed.change.mstar.fields as Record<string, unknown>).disposition !== "obsolete"
+      ) {
+        // note: The record is live on the provider again — the discard may release its half.
+        return;
+      }
+      throw new StoreError(
+        "remote.effect-mismatch",
+        `The confirmed restore of ${source.issueRef} did not re-open the record, so this discard would leave a tombstoned ` +
+          `provider record beside a discarded ledger. Nothing was modified.`,
+        { operation_id: request.operationId, issueRef: source.issueRef },
+      );
     }
-    throw new StoreError(
-      "remote.effect-mismatch",
-      `The confirmed restore of ${source.issueRef} did not re-open the record, so this discard would leave a tombstoned ` +
-        `provider record beside a discarded ledger. Nothing was modified.`,
-      { operation_id: request.operationId, issueRef: source.issueRef },
-    );
   }
   const settlement = await readOwnLane(context, (db) => tombstoneSettlement(db, operationId));
   if (settlement.kind === "confirmed") {
@@ -3545,8 +3633,8 @@ async function restoreRemoteSource(
         operation_id: request.operationId,
         issueRef: source.issueRef,
         recovery:
-          "Finish the move instead \u2014 reissue it with the destination's `staged` handoff so this side emits its `switch` " +
-          "document \u2014 or re-adopt the provider record with `mstar store collaboration remote adopt-issue`.",
+          `Reissue this --discard with the same --operation-id: it re-freezes the restore under the next ` +
+          `attempt id and reports it as remote.effect-pending until that attempt confirms.`,
       },
     );
   }
@@ -3563,7 +3651,7 @@ async function restoreRemoteSource(
       },
     );
   }
-  throw pendingRemoteEffect(intent);
+  throw pendingRemoteEffect(frozenIntent(outcome!));
 }
 
 /**

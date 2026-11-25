@@ -2346,7 +2346,43 @@ describe("cross-authority move phase engine", () => {
       db.close();
     }
   }, 60_000);
+  test("a switched local-exchange source refuses its own discard just like a remote one", async () => {
+    // invariant: Review wave 6, finding 5. The switched-source guard answers for EVERY exchange
+    // route, not only remote ones: a local-source exchange also hands its switch document to the
+    // peer checkout before `published`, so a crash in that window leaves a discarded source half
+    // beside a staged — or admitted — destination half the peer may still hold.
+    const { context, db } = await sourceCheckout();
+    try {
+      const issueId = await seededRecord(context, db, "p-source");
+      const operationId = "move-local-remote-switch";
+      const destination = "github.com/acme/other-checkout";
+      const request = {
+        operationId,
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination,
+        destinationProject: "p-dest",
+        reason: "exchange",
+      };
+      const staged = await exchangeLocalToRemote(context, request, null);
+      expect(staged).toMatchObject({ phase: "staged", side: "source" });
+      db.prepare("update issue_moves set phase = 'switched' where operation_id = ?").run(operationId);
+
+      const refused = await discardAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string },
+      );
+      expect(refused?.code).toBe("collaboration.move-phase-invalid");
+      expect(refused?.message).toContain("handed its switch document");
+      expect(db.prepare("select phase from issue_moves where operation_id = ?").get(operationId)).toEqual({
+        phase: "switched",
+      });
+    } finally {
+      db.close();
+    }
+  });
 });
+
 
 describe("cross-authority move package surface", () => {
   test("the package publishes the move routes it documents and keeps the phase engine internal", async () => {

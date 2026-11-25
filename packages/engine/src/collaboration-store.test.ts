@@ -1451,6 +1451,59 @@ function writeV2Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** note: A real v4 lane: the immutable v1-v4 migrations in order, their ledger rows and one issue. */
+function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV1Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    for (const migration of COLLABORATION_MIGRATIONS.slice(1, 4)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "2026-11-21T00:00:00.000Z",
+      );
+    }
+    db.prepare(
+      "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+        "values ('project', 'p-dest', 'Destination', 'projects', 'projects/p-dest', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+    ).run();
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+/** note: One v4 `issue_moves` half row, exactly as the v4 writers recorded it — no `route` column. */
+function seedV4MoveRow(
+  db: DatabaseSync,
+  row: Readonly<{
+    operationId: string;
+    role: "source" | "destination";
+    sourceAuthority: string;
+    destinationAuthority: string;
+    sourceIssueId?: string;
+    phase?: string;
+  }>,
+): void {
+  db.prepare(
+    "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+      "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+      "staged_counts, source_store_id, source_epoch, removed_sync_rows, created_at, updated_at) " +
+      "values (?, ?, 'hash', 'mstar:issue:99999999-9999-4999-8999-999999999999', ?, null, ?, ?, 'p-dest', " +
+      "'project-manager', 'v4 move', ?, '{}', 'digest', '{}', 'v4-store', 1, 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
+  ).run(
+    row.operationId,
+    row.role,
+    row.sourceIssueId ?? null,
+    row.sourceAuthority,
+    row.destinationAuthority,
+    row.phase ?? "staged",
+  );
+}
+
 /** note: Two issues with one occurrence: the history the upgrade must preserve. */
 function seedV1History(db: DatabaseSync): void {
   const insert = db.prepare(
@@ -11207,4 +11260,102 @@ describe("cross-authority move route and discard", () => {
     }
     expect(outboxRows(cache.dbPath)).toEqual([]);
   }, 30_000);
+  test("a v4 one-checkout move backfills its route from the reachable destination half", async () => {
+    // invariant: Review wave 6. A v4 source row names the move only by the peer it was staged
+    // against, and its destination half lives in a lane this checkout can open — the one fact that
+    // distinguishes the one-checkout topology from an exchange. A `local-remote` label would make
+    // the discard release only the source half and strand the staged destination row beside an
+    // unfenced record.
+    const sourceRepo = makeRepo("https://v4-move.invalid/acme/source.git");
+    const sourceContext = contextAt(sourceRepo);
+    const sourceLocation = locationAt(sourceRepo);
+    const destRepo = makeRepo("https://v4-move.invalid/acme/dest.git");
+    const destContext = contextAt(destRepo);
+    const destLocation = locationAt(destRepo);
+    const operationId = "v4-move-one-checkout";
+    writeV4Lane(sourceLocation, (db) => {
+      db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref) " +
+          "values ('I-000001', 'fixture-project', 'Moved finding', 'bug', 'high', 'resolved', 'i', 'a', " +
+          "'2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z', 'key-one', " +
+          "'mstar:issue:99999999-9999-4999-8999-999999999999')",
+      ).run();
+      seedV4MoveRow(db, {
+        operationId,
+        role: "source",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: destLocation.repoKey,
+        sourceIssueId: "I-000001",
+      });
+    });
+    writeV4Lane(destLocation, (db) => {
+      seedV4MoveRow(db, {
+        operationId,
+        role: "destination",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: destLocation.repoKey,
+      });
+    });
+    activate(sourceLocation.dbPath);
+    activate(destLocation.dbPath);
+    (await initializeStore(sourceContext)).close();
+
+    const sourceReceipt = await upgradeCollaborationStore(sourceContext, "ops-engineer");
+    expect(sourceReceipt.fromVersion).toBe(4);
+    expect(routeOfRow(sourceLocation.dbPath, operationId, "source")).toBe("local-local");
+    const destReceipt = await upgradeCollaborationStore(destContext, "ops-engineer");
+    expect(destReceipt.fromVersion).toBe(4);
+    expect(routeOfRow(destLocation.dbPath, operationId, "destination")).toBe("local-local");
+
+    // invariant: The relabelled route is the discard's own admission check: one run releases BOTH
+    // halves, and the frozen record is writable again once its source row leaves the blocking set.
+    const discarded = await discardAcrossAuthorities(sourceContext, {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: "I-000001",
+      destinationAuthority: destLocation.repoKey,
+      destinationProject: "p-dest",
+      reason: "v4 move",
+    });
+    expect(discarded.phase).toBe("discarded");
+    const sourceDb = new DatabaseSync(sourceLocation.dbPath);
+    try {
+      sourceDb.prepare("update issues set updated_at = ? where id = 'I-000001'").run("2026-11-24T00:00:00.000Z");
+      expect(
+        sourceDb.prepare("select phase from issue_moves where operation_id = ?").get(operationId),
+      ).toEqual({ phase: "discarded" });
+    } finally {
+      sourceDb.close();
+    }
+    const destDb = new DatabaseSync(destLocation.dbPath);
+    try {
+      expect(destDb.prepare("select count(*) as n from issue_moves").get()).toEqual({ n: 0 });
+    } finally {
+      destDb.close();
+    }
+  });
+
+  test("a v4 exchange half keeps the route its own side names when no reachable peer row exists", async () => {
+    // invariant: The same backfill must not relabel an exchange: a v4 source whose destination
+    // lane this checkout cannot open is a two-checkout move, so it keeps `local-remote` — the label
+    // that makes the discard release only the half this checkout holds.
+    const sourceRepo = makeRepo("https://v4-move.invalid/acme/exchange-source.git");
+    const sourceContext = contextAt(sourceRepo);
+    const sourceLocation = locationAt(sourceRepo);
+    const operationId = "v4-move-exchange";
+    writeV4Lane(sourceLocation, (db) => {
+      seedV4MoveRow(db, {
+        operationId,
+        role: "source",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: "v4-move.invalid/acme/never-present",
+      });
+    });
+    activate(sourceLocation.dbPath);
+
+    const receipt = await upgradeCollaborationStore(sourceContext, "ops-engineer");
+    expect(receipt.fromVersion).toBe(4);
+    expect(routeOfRow(sourceLocation.dbPath, operationId, "source")).toBe("local-remote");
+  });
+
 });
