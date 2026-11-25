@@ -44,7 +44,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseDocumentFrontmatter } from "./document-frontmatter.js";
+import { parseDocumentFrontmatterEntries } from "./document-frontmatter.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 // Call-time-only cycle with catalog.ts (which reaches this module through
 // coordination.ts): `catalogRootDir` only resolves roots when a catalog
@@ -1078,12 +1078,12 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
  * Parse flat-subset YAML frontmatter from raw file content — the single
  * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
  * the roadmap validator (extract/reuse the same parsing, no fork).
- *
- * The structural parse delegates to `parseDocumentFrontmatter`; two
- * compass-only behaviors stay here: a double-quoted scalar keeps its
- * JSON-escape decode (the roadmap export writes values with
- * `JSON.stringify`), and every scalar stays a string — the shared reader
- * types `true` / numbers / `null` where the compass contract never did.
+ * The structural parse delegates to `parseDocumentFrontmatterEntries` in
+ * the flat profile — one pass, no line rescan; two compass-only behaviors
+ * stay here: a double-quoted scalar keeps its JSON-escape decode (the
+ * roadmap export writes values with `JSON.stringify`), and every scalar
+ * keeps its source text — the compass contract never typed `true` /
+ * numbers / `null`.
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
@@ -1095,27 +1095,24 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
     throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
   }
   const frontmatter = lines.slice(1, end).join("\n");
-  const parsed = parseDocumentFrontmatter(frontmatter, filePath);
-  // Compass scalar contract: values keep their source text (never typed).
-  // Double-quoted scalars re-decode JSON escapes because the roadmap export
-  // writes values with `JSON.stringify`. Raw key/value extraction is safe:
-  // `parseDocumentFrontmatter` already validated every line and rejected
-  // nested shapes, so the remaining lines are flat `key:` lines.
-  const rawValues = new Map<string, string>();
-  for (const line of frontmatter.split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (kv) rawValues.set(kv[1]!, kv[2]!.trim());
-  }
+  // One structural pass in the shared reader under the flat compass
+  // profile: nested maps and block scalars refuse with the file and line,
+  // and every entry carries its original scalar text, so nothing is
+  // rescanned here. Compass scalar contract: values keep their source
+  // text (never typed); a double-quoted scalar keeps its JSON-escape
+  // decode because the roadmap export writes values with `JSON.stringify`.
+  const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    const raw = rawValues.get(key);
-    if (Array.isArray(value)) {
-      doc[key] = value;
-    } else if (raw === "") {
-      // A bare `key:` is null in the compass contract; the shared parser
-      // holds the same line as its empty-map placeholder.
+  for (const [key, entry] of entries) {
+    if (entry.kind === "list") {
+      doc[key] = entry.value;
+      continue;
+    }
+    const raw = entry.rawText;
+    if (raw === "") {
+      // A bare `key:` is null in the compass contract.
       doc[key] = null;
-    } else if (raw !== undefined && raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+    } else if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
       // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
       // \\" → quote, \\\\ → backslash; a lone backslash before any
       // other character is preserved (JSON.stringify parity).
@@ -1124,12 +1121,8 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
         .replace(/\\(.)/g, (_, ch: string) =>
           ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
         );
-    } else if (typeof value === "boolean" || typeof value === "number" || value === null) {
-      // Compass scalars keep their source text — the shared reader types
-      // `true` / numbers / `null` where the compass contract never did.
-      doc[key] = raw ?? String(value);
     } else {
-      doc[key] = value;
+      doc[key] = raw.replace(/^["']|["']$/g, "");
     }
   }
   return doc;

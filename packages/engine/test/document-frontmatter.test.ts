@@ -18,6 +18,7 @@ import {
   DocumentFrontmatterError,
   extractFrontmatterAndBody,
   parseDocumentFrontmatter,
+  parseDocumentFrontmatterEntries,
   parseSimpleFrontmatter,
 } from "../src/document-frontmatter.js";
 
@@ -261,6 +262,72 @@ describe("parseDocumentFrontmatter — refused line forms", () => {
     // `invalid line` is frontmatter index 1 → document line 3 (`---` is line 1).
     const error = expectRefusal(frontmatter, 3);
     expect(error.lineText).toBe("invalid line");
+  });
+
+  test("key:value without a space after the colon parses in both profiles", () => {
+    expect(parseSimpleFrontmatter(`target_branch:main`)).toEqual({ target_branch: "main" });
+    const flat = parseDocumentFrontmatterEntries(`target_branch:main`, "spec-source", "flat");
+    expect(flat.get("target_branch")).toEqual({ value: "main", rawText: "main", line: 2, kind: "scalar" });
+  });
+});
+
+describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
+  test("entries carry value, original scalar text, document line and kind", () => {
+    const entries = parseDocumentFrontmatterEntries(`name: x\nplans: [a, b]\nnote:`, "spec-source");
+    expect(entries.get("name")).toEqual({ value: "x", rawText: "x", line: 2, kind: "scalar" });
+    expect(entries.get("plans")).toEqual({ value: ["a", "b"], rawText: "[a, b]", line: 3, kind: "list" });
+    expect(entries.get("note")).toEqual({ value: {}, rawText: "", line: 4, kind: "map" });
+  });
+
+  test("a bare key that becomes a block list reports the list kind", () => {
+    const entries = parseDocumentFrontmatterEntries(`plans:\n- one\n- two`, "spec-source", "flat");
+    expect(entries.get("plans")).toEqual({ value: ["one", "two"], rawText: "", line: 2, kind: "list" });
+  });
+
+  test("flat scalars keep their source text verbatim: no typing, no quote stripping", () => {
+    const entries = parseDocumentFrontmatterEntries(
+      `flag: true\ncount: 42\nnote: {}\nanchor: &value\nfolded: >`,
+      "spec-source",
+      "flat",
+    );
+    expect(entries.get("flag")!.value).toBe("true");
+    expect(entries.get("count")!.value).toBe("42");
+    expect(entries.get("note")).toEqual({ value: "{}", rawText: "{}", line: 4, kind: "scalar" });
+    expect(entries.get("anchor")!.value).toBe("&value");
+    expect(entries.get("folded")!.value).toBe(">");
+  });
+
+  test("a nested map refuses in the flat profile with source, line and line text", () => {
+    let error: DocumentFrontmatterError | null = null;
+    try {
+      parseDocumentFrontmatterEntries(`plans:\n  unexpected: value`, "spec-source", "flat");
+    } catch (caught) {
+      error = caught as DocumentFrontmatterError;
+    }
+    expect(error).toBeInstanceOf(DocumentFrontmatterError);
+    expect(error!.source).toBe("spec-source");
+    expect(error!.line).toBe(3);
+    expect(error!.lineText).toBe("  unexpected: value");
+    expect(error!.message).toContain("nested map in flat frontmatter");
+  });
+
+  test("a block scalar refuses in the flat profile with source, line and line text", () => {
+    let error: DocumentFrontmatterError | null = null;
+    try {
+      parseDocumentFrontmatterEntries(`description: |\n  body`, "spec-source", "flat");
+    } catch (caught) {
+      error = caught as DocumentFrontmatterError;
+    }
+    expect(error).toBeInstanceOf(DocumentFrontmatterError);
+    expect(error!.line).toBe(2);
+    expect(error!.lineText).toBe("description: |");
+    expect(error!.message).toContain("block scalar in flat frontmatter");
+  });
+
+  test("the document profile still accepts nested maps and block scalars", () => {
+    const entries = parseDocumentFrontmatterEntries(`outer:\n  inner: value\nbody: |\n  text`, "spec-source");
+    expect(entries.get("outer")!.kind).toBe("map");
+    expect(entries.get("body")).toEqual({ value: "text", rawText: "|", line: 4, kind: "block-scalar" });
   });
 });
 

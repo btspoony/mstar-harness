@@ -521,4 +521,33 @@ describe("parseCompassFrontmatterText — delegation to the shared parser keeps 
     const content = ["---", "note: \"a\\nb\\\"c\"", "---", ""].join("\n");
     expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ note: "a\nb\"c" });
   });
+
+
+  test("key:value without a space stays the scalar the old parser accepted", () => {
+    const content = ["---", "target_branch:main", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ target_branch: "main" });
+  });
+
+  test("note: {} stays the string \"{}\" and >/anchor values stay plain strings", () => {
+    const content = ["---", "note: {}", "folded: >", "anchored: &value", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({
+      note: "{}",
+      folded: ">",
+      anchored: "&value",
+    });
+  });
+
+  test("a nested map refuses with the file path, the line and the reason", () => {
+    const content = ["---", "plans:", "  unexpected: value", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(
+      /compass\.md:3: nested map in flat frontmatter/,
+    );
+  });
+
+  test("a block scalar refuses with the file path, the line and the reason", () => {
+    const content = ["---", "description: |", "  body", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(
+      /compass\.md:2: block scalar in flat frontmatter/,
+    );
+  });
 });

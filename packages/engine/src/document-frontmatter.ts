@@ -13,6 +13,28 @@ export type JsonObject = Record<string, unknown>;
 
 export type FrontmatterAndBody = { frontmatter: string; body: string };
 
+/** Parser behavior profile. `document` (the default, host loaders) is the
+ * strict accepted subset below. `flat` is the delivery-compass contract:
+ * root scalars, flat flow arrays and `- item` block lists only — a nested
+ * map or a `|`/`|-` block scalar refuses with its line, and scalar values
+ * keep their source text verbatim (no typing, no quote stripping) because
+ * the compass contract never typed them. */
+export type FrontmatterProfile = "document" | "flat";
+
+export type FrontmatterEntryKind = "scalar" | "list" | "map" | "block-scalar";
+
+/** One parsed root key: the structured value, the original scalar text after
+ * the key's colon (`""` for a bare `key:`), the 1-based document line of the
+ * key line and the structural kind. The single-pass companion of
+ * `parseDocumentFrontmatter`: adapters read entries instead of rescanning
+ * the frontmatter lines a second time. */
+export type FrontmatterEntry = {
+  value: unknown;
+  rawText: string;
+  line: number;
+  kind: FrontmatterEntryKind;
+};
+
 /** Refusal of a frontmatter line outside the accepted subset. `source` is a
  * diagnostic label only (the caller names the document); `line` is the
  * 1-based line in the source document — the opening fence is document
@@ -87,6 +109,7 @@ interface Level {
   key?: string;
   parent?: JsonObject;
   childIndent: number | null;
+  entry?: FrontmatterEntry;
 }
 
 /** Parse a flat flow array (`[a, b]`, `[]`) into trimmed string items. A
@@ -132,11 +155,17 @@ function parseFlowArray(raw: string, fail: () => never): string[] {
   return items;
 }
 
-/** Parse the strict accepted subset of harness frontmatter. Any other line
- * form throws `DocumentFrontmatterError` with the source label, the 1-based
- * line in the document the frontmatter was extracted from and the offending
- * raw line. */
-export function parseDocumentFrontmatter(frontmatter: string, source: string): JsonObject {
+/** One structural pass over the accepted frontmatter subset. Returns the
+ * parsed root object and, for every root key, its entry with the original
+ * scalar text — the single interpretation adapters consume instead of
+ * rescanning lines. Any other line form throws `DocumentFrontmatterError`
+ * with the source label, the 1-based line in the document the frontmatter
+ * was extracted from and the offending raw line. */
+function parseFrontmatterStructure(
+  frontmatter: string,
+  source: string,
+  profile: FrontmatterProfile,
+): { root: JsonObject; entries: Map<string, FrontmatterEntry> } {
   const lines = frontmatter.split(/\r?\n/);
   const fail = (lineIndex: number, lineText: string, reason: string): never => {
     // `+ 2` because the diagnostic contract is document-relative: the
@@ -145,8 +174,24 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
   };
 
   const root: JsonObject = {};
+  const entries = new Map<string, FrontmatterEntry>();
   const rootLevel: Level = { indent: -1, kind: "map", target: root, childIndent: null };
   const stack: Level[] = [rootLevel];
+  /** Record the entry when a root-level key gains its value. */
+  const assign = (
+    target: JsonObject,
+    key: string,
+    value: unknown,
+    lineIndex: number,
+    rawText: string,
+    kind: FrontmatterEntryKind,
+  ): FrontmatterEntry | undefined => {
+    setOwn(target, key, value);
+    if (target !== root) return undefined;
+    const entry: FrontmatterEntry = { value, rawText, line: lineIndex + 2, kind };
+    entries.set(key, entry);
+    return entry;
+  };
 
   for (let i = 0; i < lines.length; i += 1) {
     const raw = lines[i];
@@ -173,6 +218,10 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
         setOwn(top.parent!, top.key!, list);
         top.kind = "list";
         top.target = list;
+        if (top.entry) {
+          top.entry.value = list;
+          top.entry.kind = "list";
+        }
       }
       if (top.kind !== "list") {
         fail(i, raw, "list item outside a list key");
@@ -210,7 +259,11 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       fail(i, raw, "key line inside a list");
     }
     if (container.kind === "pending") {
-      // The first child of a bare `key:` is a key line: it is a nested map.
+      // The first child of a bare `key:` is a key line: it is a nested map,
+      // which the compass flat profile refuses instead of silently dropping.
+      if (profile === "flat") {
+        fail(i, raw, "nested map in flat frontmatter");
+      }
       container.kind = "map";
     }
     if (container.childIndent === null) {
@@ -245,22 +298,16 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
     if (separator <= 0) {
       fail(i, raw, "line is not a key: line");
     }
-    if (separator + 1 < trimmed.length && trimmed[separator + 1] !== " ") {
-      fail(i, raw, "a key: line needs a space after the colon");
-    }
     const keyRaw = trimmed.slice(0, separator).trim();
-    let key: string;
-    if (BARE_KEY.test(keyRaw)) {
-      key = keyRaw;
-    } else if (
-      keyRaw.length >= 2 &&
-      (keyRaw[0] === '"' || keyRaw[0] === "'") &&
-      keyRaw[keyRaw.length - 1] === keyRaw[0]
-    ) {
-      key = keyRaw.slice(1, -1);
-    } else {
-      fail(i, raw, "unsupported key");
-    }
+    // NOTE: compute the key without `let` — a `let` captured by the
+    // `assign` closure would lose TypeScript's definite-assignment narrowing.
+    const key: string = BARE_KEY.test(keyRaw)
+      ? keyRaw
+      : keyRaw.length >= 2 &&
+          (keyRaw[0] === '"' || keyRaw[0] === "'") &&
+          keyRaw[keyRaw.length - 1] === keyRaw[0]
+        ? keyRaw.slice(1, -1)
+        : fail(i, raw, "unsupported key");
     const rawValue = trimmed.slice(separator + 1).trim();
 
     const target = container.target as JsonObject;
@@ -272,20 +319,27 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       // Bare `key:` opens either a nested map or a `- item` list; until the
       // first child line decides, it is the host's empty-map result.
       const child: JsonObject = {};
-      setOwn(target, key, child);
-      stack.push({ indent, kind: "pending", target: child, key, parent: target, childIndent: null });
+      const entry = assign(target, key, child, i, rawValue, "map");
+      stack.push({ indent, kind: "pending", target: child, key, parent: target, childIndent: null, entry });
       continue;
     }
-    if (rawValue === "{}") {
-      setOwn(target, key, {});
+    if (rawValue === "{}" && profile === "document") {
+      assign(target, key, {}, i, rawValue, "map");
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
+    }
+    if ((rawValue === "|" || rawValue === "|-") && profile === "flat") {
+      // The flat compass contract never had block scalars: the content
+      // lines under the key would be silently swallowed, so refuse at the
+      // key line instead.
+      fail(i, raw, "block scalar in flat frontmatter");
     }
     if (rawValue === "|" || rawValue === "|-") {
       // Block scalar: deeper-indented lines join with `\n`; blank lines
       // inside the block stay empty, the block ends at the first nonblank
       // line indented at or below the key. Every consumed line gets the
       // same tab-in-indentation refusal as any other frontmatter line.
+      const keyLineIndex = i;
       const blockLines: string[] = [];
       for (let j = i + 1; j < lines.length; j += 1) {
         const blockLine = lines[j];
@@ -303,30 +357,58 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
         blockLines.push(normalized);
         i = j;
       }
-      setOwn(target, key, blockLines.join("\n"));
+      assign(target, key, blockLines.join("\n"), keyLineIndex, rawValue, "block-scalar");
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
-    if (rawValue.startsWith("|") || rawValue.startsWith(">")) {
-      fail(i, raw, "unsupported block indicator");
+    if (profile === "document") {
+      if (rawValue.startsWith("|") || rawValue.startsWith(">")) {
+        fail(i, raw, "unsupported block indicator");
+      }
+      if (rawValue.startsWith("&") || rawValue.startsWith("*") || rawValue.startsWith("!")) {
+        fail(i, raw, "anchor, alias or tag value");
+      }
+      if (rawValue.startsWith("{")) {
+        fail(i, raw, "inline flow map");
+      }
     }
-    if (rawValue.startsWith("&") || rawValue.startsWith("*") || rawValue.startsWith("!")) {
-      fail(i, raw, "anchor, alias or tag value");
-    }
-    if (rawValue.startsWith("{")) {
-      fail(i, raw, "inline flow map");
-    }
-    if (rawValue.startsWith("[")) {
-      setOwn(target, key, parseFlowArray(rawValue, () => fail(i, raw, "unsupported flow array")));
+    if (rawValue.startsWith("[") && (profile === "document" || /^\[.*\]$/.test(rawValue))) {
+      assign(target, key, parseFlowArray(rawValue, () => fail(i, raw, "unsupported flow array")), i, rawValue, "list");
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
 
-    setOwn(target, key, parseScalar(rawValue));
+    // In the flat profile a scalar keeps its source text verbatim — the
+    // compass contract never typed `true`/numbers/`null` and never stripped
+    // quotes in the shared reader's sense, so adapters decode what they need.
+    assign(target, key, profile === "flat" ? rawValue : parseScalar(rawValue), i, rawValue, "scalar");
     stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
   }
 
-  return root;
+  return { root, entries };
+}
+
+/** Parse the strict accepted subset of harness frontmatter. Any other line
+ * form throws `DocumentFrontmatterError` with the source label, the 1-based
+ * line in the document the frontmatter was extracted from and the offending
+ * raw line. */
+export function parseDocumentFrontmatter(
+  frontmatter: string,
+  source: string,
+  profile: FrontmatterProfile = "document",
+): JsonObject {
+  return parseFrontmatterStructure(frontmatter, source, profile).root;
+}
+
+/** Entry-level companion of `parseDocumentFrontmatter` from the same single
+ * structural pass: per root key, the value, original scalar text, 1-based
+ * document line and kind. Adapters consuming entries never rescan lines. */
+export function parseDocumentFrontmatterEntries(
+  frontmatter: string,
+  source: string,
+  profile: FrontmatterProfile = "document",
+): Map<string, FrontmatterEntry> {
+  return parseFrontmatterStructure(frontmatter, source, profile).entries;
 }
 
 /** Parse frontmatter without a diagnostic label. Kept as the host-facing
