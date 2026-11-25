@@ -385,6 +385,7 @@ export {
   parseEnforcementFlagFromFrontmatter,
   validateAssignmentFields,
   validateControlWriteAssignment,
+  readAssignmentSource,
 } from "./dispatch.js";
 export type {
   BranchProbeOptions,

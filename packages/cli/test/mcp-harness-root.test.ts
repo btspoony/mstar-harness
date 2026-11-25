@@ -997,14 +997,16 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
 };
 
 /** An Assignment both `dispatch.validate` and `review.seats` accept. */
-const LAUNCH_ASSIGNMENT = `## Assignment
+const LAUNCH_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+working_branch: feature/fixture
+task_budget: S - one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Working branch**: feature/fixture
-**Task budget (implement / ops rounds)**: S - one focused implementer round
+## Assignment
 `;
 
 /** Two byte-identical QC assignments, so `worktree.qc-alignment` aligns them. */

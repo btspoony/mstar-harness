@@ -50,6 +50,7 @@ import {
   scopeGuard,
   SddScriptError,
   stripFrontmatter,
+  readAssignmentSource,
   validateAssignmentFields,
   validateControlWriteAssignment,
   validateDesignTokenFrontmatter,
@@ -93,12 +94,16 @@ type Input = {
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
 type Violation = GateResult["violations"][number];
-function assignmentExecutionMode(text: string): string {
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\*\*\s*Execution mode\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Execution mode\s*:\s*(.*)$/);
-    if (match) return match[1]!.trim();
-  }
-  return "";
+
+/** why: D16 — an Assignment-shaped document whose fields live in `**Label**`
+ * body lines (the retired format) is refused `dispatch.assignment.legacy-format`
+ * instead of the schema's generic absent-fence row, so the caller reads the
+ * ONE front matter contract out of the refusal. Shape detection only: a
+ * document without a closed front matter fence counts as Assignment-shaped
+ * when it carries the `## Assignment` heading or a bolded body label for any
+ * dispatch field. */
+function isLegacyAssignmentShape(text: string): boolean {
+  return /^##[ \t]+Assignment\b/m.test(text) || /^\*\*[ \t]*(?:Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*\*\*[ \t]*:/m.test(text);
 }
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
@@ -391,10 +396,45 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       case "dispatch.validate": {
         const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-        const text = readFileSync(file, "utf8");
+        // why: the read goes through the ONE source resolver (compass D14) —
+        // the CLI's input is already a file, so its content is inline input
+        // to the resolver and a pointer line inside it follows the same
+        // containment rules every gate shares. The resolver's refusal is
+        // terminal for this command: validating a text that is not the
+        // assignment source would report field violations on the wrong body.
+        const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
+        const source = readAssignmentSource(readFileSync(file, "utf8"), { harnessDir });
+        if (!source.ok) {
+          return rejected(
+            id,
+            { ok: false, violations: [{ ok: false, severity: "critical", code: source.code, message: source.message, fix: source.fix }] },
+            source.code,
+          );
+        }
+        const text = source.text;
+        const violations: Violation[] = [];
+        // why: D16 — the retired `**Label**` body-line format is refused with
+        // the front matter recovery UP FRONT instead of the schema's generic
+        // absent-fence row, so every gate the caller consults answers the same
+        // code. Shape detection only; a fenced document keeps the schema verdict.
+        const legacy = !/^---[ \t]*\r?\n/.test(text) && isLegacyAssignmentShape(text);
+        if (legacy) {
+          violations.push({
+            ok: false,
+            severity: "high",
+            code: "dispatch.assignment.legacy-format",
+            message: "the Assignment carries its fields as `**Label**` body lines \u2014 the retired format; front matter is the only field contract",
+            fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
+          });
+        }
         const fields = parseAssignmentFields(text);
         const readOnly = isReadOnlyAssignmentRole(fields.executeAs ?? "");
-        const violations: Violation[] = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
+        violations.push(...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations.filter(
+          // why: the legacy refusal supersedes the schema's absent-fence row
+          // for Assignment-shaped input — one defect, one message. Any other
+          // document keeps the schema row as its whole verdict.
+          (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
+        ));
         if (!readOnly) {
           const forms = parseAssignmentBranchForms(text);
           const declaredBranch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
@@ -409,7 +449,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (fields.writeDomain !== "control") {
             if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
           } else {
-            violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(file) }));
+            violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(source.path ?? file) }));
           }
         }
         const gate = { ok: violations.length === 0, violations };
@@ -580,7 +620,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const file = absolute(context.cwd, named);
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
-        const mode = input.mode ?? assignmentExecutionMode(text);
+        const mode = input.mode ?? parseAssignmentFields(text).executionMode ?? "";
         const reviewers = input.reviewers ?? [];
         const result = executionModeToN(mode, { seats: reviewers });
         if (!result.ok) return rejected(id, result, "review.seats.invalid");
@@ -857,7 +897,7 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
 }
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
-  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, one branch form, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
+  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate an Assignment's front matter fields and branch protection. Fields live ONLY in the document's `---`-fenced YAML front matter (snake_case keys: execute_as, delegation, task_category, working_branch / branch_policy, write_domain, worktree_path, control_write_paths, execution_mode, budget, return_shape, task_budget); a retired `**Label**` body-line document refuses `dispatch.assignment.legacy-format` with the front matter recovery. The file's own content may be an `Assignment file: <abs>` pointer instead, resolved under an accepted assignment home. Write domain: control requires `worktree_path`, one branch form, and a `control_write_paths` list; paths are concrete, absolute or relative to `worktree_path`, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "controlClean", flags: "--control-clean" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts, the L1/L2 worktree pre-dispatch gate, or the control root tracked-change gate (--control-clean: refuses while the Git main worktree carries committable changes; a repository without .mstar/ or .mstarc has no control-root contract and skips)." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
@@ -877,7 +917,7 @@ function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unkn
   const assignmentHeaderRequirement = {
     name: "assignmentFile",
     ownership: "caller" as const,
-    constraint: "the file must use a `## Assignment` header; assignment metadata is read only before the next `##` section, thematic `---`, or top-level `#` heading, so put Execute as, Delegation, and other assignment fields in that header",
+    constraint: "the file's fields live ONLY in a `---`-fenced YAML front matter block of snake_case keys (execute_as, delegation, task_category, working_branch / branch_policy, and so on); body `**Label**` lines are prose and declare nothing. The file may instead hold a single `Assignment file: <abs>` pointer line, which is resolved under an accepted assignment home",
   };
   return {
     id,

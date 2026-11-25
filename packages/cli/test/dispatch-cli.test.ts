@@ -1,20 +1,24 @@
 /**
  * CLI `mstar dispatch validate <assignment-file>` — thin engine-backed
- * wrapper over `validateAssignmentFields` + `assertDefaultBranchProtected`
- * (mstar-dispatch-gates Assignment field contract; mstar-branch-worktree
- * branch-form + default-protected-branch gates).
+ * wrapper over `readAssignmentSource` + `validateAssignmentFields` +
+ * `assertDefaultBranchProtected` (mstar-dispatch-gates Assignment field
+ * contract; mstar-branch-worktree branch-form + default-protected-branch
+ * gates).
  *
  * Exit codes: 0 = OK, 1 = violations / file errors, 2 = usage (missing
  * <assignment-file> arg, slice-2 in-handler convention). The default-branch
  * gate branch is DERIVED FROM THE ASSIGNMENT (create-form name / Working
  * branch / Branch policy branch — qc2 W-1 ); `--branch` and
  * `$MSTAR_WORKING_BRANCH` are context fallbacks for assignments without a
- * branch form. Read-only roles (scout/explore) skip both branch gates
- * . A well-formed `Branch policy: direct on <branch> —
- * <reason>` exception is honored only when its branch matches the checked
- * branch. Role and branch are read from the Assignment HEADER region only
- * (`assignmentHeaderRegion`), so a `## Task` body quoting the labels neither
- * satisfies the gate nor disables it.
+ * branch form. Read-only roles (scout/explore) skip both branch gates.
+ * A well-formed `branch_policy: direct on <branch> — <reason>` exception is
+ * honored only when its branch matches the checked branch.
+ *
+ * Fields live ONLY in the assignment's `---`-fenced YAML front matter
+ * (snake_case keys, compass D15); the retired `**Label**` body-line format
+ * refuses `dispatch.assignment.legacy-format` (D16). The file's own content
+ * may instead be a single `Assignment file: <abs>` pointer, resolved under an
+ * accepted assignment home (compass D14).
  *
  * Each case runs the real CLI as a subprocess against a temp assignment
  * fixture and asserts the exit code + reported violation codes.
@@ -57,33 +61,55 @@ function withAssignment(assignmentText: string, fn: (file: string) => void): voi
 }
 
 /** Minimal well-formed writable assignment (same shape as the engine fixture). */
-const VALID_ASSIGNMENT = `## Assignment
+const VALID_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+task_budget: S — one implementer round closing the declared Files and gates
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates
-**Plan Path**: .mstar/plans/20260808-example.md
+## Assignment
 `;
 
-function assignment(overrides: Record<string, string>): string {
-  const base: Record<string, string> = {
-    "Execute as": "fullstack-dev",
-    Delegation: "forbidden",
-    "Task category": "logic",
-    "Working branch": "feature/foo",
+/** One front matter override value: a scalar, a block list, or `undefined`
+ * to DROP the key (missing-field probes rely on the drop). */
+type FixtureValue = string | string[] | undefined;
+
+function assignment(overrides: Record<string, FixtureValue> = {}): string {
+  const base: Record<string, FixtureValue> = {
+    execute_as: "fullstack-dev",
+    delegation: "forbidden",
+    task_category: "logic",
+    working_branch: "feature/foo",
     // Implement/ops rounds must carry the Task budget capacity field
     // (capacity contract spec § A1) — every fixture built here is a
     // non-review/non-audit round.
-    "Task budget (implement / ops rounds)": "S — one focused implementer round",
+    task_budget: "S — one focused implementer round",
   };
-  const merged = { ...base, ...overrides };
-  const lines = ["## Assignment", ""];
+  const merged: Record<string, FixtureValue> = { ...base, ...overrides };
+  const lines = ["---"];
   for (const [field, value] of Object.entries(merged)) {
-    lines.push(`**${field}**: ${value}`);
+    if (value === undefined) continue;
+    // `control_write_paths` is the one list-typed key: its caller spelling is
+    // comma-separated, and the front matter type is a YAML block list.
+    const items = Array.isArray(value)
+      ? value
+      : field === "control_write_paths"
+        ? value.split(",").map((item) => item.trim()).filter(Boolean)
+        : value;
+    if (Array.isArray(items)) {
+      if (items.length === 0) lines.push(`${field}: []`);
+      else {
+        lines.push(`${field}:`);
+        for (const item of items) lines.push(`- ${item}`);
+      }
+    } else {
+      lines.push(`${field}: ${items}`);
+    }
   }
-  return lines.join("\n") + "\n";
+  lines.push("---", "", "## Assignment", "");
+  return lines.join("\n");
 }
 
 describe("mstar dispatch validate — Assignment field + default-branch gate", () => {
@@ -105,7 +131,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     }
   });
 
-  test("valid writable assignment → OK, exit 0", () => {
+  test("valid front matter assignment → OK, exit 0", () => {
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
@@ -114,36 +140,32 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("otherwise-valid implement assignment without Task budget → assignment.field.task-budget-missing, exit 1", () => {
-    const withoutTaskBudget = VALID_ASSIGNMENT.replace(
-      "**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates\n",
-      "",
-    );
-    withAssignment(withoutTaskBudget, (file) => {
+  test("otherwise-valid implement assignment without task_budget → assignment.field.task-budget-missing, exit 1", () => {
+    withAssignment(assignment({ task_budget: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("assignment.field.task-budget-missing");
     });
   });
 
-  test("missing Execute as (agent field) → assignment.field.missing-execute-as, exit 1", () => {
-    withAssignment(assignment({ "Execute as": "" }).replace("**Execute as**: ", ""), (file) => {
+  test("missing execute_as → assignment.field.execute-as, exit 1", () => {
+    withAssignment(assignment({ execute_as: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
-      expect(violationCodes(result)).toContain("assignment.field.missing-execute-as");
+      expect(violationCodes(result)).toContain("assignment.field.execute-as");
     });
   });
 
-  test("missing Working branch → assignment.field.branch-missing, exit 1", () => {
-    withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
+  test("missing working_branch → assignment.field.branch-missing, exit 1", () => {
+    withAssignment(assignment({ working_branch: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("assignment.field.branch-missing");
     });
   });
 
-  test("create-form Working branch without <base> → assignment.field.branch-missing-base, exit 1", () => {
-    withAssignment(assignment({ "Working branch": "create feature/new" }), (file) => {
+  test("create-form working_branch without <base> → assignment.field.branch-missing-base, exit 1", () => {
+    withAssignment(assignment({ working_branch: "create feature/new" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("assignment.field.branch-missing-base");
@@ -151,18 +173,37 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("dangling create form 'create feature/x from' → assignment.field.branch-missing-base, exit 1", () => {
-    withAssignment(assignment({ "Working branch": "create feature/x from" }), (file) => {
+    withAssignment(assignment({ working_branch: "create feature/x from" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("assignment.field.branch-missing-base");
     });
   });
 
+  test("a body-label document refuses dispatch.assignment.legacy-format (D16) with the front matter recovery, exit 1", () => {
+    const bodyLabel = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/foo
+**Task budget (implement / ops rounds)**: S — one implementer round
+`;
+    withAssignment(bodyLabel, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      const envelope = expectEnvelope(result, "refused", "dispatch.assignment.legacy-format");
+      expect(violationCodes(result)).toContain("dispatch.assignment.legacy-format");
+      // The recovery names the supported front matter form, not a generic block.
+      expect(`${envelope.message} ${envelope.recovery}`).toContain("front matter");
+    });
+  });
+
   // --- gate-branch derivation : the checked branch comes
   // from the Assignment's own branch forms ---
 
-  test("Working branch: main (no exception) → dispatch.default-branch.protected, exit 1 — derived from the Assignment", () => {
-    withAssignment(assignment({ "Working branch": "main" }), (file) => {
+  test("working_branch: main (no exception) → dispatch.default-branch.protected, exit 1 — derived from the Assignment", () => {
+    withAssignment(assignment({ working_branch: "main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("dispatch.default-branch.protected");
@@ -170,7 +211,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("create form 'create feature/x from main' (no --branch) → exit 0 — checked branch is feature/x, not main", () => {
-    withAssignment(assignment({ "Working branch": "create feature/x from main" }), (file) => {
+    withAssignment(assignment({ working_branch: "create feature/x from main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(0);
       expectEnvelope(result, "ok", "dispatch.validate.ok");
@@ -179,13 +220,21 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("legal 'create feature/x from main' + --branch main → exit 1 — the explicit flag conflicts with the Assignment's declared branch", () => {
-    withAssignment(assignment({ "Working branch": "create feature/x from main" }), (file) => {
+    withAssignment(assignment({ working_branch: "create feature/x from main" }), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
       // The Assignment's declared branch (the create form's target `feature/x`)
       // is the checked branch; an explicit `--branch` that disagrees is a
       // conflict, never a silent override of the declared form.
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("dispatch.branch.conflict");
+    });
+  });
+
+  test("--branch agrees with working_branch → exit 0 (reconciled, not a conflict)", () => {
+    withAssignment(VALID_ASSIGNMENT, (file) => {
+      const result = runCli(["dispatch", "validate", file, "--branch", "feature/foo"]);
+      expect(result.exitCode).toBe(0);
+      expectEnvelope(result, "ok", "dispatch.validate.ok");
     });
   });
 
@@ -209,9 +258,9 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("Branch policy direct on main — reason (no --branch) → exit 0 — derived exception branch matches the exception", () => {
+  test("branch_policy direct on main — reason (no --branch) → exit 0 — derived exception branch matches the exception", () => {
     withAssignment(
-      assignment({ "Working branch": "", "Branch policy": "direct on main -- team hotfix convention" }),
+      assignment({ working_branch: undefined, branch_policy: "direct on main -- team hotfix convention" }),
       (file) => {
         const result = runCli(["dispatch", "validate", file]);
         expect(result.exitCode).toBe(0);
@@ -220,9 +269,9 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     );
   });
 
-  test("Branch policy direct on main + --branch main → exit 0 (direct-on exception honored)", () => {
+  test("branch_policy direct on main + --branch main → exit 0 (direct-on exception honored)", () => {
     withAssignment(
-      assignment({ "Working branch": "", "Branch policy": "direct on main -- team hotfix convention" }),
+      assignment({ working_branch: undefined, branch_policy: "direct on main -- team hotfix convention" }),
       (file) => {
         const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
         expect(result.exitCode).toBe(0);
@@ -232,17 +281,17 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     );
   });
 
-  test("Branch policy without reason → assignment.field.branch-policy-missing-reason + protected, exit 1 (no exception)", () => {
-    withAssignment(assignment({ "Working branch": "", "Branch policy": "direct on main" }), (file) => {
+  test("branch_policy without reason → assignment.field.branch-policy-missing-reason + protected, exit 1 (no exception)", () => {
+    withAssignment(assignment({ working_branch: undefined, branch_policy: "direct on main" }), (file) => {
       const result = runCli(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-policy-missing-reason", "dispatch.default-branch.protected"]));
     });
   });
 
-  test("Working branch main + Branch policy direct on main-tmp — reason → protected, exit 1 (exception branch mismatch)", () => {
+  test("working_branch main + branch_policy direct on main-tmp — reason → protected, exit 1 (exception branch mismatch)", () => {
     withAssignment(
-      assignment({ "Working branch": "main", "Branch policy": "direct on main-tmp -- other work" }),
+      assignment({ working_branch: "main", branch_policy: "direct on main-tmp -- other work" }),
       (file) => {
         const result = runCli(["dispatch", "validate", file]);
         expect(result.exitCode).toBe(1);
@@ -252,7 +301,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("--branch main without an assignment branch form → dispatch.default-branch.protected, exit 1 (context fallback)", () => {
-    withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
+    withAssignment(assignment({ working_branch: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-missing", "dispatch.default-branch.protected"]));
@@ -260,15 +309,15 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("MSTAR_WORKING_BRANCH=main env fallback without an assignment branch form → protected, exit 1", () => {
-    withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
+    withAssignment(assignment({ working_branch: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file], { env: { MSTAR_WORKING_BRANCH: "main" } });
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(expect.arrayContaining(["assignment.field.branch-missing", "dispatch.default-branch.protected"]));
     });
   });
 
-  test("--branch feature/x → exit 0 (default-branch gate passes)", () => {
-    withAssignment(assignment({ "Working branch": "" }).replace("**Working branch**: ", ""), (file) => {
+  test("--branch feature/x → exit 1 with only branch-missing (default-branch gate passes)", () => {
+    withAssignment(assignment({ working_branch: undefined }), (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "feature/x"]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(["assignment.field.branch-missing"]);
@@ -278,13 +327,15 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   // --- read-only roles : scout/explore skip both branch
   // gates, so the preflight passes read-only Assignments without branch forms
 
-  test("scout assignment without Working branch → exit 0 (read-only skips the branch gates)", () => {
-    const scout = `## Assignment
+  test("scout assignment without working_branch → exit 0 (read-only skips the branch gates)", () => {
+    const scout = `---
+execute_as: scout
+delegation: forbidden
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);
@@ -294,13 +345,15 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("scout assignment without Working branch + --branch main → exit 0 (no gate on read-only work)", () => {
-    const scout = `## Assignment
+  test("scout assignment without working_branch + --branch main → exit 0 (no gate on read-only work)", () => {
+    const scout = `---
+execute_as: scout
+delegation: forbidden
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file, "--branch", "main"]);
@@ -308,13 +361,15 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("read-only role match is case-insensitive (Execute as: Scout)", () => {
-    const scout = `## Assignment
+  test("read-only role match is case-insensitive (execute_as: Scout)", () => {
+    const scout = `---
+execute_as: Scout
+delegation: forbidden
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: Scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 `;
     withAssignment(scout, (file) => {
       const result = runCli(["dispatch", "validate", file]);
@@ -322,12 +377,15 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     });
   });
 
-  test("body-only field lines do not satisfy the preflight (header region only)", () => {
-    const bodyOnly = `## Assignment
+  test("body-only field lines do not declare fields (front matter only)", () => {
+    const bodyOnly = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 ## Task 1: implement
 
@@ -341,11 +399,14 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   });
 
   test("a body-only read-only role does not disable the writable gate", () => {
-    const text = `## Assignment
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 ## Task 1: recon
 
@@ -400,31 +461,30 @@ describe("mstar dispatch validate — control writes", () => {
 
   test("validates the control checkout from a linked worktree and refuses mismatches", () => {
     fixture((control, linked, file) => {
-      const run = (overrides: Record<string, string>) => {
-        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": ".", "Working branch": "main", "Control write paths": ".mstar/plans/run.md", ...overrides }));
+      const run = (overrides: Record<string, FixtureValue>) => {
+        writeFileSync(file, assignment({ write_domain: "control", worktree_path: ".", working_branch: "main", control_write_paths: ".mstar/plans/run.md", ...overrides }));
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
       const clean = run({});
       expect(clean.exitCode).toBe(0);
       expectEnvelope(clean, "ok", "dispatch.validate.ok");
-      const wrongPath = run({ "Worktree path": linked });
+      const wrongPath = run({ worktree_path: linked });
       expect(wrongPath.exitCode).toBe(1);
       expect(violationCodes(wrongPath)).toContain("dispatch.control-write.worktree-not-control");
-      const wrongBranch = run({ "Working branch": "feature/fixture" });
+      const wrongBranch = run({ working_branch: "feature/fixture" });
       expect(wrongBranch.exitCode).toBe(1);
       expect(violationCodes(wrongBranch)).toContain("dispatch.control-write.branch-mismatch");
-      const product = run({ "Write domain": "work" });
+      const product = run({ write_domain: "work" });
       expect(product.exitCode).toBe(1);
       expect(violationCodes(product)).toContain("dispatch.default-branch.protected");
-      const readOnly = run({ "Execute as": "scout", "Worktree path": linked });
+      const readOnly = run({ execute_as: "scout", worktree_path: linked });
       expect(readOnly.exitCode).toBe(0);
     });
   });
   test("accepts direct-on control branch and refuses a different branch", () => {
     fixture((control, linked, file) => {
       const run = (branch: string) => {
-        const text = assignment({ "Write domain": "control", "Worktree path": ".", "Control write paths": ".mstar/plans/run.md", "Branch policy": `direct on ${branch} \u2014 maintenance` })
-          .replace(/^\*\*Working branch\*\*:.*\n/m, "");
+        const text = assignment({ write_domain: "control", worktree_path: ".", working_branch: undefined, control_write_paths: ".mstar/plans/run.md", branch_policy: `direct on ${branch} \u2014 maintenance` });
         writeFileSync(file, text);
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
@@ -438,7 +498,7 @@ describe("mstar dispatch validate — control writes", () => {
     fixture((control, linked, file) => {
       writeFileSync(join(control, ".gitignore"), "*.md\n");
       const run = (target: string) => {
-        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        writeFileSync(file, assignment({ write_domain: "control", worktree_path: control, working_branch: "main", control_write_paths: target }));
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
       expect(() => execFileSync("git", ["-C", control, "check-ignore", "-q", "--", "notes/run.md/"])).not.toThrow();
@@ -455,7 +515,7 @@ describe("mstar dispatch validate — control writes", () => {
     fixture((control, _linked, file) => {
       writeFileSync(join(control, ".gitignore"), ".mstar/**\n");
       const run = (target: string) => {
-        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        writeFileSync(file, assignment({ write_domain: "control", worktree_path: control, working_branch: "main", control_write_paths: target }));
         return runCli(["dispatch", "validate", file], { cwd: control });
       };
       const fileTarget = run(".mstar/notes");
@@ -468,7 +528,7 @@ describe("mstar dispatch validate — control writes", () => {
     fixture((control, linked, file) => {
       writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
       const run = (target: string) => {
-        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        writeFileSync(file, assignment({ write_domain: "control", worktree_path: control, working_branch: "main", control_write_paths: target }));
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
       const unsafe = run(".mstar/notes");
@@ -481,7 +541,7 @@ describe("mstar dispatch validate — control writes", () => {
   test("checks a declared absent directory using directory ignore rules", () => {
     fixture((control, linked, file) => {
       writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
-      writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": ".mstar/notes/" }));
+      writeFileSync(file, assignment({ write_domain: "control", worktree_path: control, working_branch: "main", control_write_paths: ".mstar/notes/" }));
       const result = runCli(["dispatch", "validate", file], { cwd: linked });
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("dispatch.control-write.target-committable");
@@ -490,8 +550,8 @@ describe("mstar dispatch validate — control writes", () => {
 
   test("checks each concrete target against the canonical ignore layout", () => {
     fixture((control, linked, file) => {
-      const run = (targets: string) => {
-        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": targets }));
+      const run = (targets: FixtureValue) => {
+        writeFileSync(file, assignment({ write_domain: "control", worktree_path: control, working_branch: "main", control_write_paths: targets }));
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
       expect(run(".mstar/sdd/plan-x/report.md").exitCode).toBe(0);
