@@ -29,10 +29,12 @@ import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
+  draftAfterWrite,
   effortInput,
   milestoneCreateInput,
   milestoneDraft,
   milestonePatch,
+  nextMilestoneOrdinal,
   ProjectDetail as ProjectDetailScreen,
   type ProjectDetailCopy,
   type ProjectDetailProps,
@@ -821,6 +823,54 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
       expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });
     }
     expect(milestonePatch(stored(), { ...milestoneDraft(stored()), effort: "twelve" })).toEqual({});
+  });
+
+  test("a NEW milestone takes one past the highest ordinal, never the count — gaps sort it last", () => {
+    // why: deletions leave gaps (ordinals 0, 2). The milestone COUNT (2) would sort
+    // the new one alongside the existing ordinal-2 work or ahead of it on the id
+    // tie-break; one past the highest ordinal (3) places it after everything.
+    const gapped = [milestoneRow({ ordinal: 0 }), milestoneRow({ milestoneId: "b-position", ordinal: 2 })];
+    expect(nextMilestoneOrdinal(gapped)).toBe(3);
+    expect(nextMilestoneOrdinal([])).toBe(0);
+    const created = milestoneCreateInput("New milestone", "12", nextMilestoneOrdinal(gapped));
+    expect(created).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: 12, ordinal: 3 } });
+  });
+
+  test("the rendered timeline places the gap-created milestone last", () => {
+    const html = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({
+            milestones: {
+              projectId: "engine",
+              milestones: [
+                milestoneRow({ milestoneId: "first-kept", ordinal: 0, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+                milestoneRow({ milestoneId: "second-kept", ordinal: 2, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+                milestoneRow({ milestoneId: "created-after", ordinal: 3, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+              ],
+              issues: [],
+              unassignedIssues: 0,
+            },
+          }),
+          projection,
+        }),
+      ),
+    });
+    const first = html.indexOf('data-ms-timeline-node="first-kept"');
+    const second = html.indexOf('data-ms-timeline-node="second-kept"');
+    const created = html.indexOf('data-ms-timeline-node="created-after"');
+    expect(first).toBeGreaterThan(-1);
+    expect(first).toBeLessThan(second);
+    expect(second).toBeLessThan(created);
+  });
+
+  test("a refused write keeps the typed draft; an accepted one clears it", () => {
+    // why: the engine refuses 0 / negative / over-range counts AFTER the operator
+    // may have edited the name and status too. The draft is theirs, not the
+    // engine's to throw away — only an accepted write closes the editor.
+    const typed = { name: "Renamed", effort: "0", status: "active" };
+    expect(draftAfterWrite(typed, "[milestone.effort-range] Effort sessions must be a positive count.")).toEqual(typed);
+    expect(draftAfterWrite(typed, null)).toBeNull();
   });
 });
 

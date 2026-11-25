@@ -15,7 +15,7 @@
  * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
  * `checkedAt`, the catalog `revision`, `sourceHash`.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { ProgressBar } from "../components/ProgressBar.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -115,6 +115,30 @@ export function milestoneCreateInput(
     kind: "input",
     input: { name: name.trim(), effortSessions: parsed.kind === "empty" ? null : parsed.sessions, ordinal: nextOrdinal },
   };
+}
+
+/**
+ * The ordinal a NEW milestone takes: one past the highest ordinal on the board,
+ * and 0 for an empty one. The count is not the answer — deletions leave gaps
+ * (ordinals 0, 2), where the count would sort the new milestone alongside or
+ * ahead of existing work instead of after it.
+ */
+export function nextMilestoneOrdinal(milestones: readonly { ordinal: number }[]): number {
+  let highest = -1;
+  for (const milestone of milestones) if (milestone.ordinal > highest) highest = milestone.ordinal;
+  return highest + 1;
+}
+
+/**
+ * What a settled write does to the operator's draft: a REFUSED write keeps it —
+ * the name/status/effort edits the operator typed are not the engine's to throw
+ * away, and the refusal message arrives while the editor is still open to fix
+ * the offending value. An accepted write clears it (null), as before. The write
+ * surface's refusal prop is the verdict: null after a successful write, the
+ * store's own message after a refused one.
+ */
+export function draftAfterWrite<T>(draft: T, refusal: string | null): T | null {
+  return refusal === null ? null : draft;
 }
 
 /**
@@ -241,6 +265,15 @@ function MilestoneActions(props: {
   const [draft, setDraft] = useState<MilestoneDraft | null>(null);
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
+  // Settled-write resolution: the draft stays open while a write is in flight,
+  // and the surface's refusal verdict — not the submit itself — decides whether
+  // it closes, so a refused count never throws away the operator's other edits.
+  const [writeInFlight, setWriteInFlight] = useState(false);
+  useEffect(() => {
+    if (!writeInFlight || writes.busy) return;
+    setWriteInFlight(false);
+    setDraft((current) => (current === null ? null : draftAfterWrite(current, writes.refusal)));
+  });
   if (draft === null) {
     return (
       <span className={"ms-actions"}>
@@ -327,7 +360,7 @@ function MilestoneActions(props: {
         }
         setEffortError(false);
         writes.update(milestone.milestoneId, milestonePatch(milestone, draft));
-        setDraft(null);
+        setWriteInFlight(true);
       }}
     >
       <label>
@@ -472,6 +505,17 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
   const [name, setName] = useState("");
   const [effort, setEffort] = useState("");
   const [effortError, setEffortError] = useState(false);
+  // Same settled-write rule as the editor: the form clears only when the write
+  // is ACCEPTED — a refusal keeps what the operator typed, and the store's own
+  // message arrives beside the still-open form.
+  const [writeInFlight, setWriteInFlight] = useState(false);
+  useEffect(() => {
+    if (!writeInFlight || writes.busy) return;
+    setWriteInFlight(false);
+    if (draftAfterWrite({ name, effort }, writes.refusal) !== null) return;
+    setName("");
+    setEffort("");
+  });
   return (
     <form
       className={"ms-create"}
@@ -485,8 +529,7 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
         }
         setEffortError(false);
         writes.create(created.input);
-        setName("");
-        setEffort("");
+        setWriteInFlight(true);
       }}
     >
       <label>
@@ -693,7 +736,7 @@ function RoadmapArm(props: {
     props.writes === undefined ? null : (
       <RoadmapWrites
         writes={props.writes}
-        nextOrdinal={roadmap.kind === "populated" ? roadmap.value.milestones.length : 0}
+        nextOrdinal={roadmap.kind === "populated" ? nextMilestoneOrdinal(roadmap.value.milestones) : 0}
         copy={copy}
       />
     );
