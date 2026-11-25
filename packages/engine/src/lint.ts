@@ -1327,6 +1327,17 @@ const DESCRIPTION_MAX_WORDS = 120;
  * verb check. No content judgment (e.g. whether the trigger is narrow
  * enough) — that stays prompt.
  */
+/** Read one frontmatter field as the contract's string scalar: strings pass
+ * through, numbers and booleans coerce, null/undefined land as "" (missing),
+ * and a list or nested map counts as missing too — it is structurally
+ * invalid content, and `String(...)` on it would either pass coerced junk or
+ * throw on a non-callable `toString`. */
+function scalarAsString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 export function lintSkillFrontmatter(frontmatterText: string): GateResult {
   const violations: ValidationResult[] = [];
   let fm: JsonObject | null = null;
@@ -1366,8 +1377,11 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
 
   // why: the reader's scalars arrive typed (null/number/boolean/string); the
   // contract reads them as text, so a bare `name:` (null) and a numeric
-  // scalar both coerce \u2014 null lands as "" and counts as missing.
-  const name = typeof fm!.name === "string" ? fm!.name : fm!.name == null ? "" : String(fm!.name);
+  // scalar both coerce — null lands as "" and counts as missing. A list or
+  // nested-map value is not a string scalar at all: coercing it would either
+  // smuggle structurally invalid metadata past the gate or crash on a
+  // non-callable `toString`, so it counts as missing too.
+  const name = scalarAsString(fm!.name);
   if (name === "") {
     violations.push(
       violation(
@@ -1388,7 +1402,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     );
   }
 
-  const description = typeof fm!.description === "string" ? fm!.description : fm!.description == null ? "" : String(fm!.description);
+  const description = scalarAsString(fm!.description);
   if (description === "") {
     violations.push(
       violation(
@@ -1458,10 +1472,26 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
  * there is no continuation join and no bare unfenced-body parse.
  */
 export function parseFrontmatter(text: string): JsonObject | null {
-  const body = text.replace(/^\uFEFF/, "").replace(/^\s+/, "");
+  const bomStripped = text.replace(/^\uFEFF/, "");
+  const body = bomStripped.replace(/^\s+/, "");
+  // Leading blank lines are stripped before the reader, so a refusal line is
+  // short by the count of removed newlines; the count is added back so the
+  // diagnostic names the document's real line.
+  const stripped = bomStripped.slice(0, bomStripped.length - body.length);
+  const removedLines = (stripped.match(/\n/g) ?? []).length;
   const { frontmatter, fenced } = extractFrontmatterAndBody(body);
   if (!fenced) return null;
-  return parseDocumentFrontmatter(frontmatter, "SKILL.md");
+  try {
+    return parseDocumentFrontmatter(frontmatter, "SKILL.md");
+  } catch (error) {
+    if (error instanceof DocumentFrontmatterError && removedLines > 0) {
+      const reason = error.message
+        .replace(/^SKILL\.md:\d+: /, "")
+        .replace(`: ${JSON.stringify(error.lineText)} (fix: ${error.fix})`, "");
+      throw new DocumentFrontmatterError(error.source, error.line + removedLines, error.lineText, reason, error.fix);
+    }
+    throw error;
+  }
 }
 
 /** Required STRATEGY.md sections (mstar-knowledge/references/strategy-document.md § Shape). */

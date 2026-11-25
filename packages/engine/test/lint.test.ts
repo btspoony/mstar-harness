@@ -1480,6 +1480,9 @@ describe("planQualityBar plan front-matter schema", () => {
     const result = planQualityBar(plan);
     expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.missing"]);
     expect(result.violations[0]!.message).toContain("working_branch");
+    // Diagnostic detail at the consumer boundary: the field is named and the
+    // violation carries the document location line the schema reported.
+    expect(result.violations[0]!.message).toMatch(/^plan:1: missing required field working_branch/);
   });
 
   test("an enum value outside the schema reports lint.plan.frontmatter.invalid", () => {
@@ -1487,17 +1490,20 @@ describe("planQualityBar plan front-matter schema", () => {
     const result = planQualityBar(plan);
     expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.invalid"]);
     expect(result.violations[0]!.message).toContain("execution");
+    expect(result.violations[0]!.message).toContain("plan:3: invalid execution");
   });
 
   test("a plan without a fence reports lint.plan.frontmatter.absent", () => {
     const result = planQualityBar("# Plan\n- [ ] implement the gate\n");
     expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.absent"]);
+    expect(result.violations[0]!.message).toContain("no front matter fence");
   });
 
   test("an unknown front-matter field reports lint.plan.frontmatter.unknown", () => {
     const plan = VALID_PLAN_FENCE.replace("status: InProgress", "status: InProgress\nflavor: spicy") + "# Plan\n";
     const result = planQualityBar(plan);
     expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.unknown"]);
+    expect(result.violations[0]!.message).toContain("plan:8: unknown field flavor");
   });
 });
 
@@ -1526,6 +1532,22 @@ describe("parseFrontmatter (delegated reader)", () => {
       expect(failure.lineText).toBe("  continuation text joins nothing");
     }
   });
+  test("leading blank lines do not shift the refusal line (T2-02 regression)", () => {
+    const text = "\n\n---\nname: example-skill\ndescription: Use when building X.\n  continuation text joins nothing\n---\n";
+    try {
+      parseFrontmatter(text);
+      expect.unreachable("the continuation line must be refused");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DocumentFrontmatterError);
+      const failure = error as DocumentFrontmatterError;
+      // The continuation sits on document line 6; the two stripped blank
+      // lines must not leave the reader-relative line 4 reported.
+      expect(failure.line).toBe(6);
+      expect(failure.lineText).toBe("  continuation text joins nothing");
+      expect(failure.message).toContain("SKILL.md:6");
+    }
+  });
+
 
   test("a skill file with a BOM still parses", () => {
     const fm = parseFrontmatter("\uFEFF" + FRONTMATTER_GOOD);
@@ -1629,6 +1651,52 @@ describe("lintSkillFrontmatter", () => {
     expect(lintSkillFrontmatter(FRONTMATTER_US_ACRONYM).ok).toBe(true);
     expect(lintSkillFrontmatter(FRONTMATTER_IO).ok).toBe(true);
   });
+  test("T2-01: a list-valued name is a missing-field violation, never coerced or thrown", () => {
+    const text = "---\nname:\n  - example-skill\ndescription: Use when building X.\n---\n";
+    const result = lintSkillFrontmatter(text);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toContain("lint.frontmatter.name.missing");
+    expect(result.violations.map((v) => v.code)).not.toContain("lint.frontmatter.name.format");
+  });
+
+  test("T2-01: a flow-list-valued description counts as missing", () => {
+    const text = "---\nname: example-skill\ndescription: [Use when needed]\n---\n";
+    const result = lintSkillFrontmatter(text);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toContain("lint.frontmatter.description.missing");
+  });
+
+  test("T2-01: a nested-map-valued name counts as missing instead of throwing", () => {
+    const text = "---\nname:\n  nested: example-skill\ndescription: Use when building X.\n---\n";
+    const result = lintSkillFrontmatter(text);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toContain("lint.frontmatter.name.missing");
+  });
+
+  test("T2-03: an unfenced skill input reports lint.frontmatter.missing with the violation detail", () => {
+    const result = lintSkillFrontmatter("name: example-skill\ndescription: Use when building X.\n");
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.frontmatter.missing"]);
+    expect(result.violations[0]!.message).toContain("no YAML frontmatter block found");
+  });
+
+  test("T2-03: a continuation refusal reaches lintSkillFrontmatter naming the document line", () => {
+    const text = "---\nname: example-skill\ndescription: Use when building X.\n  continuation text joins nothing\n---\n";
+    const result = lintSkillFrontmatter(text);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.frontmatter.missing"]);
+    expect(result.violations[0]!.message).toContain("SKILL.md:4");
+  });
+
+  test("T2-02/T2-03: leading blank lines shift the lint refusal to the document's real line", () => {
+    const text = "\n\n---\nname: example-skill\ndescription: Use when building X.\n  continuation text joins nothing\n---\n";
+    const result = lintSkillFrontmatter(text);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.frontmatter.missing"]);
+    expect(result.violations[0]!.message).toContain("SKILL.md:6");
+    expect(result.violations[0]!.message).not.toContain("SKILL.md:4");
+  });
+
 });
 
 // ---------------------------------------------------------------------------
