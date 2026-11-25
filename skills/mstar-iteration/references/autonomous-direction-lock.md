@@ -84,7 +84,7 @@ Resolve `iteration_base_branch` and `target_branch` in order（first hit wins pe
 
 `spec_integration_branch` defaults to `iteration/<iteration-id>` once base/target are known.
 
-`pr_merge_policy` follows the same evidence-first rule: carry an existing value; otherwise `reviewed-bot` when an external review bot is attached to the PR flow, else `reviewed-auto`. Never recommend `owner-gated` autonomously — it waits for the human — unless the caller's written opt-in names it. Record the value and its evidence in `## Decisions` with `source: autonomous ranking`; do not ask the user to confirm it.
+`pr_merge_policy` resolves the same evidence-first way: carry an existing value; otherwise `reviewed-bot` when an external review bot is attached to the PR flow, else `reviewed-auto`. Never recommend `owner-gated` — it waits for the human — unless the caller's written opt-in names it. No STOP: without bot evidence, fall through to `reviewed-auto`. Record value and evidence in `## Decisions` (`source: autonomous ranking`) and do not ask the user.
 
 ## Anti-patterns
 
