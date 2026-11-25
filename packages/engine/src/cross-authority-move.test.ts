@@ -484,6 +484,70 @@ async function destinationLane(projectId: string): Promise<{ repoKey: string; lo
   return { repoKey, location };
 }
 
+/** note: The selector ref a remote checkout's own resolution reads through real Git plumbing. */
+const SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
+
+/** note: One project a remote selector must select to be valid; ids are immutable Linear uuids. */
+const SELECTED_PROJECT = {
+  localProjectId: "fixture-project",
+  provider: "linear",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  teamId: "22222222-2222-4222-8222-222222222222",
+  projectId: "33333333-3333-4333-8333-333333333333",
+  journalIssueId: "44444444-4444-4444-8444-444444444444",
+  writerId: "55555555-5555-4555-8555-555555555555",
+} as const;
+
+/**
+ * note: A checkout that RESOLVES remote: a bare origin publishes one selector generation naming its
+ * canonical repoKey, and the checkout's `insteadOf` routes the synthetic https URL to the bare
+ * fixture, so `ls-remote` and `fetch` run on the real Git path. It stays UNBOUND on purpose: the
+ * refusal under test must come from the move layer, not the lane's bind recovery.
+ */
+function remoteCheckout(): { context: StoreContext; repoKey: string } {
+  const repoKey = `github.com/acme/remote-${engineSequence++}`;
+  const canonicalOrigin = `https://${repoKey}.git`;
+  const bare = join(ROOT, `remote-origin-${engineSequence}.git`);
+  execFileSync("git", ["init", "-q", "--bare", bare], { cwd: ROOT });
+  const publisher = join(ROOT, `remote-publisher-${engineSequence}`);
+  mkdirSync(publisher, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: publisher });
+  execFileSync("git", ["config", "user.name", "Selector Test"], { cwd: publisher });
+  execFileSync("git", ["config", "user.email", "selector@example.test"], { cwd: publisher });
+  writeFileSync(
+    join(publisher, "authority.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        repoKey,
+        generation: 1,
+        mode: "remote",
+        phase: "active",
+        projects: [SELECTED_PROJECT],
+        previous: null,
+        cutover: null,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  execFileSync("git", ["add", "authority.json"], { cwd: publisher });
+  execFileSync("git", ["commit", "-q", "-m", "publish selector"], { cwd: publisher });
+  execFileSync("git", ["push", "-q", "--force", bare, `HEAD:${SELECTOR_REF}`], { cwd: publisher });
+
+  const repo = join(ROOT, `remote-repo-${engineSequence}`);
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Remote Discard Test"], { cwd: repo });
+  execFileSync("git", ["config", "user.email", "remote-discard@example.test"], { cwd: repo });
+  execFileSync("git", ["config", "--add", "remote.origin.url", canonicalOrigin], { cwd: repo });
+  execFileSync("git", ["config", `url.${bare}.insteadOf`, canonicalOrigin], { cwd: repo });
+  writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=remote\n");
+  const harnessDir = join(repo, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  return { context: { harnessDir, checkoutRoot: repo }, repoKey };
+}
+
 /** note: A captured record with two occurrences, one transition, one provenance row and a settled mirror row. */
 async function seededRecord(context: StoreContext, db: StoreDb, projectId: string, tag = ""): Promise<string> {
   const receipt = await captureIssue(
@@ -1891,6 +1955,27 @@ describe("cross-authority move phase engine", () => {
       }
     }
 
+    // note: A damaged peer lane is not an absent one: the recorded `local-local` route still routes
+    // the discard through `discardMove`, whose refusal — never a probe — is what the operator sees.
+    {
+      const { context, db } = await sourceCheckout();
+      try {
+        const destination = await destinationLane("p-dest");
+        const issueId = await seededRecord(context, db, "p-source", "-peer-dmg");
+        const before = recordImage(db, issueId);
+        const request = requestFor(`move-discard-dmg-${String(engineSequence)}`, issueId, destination.repoKey);
+        await stageMove(context, request);
+        writeFileSync(destination.location.dbPath, "not a sqlite file");
+        const refused = await refusalOf(discardAcrossAuthorities(context, request));
+        expect(refused).not.toBeNull();
+        expect(refused?.code).not.toBe("collaboration.move-phase-invalid");
+        expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+        expect(recordImage(db, issueId)).toEqual(before);
+      } finally {
+        db.close();
+      }
+    }
+
     // note: The destination checkout of a one-checkout move holds its own ledger half, so its
     // discard releases that half in place — the source row it cannot reach keeps the record
     // frozen until the source side discards.
@@ -1939,6 +2024,72 @@ describe("cross-authority move phase engine", () => {
       } finally {
         db.close();
       }
+    }
+  }, 120_000);
+
+  test("a discard of a never-recorded move names its id and the staging checkout, never 'start the move'", async () => {
+    // invariant: The no-such-move refusal is step-shaped: a discard abandons a move, so its recovery
+    // is the recorded operation id and the checkout that staged it — "start the move" would publish
+    // a record under a fresh id and still leave nothing to discard.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const request = {
+        operationId: "move-never-staged",
+        actor: "project-manager",
+        sourceIssueId: "I-009999",
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "abandon",
+      };
+      const refused = await discardAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.move-phase-invalid");
+      expect(refused?.details).toMatchObject({ operation_id: request.operationId });
+      const recovery = String(refused?.details?.recovery);
+      expect(recovery).toContain("Reissue this --discard from the checkout that ran the move");
+      expect(recovery).toContain("--operation-id you used");
+      // invariant: Every artifact the recovery names is one the operator has: there is no --stage
+      // run, no --out flag and no operator-readable move ledger, so none may be named.
+      expect(recovery).not.toContain("staging run");
+      expect(recovery).not.toContain("--out");
+      expect(recovery).not.toContain("ledger");
+      expect(recovery).not.toContain("Start the move");
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("an unbound remote checkout's discard refuses before any ledger question", async () => {
+    // invariant: A remote checkout with no finalized binding cannot read a ledger at all — the
+    // scope check refuses with the binding recovery before the recorded-move question is asked,
+    // so nothing names a lane this checkout cannot prove it owns.
+    const remote = remoteCheckout();
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source", "-remote");
+      const request = {
+        operationId: `move-discard-remote-${String(engineSequence)}`,
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "abandon",
+      };
+      await stageMove(context, request);
+      const refused = await discardAcrossAuthorities(remote.context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.stale-binding");
+      expect(String(refused?.message)).toContain("remote bind");
+      // invariant: The remote checkout's lane is untouched and the source row still freezes the record.
+      expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+    } finally {
+      db.close();
     }
   }, 120_000);
 

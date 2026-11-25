@@ -456,17 +456,21 @@ export function stagedMismatch(source: IssueMoveRecord, staged: IssueMoveRecord)
 
 /** note: An operation id this lane records no move under: a fresh command, not a damaged ledger. */
 function noSuchMove(operationId: string, step: string): StoreError {
+  // invariant: A discard abandons a move, so "start the move" is no recovery here: it would publish a
+  // record under a fresh id and still leave nothing to discard. The recorded operation id and the
+  // checkout that staged it are the whole runnable recovery; every other step keeps the start.
+  const recovery =
+    step === "discard"
+      ? `Reissue this --discard from the checkout that ran the move, passing the same ` +
+        `--operation-id you used.`
+      : `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
+        `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
+        `--actor project-manager --operation-id ${operationId}\`, then reissue that same command to resume it.`;
   return new StoreError(
     "collaboration.move-phase-invalid",
     `No cross-authority move is recorded in this authority under operation id ${JSON.stringify(operationId)}, so there is ` +
       `nothing to ${step}. A move is never resumed, discarded or published from a guess. Nothing was modified.`,
-    {
-      operation_id: operationId,
-      recovery:
-        `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
-        `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
-        `--actor project-manager --operation-id ${operationId}\`, then reissue that same command to resume it.`,
-    },
+    { operation_id: operationId, recovery },
   );
 }
 
@@ -1989,8 +1993,9 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
   const own = resolveCollaborationLocation(context);
   const role: IssueMoveRole = own.repoKey === request.destinationAuthority ? "destination" : "source";
   // invariant: A move this lane never recorded refuses by name before any route question — "no
-  // such move here" is the cause the operator can act on. The check is read-only and binds the
-  // whole request, exactly as `discardMove` itself does.
+  // such move here" is the cause the operator can act on. The check is read-only, binds the
+  // whole request exactly as `discardMove` itself does, and reads the lane this checkout's mode
+  // records — a remote checkout's source row lives in its cache, not a lane open probes.
   if (role === "source" && (await boundOwnSourceRow(context, request)) === null) {
     throw noSuchMove(request.operationId, "discard");
   }
