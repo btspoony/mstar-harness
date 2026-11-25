@@ -776,3 +776,120 @@ describe('milestoneAssign — the requested seat authorizes the write, not a ses
     expect(result.ok === false && result.message.length).toBeGreaterThan(0)
   })
 })
+
+
+describe('a refused write never reloads the read — the operator\'s draft survives', () => {
+  // The panel-level contract behind the review finding: a reload re-keys the
+  // OnceReader, the destination renders the loading arm and the mounted forms
+  // (and the operator's typed draft) are destroyed. A refused write wrote
+  // nothing, so there is nothing to reload: only an ACCEPTED write refreshes
+  // the roadmap. These specs drive the production channel against the REAL
+  // engine (the validation is the engine's own) and count the reload callback.
+
+  async function harness(sessionId: string) {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, sessionId, app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+    return { app, endpoint }
+  }
+
+  function channelFor(endpoint: WriteEndpoint, sessionId: string, cwd: string, revision: number) {
+    const states: { busy: boolean; refusal: string | null }[] = []
+    const reloads: number[] = []
+    const channel = createMilestoneWrites({
+      client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
+      sessionId,
+      cwd,
+      projectId: '_default',
+      expectedStoreRevision: revision,
+      reload: () => reloads.push(1),
+      onState: (state) => states.push(state),
+      ids: writeOperationIds<{ expectedStoreRevision: number }>(),
+    })
+    return {
+      channel,
+      reloads,
+      settle: async () => {
+        for (let i = 0; i < 100 && states[states.length - 1]?.busy !== false; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(states[states.length - 1]?.busy).toBe(false)
+      },
+    }
+  }
+
+  it('a refused CREATE (effort count 0) does not reload, and the refusal text reaches the channel verbatim', async () => {
+    const { app, endpoint } = await harness('ses_draft_create')
+    const seat = channelFor(endpoint, 'ses_draft_create', app.root, await observedRevision(endpoint, 'ses_draft_create', app.root))
+
+    seat.channel.create({ name: 'Typed draft name', effortSessions: 0, ordinal: 0 })
+    await seat.settle()
+
+    // The engine refused the count; the refusal is the channel's, verbatim.
+    expect(seat.channel.refusal).toBeTruthy()
+    expect(seat.channel.refusal).toContain('milestone.invalid-input')
+    // THE contract: nothing was written, so the read is NOT reloaded — the
+    // mounted form keeps the operator's typed name and count.
+    expect(seat.reloads).toHaveLength(0)
+    // And the store holds no milestone: the refusal really wrote nothing.
+    expect(await roadmapMilestones(endpoint, 'ses_draft_create', app.root)).toHaveLength(0)
+  })
+
+  it('a refused UPDATE (effort count -1) does not reload either', async () => {
+    const { app, endpoint } = await harness('ses_draft_update')
+    const created = await endpoint.milestoneAdd(
+      'ses_draft_update',
+      app.root,
+      '_default',
+      { name: 'Existing', effortSessions: 12, ordinal: 0 },
+      { operationId: 'op-draft-seed', expectedStoreRevision: await observedRevision(endpoint, 'ses_draft_update', app.root) },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const milestoneId = (created.receipt as { milestoneId: string }).milestoneId
+
+    const seat = channelFor(endpoint, 'ses_draft_update', app.root, await observedRevision(endpoint, 'ses_draft_update', app.root))
+    seat.channel.update(milestoneId, { name: 'Renamed draft', effortSessions: -1 })
+    await seat.settle()
+
+    expect(seat.channel.refusal).toBeTruthy()
+    expect(seat.channel.refusal).toContain('milestone.invalid-input')
+    expect(seat.reloads).toHaveLength(0)
+    // The stored milestone is untouched — the editor stays open over true data.
+    expect(await roadmapMilestones(endpoint, 'ses_draft_update', app.root)).toMatchObject([
+      { name: 'Existing', effortSessions: 12 },
+    ])
+  })
+
+  it('an ACCEPTED write still reloads the roadmap', async () => {
+    const { app, endpoint } = await harness('ses_draft_accept')
+    const seat = channelFor(endpoint, 'ses_draft_accept', app.root, await observedRevision(endpoint, 'ses_draft_accept', app.root))
+
+    seat.channel.create({ name: 'Accepted', effortSessions: 12, ordinal: 0 })
+    await seat.settle()
+
+    expect(seat.channel.refusal).toBeNull()
+    expect(seat.reloads).toHaveLength(1)
+    expect(await roadmapMilestones(endpoint, 'ses_draft_accept', app.root)).toMatchObject([{ name: 'Accepted' }])
+  })
+
+  it('the reader itself is unchanged: a new identity (navigation) still enters loading', async () => {
+    // The reload gate lives in the write channel; the reader's own behaviour —
+    // a new key is a new read, and the read is loading until it answers — must
+    // not change. Drives the production OnceReader directly.
+    const { OnceReader } = require('../src/client/panel/once-reader.ts') as typeof import('../src/client/panel/once-reader.ts')
+    const gateway = stubGateway()
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const reader = new OnceReader<{ kind: string }>()
+    reader.begin('view-one', client, async () => ({ kind: 'ok' }))
+    expect(reader.state.kind).toBe('loading')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(reader.state.kind).toBe('ok')
+    // Navigation: a NEW identity re-enters loading, exactly as before the fix.
+    reader.begin('view-two', client, async () => ({ kind: 'ok' }))
+    expect(reader.state.kind).toBe('loading')
+  })
+})
+
