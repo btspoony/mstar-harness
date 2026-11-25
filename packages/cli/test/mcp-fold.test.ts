@@ -38,8 +38,14 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * other family is byte-identical, the fold's own source is untouched, and the growth is the shipped
  * command contract, so the surface measures 34_047. The ceiling is an upper bound: a later contract
  * shrinkage does not re-take it.
+ *
+ * Re-taken for the milestone effort contract: `mstar_milestone` grows 14 chars, because
+ * `milestone add` and `milestone update` publish `--effort-sessions` in place of the retired date
+ * flags and `milestone update` publishes `--clear-effort-sessions`. The fold's own source is
+ * untouched and every other family is unchanged, so the growth is the shipped command contract and
+ * the surface measures 34_061.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 34_047;
+const PUBLISHED_SURFACE_CEILING_CHARS = 34_061;
 
 type PublishedTool = Readonly<{
   name: string;

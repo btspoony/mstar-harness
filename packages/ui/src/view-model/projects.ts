@@ -80,9 +80,7 @@ export type RoadmapMilestone = {
   milestoneId: string;
   name: string;
   status: string | null;
-  /** The planned effort in standard sessions; `null` when never estimated. */
   effortSessions: number | null;
-  /** The milestone's stored position; the timeline orders by it, then by id. */
   ordinal: number;
   progress: { done: number; total: number } | null;
   openIssues: number;

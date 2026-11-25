@@ -70,7 +70,6 @@ export type FocusCopy = {
   milestoneProjectUnattributed: string;
   milestonesHeading: string;
   milestoneProgress: (done: number, total: number) => string;
-  /** The row's effort line: `12 sessions`, or the word for never estimated. */
   milestoneEffort: (sessions: number | null) => string;
   milestoneOpenCount: (open: number) => string;
   absence: {

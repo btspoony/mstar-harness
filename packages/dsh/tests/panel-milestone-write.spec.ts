@@ -132,7 +132,6 @@ async function observedRevision(endpoint: WriteEndpoint, sessionId: string, cwd:
   return read.envelope.storeRevision
 }
 
-/** One milestone row as the panel's roadmap read states it. */
 interface RoadmapMilestone {
   milestoneId: string
   name: string
@@ -140,18 +139,15 @@ interface RoadmapMilestone {
   effortSessions: number | null
 }
 
-/** The store's milestone rows, read back through the panel's own roadmap view. */
 async function roadmapMilestones(endpoint: WriteEndpoint, sessionId: string, cwd: string): Promise<RoadmapMilestone[]> {
   const read = await endpoint.dashboardView(sessionId, cwd, 'roadmap', { project: '_default' })
   if (read.envelope === undefined) throw new Error('roadmap read failed in fixture')
   return (read.envelope.data as { milestones: { milestones: RoadmapMilestone[] } }).milestones.milestones
 }
 
-/**
- * Route the production client's RPC at the REAL panel service, so a spec drives the
- * client and shell over the real store: only the transport is local. A dropped or
- * coerced `effortSessions` in either half then fails the readback below.
- */
+// why: route the production client's RPC at the REAL panel service, so a spec drives
+// the client and shell over the real store — only the transport is local. A dropped
+// or coerced `effortSessions` in either half then fails the readback below.
 function serviceConnection(service: WriteEndpoint): MstarPanelSnapshotConnection {
   return {
     rpc: {
@@ -375,8 +371,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(edited).toHaveLength(1)
     expect(edited[0]).toMatchObject({ name: 'Renamed', status: 'active', effortSessions: 20 })
 
-    // A clear is an explicit `effortSessions: null` patch, not an omitted field:
-    // omitting it leaves the stored count alone.
+    // why: a clear is an explicit `effortSessions: null` patch, not an omitted
+    // field — omitting it leaves the stored count alone.
     const cleared = await endpoint.milestoneUpdate(
       'ses_ms2',
       app.root,
@@ -396,8 +392,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
 
-    // The seat re-arms the channel after every write with the freshly observed revision,
-    // so the spec does the same: one channel per write, the production client throughout.
+    // why: the seat re-arms the channel after every write with the freshly observed
+    // revision, so the spec does the same — one channel per write, the production client throughout.
     const channelAt = (expectedStoreRevision: number) => {
       const states: { busy: boolean; refusal: string | null }[] = []
       const channel = createMilestoneWrites({
@@ -412,8 +408,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       })
       return {
         channel,
-        // A write is settled only when its terminal answer flipped busy back to
-        // false; a timer alone can read back before the engine has written.
+        // why: a write is settled only when its terminal answer flipped busy back
+        // to false — a timer alone can read back before the engine has written.
         settle: async () => {
           for (let i = 0; i < 100 && states[states.length - 1]?.busy !== false; i++) {
             await new Promise((resolve) => setTimeout(resolve, 0))
@@ -432,8 +428,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const created = await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)
     expect(created).toMatchObject([{ name: 'Chained', effortSessions: 12 }])
 
-    // The clear travels as an explicit `null` — not an omitted field, which would leave
-    // the stored 12 alone — and the STORE holds null afterwards.
+    // why: the clear travels as an explicit `null` — an omitted field would leave the
+    // stored 12 alone — and the STORE holds null afterwards.
     const clear = channelAt(await revision())
     clear.channel.update(created[0]!.milestoneId, { effortSessions: null })
     await clear.settle()

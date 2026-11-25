@@ -806,12 +806,6 @@ describe("migration 7 - project_milestones", () => {
   });
 });
 
-/* ------------------------------------------------------------------------ *
- * Migration 22 replaces `project_milestones.target` with `effort_sessions`.
- * The add/drop pair must leave the foreign key from `issues.milestone_id` and
- * the mismatch triggers resolving, and existing targets become unestimated.
- * ------------------------------------------------------------------------ */
-
 describe("migration 22 - milestone effort sessions", () => {
   test("a fresh combined store creates effort_sessions and no target", async () => {
     const dir = mkdtempSync(join(ROOT, "effort-fresh-"));

@@ -114,7 +114,6 @@ export type OverviewCopy = {
   /** The short-container summary: `n milestones · m open`. */
   milestonesSummary: (milestones: number, open: number) => string;
   milestoneProgress: (done: number, total: number) => string;
-  /** The row's effort line: `12 sessions`, or the word for never estimated. */
   milestoneEffort: (sessions: number | null) => string;
   /** The ` · 9 open` tail of the same trailing cell. */
   milestoneOpenCount: (open: number) => string;
@@ -340,13 +339,11 @@ function WorkflowRowView(props: {
   );
 }
 
-/** One milestone row: status, effort, progress, open count. */
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
-    // The prototype's milestone is two rows: `milestone-top` (a dot, the name, the effort
-    // line) and `milestone-foot` (the bar and the counts). As one flex row, a 360px pane
-    // broke the effort line and the counts across lines.
+    // why: as one flex row, a 360px pane broke the effort line and the counts across
+    // lines, so the prototype's two rows (`milestone-top`, `milestone-foot`) stay two.
     <div className="milestone-row" data-ms-milestone-row="">
       <div className="milestone-top">
         {row.status === null ? null : (

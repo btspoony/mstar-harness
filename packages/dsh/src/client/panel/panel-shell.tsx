@@ -106,7 +106,6 @@ function focusCopy(copy: Copy): FocusCopy {
     milestonesHeading: copy.overview.milestonesHeading,
     milestoneProgress: copy.overview.milestoneProgress,
     milestoneOpenCount: copy.overview.milestoneOpenCount,
-    // The Focus rows print the same effort count the Overview rows do: one formatter.
     milestoneEffort: copy.overview.milestoneEffort,
     absence: {
       'not-applicable': copy.state['not-applicable'],

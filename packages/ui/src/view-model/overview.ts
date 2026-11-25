@@ -170,7 +170,6 @@ export type MilestoneRow = {
   status: string | null;
   /** The status dot's tone: the prototype draws the milestone's state as a dot alone. */
   statusTone: Tone;
-  /** The planned effort in standard sessions; `null` when never estimated. */
   effortSessions: number | null;
   /**
    * `retired of total` — the prototype's numerator is `total - open`, which counts every

@@ -360,7 +360,6 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     }
   }
 
-  /** Edit one milestone's name / effort sessions / ordinal / status (engine `updateMilestone`). */
   async milestoneUpdate(
     sessionId: string,
     cwd: string,

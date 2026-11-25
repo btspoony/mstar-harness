@@ -415,13 +415,12 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     expect(html.match(/data-ms-milestone-|Milestone \d/g)?.length).toBeGreaterThanOrEqual(3);
     expect(html).not.toContain("Milestone 4");
     expect(html).toContain("6/10");
-    // Every row states its effort beside the name, as the prototype's slot does.
     expect(html.match(/class="milestone-target">12 sessions/g)?.length).toBe(3);
   });
 
   test("an unestimated milestone states the word, never an empty slot", () => {
-    // The slot is not "when a date exists": an unestimated milestone says so — in its
-    // OWN row, counted, so a page-wide hit from another surface cannot satisfy it.
+    // why: an unestimated milestone must say so in its OWN row, counted — a page-wide
+    // hit from another surface cannot satisfy it.
     const rows = milestones(3);
     const page = overview({
       milestones: read({
@@ -1105,10 +1104,8 @@ describe("Focus — the panels state their scope (plan 20261030 Task 2)", () => 
     expect(named).toContain('data-ms-milestone-scope=""');
     expect(named).toContain("engine");
     expect(named).not.toContain("unattributed");
-    // The Focus rows carry the same effort line as the Overview's, one per row.
     expect((named.match(/class="milestone-target">12 sessions/g) ?? []).length).toBeGreaterThan(1);
 
-    // And an unestimated row says so in its own slot, exactly once.
     const rows = milestones(3);
     const unestimated = focus({
       overview: {

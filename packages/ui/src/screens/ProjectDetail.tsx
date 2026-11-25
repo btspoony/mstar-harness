@@ -57,13 +57,12 @@ export function effortInput(value: string): { kind: "empty" } | { kind: "count";
   if (trimmed === "") return { kind: "empty" };
   if (!/^[+-]?\d+$/.test(trimmed)) return { kind: "invalid" };
   const sessions = Number(trimmed);
-  // A digit string beyond the safe range loses precision to Number() and the
+  // safety: a digit string beyond the safe range loses precision to Number() and the
   // browser JSON encoding then sends null, which the engine reads as a
   // legitimate clear — so it must be refused before any write.
   return Number.isSafeInteger(sessions) ? { kind: "count", sessions } : { kind: "invalid" };
 }
 
-/** The effort patch member for a stored milestone and a screened input. */
 function effortPatch(milestone: RoadmapModel["milestones"][number], value: string): { effortSessions?: number | null } {
   const effort = effortInput(value);
   if (effort.kind === "invalid") return {};
@@ -159,9 +158,7 @@ export type ProjectDetailCopy = {
     unassignedUnit: string;
     milestoneProgress: (done: number, total: number) => string;
     milestoneOpen: (open: number) => string;
-    /** `12 sessions` — the effort line every milestone row and timeline node carries. */
     effort: (sessions: number) => string;
-    /** The word for a milestone that was never estimated. */
     unestimated: string;
     /** The four tallies of the prototype's board row. */
     countLabels: { open: string; resolved: string; retired: string; total: string };
@@ -174,7 +171,6 @@ export type ProjectDetailCopy = {
       create: string;
       nameLabel: string;
       effortLabel: string;
-      /** Said when the effort field is not a whole number, so the write is skipped. */
       effortInvalid: string;
       statusLabel: string;
       edit: string;
@@ -240,8 +236,8 @@ function MilestoneActions(props: {
   copy: ProjectDetailCopy;
 }) {
   const { milestone, writes, assignable, copy } = props;
-  // One state: the OPEN draft. `null` is the closed editor, so a cancelled edit has
-  // nowhere to live until the next open re-seeds it from the milestone.
+  // invariant: one state, the OPEN draft — `null` is the closed editor, so a
+  // cancelled edit has nowhere to live until the next open re-seeds it from the milestone.
   const [draft, setDraft] = useState<MilestoneDraft | null>(null);
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
@@ -254,7 +250,8 @@ function MilestoneActions(props: {
           disabled={writes.busy}
           data-ms-milestone-edit=""
           onClick={() => {
-            setEffortError(false); // a reopened editor never shows a verdict about a value it no longer holds
+            // why: a reopened editor never shows a verdict about a value it no longer holds
+            setEffortError(false);
             setDraft(milestoneDraft(milestone));
           }}
         >
@@ -339,7 +336,7 @@ function MilestoneActions(props: {
       </label>
       <label>
         {copy.roadmap.writes.effortLabel}
-        {/* Plain text keeps the raw keystrokes: a number input sanitises bad text
+        {/* why: plain text keeps the raw keystrokes — a number input sanitises bad text
             to "", which would coerce garbage into a null (a cleared estimate). */}
         <input
           type="text"
@@ -382,7 +379,6 @@ function MilestoneActions(props: {
   );
 }
 
-/** One milestone of the roadmap board: status, effort, progress, open, issues. */
 function Milestone(props: {
   milestone: RoadmapModel["milestones"][number];
   copy: ProjectDetailCopy;
@@ -471,7 +467,6 @@ function Milestone(props: {
   );
 }
 
-/** The board's create form: name + optional effort; the ordinal is the list length. */
 function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
   const { writes, copy } = props;
   const [name, setName] = useState("");
@@ -552,13 +547,10 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-/**
- * The Roadmap feature's timeline: one node per milestone in the store's own order
- * (`ordinal`, then id — the comparator `readMilestonesOn` sorts with), and one
- * trailing node for the unassigned issues (plan the dashboard alignment change,
- * Task 3). Every number is the read's own: the effort line, the retired-over-total
- * pair and the open count.
- */
+// invariant: the timeline is one node per milestone in the read's order (ordinal,
+// then id — the comparator `readMilestonesOn` sorts with) plus one trailing node for
+// the unassigned issues; every number is the read's own — the effort line, the
+// retired-over-total pair and the open count.
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   const ordered = [...model.milestones].sort(

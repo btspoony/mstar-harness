@@ -3190,17 +3190,22 @@ describe("execution-composite-intents: the reservation ledger", () => {
     }
   });
 
-  test("migration 22 preserves a populated v21 reservation and its pending-plan exclusion", async () => {
+  test("the intents-rebuild migration preserves a populated reservation and its pending-plan exclusion", async () => {
     const context = controlRoot("composite-intents-v21-upgrade");
-    // note: A real v21 store: migrations 1-21 executed with this build's own bodies and checksums,
-    // so the upgrade finds exactly the predecessor shape a released workspace holds.
+    // note: The migration under test is the one that rebuilds execution_collaboration_intents,
+    // found by name rather than pinned — a merge renumbers migrations, it does not change which
+    // one carries the rebuild. Its immediate predecessor is where the populated reservation lives.
+    const rebuild = MIGRATIONS.find((migration) => migration.name === "execution-issue-move-intent")!;
+    const predecessorVersions = MIGRATIONS.slice(0, MIGRATIONS.indexOf(rebuild));
+    // note: A real predecessor store: the migrations before the rebuild executed with this build's
+    // own bodies and checksums, so the upgrade finds exactly the shape a released workspace holds.
     const before = new DatabaseSync(storePath(context));
     try {
       before.exec("pragma foreign_keys=ON");
       before.exec(SCHEMA_VERSION_TABLE_SQL);
       before.exec("begin immediate");
       const record = before.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)");
-      for (const migration of MIGRATIONS.slice(0, 21)) {
+      for (const migration of predecessorVersions) {
         before.exec(migration.sql);
         record.run(migration.version, migration.name, migrationChecksum(migration), TS);
       }
@@ -3225,7 +3230,7 @@ describe("execution-composite-intents: the reservation ledger", () => {
         )
         .run(TS, TS);
       before.exec("commit");
-      expect(scalar(before, "select max(version) as v from schema_version")).toBe(21);
+      expect(scalar(before, "select max(version) as v from schema_version")).toBe(rebuild.version - 1);
     } finally {
       before.close();
     }
@@ -3234,7 +3239,7 @@ describe("execution-composite-intents: the reservation ledger", () => {
 
     const after = rawDb(storePath(context));
     try {
-      expect(scalar(after, "select max(version) as v from schema_version")).toBe(22);
+      expect(scalar(after, "select max(version) as v from schema_version")).toBe(MIGRATIONS.length);
       // invariant: The rebuild copies the live reservation verbatim — losing a `prepared` row would
       // free a plan another operation still holds.
       expect(

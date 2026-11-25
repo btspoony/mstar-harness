@@ -106,7 +106,6 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
   ...over,
 });
 
-/** One board milestone row: the fixture's shape, with only the case's own field changed. */
 const milestoneRow = (
   over: Partial<RoadmapDTO["milestones"]["milestones"][number]> = {},
 ): RoadmapDTO["milestones"]["milestones"][number] => ({
@@ -126,13 +125,12 @@ const milestoneRow = (
   ...over,
 });
 
-/** The rendered board block of one milestone, so a slot assertion cannot be met elsewhere. */
+// why: a slot assertion must be met inside this milestone's own block, not anywhere on the page.
 const boardBlockOf = (html: string, milestoneId: string): string => {
   const start = html.indexOf(`data-ms-milestone="${milestoneId}"`);
   return start === -1 ? "" : html.slice(start, html.indexOf("</section>", start));
 };
 
-/** The rendered timeline node of one milestone (or the trailing unassigned one). */
 const timelineNodeOf = (html: string, nodeId: string): string => {
   const start = html.indexOf(`data-ms-timeline-node="${nodeId}"`);
   if (start === -1) return "";
@@ -359,14 +357,14 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 
   test("a node carries the retired-over-total pair and the open count", () => {
-    // The fixture's milestone: 10 total, 4 open → 6/10 · 4 open, inside ITS node.
+    // why: the fixture's milestone is 10 total, 4 open → 6/10 · 4 open, asserted inside ITS node.
     const node = timelineNodeOf(html, "9f2c4a10");
     expect(node).toContain("6/10");
     expect(node).toContain("4 open");
   });
 
   test("nodes follow the store's ordinal order, then the unassigned node", () => {
-    // a and b share ordinal 1 and are entered in NON-id order (b before a), so a
+    // why: a and b share ordinal 1 and are entered in NON-id order (b before a), so a
     // stable ordinal-only sort would render c, b, a — the id tie-break is the only
     // way the asserted order c, a, b arises. The other single-key alternatives also
     // disagree: by id ascending a, b, c; by id descending c, b, a; by effort
@@ -425,10 +423,9 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
     expect(c).toBeLessThan(a);
     expect(a).toBeLessThan(b);
     expect(b).toBeLessThan(unassigned);
-    // Each node states its own effort line and status, in its own slot.
     expect(timelineNodeOf(ordered, "c-position")).toContain("4 sessions · delivered");
     expect(timelineNodeOf(ordered, "a-position")).toContain("5 sessions · planned");
-    // The trailing node is the unassigned issues only: no effort line, no estimate word.
+    // invariant: the trailing node is the unassigned issues only — no effort line, no estimate word.
     const trailing = timelineNodeOf(ordered, "unassigned");
     expect(trailing).toContain("1 issues");
     expect(trailing).not.toContain("session");
@@ -466,8 +463,8 @@ describe("ProjectDetail — the Roadmap feature", () => {
   });
 
   test("the milestone board carries status, effort, the four tallies and its issues", () => {
-    // Every slot is asserted INSIDE this milestone's own block: the timeline node prints
-    // the same effort line, so a page-wide search would pass with the board slot gone.
+    // why: every slot is asserted inside this milestone's own block — the timeline node
+    // prints the same effort line, so a page-wide search would pass with the board slot gone.
     const block = boardBlockOf(html, "9f2c4a10");
     expect(block).not.toBe("");
     expect(block).toContain("Release the shared layer");
@@ -692,11 +689,11 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // Creation is name + effort only: the engine's add verb has no status field.
+    // why: the engine's add verb has no status field, so creation is name + effort only.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
-    // The effort field keeps the raw text (a number input sanitises bad text to
-    // ""), never a calendar date.
+    // why: the effort field keeps the raw text — a number input sanitises bad text to
+    // "" — and it is never a calendar date.
     expect(createForm).toContain('inputMode="numeric"');
     expect(createForm).not.toContain('type="number"');
     expect(createForm).not.toContain('type="date"');
@@ -755,21 +752,20 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
 });
 
 describe("ProjectDetail — the edit form's draft and patch contract", () => {
-  // The screen's own stored milestone, read through the view model the page renders.
   const stored = (): RoadmapModel["milestones"][number] => {
     const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
     if (arm.kind !== "populated") throw new Error("the roadmap fixture must read as populated");
     return arm.value.milestones[0]!;
   };
 
-  // The component-level sequence (clear → cancel → reopen → Save) is not expressible
-  // in this package: the suite renders with react-dom/server and has no DOM runtime.
+  // why: the component-level sequence (clear → cancel → reopen → Save) is not expressible
+  // in this package — the suite renders with react-dom/server and has no DOM runtime.
   // Each case below names the draft/patch contract it actually drives.
   test("reopening after a discarded draft reseeds from the milestone, so a rename-only patch carries no effortSessions", () => {
     const milestone = stored();
     expect(milestone.effortSessions).toBe(12);
-    // Cancel throws the draft away, so reopening seeds a NEW draft from the milestone —
-    // the value the stale draft held (empty) cannot come back.
+    // why: cancel throws the draft away, so reopening seeds a NEW draft from the
+    // milestone — the value the stale draft held (empty) cannot come back.
     const reopened = milestoneDraft(milestone);
     expect(reopened).toEqual({ name: "Release the shared layer", effort: "12", status: "active" });
     const patch = milestonePatch(milestone, { ...reopened, name: "Renamed" });
@@ -797,14 +793,14 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("a garbage effort text is refused, not coerced into a cleared estimate", () => {
-    // `0` is a whole number: it reaches the engine, whose range validator refuses
-    // it. Only non-integer text stops at the screen — never coerced to `null`.
+    // why: `0` is a whole number, so it reaches the engine, whose range validator
+    // refuses it. Only non-integer text stops at the screen — never coerced to `null`.
     expect(effortInput("0")).toEqual({ kind: "count", sessions: 0 });
     expect(milestoneCreateInput("New milestone", "0", 0)).toEqual({
       kind: "input",
       input: { name: "New milestone", effortSessions: 0, ordinal: 0 },
     });
-    // A digit string the browser's JSON encoding would turn into null (a silent
+    // safety: a digit string the browser's JSON encoding would turn into null (a silent
     // clear the engine reads as legitimate) is refused before any write; "0" and
     // in-range values still travel to the engine, which owns the range.
     expect(effortInput("9".repeat(309))).toEqual({ kind: "invalid" });
@@ -814,7 +810,6 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
       expect(effortInput(text)).toEqual({ kind: "invalid" });
       expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });
     }
-    // On the edit side an invalid text contributes no effort field at all.
     expect(milestonePatch(stored(), { ...milestoneDraft(stored()), effort: "twelve" })).toEqual({});
   });
 });
@@ -945,7 +940,6 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
     expect(html).not.toContain('data-ms-absence="absent"');
     expect(html).toContain('data-ms-milestones=""');
     expect(html).toContain("Created without a roadmap");
-    // Never estimated: the board row and the timeline node both say so.
     expect(html).toContain("unestimated");
     expect(html).toContain('data-ms-timeline-node="a1b2c3d4"');
     expect(html).toContain('data-ms-milestone="a1b2c3d4"');
