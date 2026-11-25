@@ -46,25 +46,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
-import { bootApp, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, planFrontMatter, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
 
 let booted: BootResult | undefined
 const roots: string[] = []

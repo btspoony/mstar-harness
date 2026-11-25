@@ -99,22 +99,7 @@ assert.ok(existsSync(join(CLI_ROOT, "package.json")), `CLI package root did not 
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
 
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId, body, fields = {}) {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 const COORDINATOR_ID = "coord-r3";
 const BRANCH = "feature/r3-parity";
 const WIRE_PREFIX = "exec-session-v1:";

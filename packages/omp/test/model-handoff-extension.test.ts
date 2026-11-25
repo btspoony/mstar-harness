@@ -83,23 +83,7 @@ import {
   setArtifactStore,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "./plan-frontmatter";
 
 /** Injected current runtime for a `node` consumer: at/above the declared floor. */
 const atOrAboveRuntime = (() => {

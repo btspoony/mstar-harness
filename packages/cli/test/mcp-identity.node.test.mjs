@@ -46,22 +46,7 @@ assert.ok(existsSync(CLI_ENTRY), `built CLI bundle missing: ${CLI_ENTRY} (run th
 const WORKFLOW_ID = "wf-t4-omp-identity";
 const PLAN_ID = "20261004-t4-omp-plan";
 
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId, body, fields = {}) {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 const PLAN_TITLE = "T4 omp identity plan";
 const NATIVE_ID = "omp-native-session-a";
 const BRANCH = "feature/t4-omp-identity";

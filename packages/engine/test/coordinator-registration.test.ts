@@ -8,23 +8,7 @@ import { registerShippedCatalogExecution } from "../src/execution-registration.j
 import { readExecutionState, type ExecutionContext } from "../src/execution-store.js";
 import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const root = mkdtempSync(join(tmpdir(), "mstar-coordinator-registration-"));
 

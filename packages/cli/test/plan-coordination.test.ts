@@ -12,23 +12,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
 import { receiptStable, runCli, writeFixtureRepoId } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });

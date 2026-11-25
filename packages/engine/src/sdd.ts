@@ -704,21 +704,6 @@ function throwUsage(message: string): never {
 }
 
 /**
- * Recorded main-worktree branch from the declared plan file's front matter
- * `main_worktree_branch` (the plan front matter is the declaration surface;
- * a body label declares nothing). Missing record → `""`: the caller falls
- * back conservatively to the governing snapshot's explicit `branch.base`,
- * never to the branch observed at check time.
- */
-function recordedMainWorktreeBranch(planFile: string): string {
-  try {
-    return planDeclaredHeaders(planFile).get("main worktree branch") ?? "";
-  } catch {
-    return "";
-  }
-}
-
-/**
  * The L1 lifecycle-branch ownership set read from the ACTIVE graph: ALL
  * registered ACTIVE lifecycles (never only the governing one), projected into
  * the same snapshot shape the pure collector consumes.
@@ -980,7 +965,14 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
       isPlainObject(state.branch) && typeof state.branch.base === "string" && state.branch.base.trim() !== ""
         ? state.branch.base
         : "";
-    const expectedMainBranch = recordedMainWorktreeBranch(input.planFile) || snapshotBase;
+    // Recorded plan front matter is the declaration surface (a body label
+    // declares nothing); a missing record falls back conservatively to the
+    // governing snapshot's explicit `branch.base`, never to the branch
+    // observed at check time. A DocumentFrontmatterError (malformed or
+    // duplicate declaration) propagates with its file:line diagnostic — an
+    // invalid declaration is never read as an absent one, so a corrupted
+    // plan can never silently fall back to `branch.base`.
+    const expectedMainBranch = planDeclaredHeaders(input.planFile).get("main worktree branch") ?? snapshotBase;
     const l1 = l1PreDispatchCheck({
       workflowType: state.type === "iteration" ? "iteration" : "plan",
       integrationWorktreePath:

@@ -20,23 +20,7 @@ import { getCommandDefinitions, type InvocationContext } from "@mstar-harness/co
 import { initializeStore, ensureCollaborationAuthority } from "@mstar-harness/engine";
 import { registerCliCommands } from "./command-adapter";
 import { writeFixtureRepoId } from "../test/harness";
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "../test/support/plan-frontmatter.mjs";
 
 const MARKS = ["DSH_MSTAR_LEAF_SEAT", "MSTAR_LEAF_SEAT", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID", "MSTAR_EXECUTION_IDENTITY"] as const;
 const saved = new Map(MARKS.map((key) => [key, process.env[key]]));

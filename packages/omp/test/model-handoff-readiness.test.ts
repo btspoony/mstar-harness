@@ -55,23 +55,7 @@ import type {
   Phase1Readiness,
 } from "../src/model-handoff-readiness";
 import { executionBindingOf } from "../src/coordinator-identity";
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { planFrontMatter } from "./plan-frontmatter";
 
 const SPECIALISTS = ["product-manager", "architect", "writing-specialist"] as const;
 const SCRATCH: string[] = [];

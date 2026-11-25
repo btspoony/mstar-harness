@@ -53,23 +53,8 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
-
-/** Render a plan markdown whose declarations live in the front matter fence. */
-function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
-    `execution: ${fields.execution ?? "sdd"}`,
-    `working_branch: ${fields.working_branch ?? "main"}`,
-    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
-    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
-    `status: ${fields.status ?? "InProgress"}`,
-    "---",
-    "",
-    body,
-  ].join("\n");
-}
+import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -1541,6 +1526,32 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(err.message).toContain("worktree.main.expected-branch-missing");
     } finally {
       rmSync(root3, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed plan front matter refuses with the parser file:line diagnostic — never the branch.base fallback", async () => {
+    // T4-01 regression: a duplicate declaration in the registered plan's
+    // front matter is a parse failure of the residency declaration surface.
+    // Even with a populated `branch.base` (the intended fallback for a
+    // genuinely absent record), the resolver must propagate the parser's
+    // file:line diagnostic instead of silently substituting the fallback —
+    // a corrupted plan can never admit dispatch against the wrong branch.
+    const root = tmpRoot("sdd-ctx-mainbranch-malformed-");
+    try {
+      const f = executionFixture(root);
+      writeFileSync(
+        f.planFile,
+        ["---", `plan_id: ${PLAN_ID}`, `plan_id: ${PLAN_ID}`, "---", "", "# Plan", ""].join("\n"),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection).toBeInstanceOf(DocumentFrontmatterError);
+      const frontmatterError = rejection as DocumentFrontmatterError;
+      expect(frontmatterError.source).toBe(f.planFile);
+      expect(frontmatterError.message).toContain(`${f.planFile}:`);
+      expect(frontmatterError.message).not.toContain("worktree.branch-mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
