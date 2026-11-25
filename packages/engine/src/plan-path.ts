@@ -131,29 +131,45 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
   for (const [label, key] of Object.entries(PLAN_CONSULTED_KEYS)) {
     const entry = entries.get(key);
     if (entry === undefined) continue;
+    // Branch on the entry's kind first: a scalar declares by its raw lexeme,
+    // a non-scalar is a present-but-invalid shape. The parser gives a bare
+    // `key:` the map kind with an empty-object value — the same kind as a key
+    // carrying indented children — so the populated value is the one
+    // observable that separates them: a bare key carries no children, reads
+    // as absent and the snapshot fallback applies, while a key whose object
+    // or array has entries refuses exactly like an explicit `[]` or `{}`
+    // (those keep a non-empty raw lexeme, so they never reach this check).
     // The raw lexeme after the colon is the declaration — never the typed
     // scalar: `main_worktree_branch: 5.0` is the branch spelling "5.0", and a
     // numeric-looking plan id keeps its written form. One surrounding pair of
     // matching quotes still strips (the quotes are the spelling's syntax, not
     // the branch's text).
-    // Bare `key:` declares nothing — the value carries no raw lexeme at all,
-    // so it is absent exactly as a missing key is (the snapshot fallback
-    // reads it identically). Nested children are not a consulted-key shape,
-    // and the parser's empty-raw lexeme is the one observable of that
-    // declaration form.
-    if (entry.rawText === "") continue;
     if (entry.kind === "scalar") {
-      // A `null` or `~` scalar carries no declaration — it is absent exactly
-      // as the snapshot fallback reads it. Any other scalar uses its raw text
-      // verbatim: `5.0` stays `5.0`, never the typed scalar `5` or the
-      // literal `null`.
-      if (entry.rawText === "null" || entry.rawText === "~") continue;
+      // A bare `key:` with a scalar raw lexeme is impossible here — the bare
+      // key reads as the map kind — so an empty raw lexeme can only arrive
+      // with a `null` or `~`-like spelling; those carry no declaration and
+      // are absent exactly as the snapshot fallback reads them. Any other
+      // scalar uses its raw text verbatim: `5.0` stays `5.0`, never the
+      // typed scalar `5` or the literal `null`.
+      if (entry.rawText === "" || entry.rawText === "null" || entry.rawText === "~") continue;
       const raw = entry.rawText;
       const value =
         raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
           ? raw.slice(1, -1)
           : raw;
       headers.set(label, value);
+      continue;
+    }
+    // A bare `key:` with no indented children declares nothing — its value
+    // is the parser's empty tentative container, so it is absent exactly as
+    // a missing key is. Explicit empty `[]`/`{}` shapes keep their non-empty
+    // raw lexeme and never reach this exemption.
+    if (
+      entry.rawText === "" &&
+      typeof entry.value === "object" &&
+      entry.value !== null &&
+      (Array.isArray(entry.value) ? entry.value.length === 0 : Object.keys(entry.value).length === 0)
+    ) {
       continue;
     }
     // A present but non-scalar declaration (a list, a nested map, a block

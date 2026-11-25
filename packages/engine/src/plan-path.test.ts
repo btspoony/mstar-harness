@@ -107,6 +107,33 @@ describe("planDeclaredHeadersFromContent", () => {
     expect(headers.get("main worktree branch")).toBe("5.0");
   });
 
+  test("a bare `main_worktree_branch:` with no indented children reads as absent", () => {
+    // CF-02 regression: the bare key declares nothing — no raw lexeme, no
+    // children — so it is absent exactly like a missing key, and the snapshot
+    // fallback applies unchanged.
+    const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch:", "---", ""].join("\n");
+    const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
+    expect(headers.get("main worktree branch")).toBeUndefined();
+  });
+
+  test("a bare `main_worktree_branch:` with indented children refuses identity-mismatch", () => {
+    // CF-02 regression: the indented children make the key a map or a list —
+    // a present-but-invalid shape that must never drop to the absent-key
+    // fallback, even though the raw lexeme after the colon is empty.
+    for (const child of ["  child: x", "  - x"]) {
+      const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch:", child, "---", ""].join("\n");
+      let error: unknown;
+      try {
+        planDeclaredHeadersFromContent(content, "my-plan.md");
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(PlanPathError);
+      expect((error as PlanPathError).code).toBe("plan-path.identity-mismatch");
+      expect((error as PlanPathError).message).toContain("main_worktree_branch");
+    }
+  });
+
 
   test("an unterminated front matter fence refuses identity-mismatch, never absent declarations", () => {
     // CF-02 regression: an opening fence without a closing one is invalid —
