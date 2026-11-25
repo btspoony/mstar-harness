@@ -324,6 +324,14 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(error!.message).toContain("block scalar in flat frontmatter");
   });
 
+  test("the document profile still refuses YAML structural prefixes as block-list items", () => {
+    for (const item of ["&value", "*x", "!x", "{a}", "[a]"]) {
+      expect(() => parseDocumentFrontmatterEntries(`plans:\n  - ${item}`, "spec-source")).toThrow(/unsupported list item/);
+    }
+    const flat = parseDocumentFrontmatterEntries(`plans:\n  - &value\n  - [a]`, "spec-source", "flat");
+    expect(flat.get("plans")!.value).toEqual(["&value", "[a]"]);
+  });
+
   test("the document profile still accepts nested maps and block scalars", () => {
     const entries = parseDocumentFrontmatterEntries(`outer:\n  inner: value\nbody: |\n  text`, "spec-source");
     expect(entries.get("outer")!.kind).toBe("map");

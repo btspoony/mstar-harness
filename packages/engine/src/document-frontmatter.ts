@@ -234,13 +234,19 @@ function parseFrontmatterStructure(
         fail(i, raw, "list item indent does not match the first item of its list");
       }
       const item = trimmed.replace(/^-\s*/, "").trim();
+      // An empty item is refused in both profiles. The document profile
+      // additionally refuses YAML structural prefixes — they would resolve
+      // to shapes outside the accepted subset — while the flat compass
+      // profile keeps the old compass contract: `- &value`, `- *x`,
+      // `- !x`, `- {a}`, `- [a]` are accepted as plain strings.
       if (
         item === "" ||
-        item.startsWith("[") ||
-        item.startsWith("{") ||
-        item.startsWith("&") ||
-        item.startsWith("*") ||
-        item.startsWith("!")
+        (profile === "document" &&
+          (item.startsWith("[") ||
+            item.startsWith("{") ||
+            item.startsWith("&") ||
+            item.startsWith("*") ||
+            item.startsWith("!")))
       ) {
         fail(i, raw, "unsupported list item");
       }

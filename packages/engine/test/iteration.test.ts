@@ -537,6 +537,18 @@ describe("parseCompassFrontmatterText — delegation to the shared parser keeps 
     });
   });
 
+  test("block-list items with YAML structural prefixes stay plain strings (F5 regression)", () => {
+    const content = ["---", "plans:", "  - &value", "  - *x", "  - !x", "  - {a}", "  - [a]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({
+      plans: ["&value", "*x", "!x", "{a}", "[a]"],
+    });
+  });
+
+  test("a [a] block-list item stays a plain string (F5 regression)", () => {
+    const content = ["---", "plans:", "  - [a]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["[a]"] });
+  });
+
   test("a nested map refuses with the file path, the line and the reason", () => {
     const content = ["---", "plans:", "  unexpected: value", "---", ""].join("\n");
     expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(
