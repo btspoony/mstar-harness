@@ -41,7 +41,7 @@ A **row revision** is a monotonic counter on one plan row, advanced only when th
 *Avoid:* document revision (ambiguous between the two), mtime or date as a version.
 
 ### Consulted header set
-The closed set of plan-Markdown labels the plan contract actually reads — `plan_id`, `main worktree branch`, `working branch` — matched **exactly**, never by prefix. Every other label in the header region is body content and is skipped, so a descriptive sibling such as `Working branch policy` may sit beside `Working branch` without being consumed as either. Prefix matching silently aliases the two: the policy sentence would be compared against a real branch value, and the refusal it produces would blame the wrong document. Growing the contract means adding a label to the set deliberately — the set is the contract, not the header region. Related: Row revision and artifact version, Enforcement flag.
+The plan's machine-read declarations are its front matter — `plan_id`, `title`, `execution`, `working_branch`, `main_worktree_branch`, `delivery_kind`, `status` — and the body carries human content only, so a body label is never a declaration; the canonical block and accepted values live in `mstar-artifacts/templates/plan.main.md`. The reader matches those keys **exactly**, never by prefix: a lookalike key such as `working_branch_policy` cannot alias a real declaration, and the refusal it produces names the declaring document. Growing the contract means adding a field to the schema deliberately — the declared field set is the contract, not the header region. Related: Row revision and artifact version, Enforcement flag.
 *Avoid:* plan header (ambiguous with the Assignment header block), reserved fields.
 
 ### Delivery kind
