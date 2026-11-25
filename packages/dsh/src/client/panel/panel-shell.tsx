@@ -605,11 +605,9 @@ export function createMilestoneWrites(seats: {
       busy = false
       refusal = result.ok ? null : result.message
       onState({ busy, refusal })
-      // Reloading on an ambiguous answer would refresh the read's revision and turn
-      // the retry into a DIFFERENT request — exactly the duplicate write C1 forbids.
-      // And a REFUSED write wrote nothing: there is nothing to reload. Reloading
-      // there unmounts the forms mid-edit and destroys the operator's draft, so
-      // only an ACCEPTED write refreshes the reads.
+      // why: reloading on an ambiguous answer would refresh the read's revision and turn the retry
+      // into a DIFFERENT request (exactly the duplicate write C1 forbids), and a refused write wrote
+      // nothing to reload — reloading there unmounts the forms mid-edit and destroys the draft.
       if (!ambiguous && result.ok) reload()
     })()
   }
