@@ -366,11 +366,11 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 
   test("nodes follow the store's ordinal order, then the unassigned node", () => {
-    // The fixture is sent in id-ascending order and chosen so ALL four single-key
-    // alternatives disagree with the ordinal-then-id comparator: by id ascending
-    // this is a, b, c; by id descending c, b, a; by effort ascending b(3), c(4),
-    // a(5); by effort descending a(5), c(4), b(3). Only ordinal 0 first and the id
-    // tie-break at ordinal 1 render c, a, b.
+    // a and b share ordinal 1 and are entered in NON-id order (b before a), so a
+    // stable ordinal-only sort would render c, b, a — the id tie-break is the only
+    // way the asserted order c, a, b arises. The other single-key alternatives also
+    // disagree: by id ascending a, b, c; by id descending c, b, a; by effort
+    // ascending b(3), c(4), a(5); by effort descending a(5), c(4), b(3).
     const ordered = renderDetail({
       roadmap: roadmapBody(
         roadmapFeatureArm({
@@ -379,20 +379,20 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
               projectId: "engine",
               milestones: [
                 milestoneRow({
-                  milestoneId: "a-position",
-                  name: "Second position",
-                  effortSessions: 5,
-                  status: "planned",
+                  milestoneId: "b-position",
+                  name: "Third position",
+                  effortSessions: 3,
+                  status: "active",
                   ordinal: 1,
                   totalIssues: 0,
                   resolvedIssues: 0,
                   openIssues: 0,
                 }),
                 milestoneRow({
-                  milestoneId: "b-position",
-                  name: "Third position",
-                  effortSessions: 3,
-                  status: "active",
+                  milestoneId: "a-position",
+                  name: "Second position",
+                  effortSessions: 5,
+                  status: "planned",
                   ordinal: 1,
                   totalIssues: 0,
                   resolvedIssues: 0,
@@ -762,7 +762,10 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     return arm.value.milestones[0]!;
   };
 
-  test("clear → cancel → reopen → rename only: Save carries no effortSessions", () => {
+  // The component-level sequence (clear → cancel → reopen → Save) is not expressible
+  // in this package: the suite renders with react-dom/server and has no DOM runtime.
+  // Each case below names the draft/patch contract it actually drives.
+  test("reopening after a discarded draft reseeds from the milestone, so a rename-only patch carries no effortSessions", () => {
     const milestone = stored();
     expect(milestone.effortSessions).toBe(12);
     // Cancel throws the draft away, so reopening seeds a NEW draft from the milestone —
@@ -774,13 +777,13 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     expect("effortSessions" in patch).toBe(false);
   });
 
-  test("clear → save carries the explicit null the operator meant", () => {
+  test("an emptied effort field contributes the explicit null to the patch", () => {
     const milestone = stored();
     const patch = milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "" });
     expect(patch).toEqual({ effortSessions: null });
   });
 
-  test("an untouched form carries no changed fields, though Save still issues the update call", () => {
+  test("an untouched draft yields an empty patch, a changed effort the full patch", () => {
     const milestone = stored();
     expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
     expect(milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "20" })).toEqual({ effortSessions: 20 });
@@ -801,6 +804,12 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
       kind: "input",
       input: { name: "New milestone", effortSessions: 0, ordinal: 0 },
     });
+    // A digit string the browser's JSON encoding would turn into null (a silent
+    // clear the engine reads as legitimate) is refused before any write; "0" and
+    // in-range values still travel to the engine, which owns the range.
+    expect(effortInput("9".repeat(309))).toEqual({ kind: "invalid" });
+    expect(milestoneCreateInput("New milestone", "9".repeat(309), 0)).toEqual({ kind: "invalid" });
+    expect(effortInput("9007199254740993")).toEqual({ kind: "invalid" });
     for (const text of ["1.5", "twelve", "12px", "-"]) {
       expect(effortInput(text)).toEqual({ kind: "invalid" });
       expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });

@@ -55,7 +55,12 @@ export const ASSIGNABLE_ISSUE_LIMIT = 50;
 export function effortInput(value: string): { kind: "empty" } | { kind: "count"; sessions: number } | { kind: "invalid" } {
   const trimmed = value.trim();
   if (trimmed === "") return { kind: "empty" };
-  return /^[+-]?\d+$/.test(trimmed) ? { kind: "count", sessions: Number(trimmed) } : { kind: "invalid" };
+  if (!/^[+-]?\d+$/.test(trimmed)) return { kind: "invalid" };
+  const sessions = Number(trimmed);
+  // A digit string beyond the safe range loses precision to Number() and the
+  // browser JSON encoding then sends null, which the engine reads as a
+  // legitimate clear — so it must be refused before any write.
+  return Number.isSafeInteger(sessions) ? { kind: "count", sessions } : { kind: "invalid" };
 }
 
 /** The effort patch member for a stored milestone and a screened input. */
@@ -248,7 +253,10 @@ function MilestoneActions(props: {
           className={"link"}
           disabled={writes.busy}
           data-ms-milestone-edit=""
-          onClick={() => setDraft(milestoneDraft(milestone))}
+          onClick={() => {
+            setEffortError(false); // a reopened editor never shows a verdict about a value it no longer holds
+            setDraft(milestoneDraft(milestone));
+          }}
         >
           {copy.roadmap.writes.edit}
         </button>
@@ -359,7 +367,15 @@ function MilestoneActions(props: {
       <button type="submit" className={"link"} disabled={writes.busy}>
         {copy.roadmap.writes.save}
       </button>
-      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setDraft(null)}>
+      <button
+        type="button"
+        className={"link"}
+        disabled={writes.busy}
+        onClick={() => {
+          setEffortError(false);
+          setDraft(null);
+        }}
+      >
         {copy.roadmap.writes.cancel}
       </button>
     </form>
