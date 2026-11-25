@@ -148,6 +148,24 @@ describe("resolveRegisteredPlanFile", () => {
       fixture.cleanup();
     }
   });
+
+  test("malformed front matter propagates the reader error naming file:line", () => {
+    const fixture = writePlanFile(["---", `plan_id: ${PLAN_ID}`, "*bad-alias-line", "---", ""].join("\n"));
+    try {
+      let error: unknown;
+      try {
+        resolveRegisteredPlanFile({ harnessRoot: fixture.harnessRoot, planId: PLAN_ID, file: fixture.planPath });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(DocumentFrontmatterError);
+      expect((error as DocumentFrontmatterError).source).toBe(fixture.planPath);
+      expect((error as DocumentFrontmatterError).line).toBe(3);
+      expect((error as Error).message).toContain(`${fixture.planPath}:3`);
+    } finally {
+      fixture.cleanup();
+    }
+  });
 });
 
 describe("planDeclaredHeaders", () => {

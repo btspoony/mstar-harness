@@ -38,7 +38,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, sep } from "node:path";
 import { canonicalTarget } from "./coordination-write.js";
-import { extractFrontmatterAndBody, parseDocumentFrontmatter } from "./document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatter } from "./document-frontmatter.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 
 /** Why a plan pointer was refused; these codes propagate unmapped. */
@@ -287,6 +287,11 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
       // Re-emit with the pointer diagnostic attached: the reader knows the file,
       // only this caller knows which spelling asked for it.
       throw refusal(error.code, error.message, { plan_id: planId, ...error.details });
+    }
+    // The shared front-matter reader's diagnostic is the caller's contract:
+    // propagate it unchanged so the caller keeps the file:line it names.
+    if (error instanceof DocumentFrontmatterError) {
+      throw error;
     }
     throw refusal("plan-path.unreadable", `plan ${planId} markdown ${expected} could not be read`, {
       plan_id: planId,
