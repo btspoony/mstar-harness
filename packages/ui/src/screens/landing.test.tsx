@@ -420,12 +420,17 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
   });
 
   test("an unestimated milestone states the word, never an empty slot", () => {
-    // The slot is not "when a date exists": an unestimated milestone says so.
-    const rows = milestones(1);
+    // The slot is not "when a date exists": an unestimated milestone says so — in its
+    // OWN row, counted, so a page-wide hit from another surface cannot satisfy it.
+    const rows = milestones(3);
     const page = overview({
-      milestones: read({ ...rows, milestones: rows.milestones.map((row) => ({ ...row, effortSessions: null })) }),
+      milestones: read({
+        ...rows,
+        milestones: rows.milestones.map((row, index) => (index === 1 ? { ...row, effortSessions: null } : row)),
+      }),
     });
-    expect(page).toContain('class="milestone-target">unestimated');
+    expect(page.match(/class="milestone-target">unestimated/g) ?? []).toHaveLength(1);
+    expect(page.match(/class="milestone-target">12 sessions/g) ?? []).toHaveLength(2);
   });
 
   test("the projection state closes the page", () => {
@@ -1100,8 +1105,22 @@ describe("Focus — the panels state their scope (plan 20261030 Task 2)", () => 
     expect(named).toContain('data-ms-milestone-scope=""');
     expect(named).toContain("engine");
     expect(named).not.toContain("unattributed");
-    // The Focus rows carry the same effort line as the Overview's.
-    expect(named).toContain('class="milestone-target">12 sessions');
+    // The Focus rows carry the same effort line as the Overview's, one per row.
+    expect((named.match(/class="milestone-target">12 sessions/g) ?? []).length).toBeGreaterThan(1);
+
+    // And an unestimated row says so in its own slot, exactly once.
+    const rows = milestones(3);
+    const unestimated = focus({
+      overview: {
+        state: "read",
+        data: overviewRead({
+          projectId: "engine",
+          milestones: read({ ...rows, milestones: rows.milestones.map((row, index) => (index === 2 ? { ...row, effortSessions: null } : row)) }),
+        }),
+      },
+    });
+    expect(unestimated.match(/class="milestone-target">unestimated/g) ?? []).toHaveLength(1);
+    expect(unestimated.match(/class="milestone-target">12 sessions/g) ?? []).toHaveLength(2);
 
     const bucket = focus({
       overview: { state: "read", data: overviewRead({ projectId: "_default" }) },

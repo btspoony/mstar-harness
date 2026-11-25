@@ -29,6 +29,8 @@ import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
+  milestoneDraft,
+  milestonePatch,
   ProjectDetail as ProjectDetailScreen,
   type ProjectDetailCopy,
   type ProjectDetailProps,
@@ -101,6 +103,41 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
   },
   ...over,
 });
+
+/** One board milestone row: the fixture's shape, with only the case's own field changed. */
+const milestoneRow = (
+  over: Partial<RoadmapDTO["milestones"]["milestones"][number]> = {},
+): RoadmapDTO["milestones"]["milestones"][number] => ({
+  milestoneId: "9f2c4a10",
+  projectId: "engine",
+  name: "Release the shared layer",
+  effortSessions: 12,
+  status: "active",
+  ordinal: 0,
+  revision: 2,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-02T00:00:00.000Z",
+  totalIssues: 10,
+  openIssues: 4,
+  resolvedIssues: 6,
+  otherRetiredIssues: 0,
+  ...over,
+});
+
+/** The rendered board block of one milestone, so a slot assertion cannot be met elsewhere. */
+const boardBlockOf = (html: string, milestoneId: string): string => {
+  const start = html.indexOf(`data-ms-milestone="${milestoneId}"`);
+  return start === -1 ? "" : html.slice(start, html.indexOf("</section>", start));
+};
+
+/** The rendered timeline node of one milestone (or the trailing unassigned one). */
+const timelineNodeOf = (html: string, nodeId: string): string => {
+  const start = html.indexOf(`data-ms-timeline-node="${nodeId}"`);
+  if (start === -1) return "";
+  const next = html.indexOf("data-ms-timeline-node=", start + 1);
+  const end = next === -1 ? html.indexOf('data-ms-milestone="', start) : next;
+  return html.slice(start, end === -1 ? undefined : end);
+};
 
 const projectsCopy: ProjectsCopy = {
   pageTitle: "Projects",
@@ -319,11 +356,16 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 
   test("a node carries the retired-over-total pair and the open count", () => {
-    // The fixture's milestone: 10 total, 4 open → 6/10 · 4 open.
-    expect(html).toContain("6/10");
+    // The fixture's milestone: 10 total, 4 open → 6/10 · 4 open, inside ITS node.
+    const node = timelineNodeOf(html, "9f2c4a10");
+    expect(node).toContain("6/10");
+    expect(node).toContain("4 open");
   });
 
   test("nodes follow the store's ordinal order, then the unassigned node", () => {
+    // The three orders DISAGREE on purpose: by ordinal this is zeta then alpha, by
+    // id ascending it is alpha then zeta, and by effort ascending it is alpha (1)
+    // then zeta (9). Only an ordinal sort puts zeta first.
     const ordered = renderDetail({
       roadmap: roadmapBody(
         roadmapFeatureArm({
@@ -331,36 +373,26 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
             milestones: {
               projectId: "engine",
               milestones: [
-                {
-                  milestoneId: "second",
-                  projectId: "engine",
+                milestoneRow({
+                  milestoneId: "alpha-position",
                   name: "Second position",
-                  effortSessions: null,
+                  effortSessions: 1,
                   status: "planned",
                   ordinal: 1,
-                  revision: 1,
-                  createdAt: "2026-10-01T00:00:00.000Z",
-                  updatedAt: "2026-10-01T00:00:00.000Z",
                   totalIssues: 0,
-                  openIssues: 0,
                   resolvedIssues: 0,
-                  otherRetiredIssues: 0,
-                },
-                {
-                  milestoneId: "first",
-                  projectId: "engine",
+                  openIssues: 0,
+                }),
+                milestoneRow({
+                  milestoneId: "zeta-position",
                   name: "First position",
-                  effortSessions: 2,
+                  effortSessions: 9,
                   status: "delivered",
                   ordinal: 0,
-                  revision: 1,
-                  createdAt: "2026-10-01T00:00:00.000Z",
-                  updatedAt: "2026-10-01T00:00:00.000Z",
                   totalIssues: 2,
-                  openIssues: 0,
                   resolvedIssues: 2,
-                  otherRetiredIssues: 0,
-                },
+                  openIssues: 0,
+                }),
               ],
               issues: [],
               unassignedIssues: 1,
@@ -370,16 +402,42 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
         }),
       ),
     });
-    const first = ordered.indexOf('data-ms-timeline-node="first"');
-    const second = ordered.indexOf('data-ms-timeline-node="second"');
+    const zeta = ordered.indexOf('data-ms-timeline-node="zeta-position"');
+    const alpha = ordered.indexOf('data-ms-timeline-node="alpha-position"');
     const unassigned = ordered.indexOf('data-ms-timeline-node="unassigned"');
-    expect(first).toBeGreaterThan(-1);
-    expect(first).toBeLessThan(second);
-    expect(second).toBeLessThan(unassigned);
-    // An unestimated milestone states the word, and a milestone with no issues still
-    // renders its node in the store's own position.
-    expect(ordered).toContain("unestimated · planned");
-    expect(ordered).toContain("Second position");
+    expect(zeta).toBeGreaterThan(-1);
+    expect(zeta).toBeLessThan(alpha);
+    expect(alpha).toBeLessThan(unassigned);
+    // Each node states its own effort line and status, in its own slot.
+    expect(timelineNodeOf(ordered, "zeta-position")).toContain("9 sessions · delivered");
+    // The fixture copy is not the locale's singular rule: "1 sessions" is what it prints.
+    expect(timelineNodeOf(ordered, "alpha-position")).toContain("1 sessions · planned");
+    // The trailing node is the unassigned issues only: no effort line, no estimate word.
+    const trailing = timelineNodeOf(ordered, "unassigned");
+    expect(trailing).toContain("1 issues");
+    expect(trailing).not.toContain("session");
+    expect(trailing).not.toContain("unestimated");
+  });
+
+  test("an unestimated milestone says so in its own node", () => {
+    const page = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({
+            milestones: {
+              projectId: "engine",
+              milestones: [milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 })],
+              issues: [],
+              unassignedIssues: 0,
+            },
+          }),
+          projection,
+        }),
+      ),
+    });
+    const node = timelineNodeOf(page, "never");
+    expect(node).toContain("unestimated");
+    expect(node).not.toContain("0 sessions");
   });
 });
 
@@ -392,10 +450,14 @@ describe("ProjectDetail — the Roadmap feature", () => {
   });
 
   test("the milestone board carries status, effort, the four tallies and its issues", () => {
-    expect(html).toContain('data-ms-milestone="9f2c4a10"');
-    expect(html).toContain("Release the shared layer");
-    expect(html).toContain("12 sessions");
-    expect(html).toContain("I-000870");
+    // Every slot is asserted INSIDE this milestone's own block: the timeline node prints
+    // the same effort line, so a page-wide search would pass with the board slot gone.
+    const block = boardBlockOf(html, "9f2c4a10");
+    expect(block).not.toBe("");
+    expect(block).toContain("Release the shared layer");
+    expect(block).toContain(">active<");
+    expect(block).toContain("12 sessions");
+    expect(block).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
     // rendered as zero, and `retired without resolution` contains `resolved`.
@@ -406,8 +468,33 @@ describe("ProjectDetail — the Roadmap feature", () => {
       ["retired", "0"],
       ["total", "10"],
     ] as const) {
-      expect(html).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
+      expect(block).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
     }
+  });
+
+  test("an unestimated milestone says so on the board row, and the estimate never leaks to another row", () => {
+    const page = renderDetail({
+      roadmap: roadmapBody(
+        roadmapFeatureArm({
+          data: roadmap({
+            milestones: {
+              projectId: "engine",
+              milestones: [
+                milestoneRow({ milestoneId: "estimated", name: "Estimated one", effortSessions: 4, totalIssues: 0, resolvedIssues: 0, openIssues: 0 }),
+                milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, totalIssues: 0, resolvedIssues: 0, openIssues: 0 }),
+              ],
+              issues: [],
+              unassignedIssues: 0,
+            },
+          }),
+          projection,
+        }),
+      ),
+    });
+    expect(boardBlockOf(page, "never")).toContain("unestimated");
+    expect(boardBlockOf(page, "never")).not.toContain("sessions");
+    expect(boardBlockOf(page, "estimated")).toContain("4 sessions");
+    expect(boardBlockOf(page, "estimated")).not.toContain("unestimated");
   });
 
   test("the unassigned count is stated once, as a count", () => {
@@ -647,6 +734,39 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
   test("NEGATIVE: no write surface, no remove control", () => {
     const html = renderDetail({});
     expect(html).not.toContain("data-ms-milestone-remove");
+  });
+});
+
+describe("ProjectDetail — the edit form's Save is a change against the stored milestone (QC 1 F-002)", () => {
+  // The screen's own stored milestone, read through the view model the page renders.
+  const stored = (): RoadmapModel["milestones"][number] => {
+    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
+    if (arm.kind !== "populated") throw new Error("the roadmap fixture must read as populated");
+    return arm.value.milestones[0]!;
+  };
+
+  test("clear → cancel → reopen → rename only: Save carries no effortSessions", () => {
+    const milestone = stored();
+    expect(milestone.effortSessions).toBe(12);
+    // Cancel throws the draft away, so reopening seeds a NEW draft from the milestone —
+    // the value the stale draft held (empty) cannot come back.
+    const reopened = milestoneDraft(milestone);
+    expect(reopened).toEqual({ name: "Release the shared layer", effort: "12", status: "active" });
+    const patch = milestonePatch(milestone, { ...reopened, name: "Renamed" });
+    expect(patch).toEqual({ name: "Renamed" });
+    expect("effortSessions" in patch).toBe(false);
+  });
+
+  test("clear → save carries the explicit null the operator meant", () => {
+    const milestone = stored();
+    const patch = milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "" });
+    expect(patch).toEqual({ effortSessions: null });
+  });
+
+  test("an untouched form sends nothing, and a new count is sent as that count", () => {
+    const milestone = stored();
+    expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
+    expect(milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "20" })).toEqual({ effortSessions: 20 });
   });
 });
 
