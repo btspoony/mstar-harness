@@ -31,11 +31,13 @@ import { dirname, join, resolve } from "node:path";
 import {
   assertPlanWritingPath,
   assertSafePathComponent,
+  assignmentSourceHomes,
   canonicalizeNearestExisting,
   emitGitignoreSnippet,
   HarnessRootRetiredError,
   hasHarnessRootDeclaration,
   resolveAdrDir,
+  resolveAssignmentDir,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -1876,6 +1878,90 @@ describe("canonicalizeNearestExisting — A3 nonexistent-leaf canonicalization",
     const absentRoot = join(realpathSync("/"), "no-such-ancestor-canonicalize-test");
     const p = join(absentRoot, "a", "b.md");
     expect(canonicalizeNearestExisting(p)).toBe(p);
+  });
+});
+
+describe("resolveAssignmentDir (assignment homes — compass D6/D14)", () => {
+  function harness(mstarc?: string): { root: string; harnessDir: string } {
+    const root = tmpRoot("path-assign-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    if (mstarc !== undefined) writeFileSync(join(root, ".mstarc"), mstarc);
+    return { root, harnessDir };
+  }
+
+  test("planId composes `{SDD_DIR}/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(join(resolveSddDir(harnessDir, "plan-a"), "assignments"));
+  });
+
+  test("iterationId only composes `{ITERATION_DIR}/<id>/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "iter-1" })).toBe(
+      join(resolveIterationDir(harnessDir), "iter-1", "assignments"),
+    );
+  });
+
+  test("workflowId only composes `{WORKFLOW_DIR}/<id>/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, workflowId: "wf-1" })).toBe(
+      join(resolve(harnessDir), "workflows", "wf-1", "assignments"),
+    );
+  });
+
+  test("no identity returns null", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir })).toBeNull();
+  });
+
+  test("plan wins over iteration, iteration over workflow", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, planId: "p", iterationId: "i", workflowId: "w" })).toBe(
+      join(resolveSddDir(harnessDir, "p"), "assignments"),
+    );
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "i", workflowId: "w" })).toBe(
+      join(resolveIterationDir(harnessDir), "i", "assignments"),
+    );
+  });
+
+  test("a `.mstarc` override moves the base but keeps the assignments segment", () => {
+    const { harnessDir } = harness("[config]\nsdd_dir=moved-sdd\niteration_dir=moved-iter\nworkflow_dir=moved-wf\n");
+    const root = resolve(harnessDir, "..");
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(join(root, "moved-sdd", "plan-a", "assignments"));
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "iter-1" })).toBe(join(root, "moved-iter", "iter-1", "assignments"));
+    expect(resolveAssignmentDir({ harnessDir, workflowId: "wf-1" })).toBe(join(root, "moved-wf", "wf-1", "assignments"));
+  });
+
+  test("identity ids are traversal-guarded", () => {
+    const { harnessDir } = harness();
+    expect(() => resolveAssignmentDir({ harnessDir, iterationId: "../escape" })).toThrow();
+  });
+});
+
+describe("assignmentSourceHomes (compass D14)", () => {
+  test("names the three write homes plus the read-only fourth source", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    expect(assignmentSourceHomes(harnessDir)).toEqual([
+      { name: "sdd", root: join(resolve(harnessDir), "sdd"), write: true },
+      { name: "iteration", root: join(resolve(harnessDir), "iterations"), write: true },
+      { name: "workflow", root: join(resolve(harnessDir), "workflows"), write: true },
+      { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+    ]);
+  });
+
+  test("`.mstarc` overrides move the write homes; the fourth source stays at the harness dir", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    writeFileSync(join(root, ".mstarc"), "[config]\nsdd_dir=moved-sdd\niteration_dir=moved-iter\nworkflow_dir=moved-wf\n");
+    expect(assignmentSourceHomes(harnessDir)).toEqual([
+      { name: "sdd", root: join(root, "moved-sdd"), write: true },
+      { name: "iteration", root: join(root, "moved-iter"), write: true },
+      { name: "workflow", root: join(root, "moved-wf"), write: true },
+      { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+    ]);
   });
 });
 

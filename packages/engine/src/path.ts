@@ -345,6 +345,15 @@ export function canonicalizeNearestExisting(path: string): string {
   }
 }
 
+/** why: The `sdd` base (before the per-plan join) — the `.mstarc` `sdd_dir`
+ * declaration or `{HARNESS_DIR}/sdd`. Shared by `resolveSddDir` and
+ * `assignmentSourceHomes`. */
+function sddBaseDir(harnessDir: string): string {
+  const base = resolve(harnessDir);
+  const declared = mstarcDirOverride(base, "sddDir");
+  return declared !== null ? declared : join(base, "sdd");
+}
+
 /**
  * Compose `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (plan-conventions
  * § 路径符号). A `.mstarc` `[config] sdd_dir` declaration replaces the
@@ -355,10 +364,7 @@ export function canonicalizeNearestExisting(path: string): string {
  */
 export function resolveSddDir(harnessDir: string, planId: string): string {
   assertSafePathComponent(planId, "planId");
-  const base = resolve(harnessDir);
-  const declared = mstarcDirOverride(base, "sddDir");
-  const sddBase = declared !== null ? declared : join(base, "sdd");
-  return join(sddBase, planId);
+  return join(sddBaseDir(harnessDir), planId);
 }
 
 /**
@@ -555,6 +561,62 @@ export function resolveReviewDir(
   opts: ResolveHarnessDirOptions = {},
 ): string {
   return resolveHarnessSubdir(startDir, opts, "reviewDir", "reviews");
+}
+
+/**
+ * Assignment source home (compass D14): a resolved base directory that may
+ * hold assignment files. The three write homes (`sdd`, `iteration`,
+ * `workflow`) are the per-identity `<base>/<id>/assignments` bases — this
+ * root is the base itself, without the identity segment; the harness home
+ * is the read-only fourth source `{HARNESS_DIR}/assignments`, complete.
+ */
+export type AssignmentSourceHome = {
+  name: "sdd" | "iteration" | "workflow" | "harness";
+  root: string;
+  write: boolean;
+};
+
+/**
+ * The write home for assignment files of the given identity (compass D6):
+ * precedence plan → iteration → workflow; no identity returns `null` (no
+ * harness path). `.mstarc` `sdd_dir` / `iteration_dir` / `workflow_dir`
+ * overrides move the base; the trailing `assignments` segment never drops.
+ * Every identity component passes `assertSafePathComponent` before joining.
+ */
+export function resolveAssignmentDir(opts: {
+  harnessDir: string;
+  planId?: string;
+  iterationId?: string;
+  workflowId?: string;
+}): string | null {
+  if (opts.planId !== undefined) return join(resolveSddDir(opts.harnessDir, opts.planId), "assignments");
+  if (opts.iterationId !== undefined) {
+    assertSafePathComponent(opts.iterationId, "iterationId");
+    return join(resolveIterationDir(opts.harnessDir), opts.iterationId, "assignments");
+  }
+  if (opts.workflowId !== undefined) {
+    assertSafePathComponent(opts.workflowId, "workflowId");
+    // why: the harness dir is a caller-held fact — pass it as the verbatim
+    // `harnessDir` override so no redundant Git probe runs; `.mstarc`
+    // discovery is unchanged (the harness dir is the discovery start).
+    return join(resolveWorkflowDir(opts.harnessDir, { harnessDir: opts.harnessDir }), opts.workflowId, "assignments");
+  }
+  return null;
+}
+
+/**
+ * Every assignment source home (compass D14): the three write homes plus
+ * `{HARNESS_DIR}/assignments` as the read-only fourth source. Containment
+ * checks compare against these resolved roots, never a `harnessDir`
+ * prefix — a `.mstarc` override may move a base outside the harness dir.
+ */
+export function assignmentSourceHomes(harnessDir: string): AssignmentSourceHome[] {
+  return [
+    { name: "sdd", root: sddBaseDir(harnessDir), write: true },
+    { name: "iteration", root: resolveIterationDir(harnessDir), write: true },
+    { name: "workflow", root: resolveWorkflowDir(harnessDir, { harnessDir }), write: true },
+    { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+  ];
 }
 
 /**
