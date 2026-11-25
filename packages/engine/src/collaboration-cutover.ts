@@ -117,7 +117,9 @@ const CUTOVER_LOCK_RECOVERY_SUFFIX = ".recover";
 const STALE_LOCK_ATTEMPTS = 3;
 
 /** note: The oldest source schema this build can extract (the combined store's cutover base).
- * Pinned by name, not position: an unrelated append must not move the floor. */
+ * Pinned by name, not position: an unrelated append must not move the floor. The fence transaction
+ * performs exactly one advance, so a source at this version is extractable and an older one is
+ * told to `store upgrade` first. */
 const SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
 
 type Blockers = readonly Readonly<{ code: string; subject: string }>[];
@@ -1358,25 +1360,30 @@ async function releaseStaleClaim(
   }
 }
 
+/**
+ * invariant: The fence advances the source to this build's current schema inside its own
+ * transaction by applying every migration after the recorded max, in order. A source at the floor
+ * therefore enters and leaves at the current schema; a source further behind, or with a gap, is a
+ * drift the operator settles with `store upgrade` before fencing.
+ */
 function ensureFenceSchema(db: StoreDb): number {
-  const fenceMigration = MIGRATIONS[MIGRATIONS.length - 1]!;
-  const applied = readAppliedMigrations(db, false);
-  const max = validateAppliedMigrations(applied);
-  if (max >= fenceMigration.version) return max;
-  if (max !== fenceMigration.version - 1) {
+  const max = validateAppliedMigrations(readAppliedMigrations(db, false));
+  if (max < SOURCE_SCHEMA_FLOOR) {
     throw new StoreError(
       "store.schema-drift",
-      `The combined store is at schema ${max}, not the cutover's predecessor ${fenceMigration.version - 1}. Run ` +
+      `The combined store is at schema ${max}, below the cutover source floor ${SOURCE_SCHEMA_FLOOR}. Run ` +
         `"mstar store upgrade --operator <name>" to reach the current schema; nothing was fenced.`,
     );
   }
-  db.exec(fenceMigration.sql);
-  db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-    fenceMigration.version,
-    fenceMigration.name,
-    migrationChecksum(fenceMigration),
-    nowRfc3339(),
-  );
+  for (const migration of MIGRATIONS.filter((entry) => entry.version > max)) {
+    db.exec(migration.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      migration.version,
+      migration.name,
+      migrationChecksum(migration),
+      nowRfc3339(),
+    );
+  }
   return validateAppliedMigrations(readAppliedMigrations(db, false));
 }
 

@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   appendOccurrence,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
+  discardAcrossAuthorities,
   getIssue,
   showIssue,
   ISSUE_ACTION_NAMES,
@@ -56,6 +58,8 @@ const inputSchema = z.object({
   actor: z.string().optional(),
   expect: z.number().int().nonnegative().optional(),
   expectStore: z.number().int().nonnegative().optional(),
+  toAuthority: z.string().optional(),
+  discard: z.boolean().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -179,6 +183,23 @@ function issueFilter(input: IssueInput): IssueFilter {
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
   };
 }
+/**
+ * note: A move combination neither route admits, refused by code with the route that does. It names the
+ * flags rather than the engine's internals, so an operator corrects the request instead of the store.
+ */
+function unsupportedMove(flag: string, route: string): Error & { code: string; paths: string[]; details: Record<string, unknown> } {
+  const recovery =
+    `${flag} needs the staged cross-authority route: ${route}. A project reassignment inside one authority takes ` +
+    `--payload '{"projectId":"<target>","reason":"<text>"}' with --expect and --expect-store, and no authority flag.`;
+  const error = new Error(recovery) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+  error.code = "issue.scope-refused";
+  error.paths = [flag.replace(/^--/, "")];
+  // note: The family's default recovery for a scope refusal is the seat's, which is not this cause;
+  // the flag's own route is the repair, so it travels as the refusal's recovery.
+  error.details = { flag: flag.replace(/^--/, ""), supported_route: route, recovery };
+  return error;
+}
+
 function requiredId(input: IssueInput): string {
   if (input.id === undefined || input.id.trim() === "") {
     const error = new Error("issue id is required") as Error & { code: string; paths: string[] };
@@ -216,18 +237,74 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
     }
     if (id === "issue.move") {
       const expectStore = input.expectStore;
+      // invariant: `--expect` is the record's revision CAS on every route that reads a local record, and
+      // both of this verb's routes do, so a missing flag refuses before anything is frozen.
+      if (input.expect === undefined) {
+        const error = new Error("expect is required for a move") as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+        error.code = "issue.invalid-payload";
+        error.paths = ["expect"];
+        error.details = {
+          recovery:
+            `Read the record with \`mstar issue show --id <issue-id>\`, then reissue the same command with ` +
+            `--expect <issue-revision> (and the same --operation-id).`,
+        };
+        throw error;
+      }
+      const addressed = requiredId(input);
+      const payload = validatePayload(input, "IssueMove", "move") as IssueMove;
+      const toAuthority = input.toAuthority?.trim();
+      if (toAuthority === "") throw unsupportedMove("--to-authority", `mstar issue move --id ${addressed} --to-authority <repo-key>`);
+      // invariant: `--discard` is decided before the store base: it restores the source record and never
+      // compares the lane revision a move's own phase commits have already advanced, so `--expect-store`
+      // is not one of its inputs and supplying one refuses instead of being accepted and dropped.
+      if (input.discard === true) {
+        if (toAuthority === undefined) {
+          throw unsupportedMove("--discard", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        }
+        if (expectStore !== undefined) {
+          const error = new Error(
+            "expectStore is not a --discard input: a discard restores the source record and never compares the lane " +
+              "revision a move's own phase commits have already advanced; pass the record's revision with --expect only",
+          ) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+          error.code = "issue.invalid-payload";
+          error.paths = ["expectStore"];
+          error.details = {
+            recovery:
+              `Read the record with \`mstar issue show --id ${addressed}\`, then reissue the same --discard command with ` +
+              `--expect <issue-revision> and no --expect-store.`,
+          };
+          throw error;
+        }
+        // invariant: Discard unfreezes a record, so it is an issue write: the same capture seat that
+        // authorizes the move authorizes abandoning it, checked before the store is touched.
+        const write = mutation(input);
+        assertIssueWriteSeat(write.actor);
+        // invariant: the discard route releases both halves of a one-checkout move in this one run,
+        // and refuses a checkout that holds only half of the pair.
+        const receipt = await discardAcrossAuthorities(context, {
+          operationId: write.operationId,
+          actor: write.actor,
+          sourceIssueId: addressed,
+          destinationAuthority: toAuthority,
+          destinationProject: payload.projectId,
+          reason: payload.reason,
+          ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
+        });
+        return ok(id, { ...receipt, operationId: write.operationId });
+      }
+      // invariant: `--expect-store` is the lane's store CAS, and every remaining route reads that base.
       if (expectStore === undefined) {
         const error = new Error("expectStore is required for a project move") as Error & { code: string; paths: string[] };
         error.code = "issue.invalid-payload";
         error.paths = ["expectStore"];
         throw error;
       }
-      return await runMutation((write) => moveIssue(
-        context,
-        requiredId(input),
-        validatePayload(input, "IssueMove", "move") as IssueMove,
-        { ...write, expectedStoreRevision: expectStore },
-      ));
+      // invariant: `--to-authority` selects the staged cross-authority route; without it the verb is the
+      // local project reassignment.
+      if (toAuthority === undefined) {
+        return await runMutation((write) => moveIssue(context, addressed, payload, { ...write, expectedStoreRevision: expectStore }));
+      }
+      return await runMutation((write) => moveIssue(context, addressed, { ...payload, toAuthority }, { ...write, expectedStoreRevision: expectStore }));
     }
     const defaultDisposition = terminalDisposition[id.slice("issue.".length)];
     if (defaultDisposition !== undefined) {
@@ -325,6 +402,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", expectStore: "--expect-store <n>", payload: "--payload <json>",
+    toAuthority: "--to-authority <repo-key>", discard: "--discard",
   };
   const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
@@ -333,26 +411,31 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const commandInput = z.object({
     ...inputSchema.shape,
     id: requiresIssueId ? z.string().min(1) : z.string().optional(),
+    // invariant: `--expect` is the record's revision CAS on every route that reads a local record, and
+    // both of `issue move`'s routes do.
     expect: expectedRevisionVerbs[verb] === true
       ? z.number().int().nonnegative()
       : z.number().int().nonnegative().optional(),
-    expectStore: verb === "move"
-      ? z.number().int().nonnegative()
-      : z.number().int().nonnegative().optional(),
+    expectStore: z.number().int().nonnegative().optional(),
   });
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "actor" || (key === "id" && requiresIssueId))) ||
       (verb === "show" && key === "id") ||
-      (expectedRevisionVerbs[verb] === true && key === "expect") ||
-      (verb === "move" && key === "expectStore"),
+      (expectedRevisionVerbs[verb] === true && key === "expect"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
-      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
+      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token. Compared by the run that stages the move." }
       : {}),
     ...(verb === "move" && key === "expectStore"
-      ? { help: "Exact current store revision from `mstar issue list` (`storeRevision`); a store that moved since it was read is refused." }
+      ? { help: "Exact current store revision of the lane this run stages in: `storeRevision` from `mstar issue list` there. Compared by the run that stages a move (its own lane's revision). Not an input of `--discard`." }
+      : {}),
+    ...(verb === "move" && key === "toAuthority"
+      ? { help: "Destination authority `repoKey` (`host/owner/repo`) of a staged cross-authority move; `--payload.projectId` names the destination project." }
+      : {}),
+    ...(verb === "move" && key === "discard"
+      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched. One run releases both lanes of a one-checkout move." }
       : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));
@@ -365,10 +448,21 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         { name: "payload", ownership: "caller" as const, route, required: true, condition: { field: "file", present: false }, constraint: `payload shape: mstar schema ${payloadType[verb]}` },
         { name: "file", ownership: "caller" as const, route, required: true, condition: { field: "payload", present: false }, constraint: "absolute JSON file alternative to payload" },
         ...(expectedRevisionVerbs[verb] === true
-          ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write" }]
+          ? [{
+              name: "expect", ownership: "caller" as const, route, tokenKind: "revision" as const,
+              required: true,
+              constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write",
+            }]
           : []),
         ...(verb === "move"
-          ? [{ name: "expectStore", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write" }]
+          ? [{
+              name: "expectStore", ownership: "caller" as const, route, tokenKind: "revision" as const,
+              // invariant: A discard restores the record instead of reading a lane base it cannot hold:
+              // the move's own phase commits advance the store revision, so only the routes that read a
+              // base they can still compare require it.
+              required: true, condition: { field: "discard", present: false },
+              constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write",
+            }]
           : []),
       ])
     : verb === "show" || verb === "export"
@@ -383,7 +477,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     input: terminalDisposition[verb] === undefined
       ? commandInput
       : closureInputSchema(commandInput, terminalDisposition[verb]),
-    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} ${verb === "move" ? "Requires `--expect-store` with the current `storeRevision` from `mstar issue list`." : ""} Actor vocabulary: project-manager.`,
+    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} ${verb === "move" ? "Requires `--expect-store` with the current `storeRevision` from `mstar issue list`, except with `--discard`, which honours the record's revision alone." : ""} Actor vocabulary: project-manager.`,
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],

@@ -7,13 +7,15 @@
  * green suite whose required case was renamed, deleted or skipped is not evidence,
  * so a missing owner case fails here by name.
  *
- * Two scenarios had no owner and live in this file: the delete-and-reclone of a
- * local checkout against a retained user-level store (criterion 1), and the
- * cross-authority move refusal boundary — named as boundary-only evidence that
- * is NOT criterion 7's proof, because the staged move the ADR asks for does not
- * exist (`I-001235`). Criterion 7 has no passing case here by design. Criterion 1
+ * One scenario has no owner and lives in this file: the delete-and-reclone of a
+ * local checkout against a retained user-level store (criterion 1). Criterion 1
  * also delegates its five identity and cutover owner scenarios, so a renamed or
  * deleted one fails this criterion.
+ *
+ * Criterion 7 delegates its six staged-move cases to
+ * `cross-authority-move.test.ts`. Its unsupported-move refusal also runs here as
+ * boundary-only evidence outside the owner map: it proves a refusal, never a
+ * criterion-7 pass, and the staged move it does not support is the same verb.
  *
  * Requires the locally built CLI (`bun run cli:build`) because the remote owner
  * suites spawn it, exactly like every other remote CLI suite.
@@ -42,7 +44,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** note: One owner case: the file that holds it and its exact title. */
 type OwnerCase = Readonly<{ file: string; title: string }>;
 
-/** note: Per-criterion owners. Criterion 7 deliberately has none — it is unproven. */
+/** note: Per-criterion owners. Criterion 7's six cases are the iteration spec's acceptance table. */
 const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
   "1. Local persistence and isolation": [
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a replacement clone with no execution DB reads the same authority" },
@@ -86,6 +88,14 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "two concurrent activations leave exactly one fence and one active authority" },
     { file: "packages/engine/src/collaboration-store.test.ts", title: "a rebind advances only through the reviewed lineage and never downgrades" },
     { file: "packages/engine/src/collaboration-store.test.ts", title: "an interruption at publication leaves the predecessor named and a retry completes" },
+  ],
+  "7. Cross-authority moves and relations": [
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Stage → verify → switch, preserving `IssueRef` and history" },
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Interrupt after staging, before switch" },
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Interrupt after switch, before publication" },
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Failed verification" },
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Writes stopped and in-flight reconciled" },
+    { file: "packages/cli/test/cross-authority-move.test.ts", title: "Unresolved relation visible" },
   ],
   "8. Provider isolation": [
     { file: "packages/cli/test/remote-provider-isolation.test.ts", title: "the bootstrap loop and one confirmed outbox effect run with zero provider attempts" },
@@ -351,10 +361,14 @@ describe("collaboration authority — ADR acceptance", () => {
     expectOwners("6. Migration and rebinding");
   }, 240_000);
 
-  test("criterion 7 boundary only (unproven, I-001235) — a remote project move refuses collaboration.mode-unavailable", () => {
-    // note: The ADR asks for a staged cross-authority move with interruption recovery. This
-    // asserts only the refusal boundary at the shipped CLI: no staged move, no relation
-    // resolution, no IssueRef preservation across authorities. Criterion 7 stays unproven.
+  test("criterion 7 — the staged cross-authority move and its unresolved relations are proven by their owner cases", () => {
+    expectOwners("7. Cross-authority moves and relations");
+  }, 240_000);
+
+  test("criterion 7 boundary only — a remote project move refuses collaboration.mode-unavailable", () => {
+    // note: The unsupported-move surface is NOT a criterion-7 pass: a move this checkout's topology
+    // does not admit must refuse by code, and this keeps that refusal from regressing while the staged
+    // move exists.
     const fixture = new RemoteCollaborationFixture("acceptance-move-boundary");
     const moveOperation = "11111111-1111-4111-8111-1111111111aa";
     try {

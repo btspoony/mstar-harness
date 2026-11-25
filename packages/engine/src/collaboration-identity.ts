@@ -699,6 +699,47 @@ function encodeSegment(segment: string): string {
   return escaped.replace(/[A-Z]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
+/** note: The one canonical storage path for a repository key's lane, beneath the user-level anchor. */
+function laneDbPath(home: string, dirs: readonly string[]): string {
+  return join(home, ".mstar", "repos", ...dirs.map(encodeSegment), "collaboration.db");
+}
+
+/** note: The filesystem segments a canonical repository key spells; `id:` keys live under `_id`. */
+function laneDirsOf(repoKey: string): string[] {
+  if (repoKey.startsWith("id:")) {
+    const repoId = repoKey.slice("id:".length);
+    if (!SAFE_REPO_ID.test(repoId)) {
+      unresolved(`The repository key ${JSON.stringify(repoKey)} is not a canonical 'id:<repo_id>' key`);
+    }
+    return ["_id", repoId];
+  }
+  const segments = repoKey.split("/");
+  if (segments.length < 3) {
+    unresolved(`The repository key ${JSON.stringify(repoKey)} is not a canonical 'host/owner/repo' key`);
+  }
+  for (const segment of segments) {
+    if (!SAFE_SEGMENT.test(segment)) {
+      unresolved(`The repository key ${JSON.stringify(repoKey)} carries an unsafe path segment`);
+    }
+  }
+  return segments;
+}
+
+/**
+ * invariant: The lane one canonical repository key names, resolved WITHOUT a checkout. A
+ * cross-authority destination is addressed by its `repoKey`, so its database path must derive
+ * from the key alone; `mode` stays the caller's, because a key never carries one. A key that is
+ * not a canonical spelling is refused rather than path-joined, so an operator-supplied authority
+ * can never name a location outside the private storage tree.
+ */
+export function collaborationLocationOfRepoKey(
+  repoKey: string,
+  mode: CollaborationMode,
+  options: { userHome?: string } = {},
+): CollaborationLocation {
+  return { repoKey, mode, dbPath: laneDbPath(options.userHome ?? homedir(), laneDirsOf(repoKey)) };
+}
+
 /**
  * invariant: The commit-boundary selector fence for one mutation. The caller already
  * resolved a selection before it opened a writer; a Git ref can move while the
@@ -802,7 +843,7 @@ export function resolveCollaborationLocation(
   return {
     repoKey: identity.repoKey,
     mode,
-    dbPath: join(home, ".mstar", "repos", ...identity.dirs.map(encodeSegment), "collaboration.db"),
+    dbPath: laneDbPath(home, identity.dirs),
     ...(selection === undefined ? {} : { selection }),
   };
 }

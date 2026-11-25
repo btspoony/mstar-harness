@@ -174,7 +174,7 @@ const ROADMAP_CONTENT =
  * session and an execution row. It is upgraded through the public `upgradeStore` before
  * planning, because a source below the cutover floor is refused.
  */
-function seedSchema20Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
+function seedSchemaPreFloorSource(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
   const context = contextAt(repo);
   const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
   try {
@@ -1519,7 +1519,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
 
   test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
-    const source = seedSchema20Source(repo);
+    const source = seedSchemaPreFloorSource(repo);
     // invariant: A source below the cutover floor must reach it through the public upgrade before
     // planning; the seed's own schema version is derived, never pinned.
     expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
@@ -1586,7 +1586,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
 
   test("a fence commit failure is reported as unconfirmed, never as unchanged", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-commit-unconfirmed.git");
-    const source = seedSchema20Source(repo);
+    const source = seedSchemaPreFloorSource(repo);
     expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
@@ -1622,7 +1622,7 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
 
   test("a failed fence rolls the schema-20 source back and publishes nothing", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
-    const source = seedSchema20Source(repo);
+    const source = seedSchemaPreFloorSource(repo);
     expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);

@@ -88,7 +88,11 @@ export {
   resolveRepoRoot,
 } from "./mstarc.js";
 export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
-export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+export {
+  CollaborationIdentityError,
+  collaborationLocationOfRepoKey,
+  resolveCollaborationLocation,
+} from "./collaboration-identity.js";
 // note: The collaboration lane's own store: independent staged schema, create-only
 // publication and active-only handles. No execution table or method.
 export type {
@@ -210,6 +214,19 @@ export {
   applyCollaborationCutover,
   planCollaborationCutover,
 } from "./collaboration-cutover.js";
+// note: One record's staged move: the source row is the ledger and the fence, and the phase set is
+// forward-only. The published surface is the routes a transport calls — `moveAcrossAuthorities` for
+// the one-checkout topology and `discardAcrossAuthorities` to abandon one (a checkout can only
+// release the lanes it holds). The phase engine
+// (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), `discardMove` (the one-checkout release) and
+// the ledger primitives stay internal to the module.
+export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
+export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
+export {
+  discardAcrossAuthorities,
+  discardMove,
+  moveAcrossAuthorities,
+} from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
@@ -868,6 +885,7 @@ export {
   appendOccurrence,
   assertIssueLinkVocabulary,
   assertIssueTriageVocabulary,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
   computeIdentityKey,

@@ -957,6 +957,50 @@ describe("issue views", () => {
       code: "issue.not-found",
     });
   });
+
+  test("issue-detail carries issueRef and the unresolved relation shape", async () => {
+    const { context } = await workspace("detail-unresolved-");
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "I-000001", title: "first", registeredAt: "2026-09-01" });
+      seedIssue(db, { id: "I-000002", title: "second", registeredAt: "2026-09-01" });
+      // note: Both spellings at once: a local edge stays local, and the edge whose target
+      // publication rewrote to another authority reads with its stable reference.
+      db.prepare("insert into relations(from_issue, relation, to_issue) values ('I-000001', 'blocks', 'I-000002')").run();
+      db.prepare(
+        "insert into relations(from_issue, relation, to_ref) values ('I-000002', 'related', 'mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc')",
+      ).run();
+    });
+    const detail = (await withStoreRead(context, queryDashboard("issue-detail", { id: "I-000002" }))).data;
+    if (!("relations" in detail)) throw new Error("a local issue detail must carry its relations");
+    expect(detail.issueRef).toMatch(/^mstar:issue:/);
+    // invariant: An incoming local edge keeps its writer's shape; the unresolved one names the
+    // target's reference with no title — the same unresolved fact the remote reader reports as
+    // `title: null`.
+    expect(detail.relations).toEqual([
+      { fromIssue: "I-000001", relation: "blocks", toIssue: "I-000002", toRef: null, title: "first" },
+      { fromIssue: "I-000002", relation: "related", toIssue: null, toRef: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc", title: null },
+    ]);
+  });
+
+  test("issue-detail refuses a switched source record with collaboration.operation-partial", async () => {
+    const { context } = await workspace("detail-switched-");
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "I-000001", title: "moved", registeredAt: "2026-09-01" });
+      const ref = db.prepare("select issue_ref from issues where id = 'I-000001'").get() as { issue_ref: string };
+      db.prepare(
+        "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+          "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+          "staged_counts, source_store_id, source_epoch, created_at, updated_at) " +
+          "values ('move-switched', 'source', 'hash', ?, 'I-000001', 'I-000001', ?, 'github.com/acme/elsewhere', 'p-dest', " +
+          "'project-manager', 'moved on', 'switched', '{}', 'digest', '{}', 'store-one', 1, ?, ?)",
+      ).run(ref.issue_ref, resolveCollaborationLocation(context).repoKey, RECORDED_AT, RECORDED_AT);
+    });
+    // invariant: The lane stopped presenting this record, so the read boundary refuses it the
+    // same way the domain reader does — the gap names the move that closes it.
+    await expect(withStoreRead(context, queryDashboard("issue-detail", { id: "I-000001" }))).rejects.toMatchObject({
+      code: "collaboration.operation-partial",
+    });
+  });
 });
 
 describe("collaboration rollup snapshot", () => {
