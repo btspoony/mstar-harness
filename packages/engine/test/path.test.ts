@@ -1936,6 +1936,24 @@ describe("resolveAssignmentDir (assignment homes — compass D6/D14)", () => {
     const { harnessDir } = harness();
     expect(() => resolveAssignmentDir({ harnessDir, iterationId: "../escape" })).toThrow();
   });
+  test("a write home colliding with the read-only flat home is rejected (sdd_dir=. + planId .mstar)", () => {
+    const { harnessDir } = harness("[config]\nsdd_dir=.\n");
+    expect(() => resolveAssignmentDir({ harnessDir, planId: ".mstar" })).toThrow(/alias the read-only flat source/);
+  });
+
+  test("iteration and workflow base collisions with the flat home are rejected", () => {
+    const { harnessDir } = harness("[config]\niteration_dir=.\nworkflow_dir=.\n");
+    expect(() => resolveAssignmentDir({ harnessDir, iterationId: ".mstar" })).toThrow(/alias the read-only flat source/);
+    expect(() => resolveAssignmentDir({ harnessDir, workflowId: ".mstar" })).toThrow(/alias the read-only flat source/);
+  });
+
+  test("a valid external override still resolves", () => {
+    const { root, harnessDir } = harness("[config]\nsdd_dir=../external-sdd\n");
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(
+      join(resolve(root, ".."), "external-sdd", "plan-a", "assignments"),
+    );
+  });
+
 });
 
 describe("assignmentSourceHomes (compass D14)", () => {

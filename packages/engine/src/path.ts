@@ -582,6 +582,11 @@ export type AssignmentSourceHome = {
  * harness path). `.mstarc` `sdd_dir` / `iteration_dir` / `workflow_dir`
  * overrides move the base; the trailing `assignments` segment never drops.
  * Every identity component passes `assertSafePathComponent` before joining.
+ * A resolved write home that aliases the read-only flat source
+ * `{HARNESS_DIR}/assignments` (compass D14 — e.g. `sdd_dir=.` with
+ * `planId: ".mstar"`) throws: writing there would corrupt the read-only
+ * source, and returning `null` would read as "no harness" and silently
+ * switch a caller to inline.
  */
 export function resolveAssignmentDir(opts: {
   harnessDir: string;
@@ -589,19 +594,26 @@ export function resolveAssignmentDir(opts: {
   iterationId?: string;
   workflowId?: string;
 }): string | null {
-  if (opts.planId !== undefined) return join(resolveSddDir(opts.harnessDir, opts.planId), "assignments");
-  if (opts.iterationId !== undefined) {
+  let dir: string | null = null;
+  if (opts.planId !== undefined) dir = join(resolveSddDir(opts.harnessDir, opts.planId), "assignments");
+  else if (opts.iterationId !== undefined) {
     assertSafePathComponent(opts.iterationId, "iterationId");
-    return join(resolveIterationDir(opts.harnessDir), opts.iterationId, "assignments");
-  }
-  if (opts.workflowId !== undefined) {
+    dir = join(resolveIterationDir(opts.harnessDir), opts.iterationId, "assignments");
+  } else if (opts.workflowId !== undefined) {
     assertSafePathComponent(opts.workflowId, "workflowId");
     // why: the harness dir is a caller-held fact — pass it as the verbatim
     // `harnessDir` override so no redundant Git probe runs; `.mstarc`
     // discovery is unchanged (the harness dir is the discovery start).
-    return join(resolveWorkflowDir(opts.harnessDir, { harnessDir: opts.harnessDir }), opts.workflowId, "assignments");
+    dir = join(resolveWorkflowDir(opts.harnessDir, { harnessDir: opts.harnessDir }), opts.workflowId, "assignments");
   }
-  return null;
+  if (dir === null) return null;
+  const flatHome = join(resolve(opts.harnessDir), "assignments");
+  if (canonicalizeNearestExisting(dir) === canonicalizeNearestExisting(flatHome)) {
+    throw new Error(
+      `assignment write home must not alias the read-only flat source ${flatHome} \u2014 got ${dir}`,
+    );
+  }
+  return dir;
 }
 
 /**
