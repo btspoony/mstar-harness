@@ -85,6 +85,41 @@ export function milestoneDraft(milestone: RoadmapModel["milestones"][number]): M
   };
 }
 
+/** One target's draft text. The editor carries its status too; the create form never sets it. */
+export type CreateDraft = { name: string; effort: string; status?: string };
+
+/**
+ * The draft store the host owns OUTSIDE the read's subtree. The forms live under the
+ * roadmap read, so a refresh (an accepted write, a revision conflict) unmounts and
+ * re-mounts them — a draft held in component state dies with the form, and the
+ * operator's typed text is lost exactly when they need it back (the conflict retry).
+ * The host holds one entry per target instead: the create form under `create`, each
+ * milestone editor under its milestone id. A form seeds its state from the entry on
+ * mount and writes every keystroke back, so a re-mounted form opens over the typed
+ * values; an ACCEPTED write clears the entry, because the stored milestone is then
+ * the truth the editor re-seeds from.
+ */
+export type MilestoneDraftStore = {
+  // note: the stored draft for one target, or undefined when none was typed.
+  read(target: string): CreateDraft | undefined;
+  // note: merges one field change into the target's draft.
+  write(target: string, patch: Partial<CreateDraft>): void;
+  // note: drops the target's draft (an accepted write, a cancelled edit).
+  clear(target: string): void;
+};
+
+/** The store's plain implementation: one record keyed per target. */
+export function createMilestoneDraftStore(): MilestoneDraftStore {
+  const entries = new Map<string, CreateDraft>();
+  return {
+    read: (target) => entries.get(target),
+    write: (target, patch) => entries.set(target, { ...entries.get(target), ...patch } as CreateDraft),
+    clear: (target) => {
+      entries.delete(target);
+    },
+  };
+}
+
 /** What Save sends: only the fields whose text differs from the stored milestone. */
 export function milestonePatch(
   milestone: RoadmapModel["milestones"][number],
@@ -244,6 +279,8 @@ export type ProjectDetailProps = {
   copy: ProjectDetailCopy;
   /** The milestone write channel, when the host can write (plan Task 4). */
   writes?: MilestoneWriteSurface;
+  /** note: the host-owned draft store; absent, drafts live in component state as before. */
+  drafts?: MilestoneDraftStore;
   /** The project's open, unassigned issues, as the assign picker's options. */
   assignableIssues?: readonly AssignableIssue[];
   onBack?: () => void;
@@ -258,11 +295,26 @@ function MilestoneActions(props: {
   /** The assign picker's options; absent means this host offers no picker here. */
   assignable: readonly AssignableIssue[] | undefined;
   copy: ProjectDetailCopy;
+  /** note: the host-owned draft store (absent: drafts live in component state, as before). */
+  drafts?: MilestoneDraftStore;
 }) {
   const { milestone, writes, assignable, copy } = props;
-  // invariant: one state, the OPEN draft — `null` is the closed editor, so a
-  // cancelled edit has nowhere to live until the next open re-seeds it from the milestone.
-  const [draft, setDraft] = useState<MilestoneDraft | null>(null);
+  // invariant: one state, the OPEN draft — `null` is the closed editor. Seeded from the
+  // host's store when it holds one for this milestone (a re-mount after a refresh), else
+  // closed; a cancelled edit clears the entry, so the next open re-seeds from the milestone.
+  const [draft, setDraftState] = useState<MilestoneDraft | null>(() => {
+    const kept = props.drafts?.read(milestone.milestoneId);
+    return kept === undefined ? null : { name: kept.name, effort: kept.effort, status: kept.status ?? milestone.status ?? "planned" };
+  });
+  // why: the host store shadows the component state — a refresh unmounts this editor and
+  // the re-mounted one seeds from the store, so the typed text survives. The sync is an
+  // effect (not the state setter), because a state updater must stay pure.
+  useEffect(() => {
+    if (props.drafts === undefined) return;
+    if (draft === null) props.drafts.clear(milestone.milestoneId);
+    else props.drafts.write(milestone.milestoneId, { name: draft.name, effort: draft.effort, status: draft.status });
+  }, [draft, props.drafts, milestone.milestoneId]);
+  const setDraft = setDraftState;
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
   // why: the surface's refusal verdict, not the submit itself, decides whether the draft closes,
@@ -416,6 +468,7 @@ function Milestone(props: {
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
 }) {
   const { milestone, copy } = props;
   const writes = props.writes;
@@ -493,17 +546,30 @@ function Milestone(props: {
         </div>
       )}
       {writes === undefined ? null : (
-        <MilestoneActions milestone={milestone} writes={writes} assignable={props.assignable} copy={copy} />
+        <MilestoneActions
+          milestone={milestone}
+          writes={writes}
+          assignable={props.assignable}
+          copy={copy}
+          {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+        />
       )}
     </section>
   );
 }
 
-function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore }) {
   const { writes, copy } = props;
-  const [name, setName] = useState("");
-  const [effort, setEffort] = useState("");
+  // why: seeded from the host store — a refresh re-mounts the form over the typed values.
+  const [name, setName] = useState(() => props.drafts?.read("create")?.name ?? "");
+  const [effort, setEffort] = useState(() => props.drafts?.read("create")?.effort ?? "");
   const [effortError, setEffortError] = useState(false);
+  // why: every keystroke reaches the host store, so the draft is the host's, not the
+  // unmounted subtree's.
+  useEffect(() => {
+    if (name === "" && effort === "") props.drafts?.clear("create");
+    else props.drafts?.write("create", { name, effort });
+  }, [name, effort, props.drafts]);
   // why: same rule as the editor — the form clears only when the write is accepted, so a refusal
   // keeps what the operator typed and the store's own message arrives beside the open form.
   const [writeInFlight, setWriteInFlight] = useState(false);
@@ -643,6 +709,7 @@ function RoadmapFeature(props: {
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
 }) {
   const { model, copy } = props;
   return (
@@ -673,6 +740,7 @@ function RoadmapFeature(props: {
               copy={copy}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+              {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
             />
           ))}
           {model.unassignedIssues === 0 ? null : (
@@ -694,7 +762,7 @@ function RoadmapFeature(props: {
  * roadmap row must not make the project unwritable. The store is the authority on
  * whether the write lands, so the form is offered and a refusal is surfaced.
  */
-function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
+function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore }) {
   if (props.writes === undefined) return null;
   const writes = props.writes;
   return (
@@ -706,7 +774,12 @@ function RoadmapWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: num
           {props.copy.roadmap.writes.refusalLead} {writes.refusal}
         </p>
       )}
-      <MilestoneCreateForm writes={writes} nextOrdinal={props.nextOrdinal} copy={props.copy} />
+      <MilestoneCreateForm
+        writes={writes}
+        nextOrdinal={props.nextOrdinal}
+        copy={props.copy}
+        {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
+      />
     </>
   );
 }
@@ -725,6 +798,7 @@ function RoadmapArm(props: {
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
   assignable?: readonly AssignableIssue[];
+  drafts?: MilestoneDraftStore;
 }) {
   const { roadmap, copy } = props;
   // The write controls sit OUTSIDE the arm: a roadmap with no milestone (or no
@@ -736,6 +810,7 @@ function RoadmapArm(props: {
         writes={props.writes}
         nextOrdinal={roadmap.kind === "populated" ? nextMilestoneOrdinal(roadmap.value.milestones) : 0}
         copy={copy}
+        {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
       />
     );
   switch (roadmap.kind) {
@@ -748,6 +823,7 @@ function RoadmapArm(props: {
             copy={copy}
             {...(props.writes === undefined ? {} : { writes: props.writes })}
             {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+            {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
           />
         </div>
       );
@@ -917,6 +993,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
           copy={copy}
           {...(props.writes === undefined ? {} : { writes: props.writes })}
           {...(props.assignableIssues === undefined ? {} : { assignable: props.assignableIssues })}
+          {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
         />
       ) : (
         <div className={"feature-body"} data-ms-feature={feature}>

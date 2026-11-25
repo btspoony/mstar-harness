@@ -37,7 +37,9 @@ import {
   type Copy,
   type FocusCopy,
   type FocusOverviewInput,
+  createMilestoneDraftStore,
   type Locale,
+  type MilestoneDraftStore,
   type SessionBinding,
 } from '@mstar-harness/ui'
 import type { IterationGateStep, IterationListDTO, WorkflowDTO } from '@mstar-harness/engine'
@@ -266,6 +268,9 @@ export function PanelShell(props: {
   writes?: MilestoneWriteChannel
   /** The project's open unassigned issues, as the assign picker's options. */
   assignableIssues?: ReadonlyArray<{ id: string; title: string; severity: string; revision: number }>
+  /** note: the seat-owned milestone draft store — the forms live under the roadmap read, so a
+   *  refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
+  drafts?: MilestoneDraftStore
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const selection: SessionBinding | null = props.snapshot.selection
@@ -310,6 +315,7 @@ export function PanelShell(props: {
               {...(props.projectIssues === undefined ? {} : { projectIssues: props.projectIssues })}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
+              {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
               {...(props.onOpen === undefined ? {} : { onOpenWorkflow: (id: string) => props.onOpen?.('workflow-detail', id) })}
             />
           )}
@@ -513,6 +519,16 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
  * and BOTH arms re-issue the roadmap read (contract C2 — a success proves new
  * store state, a refusal may mean the observed revision moved).
  */
+/**
+ * The one refusal class a milestone write can carry that means the OBSERVED STORE MOVED:
+ * the engine's own CAS verdict, gated on its code — never the message text. Only this class
+ * refreshes the read (the form's next write arms from the read's revision); every other
+ * refusal judged the request's CONTENT, nothing moved, and a refresh would only destroy the draft.
+ */
+export function isRevisionConflictCode(code: string): boolean {
+  return code === 'milestone.revision-conflict'
+}
+
 export type MilestoneWriteChannel = {
   readonly busy: boolean
   readonly refusal: string | null
@@ -578,8 +594,11 @@ export function createMilestoneWrites(seats: {
   onState: (state: { busy: boolean; refusal: string | null }) => void
   /** The id policy; the seat owns one instance for its lifetime. */
   ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
+  /** note: an ACCEPTED write clears its target's draft entry — the stored milestone is then the
+   *  truth the form re-seeds from, and keeping the draft would resurrect the pre-write text. */
+  onAccepted?: (target: string) => void
 }): MilestoneWriteChannel {
-  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids } = seats
+  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids, onAccepted } = seats
   // The factory's own mirror of the busy/refusal state; the hook overrides both
   // members with its React state, but a direct caller (a spec) reads these.
   let busy = false
@@ -588,6 +607,7 @@ export function createMilestoneWrites(seats: {
     signature: string,
     request: { expectedStoreRevision: number },
     call: (operationId: string, expectedStoreRevision: number) => Promise<MilestoneWriteResult>,
+    draftTarget?: string,
   ): void => {
     if (busy) return
     void (async () => {
@@ -606,9 +626,18 @@ export function createMilestoneWrites(seats: {
       refusal = result.ok ? null : result.message
       onState({ busy, refusal })
       // why: reloading on an ambiguous answer would refresh the read's revision and turn the retry
-      // into a DIFFERENT request (exactly the duplicate write C1 forbids), and a refused write wrote
-      // nothing to reload — reloading there unmounts the forms mid-edit and destroys the draft.
+      // into a DIFFERENT request (exactly the duplicate write C1 forbids), and an input-validation
+      // refusal wrote nothing, so there is nothing to refresh — reloading there unmounts the forms
+      // mid-edit for no fact. A revision conflict is the opposite: the store moved under the open
+      // read, so the read MUST refresh — the re-armed channel then carries the new
+      // expectedStoreRevision and a resubmission can land. The gate is the engine's own refusal
+      // class (its code), never the message text.
+      // why: the draft entry is cleared HERE and not in the form's verdict effect — the
+      // reload below unmounts the forms in the same batched render the verdict arrives in,
+      // so the effect never observes the accepted write.
+      if (!ambiguous && result.ok && draftTarget !== undefined) onAccepted?.(draftTarget)
       if (!ambiguous && result.ok) reload()
+      if (!ambiguous && !result.ok && isRevisionConflictCode(result.code)) reload()
     })()
   }
   return {
@@ -630,6 +659,7 @@ export function createMilestoneWrites(seats: {
             input: { name: input.name, effortSessions: input.effortSessions, ordinal: input.ordinal },
             mutation: { operationId, expectedStoreRevision },
           }),
+        'create',
       )
     },
     update(
@@ -648,6 +678,7 @@ export function createMilestoneWrites(seats: {
             patch,
             mutation: { operationId, expectedStoreRevision },
           }),
+        milestoneId,
       )
     },
     remove(milestoneId: string): void {
@@ -693,8 +724,9 @@ function useMilestoneWrites(seats: {
   projectId: string | null
   expectedStoreRevision: number | null
   reload: () => void
+  drafts?: MilestoneDraftStore
 }): MilestoneWriteChannel | undefined {
-  const { client, sessionId, cwd, projectId, expectedStoreRevision, reload } = seats
+  const { client, sessionId, cwd, projectId, expectedStoreRevision, reload, drafts } = seats
   const [state, setState] = React.useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null })
   const ids = React.useRef(writeOperationIds<{ expectedStoreRevision: number }>())
   // Number.isInteger, not a null test: a schema-drifted envelope makes the member
@@ -717,6 +749,7 @@ function useMilestoneWrites(seats: {
     reload,
     onState: setState,
     ids: ids.current,
+    ...(drafts === undefined ? {} : { onAccepted: (target: string) => drafts.clear(target) }),
   })
   // The factory's own busy flag is per-call-site state; the mirror the screen
   // reads is this component's state, so return the channel with the live mirror.
@@ -783,6 +816,10 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   // Focus reads the shared `overview` view once: its three project panels are
   // members of that one read, never three calls (contract C3).
   const [issueQueryState, setIssueQueryState] = React.useState<IssueQuery>(() => parseIssueQuery(''))
+  // why: the drafts live HERE, above the read subtree — a reload re-keys the reader, the
+  // project page unmounts, and the re-mounted forms seed from this store. Keyed per target:
+  // 'create' for the create form, the milestone id for each editor.
+  const [milestoneDrafts] = React.useState(() => createMilestoneDraftStore())
   // The screen's query IS the read's filter set: the shared serializer produces
   // the `/api`-style parameters the engine view layer validates.
   const issueParams = React.useMemo(
@@ -869,6 +906,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       detailView.reload()
       projectIssuesView.reload()
     },
+    drafts: milestoneDrafts,
   })
   // The assign picker's options: the project's OPEN, UNASSIGNED issues as the
   // scoped Issues read answers them (id, title, severity, revision for the CAS).
@@ -965,6 +1003,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       projectIssues={projectIssuesView.state}
       {...(milestoneWrites === undefined ? {} : { writes: milestoneWrites })}
       {...(assignableIssues === undefined ? {} : { assignableIssues })}
+      drafts={milestoneDrafts}
       destination={destination}
       locale={locale}
       scheme={scheme}

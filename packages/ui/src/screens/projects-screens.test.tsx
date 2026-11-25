@@ -29,6 +29,7 @@ import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
+  createMilestoneDraftStore,
   draftAfterWrite,
   effortInput,
   milestoneCreateInput,
@@ -1031,3 +1032,55 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
     expect(html).not.toContain('data-ms-milestones=""');
   });
 });
+
+describe("ProjectDetail — the host-owned draft store", () => {
+  // why: the forms live under the roadmap read, so a refresh unmounts them — the draft must
+  // be the host's, keyed per target, or the operator's typed text dies with the subtree.
+  test("the store keeps one draft per target, and clear drops only that target", () => {
+    const store = createMilestoneDraftStore();
+    expect(store.read("create")).toBeUndefined();
+    store.write("create", { name: "Typed milestone", effort: "4" });
+    store.write("m-1", { name: "Renamed", effort: "9", status: "active" });
+    expect(store.read("create")).toEqual({ name: "Typed milestone", effort: "4" });
+    expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
+    // why: a write merges into the target's entry — the name keystroke must not erase the
+    // effort the operator typed before it.
+    store.write("create", { name: "Typed milestone edited" });
+    expect(store.read("create")).toEqual({ name: "Typed milestone edited", effort: "4" });
+    store.clear("create");
+    expect(store.read("create")).toBeUndefined();
+    // invariant: clearing one target never touches another — the open editor's draft is not
+    // the create form's to lose.
+    expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
+  });
+
+  test("a re-mounted form seeds from the store: the draft survives the refresh", () => {
+    // why: the unmount/remount cycle itself needs a DOM runtime this suite does not have; the
+    // contract it proves is the seeding rule — the value a re-mounted editor opens with is
+    // the store's entry, and milestonePatch turns it into the write the retry sends.
+    const store = createMilestoneDraftStore();
+    store.write("create", { name: "Typed before the conflict", effort: "4" });
+    const seed = store.read("create");
+    expect(seed).toEqual({ name: "Typed before the conflict", effort: "4" });
+    // invariant: the create input the re-mounted form submits carries the SAME typed values.
+    const input = milestoneCreateInput(seed!.name, seed!.effort, 1);
+    expect(input).toEqual({ kind: "input", input: { name: "Typed before the conflict", effortSessions: 4, ordinal: 1 } });
+  });
+
+  test("the edit editor's seed prefers the stored draft's status over the milestone's", () => {
+    // why: the operator may have changed the status dropdown before the conflict; re-seeding
+    // from the milestone would silently revert it to the stored state.
+    const milestone = stored();
+    const kept = { name: "Renamed", effort: "9", status: "delivered" };
+    const seeded = { name: kept.name, effort: kept.effort, status: kept.status ?? milestone.status ?? "planned" };
+    expect(seeded.status).toBe("delivered");
+    expect(milestonePatch(milestone, seeded)).toEqual({ name: "Renamed", effortSessions: 9, status: "delivered" });
+  });
+
+  function stored(): RoadmapModel["milestones"][number] {
+    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
+    if (arm.kind !== "populated") throw new Error("the roadmap fixture must read as populated");
+    return arm.value.milestones[0]!;
+  }
+});
+

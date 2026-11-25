@@ -893,3 +893,134 @@ describe('a refused write never reloads the read — the operator\'s draft survi
   })
 })
 
+
+describe('a revision conflict refreshes the read, the draft survives, and the retry lands', () => {
+  // invariant: every write arms from the OPEN read's store revision. Once another writer moves
+  // the store, the open page's revision is stale — the conflict refusal must therefore refresh
+  // the read (the reload a validation refusal must NOT do), or every retry is refused forever.
+  // These specs drive the production channel against the REAL engine; the conflict is built by
+  // writing through the same endpoint between the channel's arming read and the submission.
+
+  async function harness(sessionId: string) {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, sessionId, app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+    return { app, endpoint }
+  }
+
+  function channelFor(endpoint: WriteEndpoint, sessionId: string, cwd: string, revision: number, seats: { onAccepted?: (target: string) => void } = {}) {
+    const states: { busy: boolean; refusal: string | null }[] = []
+    const reloads: number[] = []
+    const channel = createMilestoneWrites({
+      client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
+      sessionId,
+      cwd,
+      projectId: '_default',
+      expectedStoreRevision: revision,
+      reload: () => reloads.push(1),
+      onState: (state) => states.push(state),
+      ids: writeOperationIds<{ expectedStoreRevision: number }>(),
+      ...(seats.onAccepted === undefined ? {} : { onAccepted: seats.onAccepted }),
+    })
+    return {
+      channel,
+      reloads,
+      settle: async () => {
+        for (let i = 0; i < 100 && states[states.length - 1]?.busy !== false; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        expect(states[states.length - 1]?.busy).toBe(false)
+      },
+    }
+  }
+
+  it('a revision-conflict refusal DOES refresh the read, and the resubmission on the fresh revision lands', async () => {
+    const { app, endpoint } = await harness('ses_conflict')
+    const revision = () => observedRevision(endpoint, 'ses_conflict', app.root)
+
+    // why: the page's arming read — the channel carries THIS revision.
+    const armed = await revision()
+    const seat = channelFor(endpoint, 'ses_conflict', app.root, armed)
+
+    // why: another writer advances the store BETWEEN the page's read and the operator's
+    // submit — the same endpoint, a real write, so the store revision moves under the page.
+    const other = await endpoint.milestoneAdd(
+      'ses_conflict',
+      app.root,
+      '_default',
+      { name: 'Someone else wrote', effortSessions: null, ordinal: 0 },
+      { operationId: 'op-other-writer', expectedStoreRevision: armed },
+    )
+    expect(other.ok).toBe(true)
+
+    // why: the operator's write now carries the stale revision — the engine's CAS refusal.
+    seat.channel.create({ name: 'Typed draft name', effortSessions: 4, ordinal: 1 })
+    await seat.settle()
+    expect(seat.channel.refusal).toBeTruthy()
+    expect(seat.channel.refusal).toContain('milestone.revision-conflict')
+    // invariant: a revision conflict refreshes the reads — exactly what an input-validation
+    // refusal must never do.
+    expect(seat.reloads).toHaveLength(1)
+
+    // why: the refresh re-arms the channel with the NEWLY observed revision, and the resubmission
+    // of the same draft lands — the failure the stale-revision review finding reported was
+    // this retry being refused forever.
+    const rearmed = channelFor(endpoint, 'ses_conflict', app.root, await revision())
+    rearmed.channel.create({ name: 'Typed draft name', effortSessions: 4, ordinal: 1 })
+    await rearmed.settle()
+    expect(rearmed.channel.refusal).toBeNull()
+    expect(rearmed.reloads).toHaveLength(1)
+    expect(await roadmapMilestones(endpoint, 'ses_conflict', app.root)).toMatchObject([
+      { name: 'Someone else wrote' },
+      { name: 'Typed draft name', effortSessions: 4 },
+    ])
+  })
+
+  it('an accepted write clears its draft target; a refused one keeps it', async () => {
+    const { app, endpoint } = await harness('ses_accept_clear')
+    const cleared: string[] = []
+    const seat = channelFor(endpoint, 'ses_accept_clear', app.root, await observedRevision(endpoint, 'ses_accept_clear', app.root), {
+      onAccepted: (target) => cleared.push(target),
+    })
+    // why: the refusal path must NOT clear — the draft is the operator's to fix and resubmit.
+    seat.channel.create({ name: 'Refused draft', effortSessions: 0, ordinal: 0 })
+    await seat.settle()
+    expect(seat.channel.refusal).toContain('milestone.invalid-input')
+    expect(cleared).toHaveLength(0)
+
+    const accepted = channelFor(endpoint, 'ses_accept_clear', app.root, await observedRevision(endpoint, 'ses_accept_clear', app.root), {
+      onAccepted: (target) => cleared.push(target),
+    })
+    accepted.channel.create({ name: 'Accepted draft', effortSessions: 2, ordinal: 0 })
+    await accepted.settle()
+    expect(accepted.channel.refusal).toBeNull()
+    // invariant: the create form's draft key is 'create' — the accepted write clears exactly it.
+    expect(cleared).toEqual(['create'])
+  })
+
+  it('an accepted UPDATE clears the milestone-keyed entry, not the create one', async () => {
+    const { app, endpoint } = await harness('ses_update_clear')
+    const created = await endpoint.milestoneAdd(
+      'ses_update_clear',
+      app.root,
+      '_default',
+      { name: 'Edited target', effortSessions: 3, ordinal: 0 },
+      { operationId: 'op-update-target-seed', expectedStoreRevision: await observedRevision(endpoint, 'ses_update_clear', app.root) },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const milestoneId = (created.receipt as { milestoneId: string }).milestoneId
+
+    const cleared: string[] = []
+    const seat = channelFor(endpoint, 'ses_update_clear', app.root, await observedRevision(endpoint, 'ses_update_clear', app.root), {
+      onAccepted: (target) => cleared.push(target),
+    })
+    seat.channel.update(milestoneId, { name: 'Renamed' })
+    await seat.settle()
+    expect(seat.channel.refusal).toBeNull()
+    expect(cleared).toEqual([milestoneId])
+  })
+})
+
