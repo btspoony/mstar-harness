@@ -2201,6 +2201,8 @@ type CarriedOutboxLedger = Readonly<{
   bindings: readonly CarriedRow[];
   intents: readonly CarriedRow[];
   receipts: readonly CarriedRow[];
+  /** why: the move ledger outlives the cache generation the same way - a switched source row is the only record a later admission handoff can settle against. */
+  moves: Readonly<{ columns: readonly string[]; rows: readonly CarriedRow[] }>;
 }>;
 
 /** note: The declared column order of each carried row, so a row is read positionally and unambiguously. */
@@ -2228,10 +2230,21 @@ async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise
   const db = await connectAt(dbPath, "read", timeout);
   try {
     const tables = tableNamesOn(db);
-    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [] };
     const rows = (sql: string): CarriedRow[] =>
       (db.prepare(sql).all() as Array<Record<string, string | number | null>>).map((row) => Object.values(row));
+    // invariant: the move ledger is read by the columns ITS generation declares, so a pre-v6 (no route) or future lane carries positionally into the successor without inventing a default the predecessor never wrote.
+    const moveColumns = tables.has("issue_moves")
+      ? (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name?: unknown }>)
+          .map((column) => (typeof column?.name === "string" ? column.name : ""))
+          .filter((name) => name.length > 0)
+      : [];
+    const moves =
+      moveColumns.length > 0
+        ? { columns: moveColumns, rows: rows(`select ${moveColumns.join(", ")} from issue_moves order by operation_id`) }
+        : { columns: [], rows: [] as CarriedRow[] };
+    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [], moves };
     return {
+      moves,
       bindings: rows(
         `select ${CARRIED_BINDING_COLUMNS} from remote_bindings b where exists ` +
           `(select 1 from remote_outbox o where o.generation = b.generation and o.project_key = b.project_key) ` +
@@ -2249,7 +2262,7 @@ async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise
 
 /** note: Write one carried outbox ledger into the successor's own (fresh) tables, at commit. */
 function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
-  if (carried.intents.length === 0) return;
+  if (carried.intents.length === 0 && carried.moves.rows.length === 0) return;
   // why: the intents cite each other through `resolves`/`resolved_by` in either order, so their
   // foreign keys are proven once the whole carried ledger is in place, at commit.
   db.exec("pragma defer_foreign_keys = ON");
@@ -2269,6 +2282,13 @@ function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
     "insert into remote_outbox_receipts(" + CARRIED_RECEIPT_COLUMNS + ") values (?, ?, ?, ?, ?, ?)",
     carried.receipts,
   );
+  // invariant: the staged successor's issue_moves is fresh, so a positional insert by the predecessor's own column order cannot collide with a default the successor would have minted.
+  if (carried.moves.columns.length > 0 && carried.moves.rows.length > 0) {
+    copy(
+      `insert into issue_moves(${carried.moves.columns.join(", ")}) values (${carried.moves.columns.map(() => "?").join(", ")})`,
+      carried.moves.rows,
+    );
+  }
 }
 
 /**
@@ -2766,7 +2786,7 @@ async function stageCompleteStore(
   location: CollaborationLocation,
   retained: RetainedLaneIdentity | undefined,
   timeout: number,
-  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [] },
+  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [], moves: { columns: [], rows: [] } },
 ): Promise<StagedStore> {
   const dbPath = location.dbPath;
   const dir = dirname(dbPath);
