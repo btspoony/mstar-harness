@@ -31,9 +31,9 @@
  * external children alike), so both delegation shapes — a one-shot run and a
  * continuable background child — are covered by the single merge.
  *
- * Role identity uses the engine Assignment header grammar — the SAME
- * parsers the dispatch gate uses (`assignmentHeaderRegion` +
- * `parseAssignmentFields`) — over the start request's prompt text (the
+ * Role identity uses the engine Assignment front matter grammar — the SAME
+ * parsers the dispatch gate uses (`parseAssignmentFields`; front matter is
+ * the only field contract) — over the start request's prompt text (the
  * `ContentBlock[]` the child receives as its first user message).
  * `Config.rolePresets[executeAs]` is the channel's only payload source
  * (never gated on `roleMap` or on the fallbacks mounted state: delivery is
@@ -122,7 +122,7 @@
  */
 import { isAbsolute, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { assignmentHeaderRegion, parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
+import { parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
 import {
   isLiveConfigRef,
   packagedAgentsDir,
@@ -131,6 +131,7 @@ import {
   type LiveConfigRef,
 } from './_shared.ts'
 import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
+import { legacyAssignmentShape } from './dispatch-assignment.ts'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
 export const ROLE_PERSONA_LOGGER = 'mstar/role-persona'
@@ -621,43 +622,65 @@ export type RoleGateDecision =
   | { readonly kind: 'repair'; readonly request: SubagentStartRequestView; readonly roleId: string; readonly evidence: RoleGateEvidence }
   | { readonly kind: 'warn'; readonly message: string }
   | { readonly kind: 'refuse'; readonly message: string }
-
 /** Field labels whose value is a role declaration (case-insensitive). */
 const ROLE_FIELD_LABELS: ReadonlySet<string> = new Set(['execute as', 'act as', 'role'])
 
-/** Bold field line (`**Execute as**: <value>`, optional list bullet). */
+/** Bold field line (`**Role**: <value>`, optional list bullet). */
 const BOLD_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/
-/** Plain field line (`Role: <value>`, optional list bullet) — same grammar as the engine parser. */
+/** Plain field line (`Role: <value>`, optional list bullet). */
 const PLAIN_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/
 
-/** A prompt that OPENS with an Assignment section (heading + its blank-line run). */
-const OPEN_ASSIGNMENT_HEADING_RE = /^([ \t]*#{2}[ \t]+Assignment[ \t]*)(\r?\n(?:[ \t]*\r?\n)*)?/
 
-/** An existing `Execute as` field line (bold or plain label, case-insensitive, optional list bullet). */
-const EXECUTE_AS_FIELD_LINE_RE = /^([ \t]*(?:[-*][ \t]+)?)(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)[ \t]*(.*)$/gim
+/** Legacy body-label keys the repaired front matter replaces: `execute_as` variants plus the prose-tier `role` / `act_as` (case-insensitive — a case-variant key binds nothing and is normalized in place; a CRLF line's trailing `\r` is formatting). */
+const FM_ROLE_KEY_RE = /^([ \t]*)(?:execute_as|role|act_as)([ \t]*:[ \t]*)(.*)\r?$/i
+
+/**
+ * The role-declaration scan scope: the front matter block when the prompt
+ * opens with one; else, when the prompt carries an `## Assignment` heading,
+ * the lines after it up to the next heading (the section where a delegation
+ * prompt declares its fields); else the FIRST paragraph. Body prose past
+ * that boundary never declares the role — a `## Task` sentence or a quoted
+ * example is evidence, not a declaration. The scan runs on the fence-masked
+ * text (same offsets), so a fenced example supplies no candidate.
+ */
+function declarationScope(unfenced: string): string {
+  if (/^---[ \t]*\r?\n/.test(unfenced)) {
+    const openEnd = unfenced.indexOf('\n') + 1
+    const closeMatch = /^(---)[ \t]*$/m.exec(unfenced.slice(openEnd))
+    return closeMatch === null
+      ? unfenced.slice(openEnd)
+      : unfenced.slice(openEnd, openEnd + closeMatch.index)
+  }
+  const heading = /^[ \t]*##[ \t]+Assignment[ \t]*\r?$/m.exec(unfenced)
+  if (heading !== null) {
+    const rest = unfenced.slice(heading.index + heading[0].length)
+    const next = /^[ \t]*#{1,6}[ \t]/m.exec(rest)
+    return next === null ? rest : rest.slice(0, next.index)
+  }
+  const blank = /\r?\n[ \t]*\r?\n/.exec(unfenced)
+  return blank === null ? unfenced : unfenced.slice(0, blank.index)
+}
 
 /**
  * Evaluate the dispatch-role gate for one start — PURE (the harness-project
  * test is pre-resolved by the caller), first match wins:
  *
  * 1. `agentPreset` already set → pass (caller intent wins, silent).
- * 2. header already carries a USABLE, UNFENCED `Execute as` value → pass
- *    (idempotent, silent; read from the RAW header, the binding seam's own
- *    scope).
+ * 2. the front matter already carries a canonical `execute_as` value → pass
+ *    (idempotent, silent — the binding seam reads exactly that key).
  * 3. not a harness project → pass (a non-harness project never pays the gate).
  * 4. unknown provider → pass (the service fails loud its own way).
- * 5. a canonical `Execute as` value that exists ONLY inside a fenced block →
- *    the seam binds that quoted line, so `hard` refuses (and `warn` advises)
- *    with that cause; `off` passes.
- * 6. exactly one distinct repair candidate (field tier or declared token, both
- *    header-scoped) → repair the prompt, then PROVE the repair: the rewritten
- *    text is parsed with the binding seam's own reader
- *    (`parseAssignmentFields` over `assignmentHeaderRegion`) and must resolve
- *    to that role. A rewrite that leaves another `Execute as` line winning the
- *    read (a wrapped value, or one past the header boundary) would log
- *    "repaired" while the child still starts unbound, so it is NOT returned as
- *    `repair`; ambiguous, none, unusable, or an unprovable repair → the
- *    configured mode (`off` silent, `warn` one advisory, `hard` refusal).
+ * 5. a prompt shaped like an Assignment that carries its fields as retired
+ *    `**Execute as**:` body labels → the D16 legacy-format refusal (the
+ *    dispatch gate's `dispatch.assignment.legacy-format` cause, named here
+ *    because the role gate reaches the prompt first); `off` passes.
+ * 6. exactly one distinct repair candidate (front matter key, body-label
+ *    field, or declared token, all declaration-scope-scoped) → repair the
+ *    prompt, then PROVE the repair: the rewritten text is parsed with the
+ *    binding seam's own reader (`parseAssignmentFields` — front matter is
+ *    the only field contract) and must resolve to that role. Ambiguous,
+ *    none, unusable, or an unprovable repair → the configured mode (`off`
+ *    silent, `warn` one advisory, `hard` refusal).
  *
  * @param input - the request, mode, pre-resolved harness/provider facts and
  *   the declared role-id set.
@@ -668,23 +691,13 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (1) An explicit selection is caller intent — never gated.
   if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   const text = promptText(request)
-  // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
-  // example is never a declaration, and the scan and the rewrite cannot
-  // disagree about where fences are. The READ below judges the raw header,
-  // and a fenced winning line is refused rather than passed.
-  const unfenced = maskFencedCodeBlocks(text)
-  const headerExecuteAs = parseAssignmentFields(assignmentHeaderRegion(text)).executeAs
-  const canonicalExecuteAs =
-    headerExecuteAs !== undefined && isCanonicalExecuteAs(headerExecuteAs) ? headerExecuteAs : undefined
-  // (2) A USABLE, UNFENCED canonical declaration is already in place — no
-  // rewrite (byte-identical). This reads the RAW header, which is exactly the
-  // input the binding seam downstream (`withRolePreset`) parses: judging the
-  // masked header would pass a declaration the raw header never reaches (a
-  // fenced `## Task` truncates it), and a "pass" would leave the child
-  // unbound. A wrapped/odd `Execute as` value is not canonical: the
-  // downstream parsers keep it raw, so it binds nothing and falls through to
-  // the repair tiers below (replaced in place, never duplicated).
-  if (canonicalExecuteAs !== undefined && !rawHeaderDeclarationFenced(text, unfenced)) {
+  // (2) A canonical front matter `execute_as` is already in place — no
+  // rewrite (byte-identical). This reads the WHOLE raw text, which is exactly
+  // the input the binding seam downstream (`withRolePreset`) parses. A
+  // wrapped/odd scalar is not canonical: the strict parser keeps it raw, so
+  // it binds nothing and falls through to the repair tiers below (repaired
+  // in place, never duplicated).
+  if (isCanonicalExecuteAs(parseAssignmentFields(text).executeAs ?? '')) {
     return { kind: 'pass', reason: 'canonical' }
   }
   // (3) Non-harness projects are exempt (the caller resolved the child's
@@ -693,18 +706,22 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   if (!input.harnessProject) return { kind: 'pass', reason: 'non-harness' }
   // (4) The runtime's own `NO_PROVIDER` failure must not be shadowed.
   if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
-  // (5) A canonical-looking declaration that exists ONLY inside a fenced
-  // example: the seam's header slice is line-based and fence-unaware, so it
-  // binds that quoted line as the declaration — and the preset selection then
-  // arms that role's whole composition. Pasting a template or an untrusted
-  // excerpt into the Assignment must not pass silently under `hard`; `warn`
-  // advises once per apply and `off` stays silent (the documented rollbacks).
-  if (canonicalExecuteAs !== undefined) {
-    if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
-    const message = fencedDeclarationMessage(input.cwd, input.mode, canonicalExecuteAs)
-    return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
+  // (5) D16 — a prompt shaped like an Assignment whose fields live in the
+  // retired body-label grammar is refused on EVERY gate; the role gate is
+  // the first gate the subagent-start channel reaches, so it names the same
+  // cause the dispatch gate would. `off` stays the documented rollback.
+  if (legacyAssignmentShape(text)) {
+    if (input.mode !== 'off') {
+      const message = legacyDeclarationMessage(input.cwd, input.mode)
+      return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
+    }
+    return { kind: 'pass', reason: 'off' }
   }
-  // (6) Repair candidates: exactly one distinct value across both tiers.
+  // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
+  // example is never a declaration, and the scan and the rewrite cannot
+  // disagree about where fences are.
+  const unfenced = maskFencedCodeBlocks(text)
+  // (6) Repair candidates: exactly one distinct value across the tiers.
   const { fields, tokens, unusable } = roleCandidates(unfenced, input.declaredRoleIds)
   const candidates = [...new Set([...fields, ...tokens])]
   // The candidate the rewrite produced but could not make the seam bind (an
@@ -714,11 +731,10 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
     const roleId = candidates[0]!
     const repaired = repairRequest(request, roleId)
     // The repair must PROVE itself against the SAME reader the binding seam
-    // uses (`withRolePreset`): a rewrite whose canonical line does not win
-    // the read — a later wrapped field still binds, e.g. when the inserted line
-    // lands before one past the raw header boundary — leaves the child unbound,
-    // and claiming "repaired" would hide exactly that.
-    if (parseAssignmentFields(assignmentHeaderRegion(promptText(repaired))).executeAs === roleId) {
+    // uses (`withRolePreset`): a rewrite whose canonical front matter key
+    // does not parse leaves the child unbound, and claiming "repaired" would
+    // hide exactly that.
+    if (parseAssignmentFields(promptText(repaired)).executeAs === roleId) {
       return { kind: 'repair', roleId, evidence: fields.length === 1 ? 'field' : 'token', request: repaired }
     }
     unrepairable = roleId
@@ -828,46 +844,30 @@ function roleCandidates(
   unfenced: string,
   declaredRoleIds: ReadonlySet<string>,
 ): { fields: string[]; tokens: string[]; unusable: string[] } {
-  const header = assignmentHeaderRegion(unfenced)
+  const scope = declarationScope(unfenced)
   const fields = new Set<string>()
   const unusable = new Set<string>()
-  for (const line of header.split(/\r?\n/)) {
-    const match = BOLD_FIELD_LINE_RE.exec(line) ?? PLAIN_FIELD_LINE_RE.exec(line)
-    if (match === null || !ROLE_FIELD_LABELS.has(match[1]!.trim().toLowerCase())) continue
+  // Field tier: the front matter keys (`execute_as` / `role` / `act_as`,
+  // case-insensitive — the strict parser lowercases keys, so a case-variant
+  // key binds the same way a correct one does) and the prose-tier labels
+  // (`Execute as:` / `Act as:` / `Role:`, bold or plain) inside the
+  // declaration scope. A normalizable value is a candidate; anything else is
+  // unusable evidence (the cause-specific refusal names it).
+  for (const line of scope.split(/\r?\n/)) {
+    const fmMatch = /^[ \t]*(execute_as|role|act_as)[ \t]*:[ \t]*(.*)$/i.exec(line)
+    const match = fmMatch !== null
+      ? fmMatch
+      : (BOLD_FIELD_LINE_RE.exec(line) ?? PLAIN_FIELD_LINE_RE.exec(line))
+    if (match === null) continue
+    if (fmMatch === null && !ROLE_FIELD_LABELS.has(match[1]!.trim().toLowerCase())) continue
     const roleId = normalizeRoleFieldValue(match[2]!)
     if (roleId !== undefined) fields.add(roleId)
     else unusable.add(match[2]!.trim())
   }
   const tokens = new Set<string>()
-  for (const match of header.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
-  for (const match of header.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  for (const match of scope.matchAll(/`([^`\n]+)`/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
+  for (const match of scope.matchAll(/\*\*([^*\n]+)\*\*/g)) addDeclaredToken(tokens, match[1]!, declaredRoleIds)
   return { fields: [...fields], tokens: [...tokens], unusable: [...unusable] }
-}
-
-/** An `Execute as` header field line the engine parser binds (case-sensitive label, bold or plain). */
-const EXECUTE_AS_HEADER_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*\s*Execute as\s*\*\*\s*:|Execute as\s*:)/
-
-/**
- * Whether the LAST raw-header `Execute as` line the engine parser binds sits
- * inside a fenced block. The engine grammar is case-sensitive (`Execute as`),
- * and the parser binds the last such line in the header region — the same line
- * the binding seam reads. `unfenced` is offset-identical to `text`, so a line
- * that maskFencedCodeBlocks blanked is fence content.
- *
- * @param text - the raw prompt text.
- * @param unfenced - the fence-masked prompt text (see {@link maskFencedCodeBlocks}).
- */
-function rawHeaderDeclarationFenced(text: string, unfenced: string): boolean {
-  const header = assignmentHeaderRegion(text)
-  let offset: number | undefined
-  let position = 0
-  for (const line of header.split('\n')) {
-    if (EXECUTE_AS_HEADER_LINE_RE.test(line)) offset = position
-    position += line.length + 1
-  }
-  if (offset === undefined) return false
-  const length = header.indexOf('\n', offset) === -1 ? header.length - offset : header.indexOf('\n', offset) - offset
-  return unfenced.slice(offset, offset + length).trim() === ''
 }
 
 /**
@@ -922,7 +922,7 @@ function isCanonicalExecuteAs(value: string): boolean {
 
 /** Trim ONE leading `@`, surrounding quotes or backticks; accept only the role-id shape (never `inherit`). */
 function normalizeRoleFieldValue(raw: string): string | undefined {
-  let value = raw.trim()
+  let value = raw.trim().replace(/[ \t]+#.*$/, '')
   if (value.startsWith('@')) value = value.slice(1).trim()
   value = normalizeWrapped(value) ?? value
   return ROLE_ID_PATTERN.test(value) && value !== 'inherit' ? value : undefined
@@ -936,45 +936,67 @@ function normalizeWrapped(raw: string): string | undefined {
 }
 
 /**
- * Rewrite one prompt with the canonical role declaration: every existing
- * (unusable) `Execute as` header line has its value replaced IN PLACE and its
- * label normalized to the canonical spelling — the parsers match the label
- * case-sensitively and bind the LAST field line, so replacing only the first
- * occurrence would leave a later broken line winning the read. An Assignment
- * section that OPENS the prompt gets `Execute as: <id>` as its first field
- * line, and any other prompt gets the canonical header block prepended. Every
- * character outside the repaired field lines is preserved. Fenced examples are
- * not field lines: the scan runs on the fence-masked text (same offsets as the
- * input), so a quoted `Execute as:` line is neither repaired nor shadowed —
- * and only a field line the RAW header reaches is repaired in place: one past
- * the raw header boundary (a fenced `## Task` truncates the header there)
- * binds nothing, so the canonical line is inserted after the `## Assignment`
- * heading instead, i.e. before the point the binding seam stops at.
+ * Rewrite one prompt with the canonical role declaration in FRONT MATTER —
+ * the only field contract the binding seam reads. When the prompt already
+ * carries a front matter key of the role family (`execute_as` / `role` /
+ * `act_as`, case-insensitive), every such line has its value replaced IN
+ * PLACE and its key normalized to the canonical spelling — the strict
+ * parser refuses a duplicate key, so replacing only the first occurrence
+ * would leave the document unparseable. A front matter document without a
+ * role-family key gets `execute_as: <id>` spliced as the first line inside
+ * the block; any other prompt gets a canonical front matter block prepended.
+ * Fenced examples are never edited: the scan runs on the fence-masked text
+ * (same offsets as the input), so a quoted key line is neither repaired nor
+ * shadowed.
  *
  * @param text - the prompt text to rewrite.
  * @param roleId - the repaired role id.
  * @returns the rewritten prompt text.
  */
 export function rewritePromptWithExecuteAs(text: string, roleId: string): string {
-  const headerLength = assignmentHeaderRegion(text).length
-  const existing = [...assignmentHeaderRegion(maskFencedCodeBlocks(text)).matchAll(EXECUTE_AS_FIELD_LINE_RE)]
-    .filter((field) => field.index! < headerLength)
-  if (existing.length > 0) {
-    // Splice from the END backwards so earlier offsets stay valid.
+  const masked = maskFencedCodeBlocks(text)
+  if (/^---[ \t]*\r?\n/.test(masked)) {
+    const openEnd = text.indexOf('\n') + 1
+    const block = declarationScope(masked)
+    const lines = block.split(/\r?\n/)
+    const roleLines: number[] = []
+    lines.forEach((line, index) => {
+      if (FM_ROLE_KEY_RE.test(line)) roleLines.push(index)
+    })
+    if (roleLines.length === 0) {
+      // No role-family key: splice the canonical key as the first line of the
+      // existing block. Invalid YAML is irrelevant here — the proof re-parse
+      // decides whether the rewrite is ever claimed.
+      return `${text.slice(0, openEnd)}execute_as: ${roleId}\n${text.slice(openEnd)}`
+    }
+    // Replace every role-family line (all duplicates — the strict parser
+    // refuses duplicates, so a surviving second line would break the proof).
+    let lineStart = openEnd
+    const starts: number[] = []
+    for (const line of lines) {
+      starts.push(lineStart)
+      lineStart += line.length + 1
+    }
+    // Collapse the family to ONE canonical line: the FIRST role-family line
+    // becomes `execute_as: <id>` and every later one (a duplicate the strict
+    // parser refuses, or a prose-family key the parser never reads) is
+    // dropped. Editing BACKWARDS keeps earlier offsets valid: the dropped
+    // line consumes its line ending, the kept line ends before it.
     let out = text
-    for (const field of existing.reverse()) {
-      const start = field.index + field[1]!.length
-      const end = field.index + field[0]!.length
-      out = `${out.slice(0, start)}Execute as: ${roleId}${out.slice(end)}`
+    for (let position = roleLines.length - 1; position >= 0; position -= 1) {
+      const index = roleLines[position]!
+      const start = starts[index]!
+      if (position === 0) {
+        const end = start + lines[index]!.length
+        out = `${out.slice(0, start)}execute_as: ${roleId}${out.slice(end)}`
+      } else {
+        const end = start + lines[index]!.length + 1
+        out = `${out.slice(0, start)}${out.slice(end)}`
+      }
     }
     return out
   }
-  const match = OPEN_ASSIGNMENT_HEADING_RE.exec(text)
-  if (match === null) return `## Assignment\n\nExecute as: ${roleId}\n\n${text}`
-  const heading = match[1]!
-  const blanks = match[2]
-  const gap = blanks === undefined ? '\n\n' : blanks.endsWith('\n') ? blanks : `${blanks}\n`
-  return `${heading}${gap}Execute as: ${roleId}\n${text.slice(match[0].length)}`
+  return `---\nexecute_as: ${roleId}\n---\n\n${text}`
 }
 
 /**
@@ -1010,12 +1032,12 @@ function declarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', cand
   const cause =
     candidates.length > 1
       ? `declares ${candidates.length} distinct roles (${candidates.map((id) => `'${id}'`).join(', ')}) — exactly one role declaration is required`
-      : `carries no role declaration — the delegation prompt is missing 'Execute as: <role-id>' in its Assignment header ` +
-        `(no 'Execute as:' / 'Act as:' / 'Role:' field, and no declared role id in backticks or bold)`
+      : `carries no role declaration — the delegation prompt is missing 'execute_as: <role-id>' in its front matter ` +
+        `(no execute_as / act_as / role key or field, and no declared role id in backticks or bold)`
   const fix =
     candidates.length > 1
-      ? `Fix: keep exactly one role declaration — remove the extra 'Role:' / 'Act as:' / 'Execute as:' lines, or name the one role in 'Execute as: <role-id>' under the '## Assignment' heading.`
-      : `Fix: add 'Execute as: <role-id>' under the '## Assignment' heading of the prompt.`
+      ? `Fix: keep exactly one role declaration — remove the extra 'Role:' / 'Act as:' / 'execute_as' declarations, or name the one role in 'execute_as: <role-id>' in the prompt's front matter.`
+      : `Fix: add 'execute_as: <role-id>' to the prompt's front matter (a '---'-fenced YAML block at the start).`
   const recovery = modeRecovery(mode)
   return `${where} ${cause}. ${fix} ${recovery}`
 }
@@ -1047,8 +1069,8 @@ function unrepairableMessage(cwd: string | undefined, mode: 'warn' | 'hard', rol
   const where = startLocation(cwd)
   const cause =
     `declares the role '${roleId}', but the declaration cannot be normalized so that the binding seam reads it ` +
-    `(another 'Execute as' line keeps winning the header read — a wrapped value, or one past the header boundary)`
-  const fix = `Fix: write 'Execute as: ${roleId}' as the ONLY role declaration in the Assignment header, above any fenced block.`
+    `(the front matter rewrite does not parse to the role — invalid YAML, or a duplicate key the rewrite cannot collapse)`
+  const fix = `Fix: write 'execute_as: ${roleId}' as the ONLY role declaration in the prompt's front matter, above any fenced block.`
   return `${where} ${cause}. ${fix} ${modeRecovery(mode)}`
 }
 
@@ -1058,20 +1080,20 @@ function startLocation(cwd: string | undefined): string {
 }
 
 /**
- * The `hard` refusal / `warn` advisory text for a declaration that IS present
- * but only inside a fenced example. The seam binds it (its header slice does
- * not know fences), so the operator must be told the REAL cause — a quoted
- * line armed the role — plus the form that declares it deliberately.
+ * The `hard` refusal / `warn` advisory text for a prompt shaped like an
+ * Assignment whose fields live in the RETIRED body-label grammar (D16 —
+ * `dispatch.assignment.legacy-format` on the dispatch gates; the role gate
+ * names the same cause). The refusal names BOTH recoveries — the front
+ * matter rewrite and the `Assignment file:` pointer.
  *
  * @param cwd - the child's effective start directory, when known.
  * @param mode - the configured mode (`hard` refusal or `warn` advisory).
- * @param roleId - the role the fenced line binds.
  */
-function fencedDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'hard', roleId: string): string {
+function legacyDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'hard'): string {
   const cause =
-    `declares the role '${roleId}' only inside a fenced code block — a quoted example is not a declaration, ` +
-    `but the binding seam reads the header without fence awareness and binds it anyway`
-  const fix = `Fix: write 'Execute as: ${roleId}' outside any fenced block under the '## Assignment' heading (or remove the quoted line).`
+    'carries its Assignment fields as `**Label**` body lines — the retired format (dispatch.assignment.legacy-format); front matter is the only field contract'
+  const fix =
+    'Fix: rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home.'
   return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
 }
 
@@ -1089,8 +1111,8 @@ function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'har
   const named = values.map((value) => (value === '' ? "an empty value ('')" : `'${value}'`)).join(', ')
   const cause =
     `declares the role value ${named}, which is not a usable role id — a role declaration must be a lowercase ` +
-    `role id ('a-z', '0-9' and '-', 1-32 characters), and 'inherit' is valid only on 'Execute as'`
-  const fix = "Fix: write 'Execute as: <role-id>' under the '## Assignment' heading with the lowercase role id (e.g. 'Execute as: fullstack-dev')."
+    `role id ('a-z', '0-9' and '-', 1-32 characters), and 'inherit' is valid only on execute_as`
+  const fix = "Fix: write 'execute_as: <role-id>' in the prompt's front matter with the lowercase role id (e.g. 'execute_as: fullstack-dev')."
   return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
 }
 
@@ -1226,9 +1248,9 @@ function withRolePreset(
     .map((block) => block.text ?? '')
     .join('\n')
   if (taskPrompt.trim().length === 0) return spec
-  // (4) The SAME engine Assignment grammar the dispatch gate uses: the
-  // header region only, so a body-quoted field line cannot shape a merge.
-  const executeAs = parseAssignmentFields(assignmentHeaderRegion(taskPrompt)).executeAs
+  // (4) The SAME engine Assignment grammar the dispatch gate uses: front
+  // matter is the only field contract, so a body-quoted key cannot shape a merge.
+  const executeAs = parseAssignmentFields(taskPrompt).executeAs
   if (executeAs === undefined) return spec
   // (5) Only a mapped role selects a preset (an empty mapping value is
   // treated as unmapped).

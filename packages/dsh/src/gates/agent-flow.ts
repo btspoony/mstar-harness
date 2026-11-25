@@ -37,7 +37,7 @@
 import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
-import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
+import { assignmentHeaderRegion, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -966,10 +966,18 @@ export function recordDispatch(input: {
     // inbox are that service's surface, so a composition without it has no
     // team call to attribute.
     if (teamTool && input.teamPresent !== true) return
-    const header = assignmentHeaderRegion(input.prompt)
-    const fields = parseAssignmentFields(header)
+    // compass D14 — the ledger reads the RESOLVED assignment document, exactly
+    // as the gate did: an `Assignment file: <abs>` pointer resolves against
+    // this record's control harness root, so a pointer dispatch records the
+    // same fields the inline form does. A refused/unresolvable source falls
+    // back to the carrier text (the row still records — identity fields are
+    // simply absent, never fabricated).
+    const assignmentSource = readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
+    const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
+    const header = assignmentHeaderRegion(assignmentText)
+    const fields = parseAssignmentFields(assignmentText)
     const planId = planIdOf(header)
-    const taskId = taskIdOf(input.prompt)
+    const taskId = taskIdOf(assignmentText)
     const taskCategory = fields.taskCategory
     // ONE canonical role for every row this dispatch produces: the row itself
     // and its pairing ref (which the settle / link boundaries then agree

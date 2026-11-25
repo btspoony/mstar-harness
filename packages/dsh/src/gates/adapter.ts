@@ -21,6 +21,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assignmentHeaderRegion,
+  readAssignmentSource,
   validateIntegrationMergeLease,
 } from '@mstar-harness/engine'
 import type {
@@ -271,14 +272,22 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    // The Assignment names its plan row, and that row belongs to exactly one
-    // ACTIVE lifecycle — evidence the shared source must be resolved WITH, not
-    // ahead of: several active lifecycles with no discriminating cwd is the
-    // ordinary parallel-worktree case, not an unverifiable dispatch.
-    const headerRegion = assignmentHeaderRegion(prompt)
+    // compass D14 — the ONE source resolution: an `Assignment file: <abs>`
+    // pointer resolves against the gate's own control harness root, so the
+    // plan-id hint, the shape guard and the ledger record all read the
+    // RESOLVED document — never the pointer line. A refused pointer yields no
+    // resolved text: the core's refusal is the verdict and the record stays
+    // silent for the unresolved input. The Assignment names its plan row, and
+    // that row belongs to exactly one ACTIVE lifecycle — evidence the shared
+    // source must be resolved WITH, not ahead of: several active lifecycles
+    // with no discriminating cwd is the ordinary parallel-worktree case, not
+    // an unverifiable dispatch.
+    const assignmentSource = readAssignmentSource(prompt, { harnessDir })
+    const text = assignmentSource.ok ? assignmentSource.text : prompt
+    const headerRegion = assignmentHeaderRegion(text)
     const planId = planIdOf(headerRegion)
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
-    const activeSource = harnessDir !== null && isAssignmentShaped(headerRegion)
+    const activeSource = harnessDir !== null && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
     const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, exec?.agent, hint, activeSource)
@@ -303,16 +312,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // still gates, but no row is attributed to a session whose record cannot
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
-    if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
+    if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(text)) {
       const source = activeSource
       if (source?.kind === 'active') {
         try {
           recordDispatch({
             harnessDir,
             exec,
-            prompt,
+            prompt: text,
             violations,
-            hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+            hard: hard ?? resolveDispatchHard(harnessDir, this.config, text),
             pairing: this.pairing,
             workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
@@ -416,10 +425,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // The hook contract carries no exec/session context, so the harness dir
     // resolves to the explicit config or null (never a process-cwd probe) —
     // the exec-bound `tools/pre-execute` listener is the per-workspace path.
-    // `hard` resolves ONCE  and is
-    // shared by the record block (via dispatchGate) and this enforcement
-    // decision — no duplicate compass read per dispatch.
-    const hard = resolveDispatchHard(harnessDir, this.config, prompt)
+    // `hard` resolves ONCE off the RESOLVED document (a pointer's file
+    // declares its own enforcement flag) and is shared by the record block
+    // (via dispatchGate) and this enforcement decision — no duplicate compass
+    // read per dispatch.
+    const hookSource = readAssignmentSource(prompt, { harnessDir })
+    const hard = resolveDispatchHard(harnessDir, this.config, hookSource.ok ? hookSource.text : prompt)
     const gate = await this.dispatchGate(prompt, undefined, hard)
     return applyEnforcement(gate, { hard })
   }

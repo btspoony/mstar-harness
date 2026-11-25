@@ -11,6 +11,7 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import {
+  assignmentHeaderRegion,
   collectActiveLifecycleBranches,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -51,11 +52,14 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
  *
  * Pure over the header + the filesystem; the engine probes
  * `git -C <path> branch --show-current` per valid track (bounded, fails
- * closed). Header-region scoping: the caller passes the engine
- * `assignmentHeaderRegion` slice only.
- * @param header - `assignmentHeaderRegion(assignmentText)`.
+ * closed). compass D14 — the caller passes the RESOLVED assignment document
+ * (the `readAssignmentSource` output shared by the gate composition), and
+ * this gate slices its own front matter: a pointer and the inline form
+ * answer the same track questions.
+ * @param assignmentText - the resolved Assignment document.
  */
-export function worktreeL2Violations(header: string): ValidationResult[] {
+export function worktreeL2Violations(assignmentText: string): ValidationResult[] {
+  const header = assignmentHeaderRegion(assignmentText)
   const worktreePaths = assignmentHeaderValues(header, 'Worktree path')
   const workingBranches = assignmentHeaderValues(header, 'Working branch')
   const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
@@ -173,17 +177,21 @@ async function activeSnapshotRows(harnessDir: string, hint?: SessionHint, active
  * engine owns that distinction). The engine probes are subprocess-based
  * and fail closed.
  * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
- * @param header - `assignmentHeaderRegion(assignmentText)`.
+ * @param assignmentText - the resolved Assignment document (the
+ *   `readAssignmentSource` output shared by the gate composition — the gate
+ *   slices its own front matter, so a pointer and the inline form answer the
+ *   same row-scope questions).
  * @param hint - the carrying session's selection hint (which lifecycle's
  *   snapshot carries the L1 metadata to compare against).
  */
 export async function worktreeL1Violations(
   harnessDir: string | null,
-  header: string,
+  assignmentText: string,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null) return []
+  const header = assignmentHeaderRegion(assignmentText)
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
   const read = await activeSnapshotRows(harnessDir, hint, activeSource)

@@ -43,23 +43,27 @@ afterEach(async () => {
  * verdict is non-empty under warn and vetoes under hard — the same fixture the
  * dispatch-gate spec uses for its `subagent` matrix.
  */
-const MISSING_EXECUTE_AS = `## Assignment
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Fully valid writable Assignment — the unchanged-pass positive control. */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
@@ -171,7 +175,7 @@ describe('team dispatch gate — task board (description carrier)', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_create')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('team_task_update with an Assignment-shaped description is gated', async () => {
@@ -183,7 +187,7 @@ describe('team dispatch gate — task board (description carrier)', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_update')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('team_task_update WITHOUT description (status-only) produces no decision', async () => {
@@ -211,6 +215,34 @@ describe('team dispatch gate — task board (description carrier)', () => {
   })
 })
 
+/* ---------------------------------- D16 legacy body-label regression ---------------------------------- */
+
+describe('team dispatch gate — the retired body-label grammar refuses on the team carrier too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // text shaped like an Assignment whose fields live in the retired
+    // `**Label**` grammar must reach the legacy-format refusal, never pass
+    // as a field-gate miss.
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(codesOf(advisories[0])).toContain('dispatch.assignment.legacy-format')
+  })
+})
+
 /* ---------------------------------- send_message ---------------------------------- */
 
 describe('team dispatch gate — send_message (message carrier)', () => {
@@ -221,7 +253,7 @@ describe('team dispatch gate — send_message (message carrier)', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', sendMessageExec(MISSING_EXECUTE_AS), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
     expect(decision.kind === 'deny' && decision.reason).toContain('(send_message)')
     expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
@@ -305,7 +337,7 @@ describe('team dispatch gate — the team branch is TERMINAL for the names it ow
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_create')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 })
 
