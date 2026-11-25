@@ -349,7 +349,7 @@ function MilestoneActions(props: {
           onChange={(event) => setDraft({ ...draft, effort: event.target.value })}
         />
         {effortError ? (
-          <span className="muted t-11" data-ms-effort-invalid="">
+          <span className="muted t-11" role="alert" data-ms-effort-invalid="">
             {copy.roadmap.writes.effortInvalid}
           </span>
         ) : null}
@@ -508,7 +508,7 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
           onChange={(event) => setEffort(event.target.value)}
         />
         {effortError ? (
-          <span className="muted t-11" data-ms-effort-invalid="">
+          <span className="muted t-11" role="alert" data-ms-effort-invalid="">
             {copy.roadmap.writes.effortInvalid}
           </span>
         ) : null}
