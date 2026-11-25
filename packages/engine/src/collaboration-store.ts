@@ -2203,6 +2203,8 @@ type CarriedOutboxLedger = Readonly<{
   receipts: readonly CarriedRow[];
   /** why: the move ledger outlives the cache generation the same way - a switched source row is the only record a later admission handoff can settle against. */
   moves: Readonly<{ columns: readonly string[]; rows: readonly CarriedRow[] }>;
+  /** why: the predecessor's own mode, the fact the v5 route rule labels an unrouted row from when the carried ledger predates the column. */
+  predecessorMode: string | null;
 }>;
 
 /** note: The declared column order of each carried row, so a row is read positionally and unambiguously. */
@@ -2242,9 +2244,17 @@ async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise
       moveColumns.length > 0
         ? { columns: moveColumns, rows: rows(`select ${moveColumns.join(", ")} from issue_moves order by operation_id`) }
         : { columns: [], rows: [] as CarriedRow[] };
-    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [], moves };
+    // invariant: the predecessor's own mode is the fact the v5 route rule labels an unrouted
+    // carried row from - the lane's metadata singleton records it, and the carry must never
+    // invent one the predecessor never wrote.
+    const metaMode = tables.has("collaboration_meta")
+      ? (db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined)?.mode
+      : undefined;
+    const predecessorMode = typeof metaMode === "string" ? metaMode : null;
+    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [], moves, predecessorMode };
     return {
       moves,
+      predecessorMode,
       bindings: rows(
         `select ${CARRIED_BINDING_COLUMNS} from remote_bindings b where exists ` +
           `(select 1 from remote_outbox o where o.generation = b.generation and o.project_key = b.project_key) ` +
@@ -2258,6 +2268,18 @@ async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise
   } finally {
     db.close();
   }
+}
+
+/**
+ * invariant: The v5 generation's own label for one unrouted ledger half: a lane holds only its
+ * own half of a move, so an unrouted row is an exchange half and the LANE'S OWN mode names its
+ * side - `role 'source'` is `remote-unknown` on a remote lane and `local-remote` otherwise, and
+ * `role 'destination'` is `local-remote` on a remote lane and `remote-local` otherwise. The
+ * carry and the ladder never invent a different derivation.
+ */
+export function unroutedMoveHalfRoute(role: unknown, mode: string | null): string {
+  const remote = mode === "remote";
+  return role === "source" ? (remote ? "remote-unknown" : "local-remote") : remote ? "local-remote" : "remote-local";
 }
 
 /** note: Write one carried outbox ledger into the successor's own (fresh) tables, at commit. */
@@ -2284,10 +2306,29 @@ function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
   );
   // invariant: the staged successor's issue_moves is fresh, so a positional insert by the predecessor's own column order cannot collide with a default the successor would have minted.
   if (carried.moves.columns.length > 0 && carried.moves.rows.length > 0) {
-    copy(
-      `insert into issue_moves(${carried.moves.columns.join(", ")}) values (${carried.moves.columns.map(() => "?").join(", ")})`,
-      carried.moves.rows,
-    );
+    if (carried.moves.columns.includes("route")) {
+      copy(
+        `insert into issue_moves(${carried.moves.columns.join(", ")}) values (${carried.moves.columns.map(() => "?").join(", ")})`,
+        carried.moves.rows,
+      );
+    } else {
+      // invariant: a pre-route predecessor's rows are labelled by the generation's own v5 rule,
+      // not by the successor's column default: a lane holds only its own half of a move, so an
+      // unrouted row is an exchange half and the PREDECESSOR's own mode names its side. The mode
+      // is read where the carried ledger is built, never assumed.
+      const roleIndex = carried.moves.columns.indexOf("role");
+      if (roleIndex < 0) {
+        throw new StoreError("store.corrupt", "the carried move ledger declares no role column; its rows cannot be labelled");
+      }
+      const columns = [...carried.moves.columns, "route"];
+      const rows = carried.moves.rows.map((row) => {
+        return [...row, unroutedMoveHalfRoute(row[roleIndex], carried.predecessorMode)];
+      });
+      copy(
+        `insert into issue_moves(${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`,
+        rows,
+      );
+    }
   }
 }
 
@@ -2786,7 +2827,7 @@ async function stageCompleteStore(
   location: CollaborationLocation,
   retained: RetainedLaneIdentity | undefined,
   timeout: number,
-  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [], moves: { columns: [], rows: [] } },
+  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [], moves: { columns: [], rows: [] }, predecessorMode: null },
 ): Promise<StagedStore> {
   const dbPath = location.dbPath;
   const dir = dirname(dbPath);

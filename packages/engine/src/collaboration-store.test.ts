@@ -54,6 +54,7 @@ import {
   setRemoteCacheReplacementGapForTest,
   setRemoteCacheReplacementLedgerGapForTest,
   setRemoteCacheReplacementPublishGapForTest,
+  unroutedMoveHalfRoute,
   upgradeCollaborationStore,
   withCollaborationWrite,
   withRemoteCacheWrite,
@@ -9828,6 +9829,34 @@ function downgradeToV5(location: CollaborationLocation): void {
 }
 
 /**
+ * note: Rewind the live cache's version ledger to v4 AND its move ledger to the v4 shape: the
+ * route column is dropped, so the rows are exactly the pre-route halves a v4 writer recorded.
+ * The replacement decision reads its generation from this ledger, so this is the pre-v5 shape
+ * a bind must carry WITHOUT leaving the successor's column default on the rows.
+ */
+function downgradeToV4(location: CollaborationLocation): void {
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.exec("begin immediate");
+    db.prepare("delete from schema_version where version in (?, ?)").run(5, 6);
+    db.exec("alter table issue_moves drop column route");
+    db.exec("commit");
+  } finally {
+    db.close();
+  }
+}
+
+/** note: The route one ledger half recorded, read straight from the lane. */
+function routeOfRow(dbPath: string, operationId: string, role: "source" | "destination"): unknown {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db.prepare("select route from issue_moves where operation_id = ? and role = ?").get(operationId, role)?.route;
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * note: Confirm one seeded v3 outbox row in place: a receipt row plus the `confirmed` state, exactly
  * the shape a real send leaves. Used where the lane was rewritten to v3 and its ids must stay.
  */
@@ -10245,6 +10274,102 @@ describe("remote move conflict settlement", () => {
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     // invariant: the move row came through field by field, even though not one intent row exists.
     expect(rows(location.dbPath)).toEqual(before);
+  }, 30_000);
+
+  test("a v4 remote predecessor's carried source row is labelled remote-unknown, so its discard releases", async () => {
+    // invariant: Review finding — a pre-v5 predecessor has no `route` column, so the carried row
+    // must be labelled by the generation's own v5 rule from the row's role and the PREDECESSOR's
+    // mode, never by the successor's column default. A remote source half labelled the default
+    // `local-local` would read as one-checkout-local and the discard would refuse to release it.
+    const cache = await outboxCache("move-carry-v4-remote");
+    const operationId = "00000000-0000-4000-8000-000000000b61";
+    const request = {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: "github.com/remote-fixture/move-carry-v4-remote-destination",
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    };
+    const staged = await moveAcrossByDocument(cache.context, request, null);
+    expect(staged.phase).toBe("staged");
+    const location = locationAt(cache.fixture.repo);
+    downgradeToV4(location);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
+
+    const bound = await bindRemoteAuthority(cache.context, {
+      version: 1,
+      selectorCommit: cache.commit,
+      generation: Number(cache.fixture.payload().generation),
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // invariant: the carried source row is the exchange half the predecessor's OWN remote mode
+    // names — never the one-checkout default the successor's column would have minted.
+    expect(routeOfRow(location.dbPath, operationId, "source")).toBe("remote-unknown");
+
+    // invariant: the label is the discard's own admission check: the move releases its half
+    // instead of refusing as a one-checkout move it never was.
+    const released = await discardAcrossAuthorities(cache.context, request);
+    expect(released.phase).toBe("discarded");
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(db.prepare("select phase from issue_moves where operation_id = ?").get(operationId)).toEqual({
+        phase: "discarded",
+      });
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+
+  test("the carry rule labels a local-mode predecessor's source half local-remote", () => {
+    // invariant: The carrier reads the PREDECESSOR's own mode rather than assuming 'remote'.
+    // The replacement probe admits only a lane whose metadata mode equals the checkout's remote
+    // selection, so the local branch never fires in the remote bind flow - it is the rule's
+    // correctness property, verified here against the same function the carrier invokes, and it
+    // is exactly the derivation the v5 ladder SQL applies to an in-place lane of that mode.
+    expect(unroutedMoveHalfRoute("source", "local")).toBe("local-remote");
+    expect(unroutedMoveHalfRoute("source", "mirror")).toBe("local-remote");
+    expect(unroutedMoveHalfRoute("source", "remote")).toBe("remote-unknown");
+    expect(unroutedMoveHalfRoute("destination", "local")).toBe("remote-local");
+    expect(unroutedMoveHalfRoute("destination", "remote")).toBe("local-remote");
+  });
+
+  test("a predecessor whose ledger already records the route column is carried unchanged", async () => {
+    // invariant: A v5-or-later predecessor declares the column, so the carry copies it
+    // positionally and NEVER recomputes it — the relabel is the pre-route generation's alone.
+    const cache = await outboxCache("move-carry-v5-routed");
+    const operationId = "00000000-0000-4000-8000-000000000b62";
+    const staged = await moveAcrossByDocument(cache.context, {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: "github.com/remote-fixture/move-carry-v5-routed-destination",
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    }, null);
+    expect(staged.phase).toBe("staged");
+    const location = locationAt(cache.fixture.repo);
+    expect(routeOfRow(location.dbPath, operationId, "source")).toBe("remote-unknown");
+    // note: a one-checkout `local-local` label is the one value the pre-route rule can never
+    // derive for a remote-mode source row, so its survival proves no recomputation ran.
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update issue_moves set route = 'local-local' where operation_id = ?").run(operationId);
+    } finally {
+      db.close();
+    }
+    downgradeToV5(location);
+    const bound = await bindRemoteAuthority(cache.context, {
+      version: 1,
+      selectorCommit: cache.commit,
+      generation: Number(cache.fixture.payload().generation),
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    expect(routeOfRow(location.dbPath, operationId, "source")).toBe("local-local");
   }, 30_000);
 
   test("a move ledger that changes after the carried snapshot refuses the replacement and survives on the predecessor", async () => {
@@ -12500,15 +12625,6 @@ describe("cross-authority move route and discard", () => {
       actor,
     });
     return { context, dbPath: location.dbPath, issueId: created.issueId };
-  }
-
-  function routeOfRow(dbPath: string, operationId: string, role: "source" | "destination"): unknown {
-    const db = new DatabaseSync(dbPath);
-    try {
-      return db.prepare("select route from issue_moves where operation_id = ? and role = ?").get(operationId, role)?.route;
-    } finally {
-      db.close();
-    }
   }
 
   test("a local exchange source records its route and releases only its own half", async () => {
