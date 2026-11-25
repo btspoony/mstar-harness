@@ -72,7 +72,7 @@
         "@deepseek-ai/dsh-client-ui-theme": "^0.2.2-rc.3",
         "@deepseek-ai/dsh-scope": "^0.2.2-rc.3",
         "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.3",
-        "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.3",
+        "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
         "@deepseek-ai/dsh-util-code-language": "0.2.2-rc.3",
         "@mstar-harness/commands": "workspace:*",
         "@mstar-harness/engine": "workspace:*",
@@ -469,7 +469,7 @@
 
     "@deepseek-ai/dsh-timeout": ["@deepseek-ai/dsh-timeout@0.2.2-rc.3", "", { "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0" } }, "sha512-Yi2FZmvSLYZQCCTEx5SH+IbA0WMyjT05dib7x9HYKMD7sDbgRLUgVS54ZgNSzkoBIK0GEaN5g9suwo8cs9gLxQ=="],
 
-    "@deepseek-ai/dsh-tool-executor-native": ["@deepseek-ai/dsh-tool-executor-native@0.2.2-rc.3", "", { "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-tools": "0.2.2-rc.3" } }, "sha512-JvBGVMmIqXvlI3W2MMl2K+A2h0kwkWg8FFj95G4FMPX8pf9fZg+OO1ljHHHsoDKnDr3KdZazMLJEMYloeVP8sA=="],
+    "@deepseek-ai/dsh-tool-executor-native": ["@deepseek-ai/dsh-tool-executor-native@0.2.2-rc.5", "", { "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-tools": "0.2.2-rc.5" } }, "sha512-l7Lvt8Y8Q1B9Sz8bCM0Oi4sKi05z/IK40BnGvBBwocf5adl19suSSZ2unBIe1qWGw5TfsWokCKOIBWBR9x4shA=="],
 
     "@deepseek-ai/dsh-tool-subagent": ["@deepseek-ai/dsh-tool-subagent@0.2.2-rc.3", "", { "dependencies": { "@deepseek-ai/schemastery": "~3.19.0", "zod": "4.6.6" }, "peerDependencies": { "@deepseek-ai/cordis": "~4.1.0", "@deepseek-ai/dsh-agent": "0.2.2-rc.3", "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.3", "@deepseek-ai/dsh-llm": "0.2.2-rc.3", "@deepseek-ai/dsh-session": "0.2.2-rc.3", "@deepseek-ai/dsh-session-projection": "0.2.2-rc.3", "@deepseek-ai/dsh-subagent": "0.2.2-rc.3", "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3", "@deepseek-ai/dsh-tools": "0.2.2-rc.3" }, "optionalPeers": ["@deepseek-ai/dsh-agent-preset-registry"] }, "sha512-5QRLfrr5fViG+DmFRsySLMW8wV2tpaMVUlCS9OJBRywuP85p0RBTba/0RiUeTxUFZlnOkfEcJneCQ72eBY13mQ=="],
 
