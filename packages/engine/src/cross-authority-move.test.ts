@@ -5,7 +5,7 @@
  * `staged` on through triggers stored in the lane rather than through calling code.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,8 @@ import {
   assertMoveTransition,
   assertRecordWritable,
   blockingMoveFor,
+  discardAcrossAuthorities,
+  discardMove,
   frozenMoveRefusal,
   isForwardMoveTransition,
   moveAcrossAuthorities,
@@ -38,7 +40,6 @@ import {
 } from "./collaboration-store.js";
 import { collaborationLocationOfRepoKey, resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ensureCollaborationAuthority } from "./store-activation.js";
-import { discardMove } from "./cross-authority-move.js";
 import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, linkIssue } from "./issue.js";
 import { SCHEMA_VERSION_TABLE_SQL, initializeStore, migrationChecksum, type StoreContext, type StoreDb } from "./store-db.js";
 
@@ -1785,6 +1786,190 @@ describe("cross-authority move phase engine", () => {
       // invariant: The corrected run stages under the SAME operation id.
       expect((await moveAcrossAuthorities(context, request)).phase).toBe("published");
       expect(db.prepare("select count(*) as n from issues where id = ?").get(issueId)).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a discard is admitted by role, and only where both ledger halves are open", async () => {
+    // invariant: This branch ships no two-checkout exchange, so a discard releases both halves only
+    // when this checkout can open both: the SOURCE checkout of a one-checkout move. Every other role
+    // and every unreachable peer refuses with the cause and the recovery the operator can actually
+    // run, instead of falling through to `discardMove` or claiming a remote boundary.
+    const requestFor = (operationId: string, issueId: string, destinationAuthority: string) => ({
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: issueId,
+      destinationAuthority,
+      destinationProject: "p-dest",
+      reason: "abandon",
+    });
+    const refusalOf = (action: Promise<unknown>) =>
+      action.then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
+      );
+
+    // note: Source checkout, peer lane present: the one topology a discard releases here.
+    {
+      const { context, db } = await sourceCheckout();
+      try {
+        const destination = await destinationLane("p-dest");
+        const issueId = await seededRecord(context, db, "p-source");
+        const before = recordImage(db, issueId);
+        const request = requestFor(`move-discard-router-${String(engineSequence)}`, issueId, destination.repoKey);
+        await stageMove(context, request);
+        expect(await discardAcrossAuthorities(context, request)).toMatchObject({ phase: "discarded", resumedFrom: "staged" });
+        expect(recordImage(db, issueId)).toEqual(before);
+        expect(blockingMoveFor(db, issueId)).toBeNull();
+        expect(
+          await readCollaborationStage(destination.location, ({ db: lane }) =>
+            lane.prepare("select count(*) as n from issue_moves").get(),
+          ),
+        ).toEqual({ n: 0 });
+      } finally {
+        db.close();
+      }
+    }
+
+    // note: Source checkout, peer lane absent: the other half lives in a separate home, so the
+    // refusal names that cause and the layer that would release it — never an init recovery.
+    {
+      const { context, db } = await sourceCheckout();
+      try {
+        const destination = await destinationLane("p-dest");
+        const issueId = await seededRecord(context, db, "p-source", "-peer");
+        const before = recordImage(db, issueId);
+        const request = requestFor(`move-discard-peer-${String(engineSequence)}`, issueId, destination.repoKey);
+        await stageMove(context, request);
+        rmSync(destination.location.dbPath, { force: true });
+        const refused = await refusalOf(discardAcrossAuthorities(context, request));
+        expect(refused?.code).toBe("collaboration.mode-unavailable");
+        expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "source" });
+        expect(String(refused?.message)).toContain(`no lane this checkout can open exists for ${destination.repoKey}`);
+        expect(String(refused?.message)).not.toContain("spans a `local`/`remote` boundary");
+        expect(String(refused?.details?.recovery)).toContain("two-checkout exchange");
+        // invariant: Neither half moved: the record is still frozen by its staged source row.
+        expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+        expect(recordImage(db, issueId)).toEqual(before);
+        expect(blockingMoveFor(db, issueId)?.phase).toBe("staged");
+      } finally {
+        db.close();
+      }
+    }
+
+    // note: The destination checkout never holds the source half, so its refusal points at the
+    // source checkout by name — the one place the discard can run.
+    {
+      const { context, db } = await sourceCheckout();
+      const peer = await sourceCheckout();
+      try {
+        peer.db
+          .prepare(
+            "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+              "values ('project', 'p-dest', 'p-dest', 'projects', 'projects/p-dest', '2026-11-21T00:00:00.000Z', " +
+              "'2026-11-21T00:00:00.000Z')",
+          )
+          .run();
+        const issueId = await seededRecord(context, db, "p-source", "-dest");
+        const request = requestFor(`move-discard-dest-${String(engineSequence)}`, issueId, peer.repoKey);
+        await stageMove(context, request);
+        const refused = await refusalOf(discardAcrossAuthorities(peer.context, request));
+        expect(refused?.code).toBe("collaboration.mode-unavailable");
+        expect(refused?.details).toMatchObject({
+          operation_id: request.operationId,
+          role: "destination",
+          source_authority: resolveCollaborationLocation(context).repoKey,
+        });
+        expect(String(refused?.details?.recovery)).toContain(
+          `source checkout of ${resolveCollaborationLocation(context).repoKey}`,
+        );
+        // invariant: The source row still freezes the record and the destination row is untouched.
+        expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+        expect(
+          await readCollaborationStage(resolveCollaborationLocation(peer.context), ({ db: lane }) =>
+            readIssueMove(lane, request.operationId, "destination"),
+          ),
+        ).toMatchObject({ phase: "staged" });
+      } finally {
+        peer.db.close();
+        db.close();
+      }
+    }
+
+    // note: A destination checkout whose own lane does not open still names no authority to blame,
+    // so its recovery falls back to "the move's source checkout".
+    {
+      const { context, db } = await sourceCheckout();
+      const peer = await sourceCheckout();
+      try {
+        peer.db
+          .prepare(
+            "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+              "values ('project', 'p-dest', 'p-dest', 'projects', 'projects/p-dest', '2026-11-21T00:00:00.000Z', " +
+              "'2026-11-21T00:00:00.000Z')",
+          )
+          .run();
+        const issueId = await seededRecord(context, db, "p-source", "-dest-gone");
+        const request = requestFor(`move-discard-dest-gone-${String(engineSequence)}`, issueId, peer.repoKey);
+        await stageMove(context, request);
+        unlinkSync(resolveCollaborationLocation(peer.context).dbPath);
+        const refused = await refusalOf(discardAcrossAuthorities(peer.context, request));
+        expect(refused?.code).toBe("collaboration.mode-unavailable");
+        expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "destination" });
+        expect(refused?.details?.source_authority).toBeUndefined();
+        expect(String(refused?.details?.recovery)).toContain("source checkout");
+        expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+      } finally {
+        peer.db.close();
+        db.close();
+      }
+    }
+  }, 120_000);
+
+  test("publication refuses an incoming relation that landed after the freeze", async () => {
+    // invariant: The frozen incoming count is the ceiling publication enforces. A writer path that
+    // never meets the lane's insert fence must not be able to publish the record with an edge the
+    // staged copy never carried: the rewrite is compared against `relationsLeftBehind` recorded at
+    // stage, not against a count this same transaction just read.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const late = await seededRecord(context, db, "p-source", "-late");
+      const request = {
+        operationId: "move-late-edge",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "late edge",
+      };
+      await moveAcrossAuthorities(context, request, "switched");
+      const before = recordImage(db, issueId);
+      const counts = JSON.parse(readIssueMove(db, request.operationId, "source")!.stagedCounts) as {
+        relationsLeftBehind: number;
+      };
+      expect(counts.relationsLeftBehind).toBe(0);
+      const edge = db.prepare("insert into relations(from_issue, relation, to_issue) values (?, 'blocks', ?)");
+      // invariant: The lane's own insert fence refuses the edge while the record is frozen …
+      expect(() => edge.run(late, issueId)).toThrow(/issue\.move-in-progress/);
+      // note: … and the publication's frozen-count check is the second line: a writer that bypasses
+      // the fence (here by dropping it) still cannot publish the edge.
+      db.exec("drop trigger relations_move_guard_insert");
+      edge.run(late, issueId);
+      const refused = await publishMove(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
+      );
+      expect(refused?.code).toBe("collaboration.operation-partial");
+      expect(String(refused?.message)).toContain("landed while the move was in flight");
+      expect(refused?.details).toMatchObject({ expected: 0, rewritten: 1 });
+      // invariant: The whole publication rolled back: the record is still the member here and the
+      // mid-flight edge still names it.
+      expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("switched");
+      expect(recordImage(db, issueId)).toEqual(before);
+      expect(db.prepare("select count(*) as n from relations where to_issue = ?").get(issueId)).toEqual({ n: 1 });
     } finally {
       db.close();
     }

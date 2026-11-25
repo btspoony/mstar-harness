@@ -1569,28 +1569,25 @@ function removeSourceRecord(db: StoreDb, row: IssueMoveRecord, counts: MoveCount
   // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
   // record's stable reference, which is the unresolved shape both local readers already render.
   // invariant: The staged incoming count is a ceiling, not a target: an edge whose OWNER already
-  // published went away with that record's own delete, and rewriting only the survivors is the
-  // correct outcome. The comparison is therefore against the edges still anchored to a record the
-  // lane holds — a row some other writer added or removed mid-flight still fails the count.
-  const surviving = countOf(
-    db,
-    "select count(*) as n from relations where to_issue = ? and from_issue in (select id from issues)",
-    issueId,
-  );
+  // published went away with that record's own delete, so the live set may hold fewer rows than
+  // the freeze recorded — but never more, because the lane's triggers refuse every insert, update
+  // and delete an in-flight record touches. The rewrite therefore rewrites the edges still anchored
+  // to a record this lane holds and refuses when it passes the frozen count: a relation that landed
+  // mid-flight rolls the whole publication back.
   const rewritten = db
     .prepare("update relations set to_issue = null, to_ref = ? where to_issue = ? and from_issue in (select id from issues)")
     .run(row.issueRef, issueId) as { changes?: number };
   const rewrittenCount = Number(rewritten?.changes ?? 0);
-  if (rewrittenCount !== surviving) {
+  if (rewrittenCount > counts.relationsLeftBehind) {
     throw new StoreError(
       "collaboration.operation-partial",
-      `Move ${row.operationId} was staged to rewrite the record's incoming edges, but ` +
-        `this publication rewrote ${String(rewrittenCount)} of ${String(surviving)} still present: a relation changed while ` +
-        `the move was in flight. The publication rolled back and the record is unchanged.`,
+      `Move ${row.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
+        `this publication rewrote ${String(rewrittenCount)}: a relation landed while the move was in flight. The publication ` +
+        `rolled back and the record is unchanged.`,
       {
         operation_id: row.operationId,
         issue_id: issueId,
-        expected: surviving,
+        expected: counts.relationsLeftBehind,
         rewritten: rewrittenCount,
         recovery:
           "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
@@ -1687,29 +1684,62 @@ export async function discardMove(context: StoreContext, request: MoveRequest): 
  * invariant: `--discard` on a cross-authority move. A one-checkout move keeps BOTH ledger halves in
  * lanes this checkout can open, so one run releases both and the source record is writable again as
  * soon as its source row leaves the blocking set. Before the switch neither side holds the member,
- * which is exactly the window in which abandoning is lossless. A checkout that holds only ONE half
- * of the pair is refused: the other half lives in the peer's authority, whose lane this checkout
- * cannot open, so releasing one half alone would leave a move no command here can finish.
+ * which is exactly the window in which abandoning is lossless. Anything else refuses: a source
+ * checkout whose peer lane is not in this home holds only the source half, and a destination
+ * checkout never holds the source half — releasing one half alone would leave a move no command
+ * here can finish.
  */
 export async function discardAcrossAuthorities(context: StoreContext, request: MoveRequest): Promise<MoveReceipt> {
   const own = resolveCollaborationLocation(context);
   const role: IssueMoveRole = own.repoKey === request.destinationAuthority ? "destination" : "source";
   const destinationMode = await readLaneMode(collaborationLocationOfRepoKey(request.destinationAuthority, "local"));
   // invariant: Only the SOURCE checkout of a one-checkout move holds both halves reachably.
-  if (role === "source" && own.mode !== "remote" && destinationMode !== "remote") {
+  if (role === "source" && own.mode !== "remote" && destinationMode !== null && destinationMode !== "remote") {
     return discardMove(context, request);
   }
+  if (role === "destination") {
+    let sourceAuthority: string | null = null;
+    try {
+      const lane = await openCollaborationStore(context, "read");
+      try {
+        sourceAuthority = readIssueMove(lane.db, request.operationId, "destination")?.sourceAuthority ?? null;
+      } finally {
+        lane.close();
+      }
+    } catch {
+      // note: A destination lane that does not open names no source authority; the recovery still
+      // names the one checkout that can release both halves.
+      sourceAuthority = null;
+    }
+    const peer = sourceAuthority === null ? "the move's source checkout" : `the source checkout of ${sourceAuthority}`;
+    throw new StoreError(
+      "collaboration.mode-unavailable",
+      `Move ${request.operationId} keeps its source ledger row in the peer authority, which this destination checkout ` +
+        `cannot open, and a discard releases both halves in one run — only a move between two lanes this checkout can ` +
+        `open admits that. Nothing was modified.`,
+      {
+        operation_id: request.operationId,
+        role,
+        ...(sourceAuthority === null ? {} : { source_authority: sourceAuthority }),
+        recovery: `Run this --discard from ${peer}, which holds both ledger halves.`,
+      },
+    );
+  }
+  const cause =
+    destinationMode === null
+      ? `no lane this checkout can open exists for ${request.destinationAuthority}, so it holds only the source half`
+      : `the lane ${request.destinationAuthority} records is ${String(destinationMode)}, which spans a \`local\`/\`remote\` ` +
+        `boundary, so it holds only the source half`;
   throw new StoreError(
     "collaboration.mode-unavailable",
-    `Move ${request.operationId} spans a \`local\`/\`remote\` boundary, so its two ledger halves live in separate ` +
-      `authorities and this checkout holds only the ${role} half. A discard releases both halves in one run, which ` +
+    `Move ${request.operationId} cannot be discarded here: ${cause}. A discard releases both halves in one run, which ` +
       `only a move between two lanes this checkout can open admits. Nothing was modified.`,
     {
       operation_id: request.operationId,
       role,
       recovery:
-        `Run this --discard from the move's source checkout, which holds both ledger halves; a move that crosses a ` +
-        `\`local\`/\`remote\` boundary is not run by this build.`,
+        `The two-checkout exchange that releases each half in its own checkout is not part of this layer; the move's ` +
+        `record stays frozen by its source row.`,
     },
   );
 }
