@@ -1683,4 +1683,49 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
     ).toBe("active");
   });
+
+  test("a fenced combined store upgrades past the effort migration the fence's drop left behind", async () => {
+    // invariant: The fence moves every collaboration table to the lane and drops the local copy,
+    // `project_milestones` among them. A combined store fenced by a build that predates the effort
+    // migration therefore records a version whose alter still lies ahead of it, and that alter must
+    // not require the table the fence legitimately removed.
+    const repo = makeRepo("https://github.com/acme/cutover-fenced-upgrade.git");
+    const context = contextAt(repo);
+    const fenced = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
+    try {
+      fenced.exec(
+        "insert into collaboration_cutover(id, manifest_id, manifest_digest, source_store_id, source_epoch, " +
+          "source_schema_version, source_revision, source_catalog_revision, target_store_id, target_epoch, " +
+          "backup_path, fenced_at) values (1, 'manifest-one', 'digest-one', 'source-store', 1, 20, 7, 3, " +
+          "'target-store', 1, '/tmp/pre-fence.db', '2026-11-21T00:00:00.000Z')",
+      );
+      fenced.exec("drop table project_milestones");
+    } finally {
+      fenced.close();
+    }
+
+    expect(await upgradeStore(context)).toMatchObject({ schemaVersion: MIGRATIONS.length });
+
+    const after = new DatabaseSync(join(context.harnessDir, "store.db"));
+    try {
+      // invariant: The migration did not resurrect the table the fence removed: its rows and its
+      // shape belong to the collaboration lane, whose own ladder applies the same alteration.
+      expect(
+        after.prepare("select count(*) as n from sqlite_master where type='table' and name='project_milestones'").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      after.close();
+    }
+
+    // invariant: The skip is the FENCE's, not a missing table's: the same absence without fence
+    // evidence is damage and still refuses, so the conditional body cannot mask a broken store.
+    const damaged = contextAt(makeRepo("https://github.com/acme/cutover-unfenced-damage.git"));
+    const unfenced = historicalStore(damaged.harnessDir, MIGRATIONS.length - 1);
+    try {
+      unfenced.exec("drop table project_milestones");
+    } finally {
+      unfenced.close();
+    }
+    await expect(upgradeStore(damaged)).rejects.toMatchObject({ code: "store.corrupt" });
+  });
 });

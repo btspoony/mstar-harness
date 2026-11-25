@@ -1151,7 +1151,19 @@ function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreErro
   );
 }
 
-export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
+export type Migration = {
+  version: number;
+  name: string;
+  sql: string;
+  normalize?: (db: StoreDb, context: MigrationContext) => void;
+  /**
+   * invariant: The table this body alters, when the body cannot run without it. The cutover
+   * fence moves that table to the collaboration lane and drops the local copy, so a FENCED
+   * combined store records the version without running the body; the lane's own ladder applies
+   * the same alteration there. The same absence in an unfenced store is damage and still fails.
+   */
+  requiresTable?: string;
+};
 
 /**
  * invariant: Refuse a schema advance that would strand an open mirror run in a combined store.
@@ -2200,7 +2212,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
   { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
   { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL },
-  { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL },
+  { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL, requiresTable: "project_milestones" },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
@@ -2356,8 +2368,15 @@ function applyPendingMigrations(
     }
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
-      db.exec(migration.sql);
-      if (migration.normalize !== undefined) {
+      // invariant: A migration whose table the cutover fence moved runs only where the table is
+      // still local. The fence row is what admits the skip: an unfenced store missing the table
+      // is damage, and its body runs and fails exactly as before.
+      const movedByFence =
+        migration.requiresTable !== undefined &&
+        !tableNamesOn(db).has(migration.requiresTable) &&
+        readCollaborationFence(db) !== null;
+      if (!movedByFence) db.exec(migration.sql);
+      if (!movedByFence && migration.normalize !== undefined) {
         migration.normalize(db, {
           attestation: options.attestation, operator: options.operator, processFacts: options.processFacts, now: options.now,
         });
