@@ -222,20 +222,30 @@ function describeAbsence(value: string | undefined): string | undefined {
         : undefined;
 }
 
+/** Shape-guard match of an Assignment core front matter key. The declaration
+ * form is the snake_case scalar key (`execute_as: x`) — a body-quoted
+ * `**Execute as**: x` template line is NEVER a declaration. Shape
+ * detection ONLY: field parsing/semantics live in `parseAssignmentFields` /
+ * `validateAssignmentFields`. Declared before its first use because both the
+ * shape guard and the extracted-block enforcement read share it. */
+const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m;
+
 /**
- * True when the text looks like front matter YAML: a complete fenced block,
- * or bare scalar lines only (a caller that already sliced the front matter
- * passes it fence-less). A fenced document normalizes to the block inside
- * its fences; everything else is body prose and never a front matter slice.
+ * The ONE front matter scope of an Assignment DOCUMENT: the block inside a
+ * complete `---` fence. Unfenced text is body prose and declares nothing —
+ * a prompt whose lines merely look like `key: value` is not an Assignment,
+ * and no reader infers "already extracted" from the text. `unterminated`
+ * marks an opening fence that never closed: that block declares no field
+ * (fail-closed) while still counting as Assignment evidence, so the schema
+ * refuses it (`document.frontmatter.absent`) instead of an ordinary prompt
+ * silently passing as a non-Assignment. Callers holding a block that was
+ * split elsewhere use the explicit `*FromFrontmatter` functions instead.
  */
-function frontMatterSlice(text: string): { yaml: string; fenced: boolean } {
+function assignmentFrontmatter(text: string): { yaml: string; unterminated: boolean } {
   const extraction = extractFrontmatterAndBody(text);
-  if (extraction.fenced) return { yaml: extraction.frontmatter, fenced: true };
-  const lines = text.split(/\r?\n/);
-  if (text.trim() !== "" && lines.every((line) => line.trim() === "" || /^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(line) || /^[-\s]\s*\S/.test(line))) {
-    return { yaml: text, fenced: false };
-  }
-  return { yaml: "", fenced: false };
+  if (extraction.fenced) return { yaml: extraction.frontmatter, unterminated: false };
+  if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) return { yaml: "", unterminated: false };
+  return { yaml: text.slice(text.indexOf("\n") + 1), unterminated: true };
 }
 
 /** Parse front matter entries, never throwing: invalid YAML yields no entries. */
@@ -267,15 +277,29 @@ function scalarOf(value: unknown): string | undefined {
  * `undefined`.
  *
  * The function scopes its OWN input: it reads the front matter of whatever
- * text it is handed, so any caller (host gate, CLI, plugin) may pass the
- * whole dispatch/prompt — a field quoted in the task body can never be
- * read as a header field. An already-sliced front matter block may be
- * passed as well (re-normalizing is a no-op, idempotent). Body-only text
- * (no fence, not pure YAML lines) yields no fields. Never throws: invalid
- * front matter YAML yields no fields. */
+ * DOCUMENT it is handed, so any caller (host gate, CLI, plugin) may pass the
+ * whole dispatch/prompt — a field quoted in the task body can never be read
+ * as a field. Only a complete fence declares fields: unfenced `key: value`
+ * body text and an unterminated fence yield no fields (that document is
+ * refused by {@link validateAssignmentFields} instead). A caller that
+ * already split the fence passes the block to {@link
+ * parseAssignmentFieldsFromFrontmatter}. Never throws: invalid front matter
+ * YAML yields no fields. */
 export function parseAssignmentFields(assignmentText: string): AssignmentFields {
+  const { yaml, unterminated } = assignmentFrontmatter(assignmentText);
+  return unterminated ? {} : parseAssignmentFieldsFromFrontmatter(yaml);
+}
+
+/**
+ * Parse the fields of an ALREADY-EXTRACTED front matter block (the text
+ * between the fences, fences excluded) — the explicit form for callers that
+ * discovered the fence boundary themselves (`assignmentHeaderRegion`
+ * consumers, host loaders). A document must go through {@link
+ * parseAssignmentFields} so body text can never declare a field. Never
+ * throws: invalid block YAML yields no fields. */
+export function parseAssignmentFieldsFromFrontmatter(frontmatter: string): AssignmentFields {
   const fields: AssignmentFields = {};
-  const entries = safeEntries(frontMatterSlice(assignmentText).yaml);
+  const entries = safeEntries(frontmatter);
   if (entries === null) return fields;
   const scalar = (key: string): string | undefined => {
     const entry = entries.get(key);
@@ -319,17 +343,20 @@ export type EnforcementFlag = {
 };
 
 /**
- * Front matter slice of an Assignment: the document's front matter block
- * (fences stripped) when the input opens with a `---` fence, bare front
- * matter lines when the caller already sliced them, and the empty string
- * for body-only text — the front matter scope is the ONE assignment field
- * scope, so an unfenced input carries no readable front matter at all.
- * This export is the task boundary: host packages import it today and Task
- * 5 migrates them; it returns the document's front matter block (an
- * equivalent front matter-scoped slice) rather than any deleted body
- * header region. */
+ * The Assignment document's front matter as a SELF-CONTAINED fenced
+ * fragment — the host-package boundary kept until Task 5 migrates those
+ * callers (`packages/dsh` re-feeds the result to the front matter parsers).
+ * The fences are part of the fragment on purpose: the public parsers accept
+ * only a fenced document, so a host that slices once and re-parses keeps the
+ * same fence-scoped read instead of a body-text guess. A document without
+ * front matter yields `""` (unfenced key lines are body prose); an
+ * unterminated fence yields the fragment without a closing fence, which
+ * declares nothing.
+ */
 export function assignmentHeaderRegion(assignmentText: string): string {
-  return frontMatterSlice(assignmentText).yaml;
+  const { yaml, unterminated } = assignmentFrontmatter(assignmentText);
+  if (yaml === "") return "";
+  return unterminated ? `---\n${yaml}` : `---\n${yaml}\n---`;
 }
 
 /**
@@ -343,16 +370,31 @@ export function assignmentHeaderRegion(assignmentText: string): string {
  * and is case-insensitive (`enforcement: "HARD"`). A present-but-non-hard
  * value (`soft`, empty, malformed) still reports its source so callers
  * distinguish "explicitly not hard" from "not mentioned" (`source: none`).
- * Input may be a fenced document or a bare front matter slice; body-only
- * text yields the absent flag. Never throws. */
+ * Only a fenced DOCUMENT declares the flag: unfenced `enforcement: hard`
+ * body text and an unterminated fence yield the absent flag. A caller that
+ * already split the fence passes the block to {@link
+ * parseEnforcementFlagFromFrontmatter}. Never throws. */
 export function parseEnforcementFlag(text: string): EnforcementFlag {
-  const yaml = frontMatterSlice(text).yaml;
-  const entries = safeEntries(yaml);
+  const { yaml, unterminated } = assignmentFrontmatter(text);
+  return unterminated ? { hard: false, source: "none" } : parseEnforcementFlagFromFrontmatter(yaml);
+}
+
+/**
+ * Parse the `enforcement: hard` flag from an ALREADY-EXTRACTED front matter
+ * block (fences excluded) — the explicit form for callers that split the
+ * fence themselves, e.g. the compass reader. The shared front matter reader
+ * decides the key, so a YAML comment or a quoted value never hides the flag.
+ * Source attribution is decided by the block's own content: a block carrying
+ * an Assignment core key is `assignment`, anything else `compass`. Never
+ * throws.
+ */
+export function parseEnforcementFlagFromFrontmatter(frontmatter: string): EnforcementFlag {
+  const entries = safeEntries(frontmatter);
   if (entries === null) return { hard: false, source: "none" };
   const entry = entries.get("enforcement");
   if (entry === undefined) return { hard: false, source: "none" };
   const value = scalarOf(entry.value) ?? "";
-  const source: EnforcementSource = isAssignmentShaped(text) ? "assignment" : "compass";
+  const source: EnforcementSource = ASSIGNMENT_FIELD_RE.test(frontmatter) ? "assignment" : "compass";
   return { hard: value.toLowerCase() === "hard", source };
 }
 
@@ -857,27 +899,22 @@ export function assertTriIdentity(reviewerRoles: readonly string[]): GateResult 
   };
 }
 /**
- * Shape-guard match of an Assignment core front matter key. The declaration
- * form is the snake_case scalar key (`execute_as: x`) — a body-quoted
- * `**Execute as**: x` template line is NEVER a declaration. Shape
- * detection ONLY: field parsing/semantics live in `parseAssignmentFields` /
- * `validateAssignmentFields`.
- */
-const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m;
-
-/**
- * True when the text looks like an Assignment: its FRONT MATTER block
- * declares at least one core field key (`execute_as` / `delegation` /
+ * True when the document declares Assignment front matter: a front matter
+ * block carrying at least one core field key (`execute_as` / `delegation` /
  * `task_category`). This is the SINGLE shape-guard grammar shared by the
- * omp hook and the opencode adapter via {@link composeDispatchGate}, and
- * it is a front matter check — non-Assignment prompts (no fenced front
- * matter, or front matter without a core key) stay silent with no false
- * positives, including a prompt that merely quotes the Assignment template
- * in its body. The key PATTERN is the shape evidence, not the parse
- * result, so invalid front matter YAML that still carries the key line is
- * shaped (fail-closed: the schema layer then reports the parse refusal). */
+ * omp hook and the opencode adapter via {@link composeDispatchGate}, and it
+ * is a front matter check — non-Assignment prompts (no opening fence, or
+ * front matter without a core key) stay silent with no false positives,
+ * including a prompt that merely quotes the Assignment template in its
+ * body. The key PATTERN is the shape evidence, not the parse result, so
+ * invalid front matter YAML that still carries the key line is shaped
+ * (fail-closed: the schema layer then reports the parse refusal) — and an
+ * opening fence that never closes counts as evidence too, so the malformed
+ * document reaches schema validation (`document.frontmatter.absent`)
+ * instead of passing for an ordinary prompt.
+ */
 function isAssignmentShaped(assignmentText: string): boolean {
-  const yaml = frontMatterSlice(assignmentText).yaml;
+  const { yaml } = assignmentFrontmatter(assignmentText);
   if (yaml === "") return false;
   return ASSIGNMENT_FIELD_RE.test(yaml);
 }
@@ -919,7 +956,7 @@ export type ComposeDispatchGateOptions = {
  * and the header-region enforcement flag.
  */
 export type ComposeDispatchGateResult = GateResult & {
- /** Assignment-shaped text was recognized (heading or core-field regex). */
+ /** Assignment front matter was recognized (fenced block carrying a core key). */
   shaped: boolean;
  /** Enforcement parsed from the Assignment front matter only (never the body). */
   enforcement: EnforcementFlag;
@@ -930,9 +967,10 @@ export type ComposeDispatchGateResult = GateResult & {
  * the opencode adapter (`validateDispatchAssignment`) and the omp blocking
  * hook (Gate 2):
  *
- * 1. Shape guard: `## Assignment` heading OR any core field line
- * (`Execute as` / `Delegation` / `Task category`). Text that is not
- * Assignment-shaped passes silently (`shaped: false`).
+ * 1. Shape guard: a front matter block carrying a core field key
+ * (`execute_as` / `delegation` / `task_category`) — a complete fence, or an
+ * unterminated one, which then reaches schema validation and is refused.
+ * Text without Assignment front matter passes silently (`shaped: false`).
  * 2. `validateAssignmentFields` with `writable: false` when `opts.writable
  * === false` (read-only roles), else the writable default.
  * 3. Anti-recursion precheck — CALLER semantics (issue #156): runs only

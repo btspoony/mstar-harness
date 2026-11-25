@@ -46,18 +46,24 @@ export type DocumentSchema = {
   optional: readonly DocumentField[];
 };
 
-const PLAN_SCHEMA: DocumentSchema = {
-  kind: "plan",
-  required: [
-    { name: "plan_id" },
-    { name: "execution", enum: ["sdd", "inline"] },
-    { name: "working_branch" },
-    { name: "main_worktree_branch" },
-    { name: "delivery_kind", enum: WORKFLOW_DELIVERY_KINDS },
-    { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
-  ],
-  optional: [{ name: "title" }],
-};
+/** The plan table is a FUNCTION: its `delivery_kind` enum reads
+ * `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`, which imports back into this
+ * module (`workflow` → `status` → `dispatch` → here), so building it at
+ * module eval hits the const TDZ when `workflow.ts` is the cycle's entry. */
+function planSchema(): DocumentSchema {
+  return {
+    kind: "plan",
+    required: [
+      { name: "plan_id" },
+      { name: "execution", enum: ["sdd", "inline"] },
+      { name: "working_branch" },
+      { name: "main_worktree_branch" },
+      { name: "delivery_kind", enum: WORKFLOW_DELIVERY_KINDS },
+      { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
+    ],
+    optional: [{ name: "title" }],
+  };
+}
 
 /** Review/audit trigger: the dispatch-owned final round-bounding decision
  * ({@link classifyReviewOrAuditRound} `roundBounded`) — the role
@@ -152,17 +158,23 @@ const ACCEPTANCE_SCHEMA: DocumentSchema = {
   optional: [],
 };
 
-const SCHEMAS: Record<DocumentKind, DocumentSchema> = {
-  plan: PLAN_SCHEMA,
-  assignment: ASSIGNMENT_SCHEMA,
-  "sdd-brief": BRIEF_SCHEMA,
-  "pm-acceptance": ACCEPTANCE_SCHEMA,
-};
+/** Built on FIRST USE, never at module eval: the plan table's
+ * `delivery_kind` enum reads `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`,
+ * and that module imports back into this one (`workflow` → `status` →
+ * `dispatch` → here), so a module-eval table hits the const TDZ whenever
+ * `workflow.ts` is the entry module of the cycle. */
+let schemas: Record<DocumentKind, DocumentSchema> | undefined;
 
 /** The field table for one document kind: required and optional rows with
  * their enum / type declarations. */
 export function documentSchema(kind: DocumentKind): DocumentSchema {
-  return SCHEMAS[kind];
+  schemas ??= {
+    plan: planSchema(),
+    assignment: ASSIGNMENT_SCHEMA,
+    "sdd-brief": BRIEF_SCHEMA,
+    "pm-acceptance": ACCEPTANCE_SCHEMA,
+  };
+  return schemas[kind];
 }
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {

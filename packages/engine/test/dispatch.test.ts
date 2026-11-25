@@ -58,8 +58,10 @@ import {
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
   parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
+  parseEnforcementFlagFromFrontmatter,
   validateAssignmentFields,
 } from "../src/dispatch.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
@@ -295,7 +297,7 @@ describe("control write assignment fields", () => {
   };
 
   test("parses fields and block-list paths from the front matter", () => {
-    const fields = parseAssignmentFields("worktree_path: /control\nwrite_domain: control\ncontrol_write_paths:\n- a\n- b\n- c\n");
+    const fields = parseAssignmentFieldsFromFrontmatter("worktree_path: /control\nwrite_domain: control\ncontrol_write_paths:\n- a\n- b\n- c\n");
     expect(fields.worktreePath).toBe("/control");
     expect(fields.writeDomain).toBe("control");
     expect(fields.controlWritePaths).toEqual(["a", "b", "c"]);
@@ -1124,12 +1126,45 @@ enforcement: hard
   });
 
   test("execution_mode joins the parsed fields", () => {
-    expect(parseAssignmentFields("execution_mode: targeted\n").executionMode).toBe("targeted");
+    expect(parseAssignmentFieldsFromFrontmatter("execution_mode: targeted\n").executionMode).toBe("targeted");
   });
 
   test("unrelated prose and unfenced body text produce no fields", () => {
     expect(parseAssignmentFields("This is not an assignment.\nNo fields here.")).toEqual({});
     expect(parseAssignmentFields("")).toEqual({});
+  });
+
+  test("F1: an unfenced key-only body is NOT an Assignment — the public path requires a real fence", () => {
+    const body = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nworking_branch: feature/foo";
+    expect(parseAssignmentFields(body)).toEqual({});
+    expect(assignmentHeaderRegion(body)).toBe("");
+    expect(parseEnforcementFlag(`${body}\nenforcement: hard\n`)).toEqual({ hard: false, source: "none" });
+  });
+
+  test("F1: the explicit extracted-block callers read a fence-stripped block", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+enforcement: hard
+---
+
+## Assignment
+`;
+    // A caller that split the fence itself (`extractFrontmatterAndBody`).
+    const block = text.slice(4, text.indexOf("\n---"));
+    expect(parseAssignmentFieldsFromFrontmatter(block)).toEqual(parseAssignmentFields(text));
+    expect(parseEnforcementFlagFromFrontmatter(block)).toEqual({ hard: true, source: "assignment" });
+    // The header-region boundary re-feeds a fenced fragment, so the public
+    // document path stays fence-scoped for its host consumers.
+    expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
+  });
+
+  test("F3: an unterminated fence declares no fields (the schema refuses the document)", () => {
+    const text = "---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\n";
+    expect(parseAssignmentFields(text)).toEqual({});
+    expect(parseEnforcementFlag(text)).toEqual({ hard: false, source: "none" });
   });
 
   test("reads the front matter only — body-quoted keys are ignored", () => {
@@ -1155,8 +1190,9 @@ budget: <= 12 file opens
     });
   });
 
-  test("an already-sliced front matter block parses identically (idempotent)", () => {
+  test("the header-region boundary re-feeds a fenced fragment (idempotent for host callers)", () => {
     expect(parseAssignmentFields(assignmentHeaderRegion(VALID_ASSIGNMENT))).toEqual(parseAssignmentFields(VALID_ASSIGNMENT));
+    expect(assignmentHeaderRegion(assignmentHeaderRegion(VALID_ASSIGNMENT))).toBe(assignmentHeaderRegion(VALID_ASSIGNMENT));
     expect(parseAssignmentFields(VALID_ASSIGNMENT).executeAs).toBe("fullstack-dev");
   });
 
@@ -1286,15 +1322,15 @@ enforcement: hard
     });
   });
 
-  test("Assignment-shaped input with a soft flag → source assignment, hard false", () => {
-    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: soft\n")).toEqual({ hard: false, source: "assignment" });
-    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard mode\n")).toEqual({ hard: false, source: "assignment" });
-    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement:\n")).toEqual({ hard: false, source: "assignment" });
+  test("Assignment-shaped block with a soft flag → source assignment, hard false", () => {
+    expect(parseEnforcementFlagFromFrontmatter("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: soft\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlagFromFrontmatter("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard mode\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlagFromFrontmatter("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement:\n")).toEqual({ hard: false, source: "assignment" });
   });
 
   test("Assignment value is case-insensitive (Hard / HARD → hard)", () => {
     for (const value of ["Hard", "HARD", "hArD"]) {
-      expect(parseEnforcementFlag(`execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: ${value}\n`)).toEqual({
+      expect(parseEnforcementFlagFromFrontmatter(`execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: ${value}\n`)).toEqual({
         hard: true,
         source: "assignment",
       });
@@ -1302,26 +1338,26 @@ enforcement: hard
   });
 
   test("compass frontmatter form: enforcement: hard → hard, source compass", () => {
-    expect(parseEnforcementFlag("enforcement: hard\n")).toEqual({ hard: true, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter("enforcement: hard\n")).toEqual({ hard: true, source: "compass" });
   });
 
   test("compass value may be quoted and case-insensitive", () => {
-    expect(parseEnforcementFlag('enforcement: "hard"\n')).toEqual({ hard: true, source: "compass" });
-    expect(parseEnforcementFlag("enforcement: 'HARD'\n")).toEqual({ hard: true, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter('enforcement: "hard"\n')).toEqual({ hard: true, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter("enforcement: 'HARD'\n")).toEqual({ hard: true, source: "compass" });
   });
 
   test("compass present but not hard (soft / true / empty) → source compass, hard false", () => {
-    expect(parseEnforcementFlag("enforcement: soft\n")).toEqual({ hard: false, source: "compass" });
-    expect(parseEnforcementFlag("enforcement: true\n")).toEqual({ hard: false, source: "compass" });
-    expect(parseEnforcementFlag("enforcement:\n")).toEqual({ hard: false, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter("enforcement: soft\n")).toEqual({ hard: false, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter("enforcement: true\n")).toEqual({ hard: false, source: "compass" });
+    expect(parseEnforcementFlagFromFrontmatter("enforcement:\n")).toEqual({ hard: false, source: "compass" });
   });
 
   test("no flag anywhere → { hard: false, source: none }", () => {
-    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\n")).toEqual({
+    expect(parseEnforcementFlagFromFrontmatter("execute_as: dev\ndelegation: forbidden\ntask_category: logic\n")).toEqual({
       hard: false,
       source: "none",
     });
-    expect(parseEnforcementFlag("iteration_id: 20260808-demo\nstatus: active\n")).toEqual({
+    expect(parseEnforcementFlagFromFrontmatter("iteration_id: 20260808-demo\nstatus: active\n")).toEqual({
       hard: false,
       source: "none",
     });
@@ -1390,10 +1426,12 @@ enforcement: soft (example only)
   });
 });
 
-describe("assignmentHeaderRegion — front matter slice (task boundary)", () => {
+describe("assignmentHeaderRegion — fenced front matter fragment (task boundary)", () => {
  // The export is kept for the host packages Task 5 migrates: it returns the
- // document's front matter block (fences stripped), never any body text.
-  test("fenced document → the front matter block without fences", () => {
+ // document's front matter as a self-contained FENCED fragment (never any
+ // body text), so a host that re-feeds it to the front matter parsers keeps
+ // the same fence-scoped read the public document path enforces.
+  test("fenced document → the front matter block with its fences, no body", () => {
     const text = `---
 execute_as: fullstack-dev
 enforcement: hard
@@ -1404,11 +1442,12 @@ enforcement: hard
 **Enforcement**: soft (body must not count)
 `;
     const region = assignmentHeaderRegion(text);
+    expect(region.startsWith("---\n")).toBe(true);
+    expect(region.endsWith("\n---")).toBe(true);
     expect(region).toContain("execute_as: fullstack-dev");
     expect(region).toContain("enforcement: hard");
     expect(region).not.toContain("## Assignment");
     expect(region).not.toContain("soft");
-    expect(region).not.toContain("---");
   });
 
   test("body-only text (no fence) → empty slice", () => {
@@ -1416,9 +1455,17 @@ enforcement: hard
     expect(assignmentHeaderRegion("# Target\nplan body only\n")).toBe("");
   });
 
-  test("a bare front matter slice passes through unchanged (idempotent)", () => {
-    const yaml = "execute_as: fullstack-dev\nenforcement: hard";
-    expect(assignmentHeaderRegion(yaml)).toBe(yaml);
+  test("unfenced key-only text is body prose → empty slice (F1)", () => {
+    expect(assignmentHeaderRegion("execute_as: fullstack-dev\nenforcement: hard")).toBe("");
+  });
+
+  test("unterminated fence → fragment without a closing fence (declares nothing)", () => {
+    const region = assignmentHeaderRegion("---\nexecute_as: fullstack-dev\nenforcement: hard\n");
+    expect(region).toBe("---\nexecute_as: fullstack-dev\nenforcement: hard\n");
+    expect(parseAssignmentFields(region)).toEqual({});
+  });
+
+  test("idempotent on its own output", () => {
     expect(assignmentHeaderRegion(assignmentHeaderRegion(VALID_ASSIGNMENT))).toBe(assignmentHeaderRegion(VALID_ASSIGNMENT));
   });
 });
@@ -1494,6 +1541,22 @@ task_budget: S — one focused implementer round
       shaped: false,
       enforcement: { hard: false, source: "none" },
     });
+  });
+
+  test("F3: an unterminated Assignment fence is refused through schema validation, never silently non-Assignment", () => {
+    const result = composeDispatchGate(
+      "---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard\n",
+      { cwd },
+    );
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toContain("document.frontmatter.absent");
+  });
+
+  test("F3: ordinary prompts stay silent even when they open with a `---` rule", () => {
+    for (const text of ["---\n\n# Notes\n\nprose\n", "## Assignment\n\n**Execute as**: fullstack-dev\n"]) {
+      expect(composeDispatchGate(text, { cwd }).shaped).toBe(false);
+    }
   });
 
   test("front matter without a core key is not shaped (compass-style front matter stays silent)", () => {
