@@ -21,6 +21,7 @@ import {
   parseDocumentFrontmatterEntries,
   type FrontmatterEntry,
 } from "./document-frontmatter.js";
+import { isReadOnlyAssignmentRole } from "./dispatch.js";
 import type { GateResult, ValidationResult } from "./core.js";
 
 export type DocumentKind = "plan" | "assignment" | "sdd-brief" | "pm-acceptance";
@@ -119,6 +120,10 @@ const ASSIGNMENT_SCHEMA: DocumentSchema = {
     { name: "evidence_required" },
     { name: "constraints" },
     { name: "effort" },
+    { name: "plan_scope" },
+    { name: "checkpoint_comment_rule" },
+    { name: "why_batching_is_safe" },
+    { name: "scope" },
     { name: "orchestration_guard" },
     { name: "plan_path" },
     { name: "report_format" },
@@ -164,6 +169,33 @@ function violation(severity: ValidationResult["severity"], code: string, message
   return { ok: false, severity, code, message, ...(fix !== undefined ? { fix } : {}) };
 }
 
+/** Strict ISO-8601 date-time shape: `YYYY-MM-DDTHH:mm:ss` with `Z` or a
+ * `+HH:mm` / `-HH:mm` offset. No normalization — the calendar day, the
+ * time ranges and the offset range are validated against a real calendar. */
+const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})$/;
+
+function isIsoDateTime(value: string): boolean {
+  const match = value.match(ISO_DATETIME_RE);
+  if (match === null) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const zone = match[7]!;
+  if (month < 1 || month > 12) return false;
+  const monthLength = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  if (day < 1 || day > monthLength) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  if (zone !== "Z") {
+    const offsetHour = Number(zone.slice(1, 3));
+    const offsetMinute = Number(zone.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return true;
+}
+
 /**
  * Validate one document's front matter against its kind schema. `content` is
  * the whole document text (fences included); `source` is a diagnostic label
@@ -178,9 +210,8 @@ function violation(severity: ValidationResult["severity"], code: string, message
 export function validateDocumentFrontmatter(kind: DocumentKind, content: string, source: string): GateResult {
   const schema = documentSchema(kind);
   const violations: ValidationResult[] = [];
-
-  const { frontmatter } = extractFrontmatterAndBody(content);
-  if (frontmatter.trim() === "") {
+  const { frontmatter, fenced } = extractFrontmatterAndBody(content);
+  if (!fenced) {
     return {
       ok: false,
       violations: [violation("high", "document.frontmatter.absent",
@@ -218,10 +249,14 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   for (const field of schema.required) {
     const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
     if (!required) continue;
-    const present = entries.has(field.name) && entries.get(field.name)!.rawText !== "";
+    const present = entries.has(field.name)
+      && (entries.get(field.name)!.rawText !== ""
+        || Array.isArray(entries.get(field.name)!.value)
+        || (typeof entries.get(field.name)!.value === "object" && entries.get(field.name)!.value !== null && Object.keys(entries.get(field.name)!.value as object).length > 0));
     if (!present) {
+      const line = entries.has(field.name) ? entries.get(field.name)!.line : 1;
       violations.push(violation("high", "document.frontmatter.missing",
-        `${source}: missing required field ${field.name}`,
+        `${source}:${line}: missing required field ${field.name}`,
         `add a ${field.name}: line to the front matter`));
     }
   }
@@ -229,7 +264,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   for (const field of [...schema.required, ...schema.optional]) {
     const entry = entries.get(field.name);
     if (entry === undefined) continue;
-    if (field.enum !== undefined && typeof entry.value === "string" && !field.enum.includes(entry.value)) {
+    if (field.enum !== undefined && (typeof entry.value !== "string" || !field.enum.includes(entry.value))) {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ${field.enum.join(" | ")}`,
         `set ${field.name} to one of: ${field.enum.join(", ")}`));
@@ -244,13 +279,11 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
         `${source}:${entry.line}: invalid ${field.name} \u2014 accepted values: a list of paths`,
         `write ${field.name} as a "- item" block list or a [a, b] flow array`));
     } else if (field.type === "iso-datetime") {
-      const valid = typeof entry.value === "string"
-        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(entry.value)
-        && !Number.isNaN(Date.parse(entry.value));
+      const valid = typeof entry.value === "string" && isIsoDateTime(entry.value);
       if (!valid) {
         violations.push(violation("high", "document.frontmatter.invalid",
-          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time`,
-          `set ${field.name} to an ISO-8601 date-time`));
+          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time YYYY-MM-DDTHH:mm:ssZ or with a +HH:mm / -HH:mm offset`,
+          `set ${field.name} to an ISO-8601 date-time such as 2026-11-26T08:00:00Z`));
       }
     }
   }
@@ -264,6 +297,14 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
         "remove one of working_branch / branch_policy"));
     }
     const controlWritePaths = entries.get("control_write_paths");
+    const roleValue = entries.get("execute_as")?.value;
+    const role = typeof roleValue === "string" ? roleValue.trim().replace(/^@/, "").split(/\s+/)[0] ?? "" : "";
+    const writable = !isReadOnlyAssignmentRole(role);
+    if (writable && branchEntry === undefined && policyEntry === undefined) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:1: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy; a writable assignment carries one`,
+        "add exactly one of working_branch or branch_policy"));
+    }
     if (Array.isArray(controlWritePaths?.value)) {
       for (const target of controlWritePaths.value) {
         if (typeof target === "string" && /[*?[\]{}]/.test(target)) {

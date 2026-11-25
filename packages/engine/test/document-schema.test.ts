@@ -368,3 +368,221 @@ describe("validateDocumentFrontmatter — violation source and gate shape", () =
     expect(gate.ok).toBe(false);
   });
 });
+
+describe("validateDocumentFrontmatter — T3-R1 enum type checking", () => {
+  test.each([
+    ["boolean", "status: true"],
+    ["numeric", "status: 1"],
+    ["list", "status: [Todo]"],
+    ["map", "status:\n  nested: value"],
+  ])("a %s status value is invalid, not accepted", (_kind, statusLine) => {
+    const fm = PLAN_FM.replace("status: Todo", statusLine);
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("status");
+    expect(v.message).toContain("Todo");
+  });
+
+  test("assignment write_domain enum rejects non-string values", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${ASSIGNMENT_FM}\nwrite_domain: true`), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("control");
+    expect(v.message).toContain("work");
+  });
+
+  test("acceptance verdict enum rejects numeric values", () => {
+    const gate = validateDocumentFrontmatter(
+      "pm-acceptance",
+      doc(ACCEPTANCE_FM.replace("verdict: Approve", "verdict: 42")),
+      "acceptance",
+    );
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("verdict");
+  });
+});
+
+describe("validateDocumentFrontmatter — T3-R2 canonical template allowlist", () => {
+  test("every canonical template field is a known assignment field", () => {
+    const canonicalFields = [
+      ["execute_as: fullstack-dev"],
+      ["delegation: forbidden"],
+      ["execution_mode: sdd"],
+      ["sdd_implementer_session: fresh"],
+      ["sdd_dir: /x/sdd"],
+      ["sdd_context_file: /x/sdd/context.json"],
+      ["skill_presets: standard"],
+      ["qc_mode: N/A"],
+      ["review_package_path: N/A"],
+      ["qc_report_path: N/A"],
+      ["who_runs_this_turn: fullstack-dev"],
+      ["primary: Small feature"],
+      ["task_category: logic"],
+      ["dev_routing: single stream"],
+      ["parallelism: serial"],
+      ["additional_gates: none"],
+      ["phase_gate_checklist: go"],
+      ["working_branch: feature/20261125-frontmatter-core"],
+      ["control_harness_root: /x/.mstar"],
+      ["review_cwd: /x"],
+      ["worktree_path: /x"],
+      ["plan_id: 20261125-frontmatter-core"],
+      ["plan_scope: inherited read-only"],
+      ["review_range: 5da651986..HEAD"],
+      ["diff_basis: merge-base"],
+      ["write_domain: work"],
+      ["main_worktree_branch: 5.0"],
+      ["acceptance_gate: pm-acceptance"],
+      ["acceptance_gate_reason: scope"],
+      ["findings_cleanup: allow-residual"],
+      ["why_this_agent: role fit"],
+      ["pm_task_board_coverage: t3"],
+      ["roadmap_deferred_scope: N/A"],
+      ["task: one deliverable"],
+      ["checkpoint_comment_rule: commit then report"],
+      ["why_batching_is_safe: independent ids"],
+      ["scope: in/out"],
+      ["inputs: brief"],
+      ["budget: M"],
+      ["task_budget: M — one round"],
+      ["return_shape: verdict"],
+      ["severity_bar: blocking"],
+      ["input_provenance: observed"],
+      ["deliverables: one file"],
+      ["acceptance_criteria: done"],
+      ["evidence_required: tests"],
+      ["constraints: no expansion"],
+      ["effort: M"],
+      ["orchestration_guard: none"],
+      ["plan_path: /x/plan.md"],
+      ["report_format: Completion Report"],
+      ["execution_evidence: none"],
+      ["control_write_paths:", "- .mstar/notes/x.jsonl"],
+    ];
+    const fm = canonicalFields.map((lines) => lines.join("\n")).join("\n");
+    const gate = validateDocumentFrontmatter("assignment", doc(fm), "assignment");
+    const unknowns = gate.violations.filter((v) => v.code === "document.frontmatter.unknown");
+    expect(unknowns).toEqual([]);
+    const messages = gate.violations.map((v) => v.message).join(" ");
+    expect(messages).not.toContain("checkpoint_comment_rule \u2014");
+    expect(messages).not.toContain("plan_scope \u2014");
+    expect(messages).not.toContain("scope \u2014");
+    expect(messages).not.toContain("why_batching_is_safe \u2014");
+  });
+});
+
+describe("validateDocumentFrontmatter — T3-R3 exactly one branch form for writable assignments", () => {
+  const BASE = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\ntask_budget: M";
+
+  test("writable assignment with neither branch form is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(BASE), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("branch");
+  });
+
+  test("writable assignment with both branch forms is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch: feature/x\nbranch_policy: direct on main — hotfix`), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("working_branch");
+  });
+
+  test("writable assignment with only working_branch passes", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch: feature/x`), "assignment");
+    expect(gate.ok).toBe(true);
+  });
+
+  test("writable assignment with only branch_policy passes", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nbranch_policy: direct on main — hotfix`), "assignment");
+    expect(gate.ok).toBe(true);
+  });
+
+  test("read-only role without any branch form passes", () => {
+    const fm = "execute_as: explore\ndelegation: forbidden\ntask_category: logic\ntask_budget: XS";
+    const gate = validateDocumentFrontmatter("assignment", doc(fm), "assignment");
+    expect(gate.ok).toBe(true);
+  });
+});
+
+describe("validateDocumentFrontmatter — T3-R4 strict ISO-8601 generated_at", () => {
+  test("invalid calendar day 2026-02-30 is rejected", () => {
+    const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-02-30T08:00:00Z");
+    const gate = validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("generated_at");
+  });
+
+  test("a bad suffix or shape is rejected", () => {
+    for (const bad of ["2026-11-26 08:00:00Z", "2026-11-26T08:00", "2026-11-26T08:00:00", "not-a-date", "2026-11-26T25:00:00Z"]) {
+      const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", `generated_at: "${bad}"`);
+      const gate = validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance");
+      expect(gate.ok).toBe(false);
+    }
+  });
+
+  test("a valid numeric offset is accepted", () => {
+    const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-11-26T08:00:00+02:30");
+    const gate = validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance");
+    expect(gate.ok).toBe(true);
+  });
+
+  test("leap day 2024-02-29 passes, 2026-02-29 fails", () => {
+    const leap = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2024-02-29T08:00:00Z");
+    expect(validateDocumentFrontmatter("pm-acceptance", doc(leap), "acceptance").ok).toBe(true);
+    const nonLeap = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-02-29T08:00:00Z");
+    expect(validateDocumentFrontmatter("pm-acceptance", doc(nonLeap), "acceptance").ok).toBe(false);
+  });
+});
+
+describe("validateDocumentFrontmatter — T3-R5 missing-field line numbers", () => {
+  test("an absent required field reports line 1", () => {
+    const gate = validateDocumentFrontmatter("plan", doc("plan_id: p1"), "plan");
+    for (const v of gate.violations) {
+      expect(v.message).toContain("plan:1: missing required field");
+    }
+  });
+
+  test("an explicitly empty required field reports its entry line", () => {
+    const fm = "plan_id: p1\nstatus:\nexecution: sdd\nworking_branch: b\nmain_worktree_branch: m\ndelivery_kind: development";
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    const missing = gate.violations.filter((v) => v.code === "document.frontmatter.missing" && v.message.includes("status"));
+    expect(missing.length).toBe(1);
+    expect(missing[0].message).toContain("plan:3: missing required field status");
+  });
+});
+
+describe("validateDocumentFrontmatter — T3-R6 empty fenced front matter", () => {
+  test("a properly fenced empty front matter reports missing fields, not absent", () => {
+    const gate = validateDocumentFrontmatter("plan", "---\n---\n# Body\n", "plan");
+    expect(gate.ok).toBe(false);
+    expect(codesOf(gate)).not.toContain("document.frontmatter.absent");
+    const missingCount = gate.violations.filter((v) => v.code === "document.frontmatter.missing").length;
+    expect(missingCount).toBe(6);
+  });
+
+  test("a whitespace-only fenced front matter is parsed, not absent", () => {
+    const gate = validateDocumentFrontmatter("plan", "---\n\n   \n\n---\n# Body\n", "plan");
+    expect(codesOf(gate)).not.toContain("document.frontmatter.absent");
+    expect(codesOf(gate)).toContain("document.frontmatter.missing");
+  });
+
+  test("a comment-only fenced front matter is parsed, not absent", () => {
+    const gate = validateDocumentFrontmatter("plan", "---\n# a comment\n---\n# Body\n", "plan");
+    expect(codesOf(gate)).not.toContain("document.frontmatter.absent");
+    expect(codesOf(gate)).toContain("document.frontmatter.missing");
+  });
+
+  test("a genuinely absent fence still reports absent", () => {
+    const gate = validateDocumentFrontmatter("plan", "# no fence\n", "plan");
+    expect(codesOf(gate)).toEqual(["document.frontmatter.absent"]);
+  });
+
+  test("an unterminated fence still reports absent", () => {
+    const gate = validateDocumentFrontmatter("plan", "---\nplan_id: p1\n(no close", "plan");
+    expect(codesOf(gate)).toEqual(["document.frontmatter.absent"]);
+  });
+});

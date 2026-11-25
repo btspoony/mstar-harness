@@ -341,13 +341,14 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
 
 describe("extractFrontmatterAndBody — fence handling", () => {
   test("document without a fence is all body with empty frontmatter", () => {
-    expect(extractFrontmatterAndBody(`no fence here`)).toEqual({ frontmatter: "", body: "no fence here" });
+    expect(extractFrontmatterAndBody(`no fence here`)).toEqual({ frontmatter: "", body: "no fence here", fenced: false });
   });
 
   test("fenced document splits frontmatter and body", () => {
     expect(extractFrontmatterAndBody(`---\nname: x\n---\nbody text`)).toEqual({
       frontmatter: "name: x",
       body: "body text",
+      fenced: true,
     });
   });
 
@@ -355,20 +356,21 @@ describe("extractFrontmatterAndBody — fence handling", () => {
     expect(extractFrontmatterAndBody(`---\r\nname: x\r\n---\r\nbody`)).toEqual({
       frontmatter: "name: x",
       body: "body",
+      fenced: true,
     });
   });
 
   test("an unterminated fence is body, not frontmatter", () => {
-    expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x" });
+    expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x", fenced: false });
   });
 
   test("a complete empty frontmatter block extracts empty frontmatter and the body", () => {
-    expect(extractFrontmatterAndBody(`---\n\n---\nbody`)).toEqual({ frontmatter: "", body: "body" });
+    expect(extractFrontmatterAndBody(`---\n\n---\nbody`)).toEqual({ frontmatter: "", body: "body", fenced: true });
   });
 
   test("an unterminated fence never counts as frontmatter", () => {
-    expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x" });
-    expect(extractFrontmatterAndBody(`---\n`)).toEqual({ frontmatter: "", body: "---\n" });
+    expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x", fenced: false });
+    expect(extractFrontmatterAndBody(`---\n`)).toEqual({ frontmatter: "", body: "---\n", fenced: false });
   });
 });
 
