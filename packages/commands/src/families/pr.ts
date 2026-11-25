@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   decideThreadGate, parseReviewThreads, threadGateDigest,
-  type ReviewThreadFacts, type ThreadGateConfirmation,
+  type ReviewInlineComment, type ReviewThreadFacts, type ThreadGateConfirmation,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
@@ -104,11 +104,12 @@ const need = (value: string | undefined, name: string): string => {
   return value;
 };
 
-async function spawn(context: InvocationContext, argv: string[]) {
+async function spawn(context: InvocationContext, argv: string[], options: { stdin?: string; env?: Readonly<Record<string, string>> } = {}) {
   return context.effects.spawn({
     argv,
     cwd: context.cwd,
-    env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), ...options.env },
+    ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
     signal: context.signal,
   });
 }
@@ -181,6 +182,102 @@ const githubProvider: MergeGateProvider = {
   },
 };
 mergeGateProviders.set("github", githubProvider);
+
+// see skills/mstar-roles/references/project-manager/pr-delivery.md
+// why: the `pr-review.post` provider seam lives in this family so the merge
+// gate's own provider map and fixtures stay untouched; `post` looks publishers
+// up through `reviewPublisherFor`.
+
+const reviewPostId = "pr-review.post";
+
+/** Provider-neutral review publisher. Transport failures surface as a cause, not an envelope,
+ *  so the command keeps its existing refusal codes and recovery text. */
+export type ReviewPostFailure =
+  | { cause: "unauthorized"; detail: string }
+  | { cause: "wrong-target"; detail: string }
+  | { cause: "diff-unavailable"; detail: string }
+  | { cause: "unknown-outcome"; detail: string; commitId: string; probe: string };
+
+export interface ReviewPublisher {
+  // see packages/engine/src/prreview.ts
+  // `resolve` returns the raw pr-view fields — planReviewPost is the only URL
+  // and head validator, so a malformed view keeps its plan error, and a
+  // resolved URL pointing at another PR is the command's wrong-target.
+  resolve(input: { pr: number }, context: InvocationContext):
+    Promise<MergeGateOutcome<{ url: string; head: string; base: string }>>;
+  diff(input: { host: string; owner: string; repo: string; base: string; head: string }, context: InvocationContext):
+    Promise<{ ok: true; value: string } | { ok: false; failure: ReviewPostFailure }>;
+  postReview(input: { host: string; owner: string; repo: string; pr: number; commitId: string;
+                      body: string; comments: readonly ReviewInlineComment[] }, context: InvocationContext):
+    Promise<{ ok: true; value: { reviewUrl: string } } | { ok: false; failure: ReviewPostFailure }>;
+}
+
+const reviewPublishers = new Map<string, ReviewPublisher>();
+
+/** why: the seam exists so a second forge — or a test fixture — plugs in by id; production registers GitHub only. */
+export function registerReviewPublisher(id: string, publisher: ReviewPublisher): void {
+  reviewPublishers.set(id, publisher);
+}
+
+/** The publisher registered under `id`, or undefined for the unsupported-provider refusal. */
+export function reviewPublisherFor(id: string): ReviewPublisher | undefined {
+  return reviewPublishers.get(id);
+}
+
+/** Registered ids, for the unsupported-provider refusal's `details.registered`. */
+export function registeredReviewPublisherIds(): readonly string[] {
+  return [...reviewPublishers.keys()];
+}
+
+const githubReviewPublisher: ReviewPublisher = {
+  async resolve({ pr }, context) {
+    const unauthorized = (cause: string): CommandEnvelope => refusalEnvelope({
+      command: reviewPostId, status: "refused", code: `${reviewPostId}.unauthorized`, exitCode: 1, message: cause,
+      recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review-file>.",
+    });
+    const viewResult = await spawn(context, ["gh", "pr", "view", String(pr), "--json", "url,headRefOid,baseRefOid"]);
+    if (viewResult.exitCode !== 0 || viewResult.signal !== null) return { ok: false, refusal: unauthorized(viewResult.stderr || "GitHub authentication/target lookup failed") };
+    const parsedView: unknown = JSON.parse(viewResult.stdout);
+    const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
+    // see packages/engine/src/prreview.ts
+    // why: the raw view fields go back untouched — planReviewPost is the only URL
+    // and head validator, so a malformed view reports its plan error, not an
+    // auth refusal that misnames the cause.
+    return { ok: true, value: {
+      url: typeof record.url === "string" ? record.url : "",
+      head: typeof record.headRefOid === "string" ? record.headRefOid : "",
+      base: typeof record.baseRefOid === "string" ? record.baseRefOid : "",
+    } };
+  },
+  async diff({ host, owner, repo, base, head }, context) {
+    // see skills/mstar-audit/references/pr-review.md
+    // why: like the merge gate's thread scan, API calls must reach the host `gh pr view` resolved — GH_HOST carries it so a port-bearing Enterprise host works where --hostname's parser rejects the port.
+    const result = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`], { env: { GH_HOST: host } });
+    if (result.exitCode !== 0 || result.signal !== null) {
+      return { ok: false, failure: { cause: "diff-unavailable", detail: result.stderr || "gh api compare failed" } };
+    }
+    return { ok: true, value: result.stdout };
+  },
+  async postReview({ host, owner, repo, pr, commitId, body, comments }, context) {
+    const apiPath = `repos/${owner}/${repo}/pulls/${pr}/reviews`;
+    const payload = JSON.stringify({
+      commit_id: commitId, event: "COMMENT" as const, body,
+      ...(comments.length ? { comments: comments.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}),
+    });
+    const response = await spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], { stdin: payload, env: { GH_HOST: host } });
+    if (response.exitCode !== 0 || response.signal !== null) {
+      // see skills/mstar-audit/references/pr-review.md
+      // why: `detail` is the message fragment the command prints (stderr, or
+      // the same fallback as before), while `probe` carries both streams so
+      // the command's 422 fold sees exactly the text it scanned before.
+      return { ok: false, failure: { cause: "unknown-outcome", detail: response.stderr || "gh api review post failed", commitId, probe: `${response.stderr}\n${response.stdout}` } };
+    }
+    let reviewUrl = response.stdout.trim();
+    try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* see skills/mstar-audit/references/pr-review.md — a non-JSON success body keeps its trimmed text as the review_url. */ }
+    return { ok: true, value: { reviewUrl } };
+  },
+};
+reviewPublishers.set("github", githubReviewPublisher);
 
 async function mergeGate(input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   // see skills/mstar-use-cli/references/checks-and-lints.md

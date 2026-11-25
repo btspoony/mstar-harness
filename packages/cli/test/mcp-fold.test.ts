@@ -29,8 +29,11 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * Re-taken again for `pr.merge-gate`: routing the gate through a named provider
  * adapter adds one option field, `--provider <id>` (measured 33_962; later prose
  * stays inside this budget rather than re-taking it).
+ * Re-taken again for `pr-review.post`: posting through a named publisher
+ * adapter adds one option field, `--provider <id>` (measured 33_991; later
+ * prose stays inside this budget rather than re-taking it).
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_962;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_991;
 
 type PublishedTool = Readonly<{
   name: string;
