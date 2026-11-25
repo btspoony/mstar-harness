@@ -338,7 +338,6 @@ function WorkflowRowView(props: {
   );
 }
 
-/** One milestone row: status, effort sessions, progress, open count. */
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (

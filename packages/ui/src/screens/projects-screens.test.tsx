@@ -586,7 +586,7 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // Creation is name + effort sessions only: the engine's add verb has no status field.
+    // why: the engine's add verb has no status field, so creation is name + effort sessions only.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
     expect(html).not.toContain('data-ms-assign-cap');

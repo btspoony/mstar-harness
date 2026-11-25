@@ -362,7 +362,6 @@ function Milestone(props: {
   );
 }
 
-/** The board's create form: name + optional effort sessions; the ordinal is the list length. */
 function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy }) {
   const { writes, copy } = props;
   const [name, setName] = useState("");
@@ -426,12 +425,9 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-/**
- * The Roadmap feature's timeline: one node per milestone, the read's order with
- * missing targets last, and one trailing node for the unassigned issues (plan
- * the dashboard alignment change, Task 3). Every number is the read's own: the
- * retired-over-total pair and the open count.
- */
+// invariant: the timeline is one node per milestone in the read's order (missing
+// targets last) plus one trailing node for the unassigned issues; every number is
+// the read's own — the retired-over-total pair and the open count.
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   const ordered = model.milestones;

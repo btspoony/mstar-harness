@@ -113,7 +113,7 @@ test("shared admission distinguishes zero, false, and true selectors at real mil
  const exclusive=await update({effortSessions:3,clearEffortSessions:true});
  expect(exclusive.details?.diagnostics).toContainEqual(expect.objectContaining({code:"exclusive"}));
 
-// An invalid value the schema admits (a blank name) reaches the engine's own
+// why: an invalid value the schema admits (a blank name) reaches the engine's own
 // milestone.invalid-input refusal; its recovery names the effort flag (A-refusal).
  const blankName=await update({name:"   ",effortSessions:3});
  expect(blankName).toMatchObject({status:"refused",code:"milestone.invalid-input"});

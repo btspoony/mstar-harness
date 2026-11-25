@@ -504,11 +504,9 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(unsent).toMatchObject({ status: "refused", code: "remote.dispatch-refused", exitCode: 1 });
     const recovery = String(unsent.details?.recovery ?? "");
-    // the normal branch: the row's own state decides, and a conflict row has a settlement in place.
     expect(recovery).toContain("Read the row's recorded state");
     expect(recovery).toContain("a row whose state is conflict is settleable in place");
     expect(recovery).toContain("mstar store collaboration remote outbox-resolve");
-    // the damaged branch: a state that says confirmed beside a conflict receipt has no in-place route.
     expect(recovery).toContain("a row whose state says confirmed beside a recorded conflict receipt");
     expect(recovery).not.toContain("only the cache rebuild settles it");
     expect(recovery).toContain("settle every other unsettled intent that cache holds");
@@ -517,7 +515,6 @@ describe("remote outbox commands", () => {
     expect(recovery).toContain("mstar store collaboration remote status --harness <abs>");
     expect(recovery).toContain("perform a fresh reviewed remote bind");
     expect(recovery).not.toContain("then resubmit the receipt");
-    // the guard's own sequence: settle, retain, prove the rebind, and only then remove the name.
     const steps = [
       "settle every other unsettled intent",
       "keep the cache file as evidence",
