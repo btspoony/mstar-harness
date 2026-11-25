@@ -112,6 +112,35 @@ function assignment(overrides: Record<string, FixtureValue> = {}): string {
   return lines.join("\n");
 }
 
+/** Control-checkout fixture shared by the control-write and pointer suites:
+ * a git repo (the control checkout, main branch) plus one linked worktree,
+ * so the harness root the CLI resolves is `<control>/.mstar`. */
+function fixture(fn: (control: string, linked: string, file: string) => void, canonical = false): void {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-control-dispatch-")));
+  const control = join(root, "control");
+  const linked = join(root, "linked");
+  mkdirSync(control);
+  const git = (...args: string[]) => execFileSync("git", ["-C", control, ...args], {
+    stdio: "pipe",
+    env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" },
+  });
+  try {
+    git("init", "-b", "main");
+    mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+    writeFileSync(join(control, ".gitignore"), canonical
+      ? ".mstar/**\n!.mstar/AGENTS.md\n!.mstar/knowledge/\n!.mstar/knowledge/**\n!.mstar/specs/\n!.mstar/specs/**\n!.mstar/adr/\n!.mstar/adr/**\n"
+      : ".mstar/plans/\n");
+    if (canonical) writeFileSync(join(control, ".mstar", "specs", "spec.md"), "fixture\n");
+    git("add", ".");
+    git("commit", "-m", "fixture");
+    git("worktree", "add", "-b", "feature/fixture", linked);
+    const file = join(control, "assignment.md");
+    fn(control, linked, file);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("mstar dispatch validate — Assignment field + default-branch gate", () => {
   test("the shared runner spawns MSTAR_CLI_ENTRY when set, else the source entry", () => {
     // A built-entry path that cannot execute: the spawn reaches the selector
@@ -196,6 +225,52 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       expect(violationCodes(result)).toContain("dispatch.assignment.legacy-format");
       // The recovery names the supported front matter form, not a generic block.
       expect(`${envelope.message} ${envelope.recovery}`).toContain("front matter");
+    });
+  });
+
+  test("plain body labels without the heading refuse dispatch.assignment.legacy-format, exit 1", () => {
+    // The previously accepted body-label grammar: no `## Assignment` heading,
+    // no bolding — plain `Label:` lines still shape a legacy Assignment.
+    const plain = `Execute as: fullstack-dev
+Delegation: forbidden
+Task category: logic
+Working branch: feature/foo
+Task budget (implement / ops rounds): S — one implementer round
+`;
+    withAssignment(plain, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expectEnvelope(result, "refused", "dispatch.assignment.legacy-format");
+      expect(violationCodes(result)).toContain("dispatch.assignment.legacy-format");
+    });
+  });
+
+  test("list-prefixed bold body labels without the heading refuse dispatch.assignment.legacy-format, exit 1", () => {
+    const listPrefixed = `- **Execute as**: fullstack-dev
+- **Delegation**: forbidden
+- **Task category**: logic
+- **Working branch**: feature/foo
+`;
+    withAssignment(listPrefixed, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expectEnvelope(result, "refused", "dispatch.assignment.legacy-format");
+      expect(violationCodes(result)).toContain("dispatch.assignment.legacy-format");
+    });
+  });
+
+  test("ordinary prose with one bold field line is NOT an Assignment → the schema row stands, exit 1", () => {
+    // One bolded label in ordinary prose never shapes the document: the
+    // generic front-matter row is the whole verdict, not the D16 refusal.
+    const prose = `Some notes on the upcoming work.
+
+**Working branch**: feature/foo might be a good name for it.
+`;
+    withAssignment(prose, (file) => {
+      const result = runCli(["dispatch", "validate", file]);
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("document.frontmatter.absent");
+      expect(violationCodes(result)).not.toContain("dispatch.assignment.legacy-format");
     });
   });
 
@@ -433,31 +508,6 @@ task_budget: S — one implementer round
 });
 
 describe("mstar dispatch validate — control writes", () => {
-  function fixture(fn: (control: string, linked: string, file: string) => void, canonical = false): void {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-control-dispatch-")));
-    const control = join(root, "control");
-    const linked = join(root, "linked");
-    mkdirSync(control);
-    const git = (...args: string[]) => execFileSync("git", ["-C", control, ...args], {
-      stdio: "pipe",
-      env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" },
-    });
-    try {
-      git("init", "-b", "main");
-      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
-      writeFileSync(join(control, ".gitignore"), canonical
-        ? ".mstar/**\n!.mstar/AGENTS.md\n!.mstar/knowledge/\n!.mstar/knowledge/**\n!.mstar/specs/\n!.mstar/specs/**\n!.mstar/adr/\n!.mstar/adr/**\n"
-        : ".mstar/plans/\n");
-      if (canonical) writeFileSync(join(control, ".mstar", "specs", "spec.md"), "fixture\n");
-      git("add", ".");
-      git("commit", "-m", "fixture");
-      git("worktree", "add", "-b", "feature/fixture", linked);
-      const file = join(control, "assignment.md");
-      fn(control, linked, file);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }
 
   test("validates the control checkout from a linked worktree and refuses mismatches", () => {
     fixture((control, linked, file) => {
@@ -566,5 +616,101 @@ describe("mstar dispatch validate — control writes", () => {
       const multiple = run(".mstar/sdd/plan-x/report.md, .mstar/specs/spec.md");
       expect(violationCodes(multiple)).toContain("dispatch.control-write.target-committable");
     }, true);
+  });
+});
+
+describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
+  // The CLI's own input is a FILE whose content is inline input to the ONE
+  // source resolver: an `Assignment file: <abs>` pointer inside it resolves
+  // under the accepted assignment homes of the harness root the invocation
+  // directory belongs to (fixture: the control checkout's `.mstar`).
+
+  test("a pointer under an accepted assignment home validates the pointed assignment → exit 0", () => {
+    fixture((control, linked) => {
+      const assignmentsDir = join(control, ".mstar", "sdd", "plan-x", "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const pointed = join(assignmentsDir, "pointed.md");
+      writeFileSync(pointed, VALID_ASSIGNMENT);
+      withAssignment(`Assignment file: ${pointed}\n`, (file) => {
+        const result = runCli(["dispatch", "validate", file], { cwd: linked });
+        expect(result.exitCode).toBe(0);
+        expectEnvelope(result, "ok", "dispatch.validate.ok");
+      });
+    });
+  });
+
+  test("an out-of-home pointer refuses dispatch.assignment.path with no downstream field violations, exit 1", () => {
+    fixture((control, linked) => {
+      // `.mstar/scratch/` is inside the harness dir but outside every accepted
+      // assignment home (the sdd home needs `<base>/<one segment>/assignments`).
+      const outside = join(control, ".mstar", "scratch");
+      mkdirSync(outside, { recursive: true });
+      const stray = join(outside, "stray.md");
+      writeFileSync(stray, VALID_ASSIGNMENT);
+      withAssignment(`Assignment file: ${stray}\n`, (file) => {
+        const result = runCli(["dispatch", "validate", file], { cwd: linked });
+        expect(result.exitCode).toBe(1);
+        expectEnvelope(result, "refused", "dispatch.assignment.path");
+        expect(violationCodes(result)).toEqual(["dispatch.assignment.path"]);
+      });
+    });
+  });
+
+  test("a pointer with no resolvable harness root refuses dispatch.assignment.path, exit 1", () => {
+    // cwd is a bare temp dir outside any Git checkout: the control harness
+    // root is unavailable, so containment cannot be checked and the refusal
+    // is terminal — no downstream field violations.
+    withAssignment(`Assignment file: ${join(tmpdir(), "anywhere.md")}\n`, (file) => {
+      const bare = mkdtempSync(join(tmpdir(), "mstar-no-root-"));
+      try {
+        const result = runCli(["dispatch", "validate", file], { cwd: bare });
+        expect(result.exitCode).toBe(1);
+        expectEnvelope(result, "refused", "dispatch.assignment.path");
+        expect(violationCodes(result)).toEqual(["dispatch.assignment.path"]);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a pointer alongside inline content refuses dispatch.assignment.ambiguous, exit 1", () => {
+    withAssignment(`Assignment file: ${join(tmpdir(), "anywhere.md")}\n\nsome inline body\n`, (file) => {
+      const bare = mkdtempSync(join(tmpdir(), "mstar-ambiguous-"));
+      try {
+        const result = runCli(["dispatch", "validate", file], { cwd: bare });
+        expect(result.exitCode).toBe(1);
+        expectEnvelope(result, "refused", "dispatch.assignment.ambiguous");
+        expect(violationCodes(result)).toEqual(["dispatch.assignment.ambiguous"]);
+      } finally {
+        rmSync(bare, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("a pointed control-write assignment resolves worktree_path relative to the POINTED file", () => {
+    fixture((control, linked) => {
+      const assignmentsDir = join(control, ".mstar", "sdd", "plan-x", "assignments");
+      mkdirSync(assignmentsDir, { recursive: true });
+      const pointed = join(assignmentsDir, "pointed.md");
+      // Relative to the pointed file's own directory (`<control>/.mstar/sdd/
+      // plan-x/assignments`), `../../../..` IS the control checkout; resolved
+      // relative to the CLI input file (sitting directly in <control>, as an
+      // inline source would be) the same relative path misses it.
+      const text = assignment({ write_domain: "control", worktree_path: "../../../..", working_branch: "main", control_write_paths: ".mstar/plans/run.md" });
+      writeFileSync(pointed, text);
+      const inputFile = join(control, "dispatch-input.md");
+      writeFileSync(inputFile, `Assignment file: ${pointed}\n`);
+      const viaPointer = runCli(["dispatch", "validate", inputFile], { cwd: linked });
+      expect(viaPointer.exitCode).toBe(0);
+      expectEnvelope(viaPointer, "ok", "dispatch.validate.ok");
+      // Negative control: the same document inline resolves the relative
+      // worktree_path against the input file's directory — the relative
+      // location decides the verdict, so the positive run proves the pointed
+      // path reached validation.
+      writeFileSync(inputFile, text);
+      const inline = runCli(["dispatch", "validate", inputFile], { cwd: linked });
+      expect(inline.exitCode).toBe(1);
+      expect(violationCodes(inline)).toContain("dispatch.control-write.worktree-not-control");
+    });
   });
 });

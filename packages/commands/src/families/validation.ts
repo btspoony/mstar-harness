@@ -95,15 +95,29 @@ type Input = {
 };
 type Violation = GateResult["violations"][number];
 
-/** why: D16 — an Assignment-shaped document whose fields live in `**Label**`
- * body lines (the retired format) is refused `dispatch.assignment.legacy-format`
+/** why: D16 — an Assignment-shaped document whose fields live in body lines
+ * (the retired format) is refused `dispatch.assignment.legacy-format`
  * instead of the schema's generic absent-fence row, so the caller reads the
- * ONE front matter contract out of the refusal. Shape detection only: a
- * document without a closed front matter fence counts as Assignment-shaped
- * when it carries the `## Assignment` heading or a bolded body label for any
- * dispatch field. */
+ * ONE front matter contract out of the refusal. Shape detection only: the
+ * previously accepted body-label grammar counts a label in any of its three
+ * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
+ * list-prefixed `- **Execute as**:` line (indentation and a numeric or
+ * bullet list marker are formatting, never the field). Detection requires
+ * at least TWO distinct core labels, so a single bolded field line in
+ * ordinary prose never shapes a document as an Assignment; the `## Assignment`
+ * heading is irrelevant either way. */
+function legacyLabelKey(line: string): string | null {
+  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
+  return match?.[1] ?? null;
+}
 function isLegacyAssignmentShape(text: string): boolean {
-  return /^##[ \t]+Assignment\b/m.test(text) || /^\*\*[ \t]*(?:Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*\*\*[ \t]*:/m.test(text);
+  const found = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const key = legacyLabelKey(line);
+    if (key !== null) found.add(key);
+    if (found.size >= 2) return true;
+  }
+  return false;
 }
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
