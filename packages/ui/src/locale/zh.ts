@@ -469,6 +469,7 @@ export const zh: Copy = {
         create: "创建",
         nameLabel: "里程碑名称",
         effortLabel: "会话数",
+        effortInvalid: "会话数必须是大于等于 1 的整数，或留空。",
         statusLabel: "状态",
         edit: "编辑",
         save: "保存",

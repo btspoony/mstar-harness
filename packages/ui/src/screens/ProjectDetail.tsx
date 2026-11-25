@@ -45,13 +45,25 @@ export type AssignableIssue = { id: string; title: string; severity: string; rev
 export const ASSIGNABLE_ISSUE_LIMIT = 50;
 
 /**
- * An effort field's text as the count it states: empty means unestimated (`null`).
- * Any other text is sent as typed and the store's own validator refuses it, so the
- * screen never grows a second rule.
+ * An effort field's text, screened BEFORE any write: empty means unestimated
+ * (`null`), a whole number is sent as that number — the engine stays the
+ * authority for the range — and anything else is refused locally. A browser
+ * `type="number"` input sanitises bad text to an empty value, which would turn
+ * garbage into `{ effortSessions: null }` and silently clear the stored
+ * estimate, so the raw text is kept in a plain input and screened here.
  */
-function effortSessionsOf(value: string): number | null {
+export function effortInput(value: string): { kind: "empty" } | { kind: "count"; sessions: number } | { kind: "invalid" } {
   const trimmed = value.trim();
-  return trimmed === "" ? null : Number(trimmed);
+  if (trimmed === "") return { kind: "empty" };
+  return /^[+-]?\d+$/.test(trimmed) ? { kind: "count", sessions: Number(trimmed) } : { kind: "invalid" };
+}
+
+/** The effort patch member for a stored milestone and a screened input. */
+function effortPatch(milestone: RoadmapModel["milestones"][number], value: string): { effortSessions?: number | null } {
+  const effort = effortInput(value);
+  if (effort.kind === "invalid") return {};
+  if (effort.kind === "empty") return milestone.effortSessions === null ? {} : { effortSessions: null };
+  return effort.sessions === milestone.effortSessions ? {} : { effortSessions: effort.sessions };
 }
 
 /** One milestone editor's text, as the operator typed it. */
@@ -76,8 +88,28 @@ export function milestonePatch(
 ): { name?: string; effortSessions?: number | null; status?: string } {
   return {
     ...(draft.name.trim() === milestone.name ? {} : { name: draft.name.trim() }),
-    ...(effortSessionsOf(draft.effort) === milestone.effortSessions ? {} : { effortSessions: effortSessionsOf(draft.effort) }),
+    ...effortPatch(milestone, draft.effort),
     ...(draft.status === milestone.status ? {} : { status: draft.status }),
+  };
+}
+
+/**
+ * The create form's input, screened the same way: a count reaches the channel
+ * as that number, an empty field as `null`, and an invalid text refuses the
+ * submit instead of being coerced. `0` and negatives ARE whole numbers, so
+ * they travel to the engine and ITS range validator refuses them.
+ */
+export function milestoneCreateInput(
+  name: string,
+  effort: string,
+  nextOrdinal: number,
+): { kind: "invalid" } | { kind: "input"; input: { name: string; effortSessions: number | null; ordinal: number } } {
+  if (name.trim() === "") return { kind: "invalid" };
+  const parsed = effortInput(effort);
+  if (parsed.kind === "invalid") return { kind: "invalid" };
+  return {
+    kind: "input",
+    input: { name: name.trim(), effortSessions: parsed.kind === "empty" ? null : parsed.sessions, ordinal: nextOrdinal },
   };
 }
 
@@ -137,6 +169,8 @@ export type ProjectDetailCopy = {
       create: string;
       nameLabel: string;
       effortLabel: string;
+      /** Said when the effort field is not a whole number, so the write is skipped. */
+      effortInvalid: string;
       statusLabel: string;
       edit: string;
       save: string;
@@ -205,6 +239,7 @@ function MilestoneActions(props: {
   // nowhere to live until the next open re-seeds it from the milestone.
   const [draft, setDraft] = useState<MilestoneDraft | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [effortError, setEffortError] = useState(false);
   if (draft === null) {
     return (
       <span className={"ms-actions"}>
@@ -281,6 +316,11 @@ function MilestoneActions(props: {
       data-ms-milestone-edit-form={milestone.milestoneId}
       onSubmit={(event) => {
         event.preventDefault();
+        if (effortInput(draft.effort).kind === "invalid") {
+          setEffortError(true);
+          return;
+        }
+        setEffortError(false);
         writes.update(milestone.milestoneId, milestonePatch(milestone, draft));
         setDraft(null);
       }}
@@ -291,14 +331,20 @@ function MilestoneActions(props: {
       </label>
       <label>
         {copy.roadmap.writes.effortLabel}
+        {/* Plain text keeps the raw keystrokes: a number input sanitises bad text
+            to "", which would coerce garbage into a null (a cleared estimate). */}
         <input
-          type="number"
-          min={1}
-          step={1}
+          type="text"
+          inputMode="numeric"
           value={draft.effort}
           disabled={writes.busy}
           onChange={(event) => setDraft({ ...draft, effort: event.target.value })}
         />
+        {effortError ? (
+          <span className="muted t-11" data-ms-effort-invalid="">
+            {copy.roadmap.writes.effortInvalid}
+          </span>
+        ) : null}
       </label>
       <label>
         {copy.roadmap.writes.statusLabel}
@@ -414,14 +460,20 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
   const { writes, copy } = props;
   const [name, setName] = useState("");
   const [effort, setEffort] = useState("");
+  const [effortError, setEffortError] = useState(false);
   return (
     <form
       className={"ms-create"}
       data-ms-milestone-create=""
       onSubmit={(event) => {
         event.preventDefault();
-        if (name.trim() === "") return;
-        writes.create({ name: name.trim(), effortSessions: effortSessionsOf(effort), ordinal: props.nextOrdinal });
+        const created = milestoneCreateInput(name, effort, props.nextOrdinal);
+        if (created.kind === "invalid") {
+          if (name.trim() !== "") setEffortError(true);
+          return;
+        }
+        setEffortError(false);
+        writes.create(created.input);
         setName("");
         setEffort("");
       }}
@@ -433,13 +485,17 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
       <label>
         {copy.roadmap.writes.effortLabel}
         <input
-          type="number"
-          min={1}
-          step={1}
+          type="text"
+          inputMode="numeric"
           value={effort}
           disabled={writes.busy}
           onChange={(event) => setEffort(event.target.value)}
         />
+        {effortError ? (
+          <span className="muted t-11" data-ms-effort-invalid="">
+            {copy.roadmap.writes.effortInvalid}
+          </span>
+        ) : null}
       </label>
       <button type="submit" className={"link"} disabled={writes.busy || name.trim() === ""}>
         {copy.roadmap.writes.create}

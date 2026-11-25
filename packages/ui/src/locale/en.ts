@@ -142,8 +142,7 @@ export const en = {
     milestonesHeading: "Milestones",
     milestonesSummary: (milestones: number, open: number) => `${milestones} milestones · ${open} open`,
     milestoneProgress: (done: number, total: number) => `${done}/${total}`,
-    milestoneEffort: (sessions: number | null) =>
-      sessions === null ? "unestimated" : `${sessions} ${sessions === 1 ? "session" : "sessions"}`,
+    milestoneEffort: (sessions: number | null) => (sessions === null ? "unestimated" : `${sessions} sessions`),
     milestoneOpenCount: (open: number) => ` · ${open} open`,
     milestoneOpen: (open: number) => `${open} open`,
     projection: {
@@ -493,7 +492,7 @@ export const en = {
     unassignedUnit: "unassigned issues",
       milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
-      effort: (sessions: number) => `${sessions} ${sessions === 1 ? "session" : "sessions"}`,
+      effort: (sessions: number) => `${sessions} sessions`,
       unestimated: "unestimated",
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
       unassigned: (count: number) => `${count} issues are not assigned to a milestone`,
@@ -503,6 +502,7 @@ export const en = {
         create: "Create",
         nameLabel: "Milestone name",
         effortLabel: "Sessions",
+        effortInvalid: "The session count must be a whole number of at least 1, or left empty.",
         statusLabel: "Status",
         edit: "Edit",
         save: "Save",

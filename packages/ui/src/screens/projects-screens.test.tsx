@@ -29,6 +29,8 @@ import type { RoadmapModel } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
+  effortInput,
+  milestoneCreateInput,
   milestoneDraft,
   milestonePatch,
   ProjectDetail as ProjectDetailScreen,
@@ -182,6 +184,7 @@ const detailCopy: ProjectDetailCopy = {
       create: "Create",
       nameLabel: "Milestone name",
       effortLabel: "Sessions",
+      effortInvalid: "The session count must be a whole number of at least 1, or left empty.",
       statusLabel: "Status",
       edit: "Edit",
       save: "Save",
@@ -363,9 +366,11 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 
   test("nodes follow the store's ordinal order, then the unassigned node", () => {
-    // The three orders DISAGREE on purpose: by ordinal this is zeta then alpha, by
-    // id ascending it is alpha then zeta, and by effort ascending it is alpha (1)
-    // then zeta (9). Only an ordinal sort puts zeta first.
+    // The fixture is sent in id-ascending order and chosen so ALL four single-key
+    // alternatives disagree with the ordinal-then-id comparator: by id ascending
+    // this is a, b, c; by id descending c, b, a; by effort ascending b(3), c(4),
+    // a(5); by effort descending a(5), c(4), b(3). Only ordinal 0 first and the id
+    // tie-break at ordinal 1 render c, a, b.
     const ordered = renderDetail({
       roadmap: roadmapBody(
         roadmapFeatureArm({
@@ -374,9 +379,9 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
               projectId: "engine",
               milestones: [
                 milestoneRow({
-                  milestoneId: "alpha-position",
+                  milestoneId: "a-position",
                   name: "Second position",
-                  effortSessions: 1,
+                  effortSessions: 5,
                   status: "planned",
                   ordinal: 1,
                   totalIssues: 0,
@@ -384,9 +389,19 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
                   openIssues: 0,
                 }),
                 milestoneRow({
-                  milestoneId: "zeta-position",
+                  milestoneId: "b-position",
+                  name: "Third position",
+                  effortSessions: 3,
+                  status: "active",
+                  ordinal: 1,
+                  totalIssues: 0,
+                  resolvedIssues: 0,
+                  openIssues: 0,
+                }),
+                milestoneRow({
+                  milestoneId: "c-position",
                   name: "First position",
-                  effortSessions: 9,
+                  effortSessions: 4,
                   status: "delivered",
                   ordinal: 0,
                   totalIssues: 2,
@@ -402,16 +417,17 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
         }),
       ),
     });
-    const zeta = ordered.indexOf('data-ms-timeline-node="zeta-position"');
-    const alpha = ordered.indexOf('data-ms-timeline-node="alpha-position"');
+    const c = ordered.indexOf('data-ms-timeline-node="c-position"');
+    const a = ordered.indexOf('data-ms-timeline-node="a-position"');
+    const b = ordered.indexOf('data-ms-timeline-node="b-position"');
     const unassigned = ordered.indexOf('data-ms-timeline-node="unassigned"');
-    expect(zeta).toBeGreaterThan(-1);
-    expect(zeta).toBeLessThan(alpha);
-    expect(alpha).toBeLessThan(unassigned);
+    expect(c).toBeGreaterThan(-1);
+    expect(c).toBeLessThan(a);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(unassigned);
     // Each node states its own effort line and status, in its own slot.
-    expect(timelineNodeOf(ordered, "zeta-position")).toContain("9 sessions · delivered");
-    // The fixture copy is not the locale's singular rule: "1 sessions" is what it prints.
-    expect(timelineNodeOf(ordered, "alpha-position")).toContain("1 sessions · planned");
+    expect(timelineNodeOf(ordered, "c-position")).toContain("4 sessions · delivered");
+    expect(timelineNodeOf(ordered, "a-position")).toContain("5 sessions · planned");
     // The trailing node is the unassigned issues only: no effort line, no estimate word.
     const trailing = timelineNodeOf(ordered, "unassigned");
     expect(trailing).toContain("1 issues");
@@ -679,9 +695,10 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     // Creation is name + effort only: the engine's add verb has no status field.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
-    // A whole number of sessions, empty meaning unestimated — never a calendar date.
-    expect(createForm).toContain('type="number"');
-    expect(createForm).toContain('min="1"');
+    // The effort field keeps the raw text (a number input sanitises bad text to
+    // ""), never a calendar date.
+    expect(createForm).toContain('inputMode="numeric"');
+    expect(createForm).not.toContain('type="number"');
     expect(createForm).not.toContain('type="date"');
     expect(html).not.toContain('data-ms-assign-cap');
   });
@@ -737,7 +754,7 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
   });
 });
 
-describe("ProjectDetail — the edit form's Save is a change against the stored milestone (QC 1 F-002)", () => {
+describe("ProjectDetail — the edit form's draft and patch contract", () => {
   // The screen's own stored milestone, read through the view model the page renders.
   const stored = (): RoadmapModel["milestones"][number] => {
     const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
@@ -763,10 +780,33 @@ describe("ProjectDetail — the edit form's Save is a change against the stored 
     expect(patch).toEqual({ effortSessions: null });
   });
 
-  test("an untouched form sends nothing, and a new count is sent as that count", () => {
+  test("an untouched form carries no changed fields, though Save still issues the update call", () => {
     const milestone = stored();
     expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
     expect(milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "20" })).toEqual({ effortSessions: 20 });
+  });
+
+  test("the create form sends a count as that count and an empty field as null", () => {
+    const twelve = milestoneCreateInput("New milestone", "12", 0);
+    expect(twelve).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: 12, ordinal: 0 } });
+    const unestimated = milestoneCreateInput("New milestone", "  ", 0);
+    expect(unestimated).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: null, ordinal: 0 } });
+  });
+
+  test("a garbage effort text is refused, not coerced into a cleared estimate", () => {
+    // `0` is a whole number: it reaches the engine, whose range validator refuses
+    // it. Only non-integer text stops at the screen — never coerced to `null`.
+    expect(effortInput("0")).toEqual({ kind: "count", sessions: 0 });
+    expect(milestoneCreateInput("New milestone", "0", 0)).toEqual({
+      kind: "input",
+      input: { name: "New milestone", effortSessions: 0, ordinal: 0 },
+    });
+    for (const text of ["1.5", "twelve", "12px", "-"]) {
+      expect(effortInput(text)).toEqual({ kind: "invalid" });
+      expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });
+    }
+    // On the edit side an invalid text contributes no effort field at all.
+    expect(milestonePatch(stored(), { ...milestoneDraft(stored()), effort: "twelve" })).toEqual({});
   });
 });
 

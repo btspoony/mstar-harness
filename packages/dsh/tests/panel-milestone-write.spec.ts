@@ -398,29 +398,46 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
 
     // The seat re-arms the channel after every write with the freshly observed revision,
     // so the spec does the same: one channel per write, the production client throughout.
-    const channelAt = (expectedStoreRevision: number) =>
-      createMilestoneWrites({
+    const channelAt = (expectedStoreRevision: number) => {
+      const states: { busy: boolean; refusal: string | null }[] = []
+      const channel = createMilestoneWrites({
         client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
         sessionId: 'ses_ms_chain',
         cwd: app.root,
         projectId: '_default',
         expectedStoreRevision,
         reload: () => {},
-        onState: () => {},
+        onState: (state) => states.push(state),
         ids: writeOperationIds<{ expectedStoreRevision: number }>(),
       })
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+      return {
+        channel,
+        // A write is settled only when its terminal answer flipped busy back to
+        // false; a timer alone can read back before the engine has written.
+        settle: async () => {
+          for (let i = 0; i < 100 && states[states.length - 1]?.busy !== false; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          }
+          expect(states[states.length - 1]?.busy).toBe(false)
+        },
+        refusal: () => channel.refusal,
+      }
+    }
     const revision = () => observedRevision(endpoint, 'ses_ms_chain', app.root)
 
-    channelAt(await revision()).create({ name: 'Chained', effortSessions: 12, ordinal: 0 })
-    await settle()
+    const create = channelAt(await revision())
+    create.channel.create({ name: 'Chained', effortSessions: 12, ordinal: 0 })
+    await create.settle()
+    expect(create.refusal()).toBeNull()
     const created = await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)
     expect(created).toMatchObject([{ name: 'Chained', effortSessions: 12 }])
 
     // The clear travels as an explicit `null` — not an omitted field, which would leave
     // the stored 12 alone — and the STORE holds null afterwards.
-    channelAt(await revision()).update(created[0]!.milestoneId, { effortSessions: null })
-    await settle()
+    const clear = channelAt(await revision())
+    clear.channel.update(created[0]!.milestoneId, { effortSessions: null })
+    await clear.settle()
+    expect(clear.refusal()).toBeNull()
     expect(await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)).toMatchObject([
       { name: 'Chained', effortSessions: null },
     ])
