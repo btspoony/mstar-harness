@@ -270,6 +270,39 @@ Body.
     expect(loaded.permission).toEqual({ edit: { "*": "deny" } });
     expect(loaded).toMatchObject(parseSimpleFrontmatter(extractFrontmatterAndBody(QUOTED_KEY_SEAT).frontmatter));
   });
+  test("agent and command front matter with nested maps resolve to the same objects", () => {
+    // Task 4 host-parity proof: an agent seat and a command whose front
+    // matter carries nested `tools:`/`permission:` block maps must come out
+    // of the loaders as the exact object an independent parse of the same
+    // bytes produces — key spellings, nesting depth and scalars intact.
+    const COMMAND_SEAT = `---
+name: iteration-drive
+description: Drive the iteration.
+agent: fullstack-dev
+permission:
+  edit:
+    "*": deny
+---
+
+Drive the iteration.
+`;
+    const commandsDir = path.join(tmpRoot(), "harness-commands");
+    writeFileUnder(commandsDir, "iteration-drive.md", COMMAND_SEAT);
+
+    const loadedAgent = loadAgentsFromDir(agentsDirWith(PM_PRIMARY_SEAT))["project-manager"];
+    const parsedAgent = parseSimpleFrontmatter(extractFrontmatterAndBody(PM_PRIMARY_SEAT).frontmatter);
+    expect(loadedAgent).toMatchObject(parsedAgent);
+    expect(loadedAgent.tools).toEqual({ write: true, edit: true, bash: true });
+    expect((loadedAgent.permission as Record<string, Record<string, string>>).task["*"]).toBe("allow");
+
+    const loadedCommand = loadCommandsFromDir(commandsDir)["iteration-drive"];
+    const parsedCommand = parseSimpleFrontmatter(extractFrontmatterAndBody(COMMAND_SEAT).frontmatter);
+    // The command loader forwards the whitelisted scalars verbatim from the
+    // same parse; a nested permission map in the file must not disturb them.
+    expect(loadedCommand.description).toBe(parsedCommand.description);
+    expect(loadedCommand.agent).toBe(parsedCommand.agent);
+    expect(loadedCommand.template).toBe("Drive the iteration.");
+  });
 
   /** The first sorted asset file whose independent parse carries a string
    * `description`, paired with the entry the loader files it under. The

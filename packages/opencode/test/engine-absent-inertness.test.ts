@@ -149,3 +149,102 @@ describe("engine-absent inertness (subprocess fixture)", () => {
     }
   });
 });
+
+/**
+ * V1 host loader parity (Task 4): agent and command front matter carrying
+ * nested `tools:`/`permission:` block maps must come out of the V1 loaders as
+ * the exact object an independent `parseSimpleFrontmatter` of the same bytes
+ * produces. The V1 loaders are module-private, so the probe drives the real
+ * plugin source in a subprocess against a fixture package layout — the
+ * engine shim re-exports the real src so loader and probe share one parser.
+ */
+const PARITY_PROBE = `
+import { MorningStarHarnessPlugin } from "./src/mstar.ts";
+import { extractFrontmatterAndBody, parseSimpleFrontmatter } from "@mstar-harness/engine";
+import { readFileSync } from "node:fs";
+
+const fail = (message: string): never => {
+  console.error("PROBE: " + message);
+  process.exit(1);
+};
+
+const agentRaw = readFileSync("./harness-agents/nested-seat.md", "utf8");
+const commandRaw = readFileSync("./harness-commands/nested-command.md", "utf8");
+const parsedAgent = parseSimpleFrontmatter(extractFrontmatterAndBody(agentRaw).frontmatter);
+const parsedCommand = parseSimpleFrontmatter(extractFrontmatterAndBody(commandRaw).frontmatter);
+
+const plugin = await MorningStarHarnessPlugin();
+const config: { agent?: Record<string, unknown>; command?: Record<string, unknown> } = {};
+await plugin.config?.(config);
+
+const loadedAgent = config.agent?.["nested-seat"] as Record<string, unknown> | undefined;
+if (!loadedAgent) fail("nested-seat missing from loaded agents");
+for (const [key, value] of Object.entries(parsedAgent)) {
+  if (JSON.stringify(loadedAgent[key]) !== JSON.stringify(value)) {
+    fail("agent key " + key + " differs: " + JSON.stringify(loadedAgent[key]) + " vs " + JSON.stringify(value));
+  }
+}
+
+const loadedCommand = config.command?.["nested-command"] as Record<string, unknown> | undefined;
+if (!loadedCommand) fail("nested-command missing from loaded commands");
+if (loadedCommand.description !== parsedCommand.description) fail("command description differs");
+if (loadedCommand.agent !== parsedCommand.agent) fail("command agent differs");
+if (loadedCommand.template !== "Drive the iteration.") fail("command template differs");
+
+console.log("PROBE_OK");
+`;
+
+describe("host loader parity with nested front matter maps", () => {
+  test("V1 agent and command loaders resolve nested tools/permission maps to the same objects", () => {
+    const project = mkdtempSync(join(tmpdir(), "mstar-loader-parity-"));
+    try {
+      // Engine shim re-exporting the real parser src — parity demands the
+      // same reader implementation on both sides of the comparison.
+      const engineDir = join(project, "node_modules", "@mstar-harness", "engine");
+      mkdirSync(engineDir, { recursive: true });
+      writeFileSync(
+        join(engineDir, "package.json"),
+        JSON.stringify({ name: "@mstar-harness/engine", type: "module", main: "index.js" }),
+        "utf8",
+      );
+      const engineIndexPath = join(import.meta.dir, "../../engine/src/index.ts");
+      writeFileSync(join(engineDir, "index.js"), `export * from ${JSON.stringify(engineIndexPath)};\n`, "utf8");
+
+      // The ACTUAL plugin source with the fixture package layout it loads
+      // agents and commands from (`harness-agents/`, `harness-commands/`
+      // one level above src/).
+      mkdirSync(join(project, "src"));
+      copyFileSync(join(import.meta.dir, "../src/mstar.ts"), join(project, "src", "mstar.ts"));
+      writeFileSync(
+        join(project, "src", "mcp.js"),
+        "export const createOpenCodeMcpTools = () => ({});\nexport const closeOpenCodeMcpSession = async () => {};\n",
+        "utf8",
+      );
+      mkdirSync(join(project, "harness-agents"));
+      writeFileSync(
+        join(project, "harness-agents", "nested-seat.md"),
+        '---\nname: nested-seat\ntools:\n  write: true\npermission:\n  edit:\n    "*": deny\n---\n\nSeat body.\n',
+        "utf8",
+      );
+      mkdirSync(join(project, "harness-commands"));
+      writeFileSync(
+        join(project, "harness-commands", "nested-command.md"),
+        '---\nname: nested-command\ndescription: Drive nested commands.\nagent: fullstack-dev\npermission:\n  edit:\n    "*": deny\n---\n\nDrive the iteration.\n',
+        "utf8",
+      );
+
+      writeFileSync(join(project, "probe.ts"), PARITY_PROBE, "utf8");
+
+      const result = spawnSync(process.execPath, [join(project, "probe.ts")], {
+        cwd: project,
+        encoding: "utf8",
+        env: { ...process.env, MSTAR_HARNESS_DIR: "" },
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("PROBE_OK");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
