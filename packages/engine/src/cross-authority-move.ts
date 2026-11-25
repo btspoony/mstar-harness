@@ -3536,8 +3536,8 @@ async function restoreRemoteSource(
         operation_id: request.operationId,
         issueRef: source.issueRef,
         recovery:
-          "Finish the move instead — reissue it with the destination's `staged` handoff so this side emits its `switch` " +
-          "document — or re-adopt the provider record with `mstar store collaboration remote adopt-issue`.",
+          "Finish the move instead \u2014 reissue it with the destination's `staged` handoff so this side emits its `switch` " +
+          "document \u2014 or re-adopt the provider record with `mstar store collaboration remote adopt-issue`.",
       },
     );
   }
