@@ -1821,4 +1821,30 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
     if (result.ok) throw new Error("unreachable");
     expect(result.code).toBe("dispatch.assignment.path");
   });
+
+  test("a filesystem-root sdd_dir base keeps <segment>/assignments containment (F1 regression)", () => {
+    // `.mstarc` sdd_dir = "/" — the canonical write-home root is the
+    // filesystem root itself, where `root + sep` would be `//` and string
+    // slicing would corrupt the identity segment. The filesystem root is
+    // not writable on every host, so the pointer stays nonexistent: the
+    // regression is proven by containment PASSING — the refusal must be
+    // the read step ("cannot be read"), never "resolves outside every
+    // accepted assignment home".
+    const fsRootHarness = join(root, "rooted");
+    mkdirSync(fsRootHarness, { recursive: true });
+    writeFileSync(join(fsRootHarness, ".mstarc"), "[config]\nsdd_dir = /\n");
+    const harnessDir = fsRootHarness;
+    const file = join("/", "root-plan-x", "assignments", "assignment.md");
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+    expect(result.message).toContain("cannot be read");
+    expect(result.message).not.toContain("outside every accepted assignment home");
+    // A file at the base root with no <segment>/assignments shape still refuses.
+    const loose = readAssignmentSource("Assignment file: /loose-root-x.md\n", { harnessDir });
+    expect(loose.ok).toBe(false);
+    if (loose.ok) throw new Error("unreachable");
+    expect(loose.message).toContain("outside every accepted assignment home");
+  });
 });

@@ -44,7 +44,7 @@
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
  * never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
-import { isAbsolute, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { readFileSync } from "node:fs";
 import { assignmentSourceHomes, canonicalizeNearestExisting } from "./path.js";
 import { probePathOwnership } from "./path-check.js";
@@ -1138,19 +1138,22 @@ function assignmentSourceRefusal(code: string, message: string, fix: string): As
 
 /**
  * True when the canonical `file` sits inside the assignment `home`
- * (compass D14). The read-only harness home is complete
- * (`{HARNESS_DIR}/assignments`): containment is `file === home ||
- * file.startsWith(home + sep)`. A write home root is the bare base, so the
- * file must additionally sit under `<base>/<one segment>/assignments` — a
- * file directly in the base (or in a stray sibling tree) is not an
- * assignment source.
+ * (compass D14). Containment is computed with `path.relative(root, file)`
+ * — never string concatenation, which breaks when the canonical root is
+ * the filesystem root itself (root + sep would be `//`). A `..`-prefixed
+ * or absolute relative result is outside. The read-only harness home is
+ * complete (`{HARNESS_DIR}/assignments`); a write home root is the bare
+ * base, so the file must additionally sit under `<base>/<one
+ * segment>/assignments` — a file directly in the base (or in a stray
+ * sibling tree) is not an assignment source.
  */
 function assignmentHomeContains(file: string, home: { root: string; write: boolean }): boolean {
   const root = canonicalizeNearestExisting(home.root);
-  if (file !== root && !file.startsWith(root + sep)) return false;
+  const relativePath = relative(root, file);
+  if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) return false;
   if (!home.write) return true;
-  const rel = file.slice(root.length + 1).split(sep);
-  return rel.length >= 3 && rel[1] === "assignments";
+  const segments = relativePath.split(sep);
+  return segments.length >= 3 && segments[1] === "assignments";
 }
 
 /**
