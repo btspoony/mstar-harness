@@ -656,7 +656,7 @@ describe("validateDocumentFrontmatter — T3-R6 empty fenced front matter", () =
   });
 });
 
-describe("validateDocumentFrontmatter — CF-04 usable required content", () => {
+describe("validateDocumentFrontmatter — usable required content", () => {
   test('an explicit empty string refuses as missing', () => {
     const fm = PLAN_FM.replace("execution: sdd", 'execution: ""');
     const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
@@ -708,5 +708,40 @@ describe("validateDocumentFrontmatter — CF-04 usable required content", () => 
     const blank = ASSIGNMENT_FM.replace("execute_as: fullstack-dev", "execute_as:");
     const blankGate = validateDocumentFrontmatter("assignment", doc(blank), "assignment");
     expect(blankGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("execute_as"))).toBe(true);
+  });
+
+  test("a non-empty list is not usable scalar content for a required textual field", () => {
+    const fm = PLAN_FM.replace("plan_id: 20261201-synthetic-plan", "plan_id: [p1]");
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("plan_id");
+    expect(v.message).toContain("not a list");
+    // The correction tells the caller to replace the value in place —
+    // duplicating the key would be refused as a duplicate.
+    expect(v.fix).toContain("single scalar");
+  });
+
+  test("budget and return_shape of N/A count as missing exactly as dispatch classifies them", () => {
+    const base = "execute_as: qc-specialist\ndelegation: forbidden\ntask_category: logic\nbudget: M\nreturn_shape: verdict\nworking_branch: feature/x";
+    const budgetNa = base.replace("budget: M", "budget: N/A");
+    const budgetGate = validateDocumentFrontmatter("assignment", doc(budgetNa), "assignment");
+    expect(budgetGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("budget") && !v.message.includes("return_shape"))).toBe(true);
+    const shapeNa = base.replace("return_shape: verdict", "return_shape: N/A");
+    const shapeGate = validateDocumentFrontmatter("assignment", doc(shapeNa), "assignment");
+    expect(shapeGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("return_shape"))).toBe(true);
+    // A usable review-budget declaration still passes the content check.
+    const okGate = validateDocumentFrontmatter("assignment", doc(base), "assignment");
+    expect(okGate.ok).toBe(true);
+  });
+
+  test("a duplicate-key refusal propagates the reader fix through the schema violation", () => {
+    const fm = `${PLAN_FM}\nstatus: InReview`;
+    const gate = validateDocumentFrontmatter("plan", doc(fm), "plan");
+    const v = gate.violations.find((x) => x.code === "document.frontmatter.invalid");
+    expect(v).toBeDefined();
+    expect(v!.fix).toBeDefined();
+    expect(v!.fix).toContain("remove");
+    expect(v!.fix).toContain("rename");
   });
 });

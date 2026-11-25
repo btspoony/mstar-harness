@@ -294,6 +294,13 @@ describe("parseDocumentFrontmatter — refused line forms", () => {
     const alias = expectRefusal(`name: *alias`, 2);
     expect(alias.fix).toContain("quote");
     expect(alias.fix).toContain("supported scalar");
+    const duplicate = expectRefusal(`name: a\nname: b`, 3);
+    expect(duplicate.fix).toContain("remove");
+    expect(duplicate.fix).toContain("rename");
+    const tab = expectRefusal(`outer:\n\tinner: 1`, 3);
+    expect(tab.fix).toContain("spaces");
+    const childUnderScalar = expectRefusal(`name: x\n  orphan: y`, 3);
+    expect(childUnderScalar.fix).toContain("key: line");
   });
 
   test("parseSimpleFrontmatter accepts a source label so a host loader names its file", () => {
@@ -456,6 +463,15 @@ describe("extractFrontmatterAndBody — fence handling", () => {
   test("an immediately closed empty block stays valid", () => {
     expect(extractFrontmatterAndBody(`---\n---\nbody`)).toEqual({ frontmatter: "", body: "body", fenced: true });
     expect(extractFrontmatterAndBody(`---\n---`)).toEqual({ frontmatter: "", body: "", fenced: true });
+  });
+
+  test("a closing fence at end of input accepts LF, CRLF and exact EOF but not a bare CR", () => {
+    // The exact-EOF close was always valid; LF and CRLF close through their
+    // `\n`. A lone `\r` is not a line ending — `---\r` stays content.
+    expect(extractFrontmatterAndBody(`---\nname: x\n---\n`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
+    expect(extractFrontmatterAndBody(`---\r\nname: x\r\n---\r\n`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
+    expect(extractFrontmatterAndBody(`---\nname: x\n---`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
+    expect(extractFrontmatterAndBody(`---\nname: x\n---\r`)).toEqual({ frontmatter: "", body: `---\nname: x\n---\r`, fenced: false });
   });
 
   test("an immediately closed header never consumes a later horizontal rule in the body", () => {

@@ -373,6 +373,7 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  classifyReviewOrAuditRound,
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,

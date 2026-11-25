@@ -20,7 +20,7 @@ import {
   parseDocumentFrontmatterEntries,
   type FrontmatterEntry,
 } from "./document-frontmatter.js";
-import { isAuditTaskCategory, isReadOnlyAssignmentRole, REVIEW_SEAT_ROLES } from "./dispatch.js";
+import { classifyReviewOrAuditRound, isReadOnlyAssignmentRole } from "./dispatch.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import type { GateResult, ValidationResult } from "./core.js";
 
@@ -58,17 +58,15 @@ const PLAN_SCHEMA: DocumentSchema = {
   optional: [{ name: "title" }],
 };
 
-/** Review/audit trigger shared with dispatch: the exported seat roster plus
- * the dispatch-owned audit-category classifier — no second copy here (the
- * schema owns only its field table). The role token normalization mirrors
- * dispatch: strip a leading `@` mention, compare case-insensitively, take
- * the first whitespace token. */
+/** Review/audit trigger: the dispatch-owned combined classifier
+ * ({@link classifyReviewOrAuditRound}) — one copy of the role normalization
+ * and the review/audit decision; the schema keeps only its field table. */
 function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
-  const role = typeof values.execute_as === "string"
-    ? values.execute_as.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? ""
-    : "";
-  return REVIEW_SEAT_ROLES.includes(role)
-    || (typeof values.task_category === "string" && isAuditTaskCategory(values.task_category));
+  const { reviewSeat, auditRound } = classifyReviewOrAuditRound(
+    typeof values.execute_as === "string" ? values.execute_as : "",
+    typeof values.task_category === "string" ? values.task_category : "",
+  );
+  return reviewSeat || auditRound;
 }
 
 const ASSIGNMENT_SCHEMA: DocumentSchema = {
@@ -227,7 +225,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   } catch (error) {
     if (error instanceof DocumentFrontmatterError) {
       violations.push(violation("high", "document.frontmatter.invalid",
-        `${source}:${error.line}: invalid front matter at line ${error.line}: ${error.message}`));
+        `${source}:${error.line}: invalid front matter at line ${error.line}: ${error.message}`, error.fix));
     } else {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}: invalid front matter: ${(error as Error).message}`));
@@ -249,15 +247,17 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   }
 
   for (const field of schema.required) {
-    const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
-    if (!required) continue;
     // Usable content for a required textual field: a non-blank scalar —
     // the raw scalar text is the carrier, so a numeric-looking value
-    // (`main_worktree_branch: 5.0`) still counts — or a non-empty list.
+    // (`main_worktree_branch: 5.0`) still counts. A list is never usable
+    // scalar content (even non-empty): it is present-but-invalid shape.
     // `""`, whitespace, `{}` and `[]` count as missing exactly as the key's
-    // absence; a map refuses as invalid content. `task_budget` carries the
-    // dispatch N/A rule: presence-only, `N/A` counts as missing exactly as
+    // absence; a map refuses as invalid content. The round-bounding fields
+    // (`budget` / `return_shape` / `task_budget`) carry dispatch's
+    // presence-only absence rule: `N/A` counts as missing exactly as
     // dispatch classifies it.
+    const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
+    if (!required) continue;
     if (!entries.has(field.name)) {
       violations.push(violation("high", "document.frontmatter.missing",
         `${source}:1: missing required field ${field.name}`,
@@ -269,6 +269,12 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
     // Enum-typed fields refuse the same shape through the enum check below
     // (one violation per failure, naming the accepted values) — the
     // scalar-content refusal applies to plain textual fields only.
+    if (field.enum === undefined && Array.isArray(value) && value.length > 0) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${requiredEntry.line}: invalid ${field.name} \u2014 accepted values: a non-blank scalar, not a list`,
+        `write ${field.name} as a single scalar value`));
+      continue;
+    }
     if (field.enum === undefined
       && typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value as object).length > 0) {
       violations.push(violation("high", "document.frontmatter.invalid",
@@ -286,13 +292,14 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
       // shape (handled above), never missing.
       blankOrEmpty = value === null || Object.keys(value as object).length === 0;
     }
-    if (!blankOrEmpty && field.name === "task_budget" && typeof value === "string" && value.trim().toLowerCase() === "n/a") {
+    if (!blankOrEmpty && (field.name === "task_budget" || field.name === "budget" || field.name === "return_shape")
+      && typeof value === "string" && value.trim().toLowerCase() === "n/a") {
       blankOrEmpty = true;
     }
     if (blankOrEmpty) {
       violations.push(violation("high", "document.frontmatter.missing",
         `${source}:${requiredEntry.line}: missing required field ${field.name}`,
-        `add a ${field.name}: line to the front matter`));
+        `replace the ${field.name}: line with usable content \u2014 adding a second ${field.name} key is refused as a duplicate`));
     }
   }
 

@@ -155,6 +155,37 @@ export function isAuditTaskCategory(rawCategory: string): boolean {
 }
 
 /**
+ * Normalize one `Execute as` token the way the round-bounding rules read it:
+ * strip a leading `@` mention, compare case-insensitively, take the first
+ * whitespace token — `@QC-Specialist-2 (security lens)` resolves to the
+ * seat. Shared by `validateAssignmentFields` and the document schema; no
+ * second normalization copy lives in the schema.
+ */
+export function normalizeAssignmentRole(rawRole: string): string {
+  return rawRole.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * The combined review/audit round classification, owned here and consumed
+ * by both `validateAssignmentFields` and the document schema: the
+ * normalized role, whether it names a review seat, and whether the task
+ * category independently triggers an audit round. The schema keeps only
+ * its field table; the decision has exactly one copy.
+ */
+export function classifyReviewOrAuditRound(rawRole: string, rawCategory: string): {
+  role: string;
+  reviewSeat: boolean;
+  auditRound: boolean;
+} {
+  const role = normalizeAssignmentRole(rawRole);
+  return {
+    role,
+    reviewSeat: REVIEW_SEAT_ROLES.includes(role),
+    auditRound: isAuditTaskCategory(rawCategory),
+  };
+}
+
+/**
  * Assignment labels carrying the review-seat Budget cap. The PM template
  * (dispatch-and-assignment.md) writes the parenthesized form; the bare
  * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
@@ -506,10 +537,8 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 // `Execute as` is outside the seat set would otherwise escape the gate. The
 // category token is read case-insensitively, tolerating a suffix (`audit`,
 // `audit (secondary)`, `audit_secondary`) but not a longer word (`auditing`).
-  const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
-  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const { role, reviewSeat, auditRound } = classifyReviewOrAuditRound(fields.executeAs ?? "", fields.taskCategory ?? "");
   const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
-  const auditRound = isAuditTaskCategory(fields.taskCategory ?? "");
   if (reviewSeat || auditRound) {
     const subject = reviewSeat ? `review seat "${role}"` : `audit round (Task category: ${category})`;
     // One code per field — the PM reads which label is missing off the code.

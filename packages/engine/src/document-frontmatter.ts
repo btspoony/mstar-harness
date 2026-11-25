@@ -79,7 +79,10 @@ export function extractFrontmatterAndBody(content: string): FrontmatterAndBody {
   while (lineStart < content.length) {
     const newlineAt = content.indexOf("\n", lineStart);
     const lineEnd = newlineAt === -1 ? content.length : newlineAt;
-    const textEnd = content[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    // A carriage return counts as a line ending only before a located `\n`
+    // (CRLF). A lone `\r` at end of input is content, so `---\r` at EOF is
+    // not a complete closing fence.
+    const textEnd = newlineAt !== -1 && content[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
     if (content.slice(lineStart, textEnd) === "---") {
       // The closing fence never consumes the line ending that precedes
       // it, so the frontmatter block of `---\nfoo\n---` is `foo`.
@@ -179,10 +182,16 @@ function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => ne
       fail();
     }
     if (profile === "flat") {
-      if (item.includes("[") || item.includes("]")) {
+      // The old compass contract strips one surrounding quote pair before
+      // dropping empties: a quoted empty item (`["", a]`) skips like a
+      // plain empty one. An interior bracket inside the surrounding quotes
+      // (`"["` stripped to `[`) still refuses — brackets are structural.
+      const unquoted = unquote(item);
+      if (unquoted.includes("[") || unquoted.includes("]")) {
         fail();
       }
-      items.push(item);
+      if (unquoted === "") continue;
+      items.push(unquoted);
       continue;
     }
     if (
@@ -262,7 +271,7 @@ function parseFrontmatterStructure(
 
     const leadingWhitespace = raw.match(/^[ \t]*/)?.[0] ?? "";
     if (leadingWhitespace.includes("\t")) {
-      fail(i, raw, "tab in indentation");
+      fail(i, raw, "tab in indentation", "replace the tab indentation with spaces");
     }
     const indent = leadingWhitespace.length;
     const trimmed = raw.trim();
@@ -327,10 +336,20 @@ function parseFrontmatterStructure(
     }
     const container = stack[stack.length - 1];
     if (container.kind === "leaf") {
-      fail(i, raw, "indented child under a scalar, flow-array or block-scalar key");
+      fail(
+        i,
+        raw,
+        "indented child under a scalar, flow-array or block-scalar key",
+        "move the line out to its own key: line, or write the parent as a nested map with indented key: children",
+      );
     }
     if (container.kind === "list") {
-      fail(i, raw, "key line inside a list");
+      fail(
+        i,
+        raw,
+        "key line inside a list",
+        "close the list first: a key line cannot sit inside `- item` entries; move it out to its own key: line",
+      );
     }
     if (container.kind === "pending") {
       // The first child of a bare `key:` is a key line: it is a nested map,
@@ -386,7 +405,12 @@ function parseFrontmatterStructure(
 
     const target = container.target as JsonObject;
     if (Object.prototype.hasOwnProperty.call(target, key)) {
-      fail(i, raw, `duplicate key ${JSON.stringify(key)}`);
+      fail(
+        i,
+        raw,
+        `duplicate key ${JSON.stringify(key)}`,
+        `remove this repeated ${JSON.stringify(key)} line, or rename one of the two keys when both fields are intended`,
+      );
     }
 
     if (rawValue === "") {
@@ -419,7 +443,7 @@ function parseFrontmatterStructure(
         const blockLine = lines[j];
         const blockLeading = blockLine.match(/^[ \t]*/)?.[0] ?? "";
         if (blockLeading.includes("\t")) {
-          fail(j, blockLine, "tab in indentation");
+          fail(j, blockLine, "tab in indentation", "replace the tab indentation with spaces");
         }
         const blockIndent = blockLeading.length;
         if (blockLine.trim() && blockIndent <= indent) break;

@@ -568,6 +568,18 @@ describe("parseCompassFrontmatterText — delegation to the shared parser keeps 
     expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });
   });
 
+  test("quoted flow-list items lose their boundary quotes like the old flat parser", () => {
+    const content = ["---", `plans: ["plan-a", 'plan-b',]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a", "plan-b"] });
+  });
+
+  test("a quoted empty flow-list item is skipped like a plain empty one", () => {
+    const content = ["---", `plans: ["", plan-a]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });
+    const onlyEmpty = ["---", `plans: ["",]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(onlyEmpty, "compass.md")).toEqual({ plans: [] });
+  });
+
   test("an interior bracket in a flow-list item refuses like the old flat parser", () => {
     const content = ["---", "plans: [plan-a[0]]", "---", ""].join("\n");
     expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(/unsupported flow array/);
