@@ -3295,7 +3295,11 @@ async function tombstoneRemoteSource(
           operationId: leaf,
           state: restored.latest.state,
           recovery:
-            `Settle or abandon the restore intent first: ${tombstoneIntentRecovery(remoteMoveOperationId(request.operationId, "restore"), { operationId: leaf, state: restored.latest.state })}`,
+            // invariant: The frozen id named here is the LIVE ATTEMPT's own, not the chain's first:
+            // an enqueued leaf that IS that attempt id dispatches without fork evidence (a restore
+            // retry is frozen from the staged copy, not reviewed), while a leaf past it is the
+            // reviewed resolution `tombstoneIntentRecovery` names with the fork-observation route.
+            `Settle or abandon the restore intent first: ${tombstoneIntentRecovery(remoteMoveOperationId(request.operationId, restored.nextStep), { operationId: leaf, state: restored.latest.state })}`,
         },
       );
     }

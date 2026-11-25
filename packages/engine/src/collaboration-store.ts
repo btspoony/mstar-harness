@@ -2723,12 +2723,23 @@ function backfillMoveRoutes(db: StoreDb): void {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
   const peers = new Map<string, { mode: string | null } | null>();
+  // invariant: A peer key this checkout cannot resolve is a peer it cannot open: the resolution
+  // itself refuses malformed keys, and a v4 ledger row may carry any string an older build wrote.
+  // Resolution failure is "peer not present" — the row keeps its own-mode label and the upgrade
+  // completes.
+  const peerPathOf = (repoKey: string): string | null => {
+    try {
+      return collaborationLocationOfRepoKey(repoKey, "local").dbPath;
+    } catch {
+      return null;
+    }
+  };
   const peerOf = (repoKey: string): { mode: string | null } | null => {
     const cached = peers.get(repoKey);
     if (cached !== undefined) return cached;
-    const dbPath = collaborationLocationOfRepoKey(repoKey, "local").dbPath;
     let peer: { mode: string | null } | null = null;
-    if (existsSync(dbPath)) {
+    const dbPath = peerPathOf(repoKey);
+    if (dbPath !== null && existsSync(dbPath)) {
       let lane: StoreDb | undefined;
       try {
         lane = new DatabaseSync(dbPath, { readOnly: true });
@@ -2757,7 +2768,8 @@ function backfillMoveRoutes(db: StoreDb): void {
     if (typeof row.operationId !== "string" || typeof peerKey !== "string") continue;
     const peer = peerOf(peerKey);
     if (peer === null || peer.mode === "remote") continue;
-    const dbPath = collaborationLocationOfRepoKey(peerKey, "local").dbPath;
+    const dbPath = peerPathOf(peerKey);
+    if (dbPath === null) continue;
     let lane: StoreDb | undefined;
     try {
       lane = new DatabaseSync(dbPath, { readOnly: true });

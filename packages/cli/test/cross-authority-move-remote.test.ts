@@ -1742,6 +1742,20 @@ describe("cross-authority move through two checkouts", () => {
       expect(reissued.code).toBe("remote.effect-pending");
       const secondAttempt = String(refusalDetails(reissued).operationId);
       expect(secondAttempt).not.toBe(restoreOperation);
+
+      // invariant: While that SECOND restore attempt is enqueued, replaying the staged handoff
+      // refuses on the live leaf's own operation id and names the plain dispatch route — a restore
+      // retry is frozen from the staged copy, so it takes no fork evidence. Only a leaf that is a
+      // reviewed resolution earns the fork instructions.
+      const replayedWhileLive = source.runJson([...moveArgs, "--expect-store", "1", "--input", stagedPath]);
+      expect(replayedWhileLive.exitCode).toBe(1);
+      expect(replayedWhileLive.code).toBe("remote.effect-pending");
+      const liveDetails = refusalDetails(replayedWhileLive);
+      expect(liveDetails.operationId).toBe(secondAttempt);
+      expect(String(liveDetails.recovery)).toContain("outbox-dispatch");
+      expect(String(liveDetails.recovery)).toContain(secondAttempt);
+      expect(String(liveDetails.recovery)).not.toContain("reviewed resolution");
+      expect(String(liveDetails.recovery)).not.toContain("competing record");
       const secondDispatch = source.runJson([...REMOTE, "outbox-dispatch", "--harness", source.harness, "--operation", secondAttempt]);
       expect(secondDispatch.exitCode).toBe(0);
       expect(source.runJson([

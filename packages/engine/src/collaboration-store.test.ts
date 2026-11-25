@@ -1480,6 +1480,7 @@ function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
 function seedV4MoveRow(
   db: DatabaseSync,
   row: Readonly<{
+    issueRef?: string;
     operationId: string;
     role: "source" | "destination";
     sourceAuthority: string;
@@ -1492,11 +1493,12 @@ function seedV4MoveRow(
     "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
       "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
       "staged_counts, source_store_id, source_epoch, removed_sync_rows, created_at, updated_at) " +
-      "values (?, ?, 'hash', 'mstar:issue:99999999-9999-4999-8999-999999999999', ?, null, ?, ?, 'p-dest', " +
+      "values (?, ?, 'hash', ?, ?, null, ?, ?, 'p-dest', " +
       "'project-manager', 'v4 move', ?, '{}', 'digest', '{}', 'v4-store', 1, 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
   ).run(
     row.operationId,
     row.role,
+    row.issueRef ?? "mstar:issue:99999999-9999-4999-8999-999999999999",
     row.sourceIssueId ?? null,
     row.sourceAuthority,
     row.destinationAuthority,
@@ -11350,12 +11352,22 @@ describe("cross-authority move route and discard", () => {
         sourceAuthority: sourceLocation.repoKey,
         destinationAuthority: "v4-move.invalid/acme/never-present",
       });
+      // note: A v4 ledger may carry any string an older build wrote; a peer key that fails
+      // resolution must read as "not present", never abort the ladder.
+      seedV4MoveRow(db, {
+        operationId: "v4-move-bad-peer",
+        role: "source",
+        issueRef: "mstar:issue:88888888-8888-4888-8888-888888888888",
+        sourceAuthority: sourceLocation.repoKey,
+        destinationAuthority: "not-a-canonical-key",
+      });
     });
     activate(sourceLocation.dbPath);
 
     const receipt = await upgradeCollaborationStore(sourceContext, "ops-engineer");
     expect(receipt.fromVersion).toBe(4);
     expect(routeOfRow(sourceLocation.dbPath, operationId, "source")).toBe("local-remote");
+    expect(routeOfRow(sourceLocation.dbPath, "v4-move-bad-peer", "source")).toBe("local-remote");
   });
 
 });
