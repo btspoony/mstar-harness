@@ -221,7 +221,7 @@ export {
 // plus `moveDocumentOf` to parse the handoff a peer wrote. The phase engine
 // (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), `discardMove` (the one-checkout release) and
 // the ledger primitives stay internal to the module.
-export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole } from "./cross-authority-move.js";
+export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole, IssueMoveRoute } from "./cross-authority-move.js";
 export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
 // note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
 // `local`/`remote` boundary.
@@ -927,6 +927,7 @@ export {
 // .inputDocument` descriptors from these, so discovery and the runtime parsers share one
 // structural owner and the engine's vocabularies are never restated in a second package.
 export {
+  moveHandoffDocumentSchema,
   remoteAdoptionDocumentSchema,
   remoteBindDocumentSchema,
   remoteForkObservationDocumentSchema,

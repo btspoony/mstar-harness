@@ -10,6 +10,7 @@ import {
   getIssue,
   moveAcrossByDocument,
   moveDocumentOf,
+  moveHandoffDocumentSchema,
   showIssue,
   ISSUE_ACTION_NAMES,
   ISSUE_ACTIONS,
@@ -615,8 +616,17 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb] } } }
+    // why: `issue move --input`/`--out` carry the exchange handoff, so discovery publishes its shape
+    // beside the payload schema instead of leaving the document an operator must produce undocumented.
+    ...(payloadType[verb] !== undefined || verb === "move"
+      ? {
+          payloads: {
+            ...(payloadType[verb] !== undefined
+              ? { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb] } }
+              : {}),
+            ...(verb === "move" ? { inputDocument: { schema: moveHandoffDocumentSchema } } : {}),
+          },
+        }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

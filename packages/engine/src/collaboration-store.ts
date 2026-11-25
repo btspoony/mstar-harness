@@ -764,12 +764,43 @@ const COLLABORATION_MOVE_SCHEMA: Migration = {
   sql: COLLABORATION_MOVE_V4_SQL,
 };
 
-/** note: The lane's ordered migrations: v1 is immutable; v2, the v3 outbox and the v4 move ledger are appended. */
+/**
+ * invariant: v5 records each move's staged topology on its ledger row. A discard and the
+ * remote-destination guard must never probe the peer's lane — a two-checkout exchange cannot open it —
+ * so the route becomes a fact the staging run writes. Rows already in a v4 lane are backfilled from
+ * what the lane can still prove: the two half rows of one checkout share a store id, while an
+ * exchange half's peer lives in another store, and the lane's own mode names its own side.
+ */
+const COLLABORATION_MOVE_ROUTE_SQL = `
+alter table issue_moves add column route text not null default 'local-local'
+  check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'));
+update issue_moves set route = case
+  when exists (
+    select 1 from issue_moves peer
+    where peer.operation_id = issue_moves.operation_id
+      and peer.role <> issue_moves.role
+      and peer.source_store_id = issue_moves.source_store_id
+  ) then 'local-local'
+  when issue_moves.role = 'source' then
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'remote-unknown' else 'local-remote' end
+  else
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'local-remote' else 'remote-local' end
+end;
+`;
+
+const COLLABORATION_MOVE_ROUTE_SCHEMA: Migration = {
+  version: 5,
+  name: "collaboration-move-route",
+  sql: COLLABORATION_MOVE_ROUTE_SQL,
+};
+
+/** note: The lane's ordered migrations: v1–v4 are immutable; each later schema is appended. */
 export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_SCHEMA,
   COLLABORATION_REMOTE_SCHEMA,
   COLLABORATION_OUTBOX_SCHEMA,
   COLLABORATION_MOVE_SCHEMA,
+  COLLABORATION_MOVE_ROUTE_SCHEMA,
 ];
 
 /** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
@@ -939,16 +970,27 @@ const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = 
   ],
 };
 
+/** note: The v5 delta: the ledger records the topology each move was staged under. */
+const COLLABORATION_ROUTE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  issue_moves: [...COLLABORATION_MOVE_COLUMNS.issue_moves!, "route"],
+};
+
 /** note: The v3 inventory: the v2 generation plus the outbox tables, before the move ledger widened `relations`. */
 const COLLABORATION_V3_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V2_COLUMNS,
   ...COLLABORATION_OUTBOX_COLUMNS,
 };
 
-/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
-export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+/** note: The v4 inventory, proven before the v5 route column is added. */
+const COLLABORATION_V4_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V3_COLUMNS,
   ...COLLABORATION_MOVE_COLUMNS,
+};
+
+/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
+export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ...COLLABORATION_V4_COLUMNS,
+  ...COLLABORATION_ROUTE_COLUMNS,
 };
 
 /**
@@ -1113,9 +1155,22 @@ const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
   },
 ];
 
+/** note: The v5 keys: the v4 move keys plus the recorded route every discard and remote guard reads. */
+const COLLABORATION_KEY_LAYOUT_ROUTE: readonly KeyLayout[] = [
+  COLLABORATION_KEY_LAYOUT_MOVE[0]!,
+  {
+    ...COLLABORATION_KEY_LAYOUT_MOVE[1]!,
+    notNull: [...COLLABORATION_KEY_LAYOUT_MOVE[1]!.notNull, "route"],
+    checks: [
+      ...COLLABORATION_KEY_LAYOUT_MOVE[1]!.checks,
+      "check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'))",
+    ],
+  },
+];
+
 const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
   ...COLLABORATION_KEY_LAYOUT,
-  ...COLLABORATION_KEY_LAYOUT_MOVE,
+  ...COLLABORATION_KEY_LAYOUT_ROUTE,
 ];
 
 /** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
@@ -1515,6 +1570,12 @@ function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
 function assertOutboxSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V3_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
+}
+
+/** note: The exact v4 shape an upgrade from v4 proves before the v5 route column: a partial v5 refuses. */
+function assertMoveSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_V4_COLUMNS, true);
+  assertKeyLayout(db, dbPath, [...COLLABORATION_KEY_LAYOUT, ...COLLABORATION_KEY_LAYOUT_MOVE]);
 }
 
 /** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
@@ -2638,6 +2699,7 @@ export function collaborationInventoryOf(version: number): Readonly<Record<strin
   if (version <= 1) return COLLABORATION_COLUMNS;
   if (version < COLLABORATION_OUTBOX_SCHEMA.version) return COLLABORATION_V2_COLUMNS;
   if (version < COLLABORATION_MOVE_SCHEMA.version) return COLLABORATION_V3_COLUMNS;
+  if (version < COLLABORATION_MOVE_ROUTE_SCHEMA.version) return COLLABORATION_V4_COLUMNS;
   return COLLABORATION_CURRENT_COLUMNS;
 }
 
@@ -2694,14 +2756,28 @@ export function applyCollaborationLadder(
   }
   // invariant: The v3 shape is proven before the v4 rebuild: a move ledger or a widened
   // `relations` under a v3 ledger row is a partial apply, refused instead of re-created.
-  assertOutboxSchema(db, dbPath);
-  db.exec(COLLABORATION_MOVE_SCHEMA.sql);
-  db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-    COLLABORATION_MOVE_SCHEMA.version,
-    COLLABORATION_MOVE_SCHEMA.name,
-    migrationChecksum(COLLABORATION_MOVE_SCHEMA),
-    nowRfc3339(),
-  );
+  if (appliedMax < COLLABORATION_MOVE_SCHEMA.version) {
+    assertOutboxSchema(db, dbPath);
+    db.exec(COLLABORATION_MOVE_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_MOVE_SCHEMA.version,
+      COLLABORATION_MOVE_SCHEMA.name,
+      migrationChecksum(COLLABORATION_MOVE_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The v4 shape is proven before the v5 column: a ledger row that already carries an
+  // unexpected `route` under a v4 checksum is a partial apply, refused instead of re-altered.
+  if (appliedMax < COLLABORATION_MOVE_ROUTE_SCHEMA.version) {
+    assertMoveSchema(db, dbPath);
+    db.exec(COLLABORATION_MOVE_ROUTE_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_MOVE_ROUTE_SCHEMA.version,
+      COLLABORATION_MOVE_ROUTE_SCHEMA.name,
+      migrationChecksum(COLLABORATION_MOVE_ROUTE_SCHEMA),
+      nowRfc3339(),
+    );
+  }
   assertCurrentSchema(db, dbPath);
   return { fromVersion: appliedMax, issuesBackfilled };
 }

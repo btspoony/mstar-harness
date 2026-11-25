@@ -1330,11 +1330,12 @@ describe("cross-authority move through two checkouts", () => {
     }
   }, 240_000);
 
-  test("a confirmed provider tombstone refuses the source discard, and the move still completes", () => {
-    // invariant: `outbox-receipt` commits the tombstone before the ledger row reaches `switched`,
-    // so between those commits the row still reads `verified`. Discarding in that window would
-    // strand the record: the provider record is already obsolete and the destination's admission
-    // is the only remaining copy.
+  test("a confirmed tombstone is restored by the source discard, so a cancelled exchange never strands the record", () => {
+    // invariant: Finding 4. `outbox-receipt` commits the tombstone before the ledger row reaches
+    // `switched`, so a discard in that window owns a CLOSED provider record — and a destination that
+    // may already have walked away. The discard therefore re-opens it (one `issue-replace` back to
+    // the live disposition) and releases only once that restore confirms: refusing would freeze the
+    // record forever, releasing silently would strand it closed.
     const fixture = host("discard-after-tombstone");
     try {
       fixture.publish(1);
@@ -1384,34 +1385,75 @@ describe("cross-authority move through two checkouts", () => {
       expect(recorded.exitCode).toBe(0);
       expect(recorded.data.state).toBe("confirmed");
 
-      // invariant: with the tombstone confirmed the provider record is already obsolete, so the
-      // discard refuses and names the move completion as the recovery.
-      const refused = source.runJson([...moveArgs, "--discard"]);
-      expect(refused.exitCode).toBe(1);
-      expect(refused.code).toBe("collaboration.move-phase-invalid");
-      expect(refused.message).toContain("tombstone");
+      // note: every provider confirmation leaves this cache's observation stale, exactly as any other
+      // provider write does; the scope is re-verified before the next write, and again before the read.
+      function reobserve(): SandboxCommand {
+        let last = source.observe(fixture.observe(REMOTE_PROJECT, 0));
+        for (const revision of [1, 2, 3, 4, 5]) {
+          last = source.observe(fixture.observe(REMOTE_PROJECT, revision));
+          if (last.exitCode === 0) return last;
+        }
+        return last;
+      }
+      expect(reobserve().exitCode).toBe(0);
 
-      // invariant: the move itself is unharmed: the source emits `switch`, the destination admits,
-      // and the source publishes — the only copy the tombstone left is the admitted one.
-      const switchPath = source.outPath("switch");
-      expect(source.runJson([
-        ...moveArgs, "--expect-store", "1", "--input", stagedPath, "--out", switchPath,
-      ]).data).toMatchObject({ phase: "switched", side: "source" });
-      const admissionPath = destination.outPath("admission");
-      expect(destination.runJson([
-        "issue", "move",
-        "--id", FIXTURE_REF,
-        "--to-authority", fixture.localRepoKey,
-        "--payload", payload,
-        "--expect-store", "0",
-        "--actor", "project-manager",
-        "--operation-id", MOVE_OPERATION,
-        "--input", switchPath,
-        "--out", admissionPath,
-      ]).data).toMatchObject({ phase: "switched", side: "destination" });
-      expect(source.runJson([
-        ...moveArgs, "--expect-store", "1", "--input", admissionPath,
-      ]).data).toMatchObject({ phase: "published", side: "source" });
+      // invariant: the discard owes the provider record one re-open, and reports it as pending.
+      const discard = source.runJson([...moveArgs, "--discard"]);
+      expect(discard.exitCode).toBe(1);
+      expect(discard.code).toBe("remote.effect-pending");
+      const restoreDetails = refusalDetails(discard);
+      const restoreOperation = String(restoreDetails.operationId);
+      const restoreDispatch = source.runJson([
+        ...REMOTE, "outbox-dispatch", "--harness", source.harness, "--operation", restoreOperation,
+      ]);
+      expect(restoreDispatch.exitCode).toBe(0);
+      const restorePermit = restoreDispatch.data.permit as unknown as {
+        frozenRequest: { event: { change: { kind: string; mstar: { fields: { disposition: string } } } } };
+      };
+      expect(restorePermit.frozenRequest.event.change.kind).toBe("issue-replace");
+      // invariant: the restore writes the LIVE disposition back, never another obsolete one.
+      expect(restorePermit.frozenRequest.event.change.mstar.fields.disposition).toBe("open");
+      const restoreReceipt = fixture.send(restorePermit as never);
+      const restoreRecorded = source.runJson([
+        ...REMOTE, "outbox-receipt", "--harness", source.harness,
+        "--input", source.writeJson("restore-receipt", restoreReceipt),
+      ]);
+      expect(restoreRecorded.exitCode).toBe(0);
+      expect(restoreRecorded.data.state).toBe("confirmed");
+
+      expect(reobserve().exitCode).toBe(0);
+      // invariant: with the record live again this half releases, and the move is terminal.
+      const released = source.runJson([...moveArgs, "--discard"]);
+      expect(released.result.stderr).toBe("");
+      expect(released.exitCode).toBe(0);
+      expect(released.data).toMatchObject({ phase: "discarded" });
+      // invariant: the peer is handed no document it could stage a record from.
+      const replay = source.runJson([
+        ...moveArgs, "--expect-store", "1", "--out", source.outPath("after-restore"),
+      ]);
+      expect(replay.exitCode).toBe(0);
+      expect(replay.data).toMatchObject({ phase: "discarded", document: null, out: null });
+    } finally {
+      for (const created of fixtures.splice(0)) created.dispose();
+    }
+  }, 240_000);
+
+  test("discovery publishes the exchange handoff document the move verbs accept", () => {
+    // invariant: Finding 10. `--input`/`--out` carry one strict document, so the contract discovery
+    // reports must include its schema — an operator composing a handoff by hand has no other source.
+    const fixture = host("move-handoff-schema");
+    try {
+      const sandbox = localHost(fixture);
+      const described = sandbox.runJson(["schema", "--command", "issue.move"]);
+      expect(described.exitCode).toBe(0);
+      const descriptor = described.data.descriptor as {
+        payloadSchemas: Record<string, { properties?: Record<string, { enum?: unknown[] }> }>;
+      };
+      const schemas = descriptor.payloadSchemas;
+      expect(Object.keys(schemas)).toContain("inputDocument");
+      expect(schemas.inputDocument?.properties?.route?.enum).toEqual([
+        "local-local", "local-remote", "remote-local", "remote-unknown",
+      ]);
     } finally {
       for (const created of fixtures.splice(0)) created.dispose();
     }

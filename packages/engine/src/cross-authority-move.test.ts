@@ -84,6 +84,7 @@ function sourceRow(
   return {
     operationId,
     role: "source",
+    route: "local-local",
     requestHash: "request-hash",
     issueRef,
     sourceIssueId: "I-000001",
@@ -389,13 +390,13 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
     }
   });
 
-  test("a lane is v4 and a v3 lane reaches v4 through the ladder", async () => {
+  test("a lane is current and a v3 lane reaches it through the ladder, gaining the recorded route", async () => {
     const { db } = await freshLane();
     try {
-      expect((db.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(4);
+      expect((db.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(5);
       expect(
         (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name: string }>).map((column) => column.name),
-      ).toContain("operation_id");
+      ).toEqual(expect.arrayContaining(["operation_id", "route"]));
     } finally {
       db.close();
     }
@@ -430,7 +431,11 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       const receipt = applyCollaborationLadder(upgraded, legacy.dbPath);
       upgraded.exec("commit");
       expect(receipt.fromVersion).toBe(3);
-      expect((upgraded.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(4);
+      expect((upgraded.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(5);
+      // invariant: the v5 column is the one the ladder adds in place, with the closed vocabulary.
+      expect(
+        upgraded.prepare("pragma table_info(issue_moves)").all().map((column) => (column as { name: string }).name),
+      ).toContain("route");
       expect(
         upgraded.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'issue_moves'").get(),
       ).toEqual({ n: 1 });
