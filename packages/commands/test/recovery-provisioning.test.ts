@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeCommand, type InvocationContext } from "@mstar-harness/commands";
 import {
+
   ensureCollaborationAuthority,
   executionContextFor,
   initializeStore,
@@ -18,6 +19,23 @@ import {
   readExecutionState,
   registerShippedCatalogExecution,
 } from "@mstar-harness/engine";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const roots: string[] = [];
 afterEach(() => {
@@ -62,7 +80,7 @@ async function recoverableFixture(): Promise<{ root: string; harness: string; pr
   );
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "plans"), { recursive: true });
-  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), `# Recover provision plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Recover provision plan\n"));
   (await initializeStore({ harnessDir: harness })).close();
   await ensureCollaborationAuthority({ harnessDir: harness });
   const workflow = {

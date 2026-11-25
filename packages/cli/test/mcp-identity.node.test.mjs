@@ -45,6 +45,23 @@ assert.ok(existsSync(CLI_ENTRY), `built CLI bundle missing: ${CLI_ENTRY} (run th
 
 const WORKFLOW_ID = "wf-t4-omp-identity";
 const PLAN_ID = "20261004-t4-omp-plan";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId, body, fields = {}) {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 const PLAN_TITLE = "T4 omp identity plan";
 const NATIVE_ID = "omp-native-session-a";
 const BRANCH = "feature/t4-omp-identity";
@@ -186,7 +203,8 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-t4");
-  writeText(planPath, `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(PLAN_ID, `# ${PLAN_TITLE}
+`));
   // A REAL checkout on the branch the registration names: prepare validates the
   // actual checkout and branch.
   execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });

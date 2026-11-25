@@ -11,6 +11,23 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { receiptStable, runCli, writeFixtureRepoId, type RunResult } from "./harness";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const WORKFLOW_ID = "20260916-plan-register-cli";
 const SESSION_ID = "registration-cli-session";
 
@@ -85,8 +102,8 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   mkdirSync(join(harness, "plans"), { recursive: true });
-  writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), "# CLI example plan\n\n**plan_id:** 20260916-plan-cli-example\n");
-  writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), "# Verification plan\n\n**plan_id:** 20260916-plan-verify\n");
+  writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), planFrontMatter("20260916-plan-cli-example", "# CLI example plan\n"));
+  writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), planFrontMatter("20260916-plan-verify", "# Verification plan\n"));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
   await ensureCollaborationAuthority({ harnessDir: harness });

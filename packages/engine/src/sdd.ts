@@ -58,6 +58,7 @@ import {
   resolveFixedHarnessDir,
   resolveSddDir,
 } from "./path.js";
+import { planDeclaredHeaders } from "./plan-path.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
@@ -703,17 +704,15 @@ function throwUsage(message: string): never {
 }
 
 /**
- * Recorded main-worktree branch from the declared plan file (the plan
- * header `**Main worktree branch**: <branch>` written at lifecycle start —
- * SDD reads the plan it already declares). Missing record → `""`: the
- * caller falls back conservatively to the governing snapshot's explicit
- * `branch.base`, never to the branch observed at check time.
+ * Recorded main-worktree branch from the declared plan file's front matter
+ * `main_worktree_branch` (the plan front matter is the declaration surface;
+ * a body label declares nothing). Missing record → `""`: the caller falls
+ * back conservatively to the governing snapshot's explicit `branch.base`,
+ * never to the branch observed at check time.
  */
 function recordedMainWorktreeBranch(planFile: string): string {
   try {
-    const text = readFileSync(planFile, "utf8");
-    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
-    return match ? match[1]! : "";
+    return planDeclaredHeaders(planFile).get("main worktree branch") ?? "";
   } catch {
     return "";
   }

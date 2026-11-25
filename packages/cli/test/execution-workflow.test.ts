@@ -40,6 +40,23 @@ import {
 } from "@mstar-harness/engine";
 import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 type EngineManifest = { engines?: { node?: string } };
 // Repo manifest read at runtime: no test pins the runtime floor, and
 // package.json stays the sole version authority.
@@ -52,6 +69,7 @@ const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10
 
 const WORKFLOW_ID = "wf-exec-workflow";
 const PLAN_ID = "20260922-execution-workflow-plan";
+
 const COORDINATOR_ID = "coord-exec-workflow";
 const ITERATION_ID = "iter-exec-workflow";
 const INTEGRATION_BRANCH = "iteration/exec-workflow";
@@ -128,7 +146,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   await ensureCollaborationAuthority(context);
   await readExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
-  writeText(planMarkdown, `# Active workflow transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Active workflow transport plan\n"));
   return { root, harnessDir, context, planMarkdown };
 }
 

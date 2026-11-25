@@ -11,6 +11,7 @@ import { getCatalog } from "./catalog.js";
 import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
+
   abortCatalogExecution,
   assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
@@ -23,6 +24,23 @@ import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 /**
  * note: The collaboration lane is user-level, so every fixture pins `homedir` to a
@@ -98,7 +116,8 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
   function planWorkflow(harnessDir: string, workflowId: string, id: string, title: string) {
     const file = join(harnessDir, "plans", `${id}.md`);
     mkdirSync(join(harnessDir, "plans"), { recursive: true });
-    writeFileSync(file, `# ${title}\n\n**plan_id:** ${id}\n`);
+    writeFileSync(file, planFrontMatter(id, `# ${title}
+`));
     return {
       kind: "plan" as const,
       workflowId,

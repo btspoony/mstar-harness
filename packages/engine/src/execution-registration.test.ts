@@ -46,6 +46,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogLinkInput } from "./catalog.js";
 import {
+
   abandonRemoteIntent,
   bindRemoteAuthority,
   ingestRemoteObservation,
@@ -82,6 +83,23 @@ import {
 import * as engineIndex from "./index.js";
 import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type RegisterIterationWorkflowOptions, type RegisterPlanWorkflowOptions } from "./workflow.js";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
 /**
@@ -192,7 +210,8 @@ async function activeFixture(label: string): Promise<Fixture> {
 function writePlanDocument(harnessDir: string, planId: string, title: string): void {
   const file = join(harnessDir, "plans", `${planId}.md`);
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+  writeFileSync(file, planFrontMatter(planId, `# ${title}
+`));
 }
 
 /**

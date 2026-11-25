@@ -9,6 +9,23 @@ import { readExecutionState, type ExecutionContext } from "../src/execution-stor
 import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const root = mkdtempSync(join(tmpdir(), "mstar-coordinator-registration-"));
 
 async function fixture(name: string): Promise<{ harnessDir: string; context: StoreContext; planId: string; execution: ExecutionContext }> {
@@ -24,7 +41,7 @@ async function fixture(name: string): Promise<{ harnessDir: string; context: Sto
   await ensureCollaborationAuthority(context);
   const planId = "fixture-plan";
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, "plans", `${planId}.md`), `# Fixture plan\n\n**plan_id:** ${planId}\n`);
+  writeFileSync(join(harnessDir, "plans", `${planId}.md`), planFrontMatter(planId, "# Fixture plan\n"));
   return {
     harnessDir,
     context,

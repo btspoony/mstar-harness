@@ -46,6 +46,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -92,6 +93,23 @@ import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-consumers-"));
 afterAll(() => {
@@ -494,7 +512,8 @@ async function registeredStore(label: string): Promise<StoreContext> {
   mkdirSync(join(context.harnessDir, planDir), { recursive: true });
   writeFileSync(
     join(context.harnessDir, planDir, `${CROSS_PLAN}.md`),
-    `# ${planTitle}\n\n**plan_id:** ${CROSS_PLAN}\n`,
+    planFrontMatter(CROSS_PLAN, `# ${planTitle}
+`),
   );
   const execution = { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) };
   const request = {

@@ -25,6 +25,23 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
 /** Shared subprocess identity: a coordinator binds only through its creating session. */
@@ -108,7 +125,8 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
   for (const id of ["20260918-plan-alpha", "20260918-plan-beta", "20260918-plan-gamma"]) {
-    writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
+    writeFileSync(join(harness, "plans", `${id}.md`), planFrontMatter(id, `# Plan ${id}
+`));
   }
   // Registration proves the named document IS this iteration's reviewed
   // compass, so the fixture states one like any real registration does.

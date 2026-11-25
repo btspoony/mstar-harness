@@ -25,6 +25,23 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeFixtureRepoId } from "../test/harness";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
 
 type CliResult = { status: number; stdout: string; stderr: string };
@@ -75,7 +92,7 @@ describe("#324 fixture discovery walkthrough", () => {
     mkdirSync(harnessDir, { recursive: true });
     const plansDir = path.join(harnessDir, "plans");
     mkdirSync(plansDir, { recursive: true });
-    writeFileSync(path.join(plansDir, "p-walk.md"), "# Walk plan\n\n**plan_id:** p-walk\n\nbody\n");
+    writeFileSync(path.join(plansDir, "p-walk.md"), planFrontMatter("p-walk", "# Walk plan\n\nbody\n"));
     const upgraded = envelope(cli(["store", "upgrade", "--harness", harnessDir, "--operator", "walkthrough"], scratch).stdout);
     expect(upgraded.status).toBe("ok");
     expect(upgraded.data).toMatchObject({ authorityState: "active" });
@@ -183,7 +200,7 @@ describe("#324 fixture discovery walkthrough", () => {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: wrongScratch });
     writeFixtureRepoId(wrongFixture);
     mkdirSync(path.join(wrongHarness, "plans"), { recursive: true });
-    writeFileSync(path.join(wrongHarness, "plans", "p-walk.md"), "# Walk plan\n\n**plan_id:** p-walk\n\nbody\n");
+    writeFileSync(path.join(wrongHarness, "plans", "p-walk.md"), planFrontMatter("p-walk", "# Walk plan\n\nbody\n"));
     try {
       expect(envelope(cli(["store", "upgrade", "--harness", wrongHarness, "--operator", "walkthrough"], wrongScratch).stdout).status).toBe("ok");
       const read = envelope(cli(["status", "validate"], wrongFixture).stdout);
@@ -245,7 +262,7 @@ describe("#324 fixture discovery walkthrough", () => {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: legacyScratch });
     writeFixtureRepoId(legacyFixture);
     mkdirSync(path.join(legacyHarness, "plans"), { recursive: true });
-    writeFileSync(path.join(legacyHarness, "plans", "p-legacy.md"), "# Legacy plan\n\n**plan_id:** p-legacy\n\nbody\n");
+    writeFileSync(path.join(legacyHarness, "plans", "p-legacy.md"), planFrontMatter("p-legacy", "# Legacy plan\n\nbody\n"));
     try {
       expect(envelope(cli(["store", "upgrade", "--harness", legacyHarness, "--operator", "walkthrough"], legacyScratch).stdout).status).toBe("ok");
       const read = envelope(cli(["status", "validate"], legacyFixture).stdout);

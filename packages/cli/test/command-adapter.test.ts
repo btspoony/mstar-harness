@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import {
+
   bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, ensureCollaborationAuthority, executionContextFor,
   initializeStore, openStore, readExecutionAuthority, serializeExecutionValue,
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
@@ -738,10 +739,10 @@ test("workflow registration discloses missing plan identity and succeeds after t
     expect(missing.status).toBe(1);
     const refusal = JSON.parse(missing.stdout) as { command: string; status: string; code: string; message?: string };
     expect(refusal).toMatchObject({ command: "workflow.register", status: "refused", code: "plan-path.identity-mismatch" });
-    expect(refusal.message).toContain("declares no plan_id header");
+    expect(refusal.message).toContain("declares no plan_id in its front matter");
     expect(refusal.message).toContain("Help: mstar workflow register --help");
 
-    writeFileSync(planFile, "# Public registration plan\n\n**plan_id:** plan-public-registration\n");
+    writeFileSync(planFile, planFrontMatter("plan-public-registration", "# Public registration plan\n"));
     const corrected = await run(args);
     expect(corrected.status).toBe(0);
     expect(JSON.parse(corrected.stdout)).toMatchObject({
@@ -1023,6 +1024,23 @@ import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "
 import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";
 import type { MutateConfigForInitOptions, ProbeCommandRunner } from "../src/types";
 import { CLI_ROOT, cliEnv, runCli } from "./harness";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";

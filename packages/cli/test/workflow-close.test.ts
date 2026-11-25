@@ -31,6 +31,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+
   ensureCollaborationAuthority,
   initializeStore,
   openStore,
@@ -43,6 +44,23 @@ import { semanticRequestHash } from "../../engine/src/execution-store.js";
 import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
 import { receiptStable, runCli, writeFixtureRepoId, type RunResult } from "./harness";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const WORKFLOW_ID = "wf-close";
 const PLAN_ID = "plan-close";
@@ -161,7 +179,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: slice"], { cwd: worktree });
   const sourceSha = gitOut(["rev-parse", "HEAD"], worktree);
 
-  writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Close plan\n`);
+  writeText(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Close plan\n", { title: "Close plan" }));
   const sdd = join(harness, "sdd", PLAN_ID);
   const qcReport = join(sdd, "review", "qc1.md");
   const qcConsolidated = join(sdd, "review", "qc.md");
@@ -413,7 +431,7 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-close-legacy-")));
     roots.push(root);
     const harness = join(root, ".mstar");
-    writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Close plan\n"));
     const statusPath = join(harness, "status.json");
     const snapshotPath = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
     writeJson(statusPath, {

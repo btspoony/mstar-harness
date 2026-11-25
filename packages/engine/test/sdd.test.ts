@@ -37,6 +37,7 @@ import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } fro
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
+
   SddScriptError,
   assertBaseSha,
   checkSddAction,
@@ -52,6 +53,23 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -885,7 +903,7 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   // the title authority (the registration calls declare that same title).
   writeFileSync(
     planFile,
-    `# Plan\n\n**plan_id:** ${PLAN_ID}\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n`,
+    planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n"),
   );
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
@@ -1489,8 +1507,8 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   });
 
   test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", async () => {
-    // Recorded plan header (the fixture plan carries "Main worktree branch:
-    // main") — resolves.
+    // Recorded plan front matter (the fixture plan declares
+    // main_worktree_branch: main in its front matter) — resolves.
     const root1 = tmpRoot("sdd-ctx-mainbranch-");
     try {
       const f = executionFixture(root1);

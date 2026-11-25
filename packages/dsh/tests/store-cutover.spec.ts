@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
+
   StoreError,
   assertStoreRuntimeSupported,
   createFsStore,
@@ -47,6 +48,23 @@ import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
 import { bootApp, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 let booted: BootResult | undefined
 const roots: string[] = []
@@ -218,7 +236,7 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   await mkdir(join(harnessDir, 'plans'), { recursive: true })
-  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
+  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), planFrontMatter("plan-a", "# Store cutover plan\n"))
   setArtifactStore(createFsStore(harnessDir))
   await expect(
     registerShippedCatalogExecution(

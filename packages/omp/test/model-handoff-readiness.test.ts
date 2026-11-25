@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -54,6 +55,23 @@ import type {
   Phase1Readiness,
 } from "../src/model-handoff-readiness";
 import { executionBindingOf } from "../src/coordinator-identity";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 
 const SPECIALISTS = ["product-manager", "architect", "writing-specialist"] as const;
 const SCRATCH: string[] = [];
@@ -194,7 +212,10 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   // shared resolver (registration, the Prepare append and readiness) requires
   // that declaration, so the fixture states it like any registered plan does.
   planPaths.forEach((path, index) =>
-    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+    writeFileSync(path, planFrontMatter(planIds[index]!, `# ${planIds[index]}
+
+Plan body.
+`)),
   );
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
@@ -411,10 +432,16 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
 
   const planPath = join(plansDir, `${planId}.md`);
-  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  writeFileSync(planPath, planFrontMatter(planId, `# ${planId}
+
+Plan body.
+`));
   const movedPlanPath = join(plansDir, "moved", `${planId}.md`);
   mkdirSync(dirname(movedPlanPath), { recursive: true });
-  writeFileSync(movedPlanPath, `# ${planId} (moved)\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  writeFileSync(movedPlanPath, planFrontMatter(planId, `# ${planId} (moved)
+
+Plan body.
+`));
   const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
   writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));

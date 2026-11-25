@@ -22,6 +22,23 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { runCli as spawnCli, type RunResult } from "./harness";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const PLAN_ID = "20260918-plan-alpha";
 /** The reviewed compass pointer of one registered iteration (its own id names the package). */
 function compassRefFor(workflowId: string): string {
@@ -101,7 +118,8 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
   const planDir = join(harness, options.planSubdir ?? "plans");
   mkdirSync(planDir, { recursive: true });
   const planFile = join(planDir, `${PLAN_ID}.md`);
-  writeFileSync(planFile, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(planFile, planFrontMatter(PLAN_ID, `# Plan ${PLAN_ID}
+`));
   if (options.mstarc !== undefined) writeFileSync(join(harness, ".mstarc"), options.mstarc);
   else writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-iter-path-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   return {
@@ -201,7 +219,8 @@ describe("iteration registration inputs and registered plan paths", () => {
   test("an external plan root requires an absolute pointer", () => {
     const external = mkdtempSync(join(tmpdir(), "mstar-iteration-plan-path-external-"));
     const externalPlan = join(external, `${PLAN_ID}.md`);
-    writeFileSync(externalPlan, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeFileSync(externalPlan, planFrontMatter(PLAN_ID, `# Plan ${PLAN_ID}
+`));
     const fixture = setupHarness({ mstarc: `[config]\nplan_dir=${external}\n` });
     try {
       expectInvalidRegisteredPath(fixture.harness, `${PLAN_ID}.md`);

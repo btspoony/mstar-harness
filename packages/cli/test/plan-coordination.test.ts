@@ -12,6 +12,23 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
 import { receiptStable, runCli, writeFixtureRepoId } from "./harness";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -25,7 +42,7 @@ async function fixture(): Promise<Fixture> {
   writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar"); mkdirSync(join(harness, "plans"), { recursive: true });
-  write(join(harness, "plans", `${PLAN}.md`), `# Plan coordination\n\n**plan_id:** ${PLAN}\n`);
+  write(join(harness, "plans", `${PLAN}.md`), planFrontMatter(PLAN, "# Plan coordination\n"));
   const context = { harnessDir: harness }; const store = await initializeStore(context); store.close();
   await ensureCollaborationAuthority(context);
   const worktree = join(root, "feature"); execFileSync("git", ["worktree", "add", "-q", "-b", "feature/plan-coordination", worktree], { cwd: root });
@@ -40,7 +57,8 @@ function cli(args: string[], f: Fixture, caller?: ExecutionIdentity): Result {
   return { code: exitCode, stdout, stderr, json };
 }
 async function register(f: Fixture, wf = WF, id = PLAN, title = "Plan coordination", branch = "feature/plan-coordination"): Promise<void> {
-  const file = `plans/${id}.md`; write(join(f.harness, file), `# ${title}\n\n**plan_id:** ${id}\n`);
+  const file = `plans/${id}.md`; write(join(f.harness, file), planFrontMatter(id, `# ${title}
+`));
   const before = await readExecutionAuthority(f.context); const session = wf === WF ? SESSION : "peer-coordinator";
   const result = cli(["workflow", "register", "--workflow", wf, "--plan-id", id, "--plan-title", title, "--plan-file", file,
     "--delivery-kind", "development", "--branch-source", branch, "--branch-target", "main", "--expect", before.token,

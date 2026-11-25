@@ -98,6 +98,23 @@ assert.ok(existsSync(join(CLI_ROOT, "package.json")), `CLI package root did not 
 
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
+
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId, body, fields = {}) {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
 const COORDINATOR_ID = "coord-r3";
 const BRANCH = "feature/r3-parity";
 const WIRE_PREFIX = "exec-session-v1:";
@@ -340,7 +357,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-r3");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planPath, `# R3 parity plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(PLAN_ID, "# R3 parity plan\n"));
   writeText(evidencePath, "# evidence\n");
   // A REAL checkout on the branch prepare records: prepare validates the actual
   // checkout and branch.
@@ -557,7 +574,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
 
 test("the store the built CLI wrote is a real node:sqlite authority", async () => {
   const fixture = await makeActiveWorkspace("mstar-r3-sqlite");
-  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# R3 sqlite plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# R3 sqlite plan\n"));
   const rootToken = (await readExecutionAuthority({ harnessDir: fixture.harness })).token;
   ok(
     runCli(
@@ -748,7 +765,8 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
   const planPath = join(fixture.harness, "plans", `${OMP_PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", OMP_PLAN_ID);
-  writeText(planPath, `# Plan ${OMP_PLAN_ID}\n\n**plan_id:** ${OMP_PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(OMP_PLAN_ID, `# Plan ${OMP_PLAN_ID}
+`));
 
   await registerCatalogEntity(
     { harnessDir: fixture.harness },

@@ -12,6 +12,23 @@ import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { openCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "../src/collaboration-store.js";
 import { initializeStore, openStore, upgradeStore, type StoreContext } from "../src/store-db.js";
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -110,7 +127,7 @@ describe("explicit store-root selection", () => {
     // note: The repository's lane is already ACTIVE through the alternative root and
     // this checkout holds no binding of its own yet; adopt what it resolved.
     writeCollaborationBinding(selected, await readCollaborationAuthority(selected));
-    writeFileSync(join(selected.harnessDir, "plans", "selected.md"), "# Selected plan\n\n**plan_id:** selected\n");
+    writeFileSync(join(selected.harnessDir, "plans", "selected.md"), planFrontMatter("selected", "# Selected plan\n"));
     await registerCatalogEntity(
       selected,
       { kind: "plan", id: "selected", title: "Selected plan", rootKind: "plans", relativePath: "selected.md" },

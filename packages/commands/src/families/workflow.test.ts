@@ -42,6 +42,23 @@ function sessionContext(): InvocationContext {
 const roots: string[] = [];
 afterAll(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+/** Render a plan markdown whose declarations live in the front matter fence. */
+function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
 /**
  * A temp harness holding one ACTIVE store and the plan document the
  * registration resolves its id and title from.
@@ -56,7 +73,7 @@ async function harness(): Promise<string> {
   );
   const harnessDir = join(root, ".mstar");
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, "plans", "plan-anchor.md"), "# Anchor plan\n\n**plan_id:** plan-anchor\n");
+  writeFileSync(join(harnessDir, "plans", "plan-anchor.md"), planFrontMatter("plan-anchor", "# Anchor plan\n"));
   (await initializeStore({ harnessDir })).close();
   await ensureCollaborationAuthority({ harnessDir });
   return harnessDir;
@@ -214,5 +231,23 @@ describe("workflow family advisories", () => {
     const envelope = await register(await harness(), { base: "main", work: "feature/plan-anchor", target: "main" });
     expect(envelope).toMatchObject({ status: "ok", code: "workflow.register.ok" });
     expect(warningsOf(envelope)).toEqual([]);
+  });
+
+  test("a front-matter plan registers; a body-label plan refuses and names the front matter recovery", async () => {
+    // The helper renders the front matter form; registration consumes the
+    // declared plan_id through resolveRegisteredPlanFile.
+    const harnessDir = await harness();
+    const passed = await register(harnessDir, { base: "main", work: "feature/plan-anchor", target: "main" });
+    expect(passed).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+
+    // The same call against a body-label plan: `**plan_id:**` outside the fence
+    // declares nothing, so the identity proof refuses and names the recovery.
+    const bodyHarness = await harness();
+    writeFileSync(join(bodyHarness, "plans", "plan-anchor.md"), "# Anchor plan\n\n**plan_id:** plan-anchor\n");
+    const refused = await register(bodyHarness, { base: "main", work: "feature/plan-anchor", target: "main" });
+    expect(refused).toMatchObject({ status: "refused", code: "plan-path.identity-mismatch" });
+    if (refused.status === "ok") throw new Error("the body-label plan registered; the front matter comparison did not run");
+    expect(refused.message).toContain("front matter");
+    expect(refused.message).toContain("plan_id: line inside the front matter fence");
   });
 });

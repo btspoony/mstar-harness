@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
 import { PlanPathError, resolveRegisteredPlanFile, type RegisteredPlanFileInput } from "../src/plan-path.js";
 
 const PLAN_ID = "20260921-plan-path-demo";
@@ -42,9 +43,21 @@ function writePlan(dir: string, fileName: string, content: string): string {
   return path;
 }
 
-/** A plan markdown whose only declaration is `plan_id`. */
+/** A plan markdown whose declarations live in the front matter fence. */
 function planMarkdown(planId: string, body = ""): string {
-  return [`**plan_id:** ${planId}`, "", "# Plan body", body].join("\n");
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    "execution: sdd",
+    "working_branch: main",
+    "main_worktree_branch: main",
+    "delivery_kind: development",
+    "status: InProgress",
+    "---",
+    "",
+    "# Plan body",
+    body,
+  ].join("\n");
 }
 
 /** The typed refusal a call must produce (never a bare `Error`). */
@@ -128,12 +141,12 @@ describe("resolveRegisteredPlanFile — accepted forms", () => {
     expect(refusal.code).toBe("plan-path.invalid-pointer");
   });
 
-  test("a fenced example mentioning plan_id is not a declaration", () => {
+  test("a fenced example mentioning plan_id inside the body is never read", () => {
     const root = tmpRoot();
     const harness = join(root, "harness");
     const planDir = join(harness, "plans");
     const content = [
-      "# Plan",
+      planMarkdown(PLAN_ID),
       "",
       "Example of the header, inside a longer fence:",
       "",
@@ -142,14 +155,6 @@ describe("resolveRegisteredPlanFile — accepted forms", () => {
       `**plan_id:** 99999999-not-the-plan`,
       "```",
       "````",
-      "",
-      "And a tilde fence:",
-      "",
-      "~~~",
-      "**plan_id:** 88888888-also-not-the-plan",
-      "~~~",
-      "",
-      planMarkdown(PLAN_ID),
     ].join("\n");
     const planPath = writePlan(planDir, `${PLAN_ID}.md`, content);
 
@@ -158,15 +163,17 @@ describe("resolveRegisteredPlanFile — accepted forms", () => {
     expect(result.declaredPlanId).toBe(PLAN_ID);
   });
 
-  test("accepts the bold-colon-outside and plain header spellings", () => {
+  test("body label spellings declare nothing — the refusal names the front matter recovery", () => {
     const root = tmpRoot();
     const harness = join(root, "harness");
     const planDir = join(harness, "plans");
     writePlan(planDir, `${PLAN_ID}.md`, ["**plan_id**: " + PLAN_ID, "", "# Plan"].join("\n"));
 
-    expect(resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/${PLAN_ID}.md` }).declaredPlanId).toBe(
-      PLAN_ID,
+    const refusal = refusalOf(() =>
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/${PLAN_ID}.md` }),
     );
+    expect(refusal.code).toBe("plan-path.identity-mismatch");
+    expect(refusal.message).toContain("front matter");
   });
 });
 
@@ -375,23 +382,22 @@ describe("resolveRegisteredPlanFile — refusals", () => {
     ).toBe("plan-path.identity-mismatch");
   });
 
-  test("refuses conflicting plan_id declarations instead of picking one", () => {
+  test("conflicting plan_id declarations in front matter refuse from the shared reader", () => {
     const root = tmpRoot();
     const harness = join(root, "harness");
     const planDir = join(harness, "plans");
     writePlan(
       planDir,
       `${PLAN_ID}.md`,
-      [`**plan_id:** ${PLAN_ID}`, "", `plan_id: 19990101-different-plan`, "", "# Plan"].join("\n"),
+      ["---", `plan_id: ${PLAN_ID}`, `plan_id: 19990101-different-plan`, "---", "", "# Plan"].join("\n"),
     );
 
-    const refusal = refusalOf(() =>
-      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/${PLAN_ID}.md` }),
-    );
-
-    expect(refusal.code).toBe("plan-path.conflicting-declaration");
-    expect(refusal.details.header).toBe("plan_id");
-    // The pointer diagnostic still accompanies the reader's own detail.
-    expect(refusal.details.received).toBe(`plans/${PLAN_ID}.md`);
+    let error: unknown;
+    try {
+      resolveRegisteredPlanFile({ harnessRoot: harness, planId: PLAN_ID, file: `plans/${PLAN_ID}.md` });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(DocumentFrontmatterError);
   });
 });
