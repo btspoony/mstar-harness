@@ -80,6 +80,7 @@ import { SddScriptError } from "./sdd.js";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
+import { SWITCHED_NOT_PRESENTED_SQL, assertPresented } from "./cross-authority-move.js";
 import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
@@ -994,7 +995,9 @@ export type OpenIssueRollup = {
 };
 
 function readOpenIssueRollup(db: StoreDb, projectId?: string): OpenIssueRollup {
-  const where = `where issues.disposition = 'open'${projectId === undefined ? "" : " and issues.project_id = ?"}`;
+  const where =
+    `where issues.disposition = 'open' and ${SWITCHED_NOT_PRESENTED_SQL}` +
+    `${projectId === undefined ? "" : " and issues.project_id = ?"}`;
   const params = projectId === undefined ? [] : [projectId];
   // invariant: The whole severity vocabulary is reported (zeros included), so a consumer
   // never distinguishes "absent" from "zero" by a missing key.
@@ -1171,6 +1174,9 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
     );
     params.push(filter.query, filter.query);
   }
+  // invariant: A switched record belongs to the destination authority, so the dashboard page neither
+  // returns nor counts it: the same rule a detail read refuses by name.
+  clauses.push(SWITCHED_NOT_PRESENTED_SQL);
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
@@ -1250,7 +1256,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   const milestoneColumn = ", milestone_id";
   const issue = db
     .prepare(
-      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`,
+      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, issue_ref${milestoneColumn} from issues where id = ?`,
     )
     .get(id) as
     | {
@@ -1274,9 +1280,13 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
         url: string | null;
         identity_key: string;
         milestone_id: string | null;
+        issue_ref: string;
       }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
+  // invariant: The same presentation gate the domain reader applies: a switched record belongs to
+  // the destination authority until its move publishes, so this reader refuses it the same way.
+  assertPresented(db, id);
 
   const occurrences = (
     db
@@ -1346,12 +1356,12 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   // join, which is the issue this one is not.
   const relations = db
     .prepare(
-      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue, r.to_ref as toRef,
               (select i.title from issues i
                  where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
          from relations r where r.from_issue = ? or r.to_issue = ?`,
     )
-    .all(id, id, id) as Array<{ fromIssue: string; relation: string; toIssue: string; title: string | null }>;
+    .all(id, id, id) as IssueDetail["relations"];
 
   const provenance = (
     db
@@ -1425,6 +1435,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    issueRef: issue.issue_ref,
     milestoneId: issue.milestone_id ?? null,
     occurrences,
     transitions,
@@ -1477,7 +1488,10 @@ function readIssueFlow(db: StoreDb, projectId: string | undefined): IssueFlow {
     .all(...scopeParams) as Array<{ at: string | null; imported: number }>;
 
   const openRow = db
-    .prepare(`select count(*) as n from issues ${scope ? `${scope} and` : "where"} disposition = 'open'`)
+    .prepare(
+      `select count(*) as n from issues ${scope ? `${scope} and` : "where"} disposition = 'open' and ` +
+        SWITCHED_NOT_PRESENTED_SQL,
+    )
     .get(...scopeParams) as { n: number };
 
   type Day = { captured: number; retired: number; importedCaptured: number; importedRetired: number };
@@ -1611,6 +1625,7 @@ function readProjectListOn(db: StoreDb): ProjectListDTO {
        from project_ids
        left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
        left join issues on issues.project_id = project_ids.id and issues.disposition = 'open'
+         and ${SWITCHED_NOT_PRESENTED_SQL}
        group by project_ids.id
        order by coalesce(catalog.title, project_ids.id) asc, project_ids.id asc`,
     )
@@ -2428,7 +2443,9 @@ function activeWorkflows(list: WorkflowListDTO): WorkflowListDTO {
 function readResidualCounts(db: StoreDb): { open: number; bySeverity: ResidualCounts } {
   const bySeverity: ResidualCounts = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
   const rows = db
-    .prepare("select severity, count(*) as n from issues where disposition = 'open' group by severity")
+    .prepare(
+      `select severity, count(*) as n from issues where disposition = 'open' and ${SWITCHED_NOT_PRESENTED_SQL} group by severity`,
+    )
     .all() as Array<{ severity: string; n: number }>;
   for (const row of rows) {
     if (Object.hasOwn(bySeverity, row.severity)) bySeverity[row.severity as keyof ResidualCounts] = row.n;
