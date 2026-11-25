@@ -50,7 +50,7 @@ import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
-import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry } from "./document-frontmatter.js";
+import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry, type FrontmatterProfile } from "./document-frontmatter.js";
 import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 /**
@@ -249,9 +249,9 @@ function assignmentFrontmatter(text: string): { yaml: string; unterminated: bool
 }
 
 /** Parse front matter entries, never throwing: invalid YAML yields no entries. */
-function safeEntries(yaml: string): Map<string, FrontmatterEntry> | null {
+function safeEntries(yaml: string, profile: FrontmatterProfile = "document"): Map<string, FrontmatterEntry> | null {
   try {
-    return parseDocumentFrontmatterEntries(yaml, "assignment");
+    return parseDocumentFrontmatterEntries(yaml, "assignment", profile);
   } catch {
     return null;
   }
@@ -385,11 +385,13 @@ export function parseEnforcementFlag(text: string): EnforcementFlag {
  * fence themselves, e.g. the compass reader. The shared front matter reader
  * decides the key, so a YAML comment or a quoted value never hides the flag.
  * Source attribution is decided by the block's own content: a block carrying
- * an Assignment core key is `assignment`, anything else `compass`. Never
- * throws.
+ * an Assignment core key is `assignment`, anything else `compass`. The
+ * caller passes the same profile it validated the block with — a compass
+ * block read under the `flat` contract must not lose its flag to the
+ * stricter `document` profile. Never throws.
  */
-export function parseEnforcementFlagFromFrontmatter(frontmatter: string): EnforcementFlag {
-  const entries = safeEntries(frontmatter);
+export function parseEnforcementFlagFromFrontmatter(frontmatter: string, profile: FrontmatterProfile = "document"): EnforcementFlag {
+  const entries = safeEntries(frontmatter, profile);
   if (entries === null) return { hard: false, source: "none" };
   const entry = entries.get("enforcement");
   if (entry === undefined) return { hard: false, source: "none" };

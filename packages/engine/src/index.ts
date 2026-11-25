@@ -379,9 +379,10 @@ export {
   isReadOnlyAssignmentRole,
   parseAssignmentBranchForms,
   parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
-  validateAssignmentFields,
+  parseEnforcementFlagFromFrontmatter,
   validateControlWriteAssignment,
 } from "./dispatch.js";
 export type {

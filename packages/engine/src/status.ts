@@ -771,7 +771,7 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     // status-less compasses are skipped — fail-soft (an archive must never
     // keep the repo hardened).
     if (status !== "active" && status !== "locked") continue;
-    const flag = parseEnforcementFlagFromFrontmatter(extraction.frontmatter);
+    const flag = parseEnforcementFlagFromFrontmatter(extraction.frontmatter, "flat");
     if (flag.hard) return flag;
   }
   return { hard: false, source: "none" };

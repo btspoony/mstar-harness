@@ -1340,6 +1340,14 @@ enforcement: hard
   test("compass frontmatter form: enforcement: hard → hard, source compass", () => {
     expect(parseEnforcementFlagFromFrontmatter("enforcement: hard\n")).toEqual({ hard: true, source: "compass" });
   });
+  test("F2: the flat compass profile accepts flat-only shapes the document profile refuses", () => {
+    const block = "iteration_id: 20260808-demo\nstatus: active\nreview_targets: [a,]\nenforcement: hard\n";
+    // The strict document profile refuses the trailing flow-list separator,
+    // so the flag vanishes; the flat profile the compass was validated with
+    // keeps it.
+    expect(parseEnforcementFlagFromFrontmatter(block)).toEqual({ hard: false, source: "none" });
+    expect(parseEnforcementFlagFromFrontmatter(block, "flat")).toEqual({ hard: true, source: "compass" });
+  });
 
   test("compass value may be quoted and case-insensitive", () => {
     expect(parseEnforcementFlagFromFrontmatter('enforcement: "hard"\n')).toEqual({ hard: true, source: "compass" });
