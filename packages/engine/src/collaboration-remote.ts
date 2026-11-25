@@ -3278,6 +3278,12 @@ export type RemoteIntentRead = Readonly<{
   result: unknown | null;
   operator: string | null;
   reason: string | null;
+  /**
+   * note: The stored request was written before the effort contract and read under it: its
+   * milestone `target` members were normalized to `effortSessions: null` at read time. Reported
+   * regardless of disclosure - it is the row's provenance, never frozen content.
+   */
+  normalizedFromLegacy: boolean;
   resolves: string | null;
   resolvedBy: string | null;
   abandonReason: string | null;
@@ -3310,6 +3316,8 @@ export type RemoteDispatchPermit = Readonly<{
   operationId: string;
   requestHash: string;
   frozenRequest: RemoteIntentRequest;
+  /** note: The frozen request was read under the pre-upgrade contract and normalized to the current one. */
+  normalizedFromLegacy: boolean;
   /** note: The observation the base was proven against: its generation, cache revision and traversal start. */
   observation: Readonly<{ generation: number; revision: number; asOf: string | null }>;
 }>;
@@ -3333,6 +3341,8 @@ type StoredRequest = Readonly<{
   reason: string | null;
   origin: RemoteWriteOrigin | null;
   result: unknown | null;
+  /** note: The stored request was read under the pre-upgrade contract and normalized to the current one. */
+  legacyRead: boolean;
 }>;
 
 type OutboxIntentRow = Readonly<{
@@ -3409,32 +3419,48 @@ function intentRow(db: StoreDb, operationId: string): OutboxIntentRow {
  * reads it, so a hand-edited or partially written row refuses as unreadable instead of
  * driving a send. The reviewed resolution additionally carries its operator and reason.
  */
+/** note: One stored request's reading: unmodified, normalized from the uniform pre-upgrade shape, or mixed. */
+type LegacyReading = Readonly<{ body: unknown; legacy: boolean }>;
+
 /**
  * invariant: A frozen request is read under the contract that FROZE it. The effort contract
- * retired a milestone's calendar `target` for a session count, and a date is not a count: a stored
- * milestone that carries `target` reads as unestimated (`effortSessions: null`) instead of being
- * reinterpreted as a number or refused as unreadable, which would strand a row the migration
- * promised to settle in place. A new submission is unaffected - `milestone` still refuses `target`
- * at the boundary, so the widening is the stored path's alone.
+ * retired a milestone's calendar `target` for a session count, and a date is not a count. The old
+ * writer had one shape: a genuine pre-upgrade request carries `target` on EVERY milestone row and
+ * `effortSessions` on NONE. Exactly that uniform shape is normalized (each milestone reads as
+ * unestimated, `effortSessions: null`) and is reported as such. Anything else that carries
+ * `target` - a partially written or hand-edited row that mixes the two members - is a
+ * contradiction no writer ever produced: `mixed` refuses as unreadable instead of driving a send.
+ * A new submission is unaffected - `milestone` still refuses `target` at the boundary, so the
+ * widening is the stored path's alone.
  */
-function legacyFrozenRequest(parsed: unknown): unknown {
-  if (typeof parsed !== "object" || parsed === null) return parsed;
+function legacyFrozenRequest(parsed: unknown): LegacyReading | "mixed" {
+  if (typeof parsed !== "object" || parsed === null) return { body: parsed, legacy: false };
   const event = (parsed as Record<string, unknown>).event;
-  if (typeof event !== "object" || event === null) return parsed;
+  if (typeof event !== "object" || event === null) return { body: parsed, legacy: false };
   const change = (event as Record<string, unknown>).change;
-  if (typeof change !== "object" || change === null) return parsed;
+  if (typeof change !== "object" || change === null) return { body: parsed, legacy: false };
   const project = (change as Record<string, unknown>).project;
-  if (typeof project !== "object" || project === null) return parsed;
+  if (typeof project !== "object" || project === null) return { body: parsed, legacy: false };
   const milestones = (project as Record<string, unknown>).milestones;
-  if (!Array.isArray(milestones)) return parsed;
+  if (!Array.isArray(milestones)) return { body: parsed, legacy: false };
+  let withTarget = 0;
+  let withSessions = 0;
+  for (const entry of milestones) {
+    if (typeof entry !== "object" || entry === null) continue;
+    if (Object.hasOwn(entry, "target")) withTarget += 1;
+    if (Object.hasOwn(entry, "effortSessions")) withSessions += 1;
+  }
+  if (withTarget === 0) return { body: parsed, legacy: false };
+  // invariant: The pre-upgrade shape was uniform. A row where some milestones carry `target`,
+  // or one carries both members, is damage - not a legacy row to normalize.
+  if (withTarget !== milestones.length || withSessions !== 0) return "mixed";
   for (const entry of milestones) {
     if (typeof entry !== "object" || entry === null) continue;
     const milestone = entry as Record<string, unknown>;
-    if (!Object.hasOwn(milestone, "target")) continue;
     delete milestone.target;
     if (!Object.hasOwn(milestone, "effortSessions")) milestone.effortSessions = null;
   }
-  return parsed;
+  return { body: parsed, legacy: true };
 }
 
 function storedRequest(row: OutboxIntentRow): StoredRequest {
@@ -3444,8 +3470,15 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
   } catch {
     throw malformedIntent(row.operationId, "carries no readable frozen request");
   }
+  const legacy = legacyFrozenRequest(parsed);
+  if (legacy === "mixed") {
+    throw malformedIntent(
+      row.operationId,
+      "mixes the retired milestone `target` with `effortSessions` - no writer produced that shape",
+    );
+  }
   try {
-    const body = record(legacyFrozenRequest(parsed), "request");
+    const body = record(legacy.body, "request");
     allowOnly(body, "request", [
       "binding", "event", "target", "expectedHeads", "executionKey", "operator", "reason", "origin", "result",
     ]);
@@ -3463,6 +3496,7 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
       reason: typeof body.reason === "string" ? body.reason : null,
       origin: body.origin === undefined || body.origin === null ? null : writeOrigin(body.origin, "request.origin"),
       result: body.result === undefined ? null : plainJson(body.result, "request.result"),
+      legacyRead: legacy.legacy,
     };
   } catch {
     throw malformedIntent(row.operationId, "carries a frozen request the contract cannot read");
@@ -4229,6 +4263,7 @@ function intentRead(
     result: full ? stored.result : null,
     operator: full ? stored.operator : null,
     reason: full ? stored.reason : null,
+    normalizedFromLegacy: stored.legacyRead,
     resolves: row.resolves,
     resolvedBy: row.resolvedBy,
     abandonReason: full ? row.abandonReason : null,
@@ -4269,6 +4304,7 @@ function claimIntentRead(
     result: full ? { noChange: claim.answer } : null,
     operator: null,
     reason: null,
+    normalizedFromLegacy: false,
     resolves: row.resolves,
     resolvedBy: row.resolvedBy,
     abandonReason: full ? row.abandonReason : null,
@@ -4953,6 +4989,7 @@ export async function dispatchRemoteIntent(
         operationId: target,
         requestHash: row.requestHash,
         frozenRequest: stored.request,
+        normalizedFromLegacy: stored.legacyRead,
         observation: {
           generation: observation === null ? row.generation : observation.generation,
           revision: typeof scope.revision === "number" ? scope.revision : 0,

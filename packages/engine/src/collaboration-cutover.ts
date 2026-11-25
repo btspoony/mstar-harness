@@ -106,6 +106,16 @@ export type CutoverActivationOptions = Readonly<{
   attestation: ActivationAttestation;
 }>;
 
+/**
+ * note: The oldest source schema this build can extract — and it IS this iteration's newest
+ * migration: extraction copies the collaboration tables' exact current columns, so a source one
+ * version older is already missing columns (the effort migration retired `target` on
+ * `project_milestones`) and cannot be copied. The fence advances nothing; a source below this
+ * floor reaches it only through the public `store upgrade`. Pinned by name, not position: an
+ * unrelated append must not silently move the boundary a planned cutover documented.
+ */
+const SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
+
 /** note: The single claim slot on the canonical target: one activation at a time. */
 const CLAIM_KEY = "collaboration-cutover-claim";
 
@@ -115,12 +125,6 @@ const CUTOVER_LOCK_BASENAME = "collaboration-cutover.lock";
 const CUTOVER_LOCK_RECOVERY_SUFFIX = ".recover";
 /** note: Bounded retries after recovering a stale lock another attempt just replaced. */
 const STALE_LOCK_ATTEMPTS = 3;
-
-/** note: The oldest source schema this build can extract (the combined store's cutover base).
- * Pinned by name, not position: an unrelated append must not move the floor. The fence transaction
- * performs exactly one advance, so a source at this version is extractable and an older one is
- * told to `store upgrade` first. */
-const SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
 
 type Blockers = readonly Readonly<{ code: string; subject: string }>[];
 
@@ -1361,10 +1365,11 @@ async function releaseStaleClaim(
 }
 
 /**
- * invariant: The fence advances the source to this build's current schema inside its own
- * transaction by applying every migration after the recorded max, in order. A source at the floor
- * therefore enters and leaves at the current schema; a source further behind, or with a gap, is a
- * drift the operator settles with `store upgrade` before fencing.
+ * invariant: The fence performs NO schema advance. The source floor is this build's current
+ * schema: extraction copies the collaboration tables' exact current columns, so a source older
+ * than the newest migration is missing columns and cannot be copied at all. The gate's only job
+ * is the exact refusal - an operational consequence an operator plans for: a source below the
+ * floor reaches it only through `mstar store upgrade`, never through the fence.
  */
 function ensureFenceSchema(db: StoreDb): number {
   const max = validateAppliedMigrations(readAppliedMigrations(db, false));
@@ -1375,16 +1380,7 @@ function ensureFenceSchema(db: StoreDb): number {
         `"mstar store upgrade --operator <name>" to reach the current schema; nothing was fenced.`,
     );
   }
-  for (const migration of MIGRATIONS.filter((entry) => entry.version > max)) {
-    db.exec(migration.sql);
-    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-      migration.version,
-      migration.name,
-      migrationChecksum(migration),
-      nowRfc3339(),
-    );
-  }
-  return validateAppliedMigrations(readAppliedMigrations(db, false));
+  return max;
 }
 
 export async function planCollaborationCutover(context: StoreContext): Promise<CutoverManifest> {

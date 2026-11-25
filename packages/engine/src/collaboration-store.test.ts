@@ -4718,7 +4718,8 @@ describe("remote outbox intents", () => {
 test("a frozen pre-upgrade request that carried a milestone target settles as unestimated", async () => {
     // invariant: A frozen request outlives the contract that froze it. The predecessor froze each
     // milestone with a calendar `target`; a date is not a count of sessions, so the stored row must
-    // settle as unestimated instead of refusing every settlement verb as input-invalid.
+    // settle as unestimated instead of refusing every settlement verb as input-invalid. The rewrite
+    // is visible: the row reads as normalized-from-legacy, never as a current contract row.
     const fixture = remoteFixture("outbox-frozen-target");
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
@@ -4726,6 +4727,8 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
     const operationId = "00000000-0000-4000-8000-0000000000f1";
     await prepareRemoteIntent(context, intentRequest(fixture, commit, operationId));
+    // invariant: A CURRENT row reads untouched - no normalization is reported for it.
+    expect((await readRemoteIntent(context, operationId)).normalizedFromLegacy).toBe(false);
     const db = new DatabaseSync(location.dbPath);
     try {
       const row = db.prepare("select request_json from remote_outbox where operation_id = ?").get(operationId) as {
@@ -4747,9 +4750,32 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     if (shown.event?.change.kind !== "project-replace") throw new Error("expected a frozen project replacement");
     const milestones = shown.event.change.project.milestones as Array<{ effortSessions: unknown }>;
     expect(milestones.map((entry) => entry.effortSessions)).toEqual([null]);
+    expect(shown.normalizedFromLegacy).toBe(true);
     await expect(abandonRemoteIntent(context, { operationId, reason: "superseded" })).resolves.toMatchObject({
       state: "abandoned",
     });
+
+    // invariant: A row that MIXES the pre-upgrade and current shapes - some milestones carrying
+    // `target`, or one carrying both members - is damage no writer produced: it refuses as
+    // unreadable instead of being laundered through the legacy rewrite.
+    const mixed = "00000000-0000-4000-8000-0000000000f3";
+    await prepareRemoteIntent(context, intentRequest(fixture, commit, mixed));
+    const mixedDb = new DatabaseSync(location.dbPath);
+    try {
+      const row = mixedDb.prepare("select request_json from remote_outbox where operation_id = ?").get(mixed) as {
+        request_json: string;
+      };
+      const body = JSON.parse(row.request_json) as {
+        event: { change: { project: { milestones: Array<Record<string, unknown>> } } };
+      };
+      // note: ONE row carrying both the retired `target` and the current `effortSessions`:
+      // no writer ever produced that shape, uniform or current.
+      body.event.change.project.milestones[0]!.target = "2026-12-01";
+      mixedDb.prepare("update remote_outbox set request_json = ? where operation_id = ?").run(JSON.stringify(body), mixed);
+    } finally {
+      mixedDb.close();
+    }
+    await expect(readRemoteIntent(context, mixed)).rejects.toMatchObject({ code: "collaboration.unreadable" });
 
     // invariant: The legacy reading is the STORED path's alone: a new submission carrying the
     // retired member is still refused at the boundary.
