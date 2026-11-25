@@ -168,20 +168,26 @@ export function normalizeAssignmentRole(rawRole: string): string {
 /**
  * The combined review/audit round classification, owned here and consumed
  * by both `validateAssignmentFields` and the document schema: the
- * normalized role, whether it names a review seat, and whether the task
- * category independently triggers an audit round. The schema keeps only
- * its field table; the decision has exactly one copy.
+ * normalized role, whether it names a review seat, whether the task
+ * category independently triggers an audit round — and `roundBounded`,
+ * the final shared decision of whether the round-bounding fields are
+ * required. The schema keeps only its field table; every part of the
+ * decision has exactly one copy.
  */
 export function classifyReviewOrAuditRound(rawRole: string, rawCategory: string): {
   role: string;
   reviewSeat: boolean;
   auditRound: boolean;
+  roundBounded: boolean;
 } {
   const role = normalizeAssignmentRole(rawRole);
+  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const auditRound = isAuditTaskCategory(rawCategory);
   return {
     role,
-    reviewSeat: REVIEW_SEAT_ROLES.includes(role),
-    auditRound: isAuditTaskCategory(rawCategory),
+    reviewSeat,
+    auditRound,
+    roundBounded: reviewSeat || auditRound,
   };
 }
 
@@ -537,9 +543,9 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 // `Execute as` is outside the seat set would otherwise escape the gate. The
 // category token is read case-insensitively, tolerating a suffix (`audit`,
 // `audit (secondary)`, `audit_secondary`) but not a longer word (`auditing`).
-  const { role, reviewSeat, auditRound } = classifyReviewOrAuditRound(fields.executeAs ?? "", fields.taskCategory ?? "");
+  const { role, reviewSeat, roundBounded } = classifyReviewOrAuditRound(fields.executeAs ?? "", fields.taskCategory ?? "");
   const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
-  if (reviewSeat || auditRound) {
+  if (roundBounded) {
     const subject = reviewSeat ? `review seat "${role}"` : `audit round (Task category: ${category})`;
     // One code per field — the PM reads which label is missing off the code.
     const boundingFields = [
@@ -576,7 +582,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // here too, and `writable: false` only waives the branch-form gate, never
   // this field. Presence-only: absent, empty or `N/A` fails; numeric/semantic
   // adequacy stays in PM's Prepare check.
-  if (!reviewSeat && !auditRound) {
+  if (!roundBounded) {
     const missing = describeAbsence(fields.taskBudget);
     if (missing !== undefined) {
       violations.push(

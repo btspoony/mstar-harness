@@ -58,15 +58,15 @@ const PLAN_SCHEMA: DocumentSchema = {
   optional: [{ name: "title" }],
 };
 
-/** Review/audit trigger: the dispatch-owned combined classifier
- * ({@link classifyReviewOrAuditRound}) — one copy of the role normalization
- * and the review/audit decision; the schema keeps only its field table. */
+/** Review/audit trigger: the dispatch-owned final round-bounding decision
+ * ({@link classifyReviewOrAuditRound} `roundBounded`) — the role
+ * normalization, both component checks and the final decision each have
+ * exactly one copy; the schema keeps only its field table. */
 function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
-  const { reviewSeat, auditRound } = classifyReviewOrAuditRound(
+  return classifyReviewOrAuditRound(
     typeof values.execute_as === "string" ? values.execute_as : "",
     typeof values.task_category === "string" ? values.task_category : "",
-  );
-  return reviewSeat || auditRound;
+  ).roundBounded;
 }
 
 const ASSIGNMENT_SCHEMA: DocumentSchema = {

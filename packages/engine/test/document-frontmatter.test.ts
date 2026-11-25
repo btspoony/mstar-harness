@@ -299,8 +299,22 @@ describe("parseDocumentFrontmatter — refused line forms", () => {
     expect(duplicate.fix).toContain("rename");
     const tab = expectRefusal(`outer:\n\tinner: 1`, 3);
     expect(tab.fix).toContain("spaces");
+    const misaligned = expectRefusal(`plans:\n  - a\n    - b`, 4);
+    expect(misaligned.fix).toContain("align the item's dash with the dash of the first item");
     const childUnderScalar = expectRefusal(`name: x\n  orphan: y`, 3);
     expect(childUnderScalar.fix).toContain("key: line");
+  });
+
+  test("a flat-profile nested-map refusal names the accepted flat root shapes", () => {
+    let error: DocumentFrontmatterError | null = null;
+    try {
+      parseDocumentFrontmatter(`plans:\n  unexpected: value`, "spec-source", "flat");
+    } catch (caught) {
+      error = caught as DocumentFrontmatterError;
+    }
+    expect(error).toBeInstanceOf(DocumentFrontmatterError);
+    expect(error!.fix).toContain("flat root shapes");
+    expect(error!.fix).not.toContain("nested-map form");
   });
 
   test("parseSimpleFrontmatter accepts a source label so a host loader names its file", () => {

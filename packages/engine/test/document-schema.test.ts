@@ -384,7 +384,7 @@ describe("validateDocumentFrontmatter — violation source and gate shape", () =
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R1 enum type checking", () => {
+describe("validateDocumentFrontmatter — enum type checking", () => {
   test.each([
     ["boolean", "status: true"],
     ["numeric", "status: 1"],
@@ -419,7 +419,7 @@ describe("validateDocumentFrontmatter — T3-R1 enum type checking", () => {
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R2 canonical template allowlist", () => {
+describe("validateDocumentFrontmatter — canonical template allowlist", () => {
   test("every canonical template field is a known assignment field", () => {
     const canonicalFields = [
       ["execute_as: fullstack-dev"],
@@ -488,7 +488,7 @@ describe("validateDocumentFrontmatter — T3-R2 canonical template allowlist", (
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R3 exactly one branch form for writable assignments", () => {
+describe("validateDocumentFrontmatter — exactly one branch form for writable assignments", () => {
   const BASE = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\ntask_budget: M";
 
   test("writable assignment with neither branch form is invalid", () => {
@@ -562,7 +562,7 @@ describe("validateDocumentFrontmatter — T3-R3 exactly one branch form for writ
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R4 strict ISO-8601 generated_at", () => {
+describe("validateDocumentFrontmatter — strict ISO-8601 generated_at", () => {
   test("invalid calendar day 2026-02-30 is rejected", () => {
     const fm = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-02-30T08:00:00Z");
     const gate = validateDocumentFrontmatter("pm-acceptance", doc(fm), "acceptance");
@@ -607,7 +607,7 @@ describe("validateDocumentFrontmatter — T3-R4 strict ISO-8601 generated_at", (
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R5 missing-field line numbers", () => {
+describe("validateDocumentFrontmatter — missing-field line numbers", () => {
   test("an absent required field reports line 1", () => {
     const gate = validateDocumentFrontmatter("plan", doc("plan_id: p1"), "plan");
     for (const v of gate.violations) {
@@ -624,7 +624,7 @@ describe("validateDocumentFrontmatter — T3-R5 missing-field line numbers", () 
   });
 });
 
-describe("validateDocumentFrontmatter — T3-R6 empty fenced front matter", () => {
+describe("validateDocumentFrontmatter — empty fenced front matter", () => {
   test("a properly fenced empty front matter reports missing fields, not absent", () => {
     const gate = validateDocumentFrontmatter("plan", "---\n---\n# Body\n", "plan");
     expect(gate.ok).toBe(false);

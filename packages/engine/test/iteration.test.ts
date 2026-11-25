@@ -573,6 +573,16 @@ describe("parseCompassFrontmatterText — delegation to the shared parser keeps 
     expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a", "plan-b"] });
   });
 
+  test("a leading quote on a flow-list item strips even when its mate sits inside the item", () => {
+    const content = ["---", `plans: ["plan-a" suffix]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: [`plan-a" suffix`] });
+  });
+
+  test("a trailing quote on a flow-list item strips even when its mate sits inside the item", () => {
+    const content = ["---", `plans: [prefix"plan-a"]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: [`prefix"plan-a`] });
+  });
+
   test("a quoted empty flow-list item is skipped like a plain empty one", () => {
     const content = ["---", `plans: ["", plan-a]`, "---", ""].join("\n");
     expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });

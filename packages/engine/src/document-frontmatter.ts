@@ -182,16 +182,17 @@ function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => ne
       fail();
     }
     if (profile === "flat") {
-      // The old compass contract strips one surrounding quote pair before
-      // dropping empties: a quoted empty item (`["", a]`) skips like a
-      // plain empty one. An interior bracket inside the surrounding quotes
+      // The old compass contract strips one quote at either boundary
+      // independently (wherever the other quote sits inside the item),
+      // then drops empties: a quoted empty item (`["", a]`) skips like a
+      // plain empty one. An interior bracket inside stripped quotes
       // (`"["` stripped to `[`) still refuses — brackets are structural.
-      const unquoted = unquote(item);
-      if (unquoted.includes("[") || unquoted.includes("]")) {
+      const stripped = item.replace(/^["']|["']$/g, "");
+      if (stripped.includes("[") || stripped.includes("]")) {
         fail();
       }
-      if (unquoted === "") continue;
-      items.push(unquoted);
+      if (stripped === "") continue;
+      items.push(stripped);
       continue;
     }
     if (
@@ -303,7 +304,7 @@ function parseFrontmatterStructure(
       if (top.childIndent === null) {
         top.childIndent = indent;
       } else if (indent !== top.childIndent) {
-        fail(i, raw, "list item indent does not match the first item of its list");
+        fail(i, raw, "list item indent does not match the first item of its list", "align the item's dash with the dash of the first item of its list");
       }
       const item = trimmed.replace(/^-\s*/, "").trim();
       // An empty item is refused in both profiles. The document profile
@@ -355,7 +356,12 @@ function parseFrontmatterStructure(
       // The first child of a bare `key:` is a key line: it is a nested map,
       // which the compass flat profile refuses instead of silently dropping.
       if (profile === "flat") {
-        fail(i, raw, "nested map in flat frontmatter");
+        fail(
+          i,
+          raw,
+          "nested map in flat frontmatter",
+          "flat frontmatter accepts only flat root shapes: write the parent as a scalar or flow array on the key line, or as indented `- item` list children \u2014 nested key: children are not accepted",
+        );
       }
       container.kind = "map";
     }
