@@ -9803,6 +9803,23 @@ function downgradeToV3(location: CollaborationLocation): void {
 }
 
 /**
+ * note: Rewind the live cache's version ledger to v5, keeping every table row - outbox, receipts,
+ * bindings and the move ledger - exactly as the v6 writers left it. The replacement decision reads
+ * its generation from this ledger, so this is the pre-v6 shape a bind must replace without losing
+ * the switched move rows.
+ */
+function downgradeToV5(location: CollaborationLocation): void {
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.exec("begin immediate");
+    db.prepare("delete from schema_version where version = ?").run(6);
+    db.exec("commit");
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * note: Confirm one seeded v3 outbox row in place: a receipt row plus the `confirmed` state, exactly
  * the shape a real send leaves. Used where the lane was rewritten to v3 and its ids must stay.
  */
@@ -10050,6 +10067,7 @@ describe("remote move conflict settlement", () => {
     switched: Awaited<ReturnType<typeof moveAcrossByDocument>>;
     destinationContext: StoreContext;
     request: Parameters<typeof moveAcrossByDocument>[1];
+    cache: Awaited<ReturnType<typeof outboxCache>>;
   }> {
     const cache = await outboxCache(name);
     const destinationKey = `github.com/remote-fixture/${name}-destination-${sequence++}`;
@@ -10095,7 +10113,7 @@ describe("remote move conflict settlement", () => {
         event: recordedEvent(cache.dbPath, repairId),
       }),
     );
-    return { switched: await moveAcrossByDocument(cache.context, request, stagedDoc), destinationContext, request };
+    return { switched: await moveAcrossByDocument(cache.context, request, stagedDoc), destinationContext, request, cache };
   }
 
   test("a repair that interleaves its rows still switches: the carried copy is a set-preserving extension", async () => {
@@ -10135,6 +10153,97 @@ describe("remote move conflict settlement", () => {
       ).toEqual([{ occurrence_key: "occ-prepended" }, { occurrence_key: "occurrence-one" }]);
     } finally {
       admittedDb.close();
+    }
+  }, 30_000);
+
+  test("a remote bind replacement carries the switched move ledger, and the admission handoff still completes", async () => {
+    // invariant: Review wave 3, item 1. `replaceDerivedLane` carried the settled outbox ledger but
+    // not `issue_moves`, so a bind that replaced the cache erased the switched source row - the only
+    // record the final admission handoff settles against.
+    const { switched, destinationContext, request, cache } = await switchThroughRepair(
+      "move-carry-replace",
+      "00000000-0000-4000-8000-000000000b41",
+      (mstar) => mstar,
+    );
+    expect(switched.phase).toBe("switched");
+    const location = locationAt(cache.fixture.repo);
+    const moveRows = (dbPath: string) => {
+      const db = new DatabaseSync(dbPath);
+      try {
+        return db.prepare("select * from issue_moves order by operation_id, role").all();
+      } finally {
+        db.close();
+      }
+    };
+    const before = moveRows(location.dbPath);
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.some((row) => (row as { phase: string }).phase === "switched")).toBe(true);
+    // note: the downgrade rewinds the version ledger only: the replacement reads its decision from
+    // that ledger, the meta identity and the settled outbox probe, never from a v6-only DDL.
+    downgradeToV5(location);
+    const bound = await bindRemoteAuthority(cache.context, {
+      version: 1,
+      selectorCommit: cache.commit,
+      generation: Number(cache.fixture.payload().generation),
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // invariant: every move row came through field by field, not as a count.
+    expect(moveRows(location.dbPath)).toEqual(before);
+    // invariant: the destination's admission handoff is the step the dropped row used to refuse.
+    const admitted = await moveAcrossByDocument(destinationContext, request, switched.document!);
+    expect(admitted.phase).toBe("switched");
+    const published = await moveAcrossByDocument(cache.context, request, admitted.document!);
+    expect(published.phase).toBe("published");
+  }, 30_000);
+
+  test("a move ledger that changes after the carried snapshot refuses the replacement and survives on the predecessor", async () => {
+    // invariant: the re-read comparison must cover the move ledger like the outbox: a row that
+    // advanced while the successor was staged aborts the swap instead of silently dropping it.
+    const { switched, cache } = await switchThroughRepair(
+      "move-carry-replace-guard",
+      "00000000-0000-4000-8000-000000000b42",
+      (mstar) => mstar,
+    );
+    expect(switched.phase).toBe("switched");
+    const location = locationAt(cache.fixture.repo);
+    downgradeToV5(location);
+    let mutated = "no";
+    setRemoteCacheReplacementLedgerGapForTest(() =>
+      new Promise<void>((resolve) => {
+        const db = new DatabaseSync(location.dbPath);
+        try {
+          db.prepare("update issue_moves set updated_at = '2026-11-25T00:00:00.000Z' where role = 'source'").run();
+          mutated = "committed";
+        } finally {
+          db.close();
+        }
+        resolve();
+      }),
+    );
+    let refused: { code: string };
+    try {
+      refused = await refusalOf(() =>
+        bindRemoteAuthority(cache.context, {
+          version: 1,
+          selectorCommit: cache.commit,
+          generation: Number(cache.fixture.payload().generation),
+          checks: [positiveCheck()],
+        }),
+      );
+    } finally {
+      setRemoteCacheReplacementLedgerGapForTest(undefined);
+    }
+    expect(mutated).toBe("committed");
+    expect(refused.code).toBe("collaboration.upgrade-required");
+    // invariant: the predecessor kept its name, its v5 ledger and every move row.
+    expect(ledgerVersions(location.dbPath)).toEqual(COLLABORATION_MIGRATIONS.slice(0, 5).map(({ version }) => version));
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(db.prepare("select phase from issue_moves where role = 'source'").all()).toEqual([{ phase: "switched" }]);
+    } finally {
+      db.close();
     }
   }, 30_000);
 

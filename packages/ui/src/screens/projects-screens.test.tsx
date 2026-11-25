@@ -469,9 +469,17 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(block).not.toBe("");
     expect(block).toContain("Release the shared layer");
     expect(block).toContain(">active<");
-    // The effort cell answers through its own hook: a bare "12" also matches a catalog
-    // revision, so it would pass even if the session count never rendered.
-    expect(block).toContain('data-ms-effort="12"');
+    // why: a kept attribute with no rendered count must still fail, so the cell's own hook AND the
+    // number it prints are both asserted - the display renders the bare count (`sessionsLabel` is
+    // the write form's label only).
+    const effortSessions = 12;
+    const effortAt = block.indexOf("data-ms-effort");
+    expect(effortAt).toBeGreaterThan(-1);
+    expect(block).toContain(`data-ms-effort="${effortSessions}"`);
+    const effortClose = block.indexOf("</span>", effortAt) + "</span>".length;
+    // why: the cell prints the count inside the localized effort copy, so the assertion is the
+    // number itself - asserting a bare `>12<` would encode one surface's wording.
+    expect(block.slice(effortAt, effortClose)).toContain(String(effortSessions));
     expect(block).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
