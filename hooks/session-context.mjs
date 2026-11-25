@@ -17847,7 +17847,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   milestoneDocument = object({
     milestoneId: string4(),
     name: string4(),
-    target: string4().regex(/^\d{4}-\d{2}-\d{2}$/, "a YYYY-MM-DD date").nullable(),
+    effortSessions: number2().int().min(1).nullable().describe("null or an integer of at least 1 (a count of standard sessions)"),
     status: _enum(["planned", "active", "delivered", "dropped"]),
     ordinal: number2().int().nonnegative(),
     revision: number2().int().positive(),

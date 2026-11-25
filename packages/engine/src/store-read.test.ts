@@ -38,6 +38,7 @@ import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteMilestone, type RemoteSnapshot } from "./collaboration-remote.js";
 import { openRemoteReadView, setRemoteReadSampleGapForTest } from "./collaboration-remote-read.js";
+import { remoteObserveDocumentSchema } from "./remote-documents.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
@@ -1852,6 +1853,38 @@ describe("remote read boundary", () => {
     await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
     return { fixture, context, commit, check };
   }
+
+  test("the published observation document is the shape the runtime accepts", async () => {
+    // invariant: the schema command derives its inputDocument descriptor from
+    // remoteObserveDocumentSchema, so an agent builds its submission from that published shape.
+    // The advertised shape must be the accepted shape: a document the descriptor validates must pass
+    // the runtime parser, and the retired milestone target member must be absent from both.
+    const { context, commit, check } = await boundScope("remote-milestone-published-shape");
+    const document = JSON.parse(
+      JSON.stringify(submission(commit, check, completeSnapshot(check), 1)),
+    ) as Record<string, unknown>;
+    // note: The published descriptor validates the exact document the runtime is about to receive.
+    const published = remoteObserveDocumentSchema.safeParse(document);
+    expect(published.success).toBe(true);
+    const milestone = (document.snapshot as { project: { milestones: Record<string, unknown>[] } }).project.milestones[0]!;
+    expect(Object.keys(milestone).sort()).toEqual(
+      ["createdAt", "effortSessions", "milestoneId", "name", "ordinal", "revision", "status", "updatedAt"].sort(),
+    );
+    // invariant: The runtime parser accepts the document the published shape produced.
+    expect(await ingestRemoteObservation(context, document as never)).toBeDefined();
+    // invariant: A document still carrying the retired member is refused at the milestone path -
+    // by the descriptor (strict members) and by the runtime parser alike.
+    const withTarget = JSON.parse(JSON.stringify(document)) as {
+      snapshot: { project: { milestones: Record<string, unknown>[] } };
+    };
+    delete (withTarget.snapshot.project.milestones[0] as Record<string, unknown>).effortSessions;
+    withTarget.snapshot.project.milestones[0]!.target = "2026-12-01";
+    expect(remoteObserveDocumentSchema.safeParse(withTarget).success).toBe(false);
+    await expect(ingestRemoteObservation(context, withTarget as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining("submission.snapshot.project.milestones[0].target:"),
+    });
+  });
 
   test("a milestone document carrying target or an invalid effortSessions is refused, and a valid effortSessions is admitted", async () => {
     const { context, commit, check } = await boundScope("remote-milestone-effort");
