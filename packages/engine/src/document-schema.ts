@@ -215,7 +215,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
     return {
       ok: false,
       violations: [violation("high", "document.frontmatter.absent",
-        `${source}: no front matter fence \u2014 the document must open with a "---" line closed by a second "---" line`)],
+        `${source}:1: no front matter fence \u2014 the document must open with a "---" line closed by a second "---" line`)],
     };
   }
 

@@ -1497,6 +1497,7 @@ describe("planQualityBar plan front-matter schema", () => {
     const result = planQualityBar("# Plan\n- [ ] implement the gate\n");
     expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.absent"]);
     expect(result.violations[0]!.message).toContain("no front matter fence");
+    expect(result.violations[0]!.message).toMatch(/^plan:1: no front matter fence/);
   });
 
   test("an unknown front-matter field reports lint.plan.frontmatter.unknown", () => {
