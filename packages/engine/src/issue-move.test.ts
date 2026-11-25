@@ -100,7 +100,7 @@ beforeAll(async () => {
   movedIssue = await captureIssue(context, capture(projectA, "occ-moved"), { actor: "project-manager", operationId: "capture-moved" });
   const milestone = await addMilestone(
     context,
-    { projectId: projectA, name: "Milestone A", target: null, ordinal: 0 },
+    { projectId: projectA, name: "Milestone A", effortSessions: null, ordinal: 0 },
     { operationId: "milestone-a", expectedStoreRevision: revision() },
   );
   db.prepare("update issues set milestone_id = ? where id = ?").run(milestone.milestoneId, movedIssue.issueId);
@@ -354,7 +354,7 @@ describe("issue project move", () => {
     );
     const dropped = await addMilestone(
       context,
-      { projectId: projectA, name: "Dropped milestone", target: null, ordinal: 9 },
+      { projectId: projectA, name: "Dropped milestone", effortSessions: null, ordinal: 9 },
       { operationId: "milestone-dropped", expectedStoreRevision: revision() },
     );
     await updateMilestone(

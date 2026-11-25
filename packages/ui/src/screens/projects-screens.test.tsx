@@ -81,7 +81,7 @@ const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
         milestoneId: "9f2c4a10",
         projectId: "engine",
         name: "Release the shared layer",
-        target: "2026-11-07",
+        effortSessions: 12,
         status: "active",
         ordinal: 0,
         revision: 2,
@@ -138,12 +138,12 @@ const detailCopy: ProjectDetailCopy = {
     milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
-    noTarget: "no target",
+    noSessions: "no sessions",
     unassigned: (count) => `${count} unassigned`,
     writes: {
       create: "Create",
       nameLabel: "Milestone name",
-      targetLabel: "Target",
+      sessionsLabel: "Sessions",
       statusLabel: "Status",
       edit: "Edit",
       save: "Save",
@@ -322,7 +322,7 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
     expect(html).toContain("6/10");
   });
 
-  test("missing targets sort last, before the unassigned node", () => {
+  test("the timeline keeps the read's order, before the unassigned node", () => {
     const withLateTarget = renderDetail({
       roadmap: roadmapBody(
         roadmapFeatureArm({
@@ -333,8 +333,8 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
                 {
                   milestoneId: "no-target",
                   projectId: "engine",
-                  name: "No target milestone",
-                  target: null,
+                  name: "No sessions milestone",
+                  effortSessions: null,
                   status: "planned",
                   ordinal: 1,
                   revision: 1,
@@ -349,7 +349,7 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
                   milestoneId: "early",
                   projectId: "engine",
                   name: "Early milestone",
-                  target: "2026-10-01",
+                  effortSessions: 4,
                   status: "delivered",
                   ordinal: 0,
                   revision: 1,
@@ -369,14 +369,14 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
         }),
       ),
     });
-    const early = withLateTarget.indexOf('data-ms-timeline-node="early"');
-    const late = withLateTarget.indexOf('data-ms-timeline-node="no-target"');
+    const early = withLateTarget.indexOf('data-ms-timeline-node="no-target"');
+    const late = withLateTarget.indexOf('data-ms-timeline-node="early"');
     const unassigned = withLateTarget.indexOf('data-ms-timeline-node="unassigned"');
     expect(early).toBeGreaterThan(-1);
     expect(early).toBeLessThan(late);
     expect(late).toBeLessThan(unassigned);
     // A milestone with no issues still renders its node, as the planned status shows.
-    expect(withLateTarget).toContain("No target milestone");
+    expect(withLateTarget).toContain("No sessions milestone");
   });
 });
 
@@ -388,10 +388,19 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).not.toContain("<details");
   });
 
-  test("the milestone board carries status, target, the four tallies and its issues", () => {
+  test("the milestone board carries status, effort sessions, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
-    expect(html).toContain("2026-11-07");
+    // why: a kept attribute with no rendered count must still fail, so the milestone's own block
+    // must also SHOW the session value - the display cell renders the bare count
+    // (`milestone.effortSessions`; `sessionsLabel` is the write form's label only).
+    const board = html.slice(html.indexOf('data-ms-milestone="9f2c4a10"'));
+    const effortAt = board.indexOf("data-ms-effort");
+    expect(effortAt).toBeGreaterThan(-1);
+    const effortSessions = 12;
+    expect(html).toContain(`data-ms-effort="${effortSessions}"`);
+    const effortClose = board.indexOf("</span>", effortAt) + "</span>".length;
+    expect(board.slice(effortAt, effortClose)).toContain(`>${String(effortSessions)}<`);
     expect(html).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
@@ -586,7 +595,7 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // Creation is name + target only: the engine's add verb has no status field.
+    // why: the engine's add verb has no status field, so creation is name + effort sessions only.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
     expect(html).not.toContain('data-ms-assign-cap');
@@ -748,7 +757,7 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
             milestoneId: "a1b2c3d4",
             projectId: "engine",
             name: "Created without a roadmap",
-            target: "2026-12-01",
+            effortSessions: 6,
             status: "planned",
             ordinal: 0,
             revision: 1,

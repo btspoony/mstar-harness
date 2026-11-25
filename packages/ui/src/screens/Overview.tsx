@@ -338,7 +338,6 @@ function WorkflowRowView(props: {
   );
 }
 
-/** One milestone row: status, target, progress, open count. */
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
@@ -355,7 +354,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
         <span className="milestone-name">
           <TruncatedText text={row.name} />
         </span>
-        {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+        {row.effortSessions === null ? null : <span className="milestone-target">{row.effortSessions}</span>}
       </div>
       {row.progress === null ? null : (
         <div className="milestone-foot">
