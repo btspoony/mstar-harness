@@ -306,7 +306,7 @@ function MilestonesPanel(props: { overview: NonNullable<FocusModel["overview"]>;
                   <span className="milestone-name">
                     <TruncatedText text={row.name} />
                   </span>
-                  {row.target === null ? null : <span className="milestone-target">{row.target}</span>}
+                  {row.effortSessions === null ? null : <span className="milestone-target">{row.effortSessions}</span>}
                 </div>
                 {row.progress === null ? null : (
                   <div className="milestone-foot">

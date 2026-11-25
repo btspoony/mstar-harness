@@ -74,7 +74,7 @@ const healthy = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
           milestoneId: "m-1",
           projectId: "engine",
           name: "Release the shared layer",
-          target: "2026-11-07",
+          effortSessions: 12,
           status: "active",
           ordinal: 0,
           revision: 1,

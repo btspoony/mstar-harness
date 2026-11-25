@@ -54,7 +54,7 @@ interface WriteEndpoint {
     sessionId: string,
     cwd: string,
     projectId: string,
-    input: { name: string; target: string | null; ordinal: number },
+    input: { name: string; effortSessions: number | null; ordinal: number },
     mutation: { operationId: string; expectedStoreRevision: number },
   ): Promise<MilestoneWriteResult>
   milestoneUpdate(
@@ -62,7 +62,7 @@ interface WriteEndpoint {
     cwd: string,
     projectId: string,
     milestoneId: string,
-    patch: { name?: string; target?: string | null; status?: string },
+    patch: { name?: string; effortSessions?: number | null; status?: string },
     mutation: { operationId: string; expectedStoreRevision: number },
   ): Promise<MilestoneWriteResult>
   milestoneRemove(
@@ -209,9 +209,9 @@ describe('the write CHANNEL retries a transport-ambiguous write with the SAME op
     })
 
     // The ambiguous attempt, then the user's retry of the SAME logical write.
-    channel.create({ name: 'Milestone one', target: null, ordinal: 0 })
+    channel.create({ name: 'Milestone one', effortSessions: null, ordinal: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    channel.create({ name: 'Milestone one', target: null, ordinal: 0 })
+    channel.create({ name: 'Milestone one', effortSessions: null, ordinal: 0 })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const adds = gateway.calls.filter((call) => call.endpoint === MILESTONE_ADD_ENDPOINT)
@@ -237,7 +237,7 @@ describe('the write CHANNEL retries a transport-ambiguous write with the SAME op
 
     // A DIFFERENT logical write is a new intent: fresh id, because the previous
     // write settled on success.
-    channel.create({ name: 'Another milestone', target: null, ordinal: 1 })
+    channel.create({ name: 'Another milestone', effortSessions: null, ordinal: 1 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     const thirdId = (
       gateway.calls.filter((call) => call.endpoint === MILESTONE_ADD_ENDPOINT)[2]!.payload as {
@@ -261,7 +261,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       'ses_ms',
       app.root,
       '_default',
-      { name: 'Milestone one', target: '2026-11-30', ordinal: 0 },
+      { name: 'Milestone one', effortSessions: 12, ordinal: 0 },
       { operationId: 'op-create-1', expectedStoreRevision: before },
     )
     expect(created.ok).toBe(true)
@@ -298,7 +298,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       'ses_ms2',
       app.root,
       '_default',
-      { name: 'Rename me', target: null, ordinal: 0 },
+      { name: 'Rename me', effortSessions: null, ordinal: 0 },
       { operationId: 'op-create-2', expectedStoreRevision: await observedRevision(endpoint, 'ses_ms2', app.root) },
     )
     expect(created.ok).toBe(true)
@@ -341,7 +341,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       'ses_rm',
       app.root,
       '_default',
-      { name: 'Doomed', target: null, ordinal: 0 },
+      { name: 'Doomed', effortSessions: null, ordinal: 0 },
       { operationId: 'op-rm-create', expectedStoreRevision: await observedRevision(endpoint, 'ses_rm', app.root) },
     )
     expect(created.ok).toBe(true)
@@ -399,7 +399,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       'ses_ms4',
       app.root,
       '_default',
-      { name: 'First', target: null, ordinal: 0 },
+      { name: 'First', effortSessions: null, ordinal: 0 },
       { operationId: 'op-ordinal-1', expectedStoreRevision: await observedRevision(endpoint, 'ses_ms4', app.root) },
     )
     expect(first.ok).toBe(true)
@@ -410,7 +410,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       'ses_ms4',
       app.root,
       '_default',
-      { name: 'Second', target: null, ordinal: 1 },
+      { name: 'Second', effortSessions: null, ordinal: 1 },
       { operationId: 'op-ordinal-2', expectedStoreRevision: await observedRevision(endpoint, 'ses_ms4', app.root) },
     )
     expect(second.ok).toBe(true)
@@ -432,8 +432,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     await seedProject(app.harnessDir)
     const revision = await observedRevision(endpoint, 'ses_ms3', app.root)
     const mutation = { operationId: 'op-replay-1', expectedStoreRevision: revision }
-    const first = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Once', target: null, ordinal: 0 }, mutation)
-    const second = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Once', target: null, ordinal: 0 }, mutation)
+    const first = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Once', effortSessions: null, ordinal: 0 }, mutation)
+    const second = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Once', effortSessions: null, ordinal: 0 }, mutation)
     expect(first.ok).toBe(true)
     expect(second).toEqual(first)
     // The retry replayed the recorded receipt: the store holds ONE milestone, which
@@ -442,7 +442,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const held = (read.envelope?.data as { milestones: { milestones: unknown[] } }).milestones.milestones
     expect(held).toHaveLength(1)
     // And a DIFFERENT request reusing the id is refused, per the engine's rule.
-    const conflict = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Other', target: null, ordinal: 1 }, mutation)
+    const conflict = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Other', effortSessions: null, ordinal: 1 }, mutation)
     expect(conflict.ok).toBe(false)
     if (conflict.ok) return
     expect(conflict.code).toBe('store.operation-conflict')
@@ -457,7 +457,7 @@ describe('the client surface — one request per write, arguments intact', () =>
       sessionId: 's-1',
       cwd: '/proj',
       projectId: '_default',
-      input: { name: 'Second', target: '2026-11-30', ordinal: 1 },
+      input: { name: 'Second', effortSessions: 12, ordinal: 1 },
       mutation: { operationId: 'op-client-1', expectedStoreRevision: 7 },
     })
     expect(result.ok).toBe(true)
@@ -469,7 +469,7 @@ describe('the client surface — one request per write, arguments intact', () =>
         sessionId: 's-1',
         cwd: '/proj',
         projectId: '_default',
-        input: { name: 'Second', target: '2026-11-30', ordinal: 1 },
+        input: { name: 'Second', effortSessions: 12, ordinal: 1 },
         mutation: { operationId: 'op-client-1', expectedStoreRevision: 7 },
       },
     })
@@ -508,7 +508,7 @@ describe('the client surface — one request per write, arguments intact', () =>
       sessionId: 's-1',
       cwd: '/proj',
       projectId: '_default',
-      input: { name: '', target: null, ordinal: 0 },
+      input: { name: '', effortSessions: null, ordinal: 0 },
       mutation: { operationId: 'op-client-3', expectedStoreRevision: 7 },
     })
     expect(transport).toEqual({ ok: false, code: 'gateway/timeout', message: 'gateway closed' })
@@ -516,7 +516,7 @@ describe('the client surface — one request per write, arguments intact', () =>
       sessionId: 's-1',
       cwd: '/proj',
       projectId: '_default',
-      input: { name: 'Third', target: null, ordinal: 2 },
+      input: { name: 'Third', effortSessions: null, ordinal: 2 },
       mutation: { operationId: 'op-client-4', expectedStoreRevision: 7 },
     })
     expect(noCode).toEqual({ ok: false, code: 'transport-error', message: 'gateway closed' })
@@ -526,7 +526,7 @@ describe('the client surface — one request per write, arguments intact', () =>
       sessionId: 's-1',
       cwd: '/proj',
       projectId: '_default',
-      input: { name: 'Fourth', target: null, ordinal: 3 },
+      input: { name: 'Fourth', effortSessions: null, ordinal: 3 },
       mutation: { operationId: 'op-client-5', expectedStoreRevision: 7 },
     })
     expect(foreign).toEqual({
@@ -553,7 +553,7 @@ describe('milestoneAssign — the requested seat authorizes the write, not a ses
       'ses_assign',
       app.root,
       '_default',
-      { name: 'Assign target', target: null, ordinal: 0 },
+      { name: 'Assign target', effortSessions: null, ordinal: 0 },
       { operationId: 'op-assign-create', expectedStoreRevision: await observedRevision(endpoint, 'ses_assign', app.root) },
     )
     expect(created.ok).toBe(true)

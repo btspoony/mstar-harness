@@ -107,7 +107,7 @@ const roadmap = (milestoneCount: number): RoadmapDTO => ({
       milestoneId: `m-${index}`,
       projectId: "engine",
       name: `Milestone ${index}`,
-      target: "2026-11-07",
+      effortSessions: 12,
       status: "active" as const,
       ordinal: index,
       revision: 1,
@@ -233,7 +233,7 @@ describe("Overview — the fact set of §8.2", () => {
     expect(zeros.total).toBe(0);
   });
 
-  test("milestones are capped at three and carry status, target, progress and open count", () => {
+  test("milestones are capped at three and carry status, effort sessions, progress and open count", () => {
     if (model.milestones.kind !== "populated") throw new Error("expected milestones");
     expect(model.milestones.value).toHaveLength(3);
     expect(model.milestones.value[0]).toEqual({
@@ -241,7 +241,7 @@ describe("Overview — the fact set of §8.2", () => {
       name: "Milestone 0",
       status: "active",
       statusTone: "accent",
-      target: "2026-11-07",
+      effortSessions: 12,
       progress: { retired: 6, total: 10 },
       openIssues: 4,
     });
