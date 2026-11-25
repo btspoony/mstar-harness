@@ -442,7 +442,7 @@ Executed by the main agent at Stage 3 — review seats never run this procedure.
 
 ### Thread lifecycle
 
-Runs only for a PR target whose review POST succeeded this run (`comments: posted`), at Stage 3 in the main agent, between the POST and the local report save; review seats never post and never call GitHub. The lifecycle has two passes, in order: resolve, then fold. Inline comment bodies are never edited or deleted, threads are never reopened, and unresolved findings keep their inline threads open and visible — that is the point of the contract, not a side condition. Every `gh api` call below is the GitHub adapter's transport and must pin the host resolved in step 1: export `GH_HOST=<host>` before running them — the same pinning the shipped publisher applies internally (`packages/commands/src/families/pr.ts`); a bare call would silently hit the CLI's default host.
+Runs only for a PR target whose review POST succeeded this run (`comments: posted`), at Stage 3 in the main agent, between the POST and the local report save; review seats never post and never call GitHub. The lifecycle has two passes, in order: resolve, then fold. Inline comment bodies are never edited or deleted, threads are never reopened, and unresolved findings keep their inline threads open and visible — that is the point of the contract, not a side condition. Every `gh api` call below is the GitHub adapter's transport and carries the host resolved in step 1 inline — `GH_HOST=<host> gh api …`, the same pinning the shipped publisher applies internally (`packages/commands/src/families/pr.ts`) — never `export`-only or bare: Stage 3 may run these commands in separate shells, an earlier `export` would not reach them, and an unpinned call silently hits the CLI's default host.
 
 **This flow's reviews — the shared candidate set.** One definition feeds both passes: enumerate with `gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews` reading each review's `id`, `user.login` and `body`, compare `user.login` against the authenticated account (`gh api user --jq .login`), and keep only reviews whose `body` starts with this flow's verdict heading (`## <emoji> Verdict: \`<token>\``) **or** with the fold pointer line (`> **Superseded** — latest review:` — an already-folded earlier round). Human and third-party reviews are never in this set and are never touched by either pass; only the **earlier** members feed the fold pass.
 
@@ -451,10 +451,10 @@ Runs only for a PR target whose review POST succeeded this run (`comments: poste
 **Fold — superseded review bodies from this flow.** Candidates are the **earlier** members of this flow's reviews (the shared candidate set above); reviews are never deleted. Each candidate body becomes the pointer line `> **Superseded** — latest review: <new review url>` followed by the original body wrapped in `<details><summary>Original review (superseded)</summary>` … `</details>`. Idempotent across rounds: a body already carrying the pointer line has only that line replaced (repointed at the newest review); it is never nested a second time. Write with `gh api --method PUT repos/<owner>/<repo>/pulls/<n>/reviews/<id> -F body=@-` — `-F/--field` is the flag that expands `@-`, so the body comes from stdin, never interpolated into a shell argument:
 
 ```bash
-# Same `gh api graphql` channel as the thread read above.
-gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread-id>"}) { thread { id } } }'
+# Same `gh api graphql` channel as the thread read above — every call keeps the GH_HOST=<host> prefix.
+GH_HOST=<host> gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread-id>"}) { thread { id } } }'
 
-gh api --method PUT repos/example-owner/example-repo/pulls/42/reviews/1234567 -F body=@- <<'EOF'
+GH_HOST=<host> gh api --method PUT repos/example-owner/example-repo/pulls/42/reviews/1234567 -F body=@- <<'EOF'
 > **Superseded** — latest review: https://github.com/example-owner/example-repo/pull/42#pullrequestreview-7654321
 
 <details><summary>Original review (superseded)</summary>
