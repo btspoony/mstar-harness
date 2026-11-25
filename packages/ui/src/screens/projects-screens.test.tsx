@@ -391,9 +391,16 @@ describe("ProjectDetail — the Roadmap feature", () => {
   test("the milestone board carries status, effort sessions, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
-    // The effort cell answers through its own hook: a bare "12" also matches a catalog
-    // revision, so it would pass even if the session count never rendered.
-    expect(html).toContain('data-ms-effort="12"');
+    // why: a kept attribute with no rendered count must still fail, so the milestone's own block
+    // must also SHOW the session value - the display cell renders the bare count
+    // (`milestone.effortSessions`; `sessionsLabel` is the write form's label only).
+    const board = html.slice(html.indexOf('data-ms-milestone="9f2c4a10"'));
+    const effortAt = board.indexOf("data-ms-effort");
+    expect(effortAt).toBeGreaterThan(-1);
+    const effortSessions = 12;
+    expect(html).toContain(`data-ms-effort="${effortSessions}"`);
+    const effortClose = board.indexOf("</span>", effortAt) + "</span>".length;
+    expect(board.slice(effortAt, effortClose)).toContain(`>${String(effortSessions)}<`);
     expect(html).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count

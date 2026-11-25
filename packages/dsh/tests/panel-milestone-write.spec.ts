@@ -324,6 +324,55 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(milestones[0]).toMatchObject({ name: 'Renamed', status: 'active' })
   })
 
+  it('sets and clears the effort count through the endpoint, and the roadmap read shows each value', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_eff', app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+
+    const created = await endpoint.milestoneAdd(
+      'ses_eff',
+      app.root,
+      '_default',
+      { name: 'Estimated', effortSessions: null, ordinal: 0 },
+      { operationId: 'op-effort-create', expectedStoreRevision: await observedRevision(endpoint, 'ses_eff', app.root) },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const milestoneId = (created.receipt as { milestoneId: string }).milestoneId
+
+    const set = await endpoint.milestoneUpdate(
+      'ses_eff',
+      app.root,
+      '_default',
+      milestoneId,
+      { effortSessions: 12 },
+      { operationId: 'op-effort-set', expectedStoreRevision: await observedRevision(endpoint, 'ses_eff', app.root) },
+    )
+    expect(set.ok).toBe(true)
+    const setRead = await endpoint.dashboardView('ses_eff', app.root, 'roadmap', { project: '_default' })
+    const afterSet = (setRead.envelope?.data as { milestones: { milestones: Array<{ effortSessions: number | null }> } })
+      .milestones.milestones
+    expect(afterSet).toHaveLength(1)
+    expect(afterSet[0]!.effortSessions).toBe(12)
+
+    const cleared = await endpoint.milestoneUpdate(
+      'ses_eff',
+      app.root,
+      '_default',
+      milestoneId,
+      { effortSessions: null },
+      { operationId: 'op-effort-clear', expectedStoreRevision: await observedRevision(endpoint, 'ses_eff', app.root) },
+    )
+    expect(cleared.ok).toBe(true)
+    const clearRead = await endpoint.dashboardView('ses_eff', app.root, 'roadmap', { project: '_default' })
+    const afterClear = (clearRead.envelope?.data as { milestones: { milestones: Array<{ effortSessions: number | null }> } })
+      .milestones.milestones
+    expect(afterClear).toHaveLength(1)
+    expect(afterClear[0]!.effortSessions).toBeNull()
+  })
+
   it('removes an EMPTY milestone, and a non-empty one is refused verbatim', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await seedStore(app.harnessDir)
