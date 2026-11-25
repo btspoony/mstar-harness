@@ -14542,7 +14542,7 @@ var init_engine = __esm(() => {
       { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
       { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
       { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL },
-      { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL }
+      { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL, requiresTable: "project_milestones" }
     ];
     DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
     EXECUTION_TABLE_NAMES = [
