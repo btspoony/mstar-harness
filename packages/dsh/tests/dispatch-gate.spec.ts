@@ -1483,3 +1483,191 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
   })
 })
+
+/* ===========================================================================
+ * 5a1-F1 — pointer/inline parity under the document's OWN hard enforcement
+ * ========================================================================= */
+
+describe('dispatch gate — pointer/inline hard-enforcement parity (5a1-F1)', () => {
+  /** Write one assignment file under the accepted harness home and return the pointer prompt. */
+  function hardPointerInHome(harnessDir: string, content: string): string {
+    const dir = join(harnessDir, 'assignments')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'hard-parity-target.md')
+    writeFileSync(file, content)
+    return `Assignment file: ${file}`
+  }
+
+  /** Violation codes of a deny reason (the deny channel is the verdict — no advisory in hard mode). */
+  const denyCodes = (decision: PreToolDecision): string[] =>
+    decision.kind === 'deny' ? [...decision.reason.matchAll(/\[(?:critical|high|medium|low)\] ([\w.-]+)/g)].map((match) => match[1]!) : []
+
+  it('a pointer whose document carries enforcement: hard plus a violation denies exactly as the inline form (no Config enforcement)', async () => {
+    // No `enforcement` in Config, no compass arm: the ONLY hard source is the
+    // Assignment document's own flag. The inline form denies; before F1 the
+    // pointer resolved hard from the pointer LINE (no front matter) and
+    // allowed in warn mode.
+    const app = booted = await bootApp({ dispatchBinding: '' })
+
+    const inlineDecision = await app.ctx.waterfall('tools/pre-execute', subagentExec(HARD_HEADER_FLAG), defaultAllow)
+    expect(inlineDecision.kind).toBe('deny')
+
+    await app.dispose()
+    booted = undefined
+
+    const app2 = booted = await bootApp({ dispatchBinding: '' })
+    const pointerDecision = await app2.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(hardPointerInHome(app2.harnessDir, HARD_HEADER_FLAG)),
+      defaultAllow,
+    )
+
+    expect(pointerDecision.kind).toBe('deny')
+    expect(pointerDecision.kind === 'deny' && pointerDecision.reason).toContain('assignment.field.branch-missing')
+    expect(denyCodes(pointerDecision).sort()).toEqual(denyCodes(inlineDecision).sort())
+  })
+
+  it('the warn-mode advisory of a pointer violation names the document\'s own Execute as, not the pointer text', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    // The document carries execute_as: fullstack-dev; the pointer line carries none.
+    const pointer = hardPointerInHome(app.harnessDir, MISSING_BRANCH)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.role).toBe('fullstack-dev')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.branch-missing')
+  })
+})
+
+/* ===========================================================================
+ * 5a1-F2 — isolation shapes at the worktree L2 gate (the shared entries API)
+ * ========================================================================= */
+
+describe('dispatch gate — worktree L2 isolation shapes (5a1-F2)', () => {
+  /** Real git worktrees for the L2 probe (`git -C <path> branch --show-current`). */
+  function trackWorktrees(root: string, branches: readonly string[]): Map<string, string> {
+    const paths = new Map<string, string>()
+    for (const branch of branches) {
+      const path = join(root, `wt-${branch.replace(/\//g, '-')}`)
+      execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', branch, path])
+      paths.set(branch, path)
+    }
+    return paths
+  }
+
+  /** Front-matter parallel-track document: both tracks as flow or block list values. */
+  function parallelTracksDoc(pathA: string, branchA: string, pathB: string, branchB: string, flow: boolean): string {
+    const paths = flow ? `worktree_path: [${pathA}, ${pathB}]` : `worktree_path:\n  - ${pathA}\n  - ${pathB}`
+    const branches = flow ? `working_branch: [${branchA}, ${branchB}]` : `working_branch:\n  - ${branchA}\n  - ${branchB}`
+    return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+${paths}
+${branches}
+---
+
+## Assignment
+
+Two parallel writable tracks.
+`
+  }
+
+  it('a flow-list parallel-track declaration enters the L2 isolation check (branch mismatch surfaces)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    // bootApp's root is already a git repo with its initial commit — add the
+    // two track worktrees to it (the L2 probe needs real checkouts on their branches).
+    const tracks = trackWorktrees(app.root, ['feature/track-a', 'feature/track-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/track-a')!, 'feature/track-a', tracks.get('feature/track-b')!, 'feature/not-track-b', true)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    // A flow-list `worktree_path` is the parallel declaration: track B is
+    // declared on the WRONG branch, so the mismatch can only surface when the
+    // gate reads the list as two tracks — before the shared entries API the
+    // flow array read as one scalar and the gate skipped isolation entirely.
+    expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
+  }, 60_000)
+
+  it('a block-list parallel-track declaration enters the same L2 isolation check (branch mismatch surfaces)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/block-a', 'feature/block-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    // Track B declared on the WRONG branch: only a gate that reads the block
+    // list as two tracks can detect it.
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/block-a')!, 'feature/block-a', tracks.get('feature/block-b')!, 'feature/not-block-b', false)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
+  }, 60_000)
+
+  it('duplicate worktree_path keys refuse as document.frontmatter.invalid instead of entering isolation', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/dupe-a', 'feature/dupe-b'])
+    const advisories = captureAdvisories(app.ctx)
+    // The retired parallel grammar: repeated keys. The shared entries parser
+    // refuses the whole block — the schema layer reports the malformed
+    // document rather than the worktree gate silently pairing the first keys.
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+worktree_path: ${tracks.get('feature/dupe-a')!}
+worktree_path: ${tracks.get('feature/dupe-b')!}
+working_branch: feature/dupe-a
+---
+
+## Assignment
+
+Two parallel writable tracks.
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
+  }, 60_000)
+
+  it('an unterminated fence declares nothing at the worktree gate — schema refusal only, no track pairing', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/unterm-a', 'feature/unterm-b'])
+    const advisories = captureAdvisories(app.ctx)
+    // The opening fence never closes: every field line below is inert. Before
+    // the shared entries API the local scanner still read the lines as root
+    // keys and could pair tracks out of a malformed document.
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+worktree_path: [${tracks.get('feature/unterm-a')!}, ${tracks.get('feature/unterm-b')!}]
+working_branch: [feature/unterm-a, feature/unterm-b]
+
+## Assignment
+
+Two parallel writable tracks.
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
+  }, 60_000)
+})

@@ -19,8 +19,8 @@
  * re-exports nothing from a sibling and imports no sibling dispatch module.
  */
 import { basename } from 'node:path'
-import { parseEnforcementFlag } from '@mstar-harness/engine'
-import type { AssignmentFields, ValidationResult } from '@mstar-harness/engine'
+import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, parseEnforcementFlag } from '@mstar-harness/engine'
+import type { AssignmentFields, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 
@@ -134,43 +134,54 @@ function stripWrappingCodeSpan(value: string): string {
   return inner.includes('`') ? value : inner.trim()
 }
 
-/** Strip one wrapping YAML quote pair from a scalar. */
-function unquoteScalar(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1)
-  if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1)
-  return trimmed
+/**
+ * The front matter entries of one header region, parsed ONCE with the shared
+ * engine entries parser (`parseDocumentFrontmatterEntries`, fence-validated
+ * via `extractFrontmatterAndBody`): a duplicate key, a nested key under a
+ * scalar, or any other malformed line refuses the WHOLE block (null), so the
+ * gates never read fields of a document the schema refuses. The region keeps
+ * its fences (engine `assignmentHeaderRegion` contract); an unterminated
+ * fence yields no block, exactly as `assignmentHeaderRegion` declares.
+ */
+function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntry> | null {
+  if (headerRegion === '') return null
+  const { frontmatter, fenced } = extractFrontmatterAndBody(headerRegion)
+  if (!fenced) return null
+  try {
+    return parseDocumentFrontmatterEntries(frontmatter, 'assignment')
+  } catch {
+    return null
+  }
+}
+
+/** One scalar field value of a parsed entry: strings verbatim; a bare scalar
+ * (`key:`) is present-but-empty; numbers/booleans read as their string form
+ * (the line-shaped contract never typed them — the conversion only narrows
+ * the entries API onto it). Lists, maps and block scalars are never a
+ * single scalar field. */
+function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
+  if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
+  if (typeof entry.value === 'string') return entry.value
+  if (typeof entry.value === 'number' || typeof entry.value === 'boolean') return String(entry.value)
+  if (entry.value === null) return ''
+  return undefined
 }
 
 /**
- * The front matter scalar lines of a fenced fragment (the engine
- * `assignmentHeaderRegion` output keeps the `---` fences): `key: value`
- * entries plus block-list items, repeated keys kept in order (the L2
- * parallel-track declaration is a repeated `worktree_path` /
- * `working_branch` pairing). Comments and blank lines are skipped; the
- * grammar is line-shaped — nested maps are never Assignment values.
- * shortcut: indentation-sensitive subset of YAML, upgrade to the engine
- * entries parser when it is exported.
+ * String items of a list-valued front matter entry: flow arrays
+ * (`[a, b]`) and `- item` block lists parse to the same string list, so
+ * the parallel-track declaration (`worktree_path` / `working_branch` as a
+ * list value) is shape-agnostic. A scalar entry yields its single value —
+ * one track is the serial norm.
  */
-function frontmatterEntries(headerRegion: string): Array<{ key: string; value: string }> {
-  const entries: Array<{ key: string; value: string }> = []
-  const lines = headerRegion.split(/\r?\n/)
-  let lastIndex = -1
-  for (const line of lines) {
-    if (line.trim() === '' || line.trim() === '---' || line.trimStart().startsWith('#')) continue
-    const listItem = /^[ \t]*-[ \t]+(.*)$/.exec(line)
-    if (listItem !== null && lastIndex >= 0) {
-      // A block-list item belongs to the most recent key.
-      entries.push({ key: entries[lastIndex]!.key, value: unquoteScalar(listItem[1]!) })
-      continue
-    }
-    const entry = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(.*)$/.exec(line)
-    if (entry === null) { lastIndex = -1; continue }
-    entries.push({ key: entry[1]!, value: unquoteScalar(entry[2]!.replace(/[ \t]+#.*$/, '')) })
-    lastIndex = entries.length - 1
+function listEntryValues(entry: FrontmatterEntry): string[] {
+  if (entry.kind === 'list' && Array.isArray(entry.value)) {
+    return entry.value.filter((item): item is string => typeof item === 'string')
   }
-  return entries
+  const scalar = scalarEntryValue(entry)
+  return scalar === undefined ? [] : [scalar]
 }
+
 
 /**
  * Parse one Assignment front matter field value by its snake_case key
@@ -188,9 +199,11 @@ function frontmatterEntries(headerRegion: string): Array<{ key: string; value: s
  */
 export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
   const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
-  const entry = frontmatterEntries(headerRegion).find((candidate) => candidate.key === key)
+  const entry = frontmatterEntriesOf(headerRegion)?.get(key)
   if (entry === undefined) return undefined
-  const value = stripWrappingCodeSpan(entry.value.trim())
+  const scalar = scalarEntryValue(entry)
+  if (scalar === undefined) return undefined
+  const value = stripWrappingCodeSpan(scalar.trim())
   return value === '' ? undefined : value
 }
 
@@ -201,11 +214,11 @@ export function firstToken(value: string): string | undefined {
 }
 
 /**
- * ALL front matter values of a repeated Assignment field key. Repeated
- * `worktree_path` / `working_branch` lines declare the L2 parallel-track
- * context; empty values are dropped (consistent with
- * {@link assignmentHeaderValue}: an empty line is an absent field, never a
- * malformed track).
+ * ALL front matter values of one Assignment field key. Parallel tracks
+ * declare `worktree_path` / `working_branch` as a LIST value (flow array or
+ * block list — the shared parser refuses duplicate keys); empty values are
+ * dropped (consistent with {@link assignmentHeaderValue}: an empty value is
+ * an absent field, never a malformed track).
  *
  * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
  * slice.
@@ -214,10 +227,11 @@ export function firstToken(value: string): string | undefined {
  */
 export function assignmentHeaderValues(headerRegion: string, label: string): string[] {
   const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
+  const entry = frontmatterEntriesOf(headerRegion)?.get(key)
+  if (entry === undefined) return []
   const values: string[] = []
-  for (const entry of frontmatterEntries(headerRegion)) {
-    if (entry.key !== key) continue
-    const value = stripWrappingCodeSpan(entry.value.trim())
+  for (const item of listEntryValues(entry)) {
+    const value = stripWrappingCodeSpan(item.trim())
     if (value !== '') values.push(value)
   }
   return values

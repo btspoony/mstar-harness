@@ -438,3 +438,64 @@ Do the thing. Quoted example must not trigger the gate:
     expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.branch-mismatch')
   })
 })
+
+/* ===========================================================================
+ * 5a1-F2 — malformed front matter at the lease gate (the shared entries API)
+ * ========================================================================= */
+
+describe('dispatch gate — lease isolation shapes (5a1-F2)', () => {
+  it('an indented nested plan_path never reads as the root plan identity — the lease check does not fire', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    // A `plan_path` line indented under a parent key is a NESTED map entry,
+    // never the root field: the local line reader treated it as a root key,
+    // so the lease resolved a plan id the document never declared (here a
+    // DIFFERENT plan — pre-fix it surfaced lease.dispatch.plan-not-found).
+    const nested = SDD_ASSIGNMENT.replace(
+      `plan_path: /srv/plans/${PLAN_ID}.md`,
+      'phase_gate_checklist:\n  plan_path: /srv/plans/nested-other-plan.md',
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(nested), defaultAllow)
+
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.plan-not-found')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('lease.dispatch.'))).toEqual([])
+  })
+
+  it('duplicate plan_path keys refuse as document.frontmatter.invalid instead of silently pairing the first', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    const duplicated = SDD_ASSIGNMENT.replace(
+      `plan_path: /srv/plans/${PLAN_ID}.md`,
+      `plan_path: /srv/plans/${PLAN_ID}.md\nplan_path: /srv/plans/another-plan.md`,
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(duplicated), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
+    // The whole block is refused: the lease never re-verifies a malformed document.
+    // The retired duplicate grammar read the FIRST key — the row's own — so pre-fix
+    // this dispatch verified clean and emitted NO advisory at all (silent pass).
+    expect(advisories).toHaveLength(1)
+  })
+
+  it('an unterminated fence declares nothing at the lease gate — schema refusal only', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    // The opening fence never closes (the closing --- line is dropped): every
+    // field line below is inert, so the lease must not re-verify anything.
+    const unterminated = SDD_ASSIGNMENT.replace(/\n---\n\n## Assignment/, '\n\n## Assignment')
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(unterminated), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('lease.dispatch.'))).toEqual([])
+  })
+})

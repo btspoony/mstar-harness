@@ -501,10 +501,11 @@ export {
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
-export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
+export type { FrontmatterAndBody, FrontmatterEntry, JsonObject } from "./document-frontmatter.js";
 export {
   DocumentFrontmatterError,
   extractFrontmatterAndBody,
+  parseDocumentFrontmatterEntries,
   parseDocumentFrontmatter,
   parseSimpleFrontmatter,
 } from "./document-frontmatter.js";
