@@ -100,5 +100,11 @@
     "justification": "The refusal interpolates the registered provider-id list (`[...mergeGateProviders.keys()]`) into the recovery template, so strict static proof cannot evaluate the substitution; the site carries a `reachability: manual` note — see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/pr-review.ts:f721232b636e",
+    "justification": "The refusal interpolates the registered provider-id list (`registered.join(\", \")`) and the retained `--findings` placeholder into the recovery template, so strict static proof cannot evaluate the substitution; the site carries a `reachability: manual` note — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
   }
 ]

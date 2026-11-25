@@ -248,20 +248,22 @@ const githubReviewPublisher: ReviewPublisher = {
       base: typeof record.baseRefOid === "string" ? record.baseRefOid : "",
     } };
   },
-  async diff({ owner, repo, base, head }, context) {
-    const result = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`]);
+  async diff({ host, owner, repo, base, head }, context) {
+    // why: like the merge gate's thread scan, API calls must reach the host
+    // `gh pr view` resolved — an Enterprise PR never posts to the default host.
+    const result = await spawn(context, ["gh", "api", "--hostname", host, "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`]);
     if (result.exitCode !== 0 || result.signal !== null) {
       return { ok: false, failure: { cause: "diff-unavailable", detail: result.stderr || "gh api compare failed" } };
     }
     return { ok: true, value: result.stdout };
   },
-  async postReview({ owner, repo, pr, commitId, body, comments }, context) {
+  async postReview({ host, owner, repo, pr, commitId, body, comments }, context) {
     const apiPath = `repos/${owner}/${repo}/pulls/${pr}/reviews`;
     const payload = JSON.stringify({
       commit_id: commitId, event: "COMMENT" as const, body,
       ...(comments.length ? { comments: comments.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}),
     });
-    const response = await spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], payload);
+    const response = await spawn(context, ["gh", "api", "--hostname", host, "--method", "POST", apiPath, "--input", "-"], payload);
     if (response.exitCode !== 0 || response.signal !== null) {
       // why: `detail` is the message fragment the command prints (stderr, or
       // the same fallback as before), while `probe` carries both streams so

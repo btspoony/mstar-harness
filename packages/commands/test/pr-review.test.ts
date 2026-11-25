@@ -243,7 +243,7 @@ describe("pr-review command family", () => {
     const authorized = await post.execute({ pr: "42", bodyFile }, context);
     expect(authorized.status).toBe("ok");
     expect(calls).toHaveLength(2);
-    expect(calls[1]!.argv).toEqual(["gh", "api", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "github.com", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
@@ -269,6 +269,13 @@ describe("pr-review command family", () => {
     // tooling per pr-delivery.md, and STOPs without a documented equivalent.
     expect(recovery).toContain("pr-delivery.md");
     expect(recovery).toContain("STOP");
+    // why: the retry keeps the caller's other arguments, so the findings flag
+    // is named only when the caller supplied it — never dropped silently.
+    expect(recovery).toContain("keeping the original arguments and replacing only the provider id");
+    expect(recovery).not.toContain("--findings");
+    const withFindings = await command("pr-review.post").execute({ pr: "42", bodyFile: "body.md", findings: "f.json", provider: "nope" }, context);
+    const findingsRecovery = withFindings.status === "ok" ? "" : (withFindings.details?.recovery as string | undefined) ?? "";
+    expect(findingsRecovery).toContain("[--findings <file.json>]");
   });
 
   test("a publisher registered under a second id posts through --provider with no gh call", async () => {
@@ -328,11 +335,11 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     const result = await post.execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(calls[1]!.argv).toEqual(["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "github.com", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
     expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({
       comments: [
         { path: "src/a.ts", line: 4, side: "RIGHT", start_line: 2, start_side: "RIGHT", body: "Range finding" },
@@ -350,6 +357,30 @@ describe("pr-review command family", () => {
     expect(rejected.message).toContain("findings[0].start_line must be an integer >= 1 and less than line (12)");
   });
 
+  test("an Enterprise URL reaches every gh api call through --hostname", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
+    // why: `gh pr view` resolves its own host, but `gh api` would fall back to
+    // the CLI's default host — every API call must name the resolved one.
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://git.acme.example/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://git.acme.example/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv.includes("-H") ? diff : posted;
+    };
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid,baseRefOid"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "git.acme.example", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(calls[2]!.argv).toEqual(["gh", "api", "--hostname", "git.acme.example", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+  });
+
   test("a range spanning two right-side hunks is refused before any POST", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");
@@ -362,13 +393,13 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks", exitCode: 1 });
     expect(refused.message).toContain("comments[0] src/a.ts:4-31");
     expect(refused.message).toContain("hunks: 1-5, 30-35");
-    expect(calls.map((call) => call.argv[2] === "-H" ? "compare" : call.argv[2] ?? call.argv[1])).toEqual(["view", "compare"]);
+    expect(calls.map((call) => call.argv.includes("-H") ? "compare" : call.argv[2] ?? call.argv[1])).toEqual(["view", "compare"]);
     // why: one hunk down, the same anchor is legal and must reach the POST.
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "In-hunk" }]));
     calls.length = 0;
@@ -388,7 +419,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     // why: 31-32 is src/c.ts's second hunk, which follows the `+++ b/src/a.ts`
     // content line and must keep that attribution.
@@ -414,7 +445,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     // why: the escaped path (and the octal-encoded one) must match the decoded
     // spelling, while neither may inherit the previous file's hunks.
@@ -441,7 +472,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     writeFileSync(findings, JSON.stringify([{ path: "src/file name.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Spaced path" }]));
     const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
@@ -464,7 +495,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     writeFileSync(findings, JSON.stringify([{ path: 'src/q"uote.ts', line: 42, start_line: 41, start_side: "RIGHT", body: "Rename destination" }]));
     const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
@@ -487,7 +518,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return review;
-      return request.argv[2] === "-H" ? diff : posted;
+      return request.argv.includes("-H") ? diff : posted;
     };
     writeFileSync(findings, JSON.stringify([{ path: "src/file 日.ts", line: 62, start_line: 61, start_side: "RIGHT", body: "Spaced quoted path" }]));
     const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
@@ -544,7 +575,7 @@ describe("pr-review command family", () => {
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
       if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
-      if (request.argv[2] === "-H") return { exitCode: 0, signal: null, stdout: FOLD_DIFF, stderr: "" };
+      if (request.argv.includes("-H")) return { exitCode: 0, signal: null, stdout: FOLD_DIFF, stderr: "" };
       apiCalls += 1;
       if (apiCalls === 1) return { exitCode: 1, signal: null, stdout: "", stderr: 'HTTP 422: "line" must be part of the diff' };
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-2" }), stderr: "" };

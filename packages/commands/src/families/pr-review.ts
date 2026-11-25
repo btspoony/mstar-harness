@@ -418,7 +418,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (publisher === undefined) {
         const registered = registeredReviewPublisherIds();
         // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
-        // reachability: manual — the interpolation lists registered provider ids (names, not command paths); the runnable retry is the literal `mstar pr-review post --pr <n> --body-file <file> --provider <id>` this recovery names.
+        // reachability: manual — the interpolation lists registered provider ids (names, not command paths) and retains the caller's --findings placeholder when supplied; the runnable retry is the literal `mstar pr-review post --pr <n> --body-file <file> --provider <id>` this recovery names.
         return refusalEnvelope({
           command: id, status: "refused", code: `${id}.unsupported-provider`, exitCode: 1,
           message: `pr-review posting provider ${providerId} is not registered`,
@@ -427,8 +427,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
           // why: an id that names a different forge is not a typo to correct — a
           // registered publisher can only post to its own forge's PR, so the
           // recovery must route an unsupported forge to the documented
-          // project-tooling path instead of naming a GitHub publisher for a GitLab MR.
-          recovery: `If ${providerId} is a typo, rerun with a registered provider id (${registered.join(", ")}): Run mstar pr-review post --pr <n> --body-file <file> --provider <id>. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, post the review with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (same owner-approval and waiver rules); when no documented equivalent exists, STOP — never post by hand.`,
+          recovery: `If ${providerId} is a typo, rerun with a registered provider id (${registered.join(", ")}): Run mstar pr-review post --pr <n> --body-file <file>${input.findings !== undefined ? " [--findings <file.json>]" : ""} --provider <id>, keeping the original arguments and replacing only the provider id. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, post the review with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (same owner-approval and waiver rules); when no documented equivalent exists, STOP — never post by hand.`,
         });
       }
       const bodyFile = abs(context.cwd, need(input.bodyFile, "--body-file"));
