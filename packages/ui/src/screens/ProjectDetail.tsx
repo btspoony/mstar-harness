@@ -265,9 +265,8 @@ function MilestoneActions(props: {
   const [draft, setDraft] = useState<MilestoneDraft | null>(null);
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
-  // Settled-write resolution: the draft stays open while a write is in flight,
-  // and the surface's refusal verdict — not the submit itself — decides whether
-  // it closes, so a refused count never throws away the operator's other edits.
+  // why: the surface's refusal verdict, not the submit itself, decides whether the draft closes,
+  // so a refused count never throws away the operator's other edits.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
     if (!writeInFlight || writes.busy) return;
@@ -505,9 +504,8 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
   const [name, setName] = useState("");
   const [effort, setEffort] = useState("");
   const [effortError, setEffortError] = useState(false);
-  // Same settled-write rule as the editor: the form clears only when the write
-  // is ACCEPTED — a refusal keeps what the operator typed, and the store's own
-  // message arrives beside the still-open form.
+  // why: same rule as the editor — the form clears only when the write is accepted, so a refusal
+  // keeps what the operator typed and the store's own message arrives beside the open form.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
     if (!writeInFlight || writes.busy) return;
