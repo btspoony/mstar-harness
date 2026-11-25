@@ -2398,6 +2398,14 @@ function bindingEvidence(dbPath: string): { verified_at: string; verification_js
   }
 }
 
+/** note: A bind replacing a cache must advance the verification that cache already records. */
+function checkAfterBinding(dbPath: string, overrides: Partial<ScopeCheck> = {}): ScopeCheck {
+  return positiveCheck({
+    checkedAt: new Date(Date.parse(bindingEvidence(dbPath).verified_at) + 1).toISOString(),
+    ...overrides,
+  });
+}
+
 /** note: Rebuild one table from its declared DDL after a textual mutation, so admission sees a damaged layout. */
 function rebuildTable(
   dbPath: string,
@@ -11157,7 +11165,7 @@ describe("pre-v3 remote cache recovery", () => {
         version: 1,
         selectorCommit: cache.commit,
         generation: cache.generation,
-        checks: [positiveCheck()],
+        checks: [checkAfterBinding(cache.location.dbPath)],
       });
 
     // invariant: The conflict blocks the replacement and names its own route.
@@ -11282,7 +11290,7 @@ describe("pre-v3 remote cache recovery", () => {
       version: 1,
       selectorCommit: cache.commit,
       generation: cache.generation,
-      checks: [positiveCheck()],
+      checks: [checkAfterBinding(cache.location.dbPath)],
     });
     expect(bound).toMatchObject({ version: 1, generation: cache.generation });
 
