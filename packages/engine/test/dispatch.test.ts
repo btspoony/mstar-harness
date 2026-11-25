@@ -45,7 +45,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -63,6 +63,7 @@ import {
   parseEnforcementFlag,
   parseEnforcementFlagFromFrontmatter,
   validateAssignmentFields,
+  readAssignmentSource,
 } from "../src/dispatch.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
 
@@ -1701,5 +1702,123 @@ Example Assignment front matter: execute_as: scout
 `;
     const result = composeDispatchGate(text, { caller: "fullstack-dev", cwd });
     expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(true);
+  });
+});
+describe("readAssignmentSource — one Assignment source resolver (compass D14)", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-source-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  /** The control harness root of this fixture; the four homes resolve under it. */
+  const harnessDir = join(root, ".mstar");
+
+  /** The assignment front matter body every pointer target below carries. */
+  const FILE_ASSIGNMENT = VALID_ASSIGNMENT.replace("feature/foo", "feature/from-file");
+
+  function writeHomeFile(home: string[]): string {
+    const dir = join(root, ...home);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "assignment.md");
+    writeFileSync(file, FILE_ASSIGNMENT);
+    return file;
+  }
+
+  // The three write homes (`<base>/<one segment>/assignments`) plus the
+  // read-only flat harness home `{HARNESS_DIR}/assignments`.
+  const homeCases: Array<{ name: string; segments: string[] }> = [
+    { name: "sdd write home", segments: [".mstar", "sdd", "plan-1", "assignments"] },
+    { name: "iteration write home", segments: [".mstar", "iterations", "iter-1", "assignments"] },
+    { name: "workflow write home", segments: [".mstar", "workflows", "wf-1", "assignments"] },
+    { name: "harness read-only flat home", segments: [".mstar", "assignments"] },
+  ];
+
+  for (const home of homeCases) {
+    test(`pointer inside the ${home.name} reads the file`, () => {
+      const file = writeHomeFile(home.segments);
+      const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("unreachable");
+      expect(result.text).toBe(FILE_ASSIGNMENT);
+      expect(result.path).toBe(file);
+    });
+  }
+
+  test("pointer outside every home refuses dispatch.assignment.path with both recoveries", () => {
+    const file = join(root, "outside.md");
+    writeFileSync(file, FILE_ASSIGNMENT);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+    expect(result.message).toContain(file);
+    expect(result.fix).toContain("accepted assignment home");
+    expect(result.fix).toContain("inline");
+  });
+
+  test("missing file inside a home refuses naming the path", () => {
+    const dir = join(root, ".mstar", "sdd", "plan-2", "assignments");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "does-not-exist.md");
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+    expect(result.message).toContain(file);
+  });
+
+  test("inline front matter passes through without filesystem access", () => {
+    const result = readAssignmentSource(VALID_ASSIGNMENT, { harnessDir: join(root, "no-such-harness-dir") });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(VALID_ASSIGNMENT);
+    expect(result.path).toBeUndefined();
+  });
+
+  test("a pointer plus an inline body refuses as ambiguous", () => {
+    const file = writeHomeFile([".mstar", "assignments"]);
+    const text = `${VALID_ASSIGNMENT}\nAssignment file: ${file}\n`;
+    const result = readAssignmentSource(text, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.ambiguous");
+  });
+
+  test("a relative pointer refuses dispatch.assignment.path", () => {
+    const result = readAssignmentSource("Assignment file: sdd/plan-1/assignments/x.md\n", { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+  });
+
+  test("a symlink inside the home landing outside refuses dispatch.assignment.path", () => {
+    const outside = join(root, "symlink-target.md");
+    writeFileSync(outside, FILE_ASSIGNMENT);
+    const dir = join(root, ".mstar", "sdd", "plan-3", "assignments");
+    mkdirSync(dir, { recursive: true });
+    const link = join(dir, "link.md");
+    symlinkSync(outside, link);
+    const result = readAssignmentSource(`Assignment file: ${link}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+  });
+
+  test("a null harness root refuses the pointer with the inline recovery — containment never skips", () => {
+    const file = writeHomeFile([".mstar", "sdd", "plan-4", "assignments"]);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir: null });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+    expect(result.fix).toContain("inline");
+  });
+
+  test("a pointer at a write-home base but NOT under <base>/<segment>/assignments refuses", () => {
+    const dir = join(root, ".mstar", "sdd");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "loose.md");
+    writeFileSync(file, FILE_ASSIGNMENT);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
   });
 });

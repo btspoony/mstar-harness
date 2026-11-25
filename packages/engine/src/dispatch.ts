@@ -44,8 +44,9 @@
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
  * never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
-import { isAbsolute, resolve } from "node:path";
-import { canonicalizeNearestExisting } from "./path.js";
+import { isAbsolute, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { assignmentSourceHomes, canonicalizeNearestExisting } from "./path.js";
 import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
@@ -1112,4 +1113,102 @@ export function antiRecursionPrecheck(subagentType: string, executeAs: string): 
     };
   }
   return { ok: true, violations: [] };
+}
+/**
+ * Result of {@link readAssignmentSource}: on success the Assignment text plus
+ * the resolved pointer path when a file supplied it; on refusal a single
+ * violation-shaped record — `dispatch.assignment.path` (unreadable,
+ * out-of-home, relative, or unrooted pointer) or
+ * `dispatch.assignment.ambiguous` (pointer plus an inline body).
+ */
+export type AssignmentSourceResult =
+  | { ok: true; text: string; path?: string }
+  | (ValidationResult & { ok: false });
+
+/** The ONE pointer-line grammar: `Assignment file: <abs>` on a line of its own. */
+const ASSIGNMENT_POINTER_RE = /^[ \t]*Assignment file:[ \t]*(\S[^\r\n]*?)[ \t]*$/m;
+
+/** Shared recovery text of the two refusals: home placement OR the inline form. */
+const ASSIGNMENT_SOURCE_RECOVERY =
+  "move the assignment file under an accepted assignment home (`<base>/<identity>/assignments` of the sdd, iteration or workflow base, or `{HARNESS_DIR}/assignments`), or pass the assignment inline as a front-matter document instead of a pointer";
+
+function assignmentSourceRefusal(code: string, message: string, fix: string): AssignmentSourceResult {
+  return { ok: false, severity: "critical", code, message, fix };
+}
+
+/**
+ * True when the canonical `file` sits inside the assignment `home`
+ * (compass D14). The read-only harness home is complete
+ * (`{HARNESS_DIR}/assignments`): containment is `file === home ||
+ * file.startsWith(home + sep)`. A write home root is the bare base, so the
+ * file must additionally sit under `<base>/<one segment>/assignments` — a
+ * file directly in the base (or in a stray sibling tree) is not an
+ * assignment source.
+ */
+function assignmentHomeContains(file: string, home: { root: string; write: boolean }): boolean {
+  const root = canonicalizeNearestExisting(home.root);
+  if (file !== root && !file.startsWith(root + sep)) return false;
+  if (!home.write) return true;
+  const rel = file.slice(root.length + 1).split(sep);
+  return rel.length >= 3 && rel[1] === "assignments";
+}
+
+/**
+ * Resolve one Assignment source (compass D14 — the single resolver every
+ * consumer shares). An inline front-matter document passes through verbatim
+ * without any filesystem access. A pointer line `Assignment file: <abs>` is
+ * the whole input: any other non-whitespace content alongside it refuses
+ * `dispatch.assignment.ambiguous`. The pointer must be absolute and, after
+ * canonicalization with `canonicalizeNearestExisting` (a symlink landing
+ * outside the home is outside), contained in one of the four homes from
+ * `assignmentSourceHomes` — a `null` harness root refuses
+ * `dispatch.assignment.path` rather than skipping containment. An
+ * unreadable or out-of-home pointer refuses `dispatch.assignment.path` with
+ * both recoveries (place under an accepted home OR pass the assignment
+ * inline).
+ */
+export function readAssignmentSource(text: string, opts: { harnessDir: string | null }): AssignmentSourceResult {
+  const pointerMatch = ASSIGNMENT_POINTER_RE.exec(text);
+  if (pointerMatch === null) return { ok: true, text };
+  if (text.replace(pointerMatch[0], "").trim() !== "") {
+    return assignmentSourceRefusal(
+      "dispatch.assignment.ambiguous",
+      `assignment source is ambiguous: an \`Assignment file:\` pointer appears alongside inline content`,
+      "choose ONE source form \u2014 drop the inline body and keep the pointer, or drop the pointer and pass the assignment inline",
+    );
+  }
+  const pointer = pointerMatch[1];
+  if (!isAbsolute(pointer)) {
+    return assignmentSourceRefusal(
+      "dispatch.assignment.path",
+      `assignment pointer must be an absolute path \u2014 got ${JSON.stringify(pointer)}`,
+      ASSIGNMENT_SOURCE_RECOVERY,
+    );
+  }
+  if (opts.harnessDir === null) {
+    return assignmentSourceRefusal(
+      "dispatch.assignment.path",
+      `assignment pointer ${pointer} cannot be containment-checked: the control harness root is unavailable`,
+      "pass the assignment inline as a front-matter document instead of a pointer, or restore the control harness root",
+    );
+  }
+  const file = canonicalizeNearestExisting(pointer);
+  if (!assignmentSourceHomes(opts.harnessDir).some((home) => assignmentHomeContains(file, home))) {
+    return assignmentSourceRefusal(
+      "dispatch.assignment.path",
+      `assignment pointer ${pointer} resolves outside every accepted assignment home \u2014 got ${file}`,
+      ASSIGNMENT_SOURCE_RECOVERY,
+    );
+  }
+  let content: string;
+  try {
+    content = readFileSync(file, "utf8");
+  } catch (error) {
+    return assignmentSourceRefusal(
+      "dispatch.assignment.path",
+      `assignment file ${file} cannot be read (${(error as NodeJS.ErrnoException).code ?? "unknown error"})`,
+      ASSIGNMENT_SOURCE_RECOVERY,
+    );
+  }
+  return { ok: true, text: content, path: file };
 }
