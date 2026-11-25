@@ -54,6 +54,33 @@ function effortSessionsOf(value: string): number | null {
   return trimmed === "" ? null : Number(trimmed);
 }
 
+/** One milestone editor's text, as the operator typed it. */
+export type MilestoneDraft = { name: string; effort: string; status: string };
+
+/**
+ * The draft the editor opens with: seeded from the milestone on EVERY open, so a
+ * cancelled edit cannot survive into the next one and emit a stale delta.
+ */
+export function milestoneDraft(milestone: RoadmapModel["milestones"][number]): MilestoneDraft {
+  return {
+    name: milestone.name,
+    effort: milestone.effortSessions === null ? "" : String(milestone.effortSessions),
+    status: milestone.status ?? "planned",
+  };
+}
+
+/** What Save sends: only the fields whose text differs from the stored milestone. */
+export function milestonePatch(
+  milestone: RoadmapModel["milestones"][number],
+  draft: MilestoneDraft,
+): { name?: string; effortSessions?: number | null; status?: string } {
+  return {
+    ...(draft.name.trim() === milestone.name ? {} : { name: draft.name.trim() }),
+    ...(effortSessionsOf(draft.effort) === milestone.effortSessions ? {} : { effortSessions: effortSessionsOf(draft.effort) }),
+    ...(draft.status === milestone.status ? {} : { status: draft.status }),
+  };
+}
+
 /**
  * The milestone write surface, declared structurally so this screen stays
  * transport-agnostic (the dashboard alignment change, Task 4). Every action
@@ -174,15 +201,20 @@ function MilestoneActions(props: {
   copy: ProjectDetailCopy;
 }) {
   const { milestone, writes, assignable, copy } = props;
-  const [editing, setEditing] = useState(false);
+  // One state: the OPEN draft. `null` is the closed editor, so a cancelled edit has
+  // nowhere to live until the next open re-seeds it from the milestone.
+  const [draft, setDraft] = useState<MilestoneDraft | null>(null);
   const [removing, setRemoving] = useState(false);
-  const [name, setName] = useState(milestone.name);
-  const [effort, setEffort] = useState(milestone.effortSessions === null ? "" : String(milestone.effortSessions));
-  const [status, setStatus] = useState(milestone.status ?? "planned");
-  if (!editing) {
+  if (draft === null) {
     return (
       <span className={"ms-actions"}>
-        <button type="button" className={"link"} disabled={writes.busy} data-ms-milestone-edit="" onClick={() => setEditing(true)}>
+        <button
+          type="button"
+          className={"link"}
+          disabled={writes.busy}
+          data-ms-milestone-edit=""
+          onClick={() => setDraft(milestoneDraft(milestone))}
+        >
           {copy.roadmap.writes.edit}
         </button>
         {removing ? (
@@ -249,20 +281,13 @@ function MilestoneActions(props: {
       data-ms-milestone-edit-form={milestone.milestoneId}
       onSubmit={(event) => {
         event.preventDefault();
-        writes.update(
-          milestone.milestoneId,
-          {
-            ...(name.trim() === milestone.name ? {} : { name: name.trim() }),
-            ...(effortSessionsOf(effort) === milestone.effortSessions ? {} : { effortSessions: effortSessionsOf(effort) }),
-            ...(status === milestone.status ? {} : { status }),
-          },
-        );
-        setEditing(false);
+        writes.update(milestone.milestoneId, milestonePatch(milestone, draft));
+        setDraft(null);
       }}
     >
       <label>
         {copy.roadmap.writes.nameLabel}
-        <input value={name} disabled={writes.busy} onChange={(event) => setName(event.target.value)} />
+        <input value={draft.name} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
       </label>
       <label>
         {copy.roadmap.writes.effortLabel}
@@ -270,14 +295,14 @@ function MilestoneActions(props: {
           type="number"
           min={1}
           step={1}
-          value={effort}
+          value={draft.effort}
           disabled={writes.busy}
-          onChange={(event) => setEffort(event.target.value)}
+          onChange={(event) => setDraft({ ...draft, effort: event.target.value })}
         />
       </label>
       <label>
         {copy.roadmap.writes.statusLabel}
-        <select value={status} disabled={writes.busy} onChange={(event) => setStatus(event.target.value)}>
+        <select value={draft.status} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
           {MILESTONE_STATUSES.map((option) => (
             <option key={option} value={option}>
               {option}
@@ -288,7 +313,7 @@ function MilestoneActions(props: {
       <button type="submit" className={"link"} disabled={writes.busy}>
         {copy.roadmap.writes.save}
       </button>
-      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setEditing(false)}>
+      <button type="button" className={"link"} disabled={writes.busy} onClick={() => setDraft(null)}>
         {copy.roadmap.writes.cancel}
       </button>
     </form>
