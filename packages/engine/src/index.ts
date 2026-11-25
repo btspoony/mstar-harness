@@ -383,6 +383,7 @@ export {
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   parseEnforcementFlagFromFrontmatter,
+  validateAssignmentFields,
   validateControlWriteAssignment,
 } from "./dispatch.js";
 export type {
