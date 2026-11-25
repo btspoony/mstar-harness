@@ -358,16 +358,18 @@ function MilestoneActions(props: {
   // closed; a cancelled edit clears the entry, so the next open re-seeds from the milestone.
   const [draft, setDraftState] = useState<MilestoneDraft | null>(() => {
     const kept = props.drafts?.read(targetKey);
-    // invariant: a kept draft re-opens with the fields the operator touched, so a retry after a
-    // conflict refresh still sends only what they edited.
-    return kept === undefined
-      ? null
-      : {
-          name: kept.name,
-          effort: kept.effort,
-          status: kept.status ?? milestone.status ?? "planned",
-          touched: new Set(kept.touched ?? []),
-        };
+    // invariant: a re-mounted editor shows the FRESH milestone for every field the operator did
+    // not touch — a stale displayed value would silently win over a status another writer changed —
+    // and keeps only the fields they did touch, so a retry still sends exactly their edits.
+    if (kept === undefined) return null;
+    const touched = new Set(kept.touched ?? []);
+    const fresh = milestoneDraft(milestone);
+    return {
+      name: touched.has("name") ? kept.name : fresh.name,
+      effort: touched.has("effort") ? kept.effort : fresh.effort,
+      status: touched.has("status") ? (kept.status ?? fresh.status) : fresh.status,
+      touched,
+    };
   });
   // why: the host store shadows the component state — a refresh unmounts this editor and
   // the re-mounted one seeds from the store, so the typed text survives. The sync is an
@@ -479,7 +481,15 @@ function MilestoneActions(props: {
           return;
         }
         setEffortError(false);
-        writes.update(milestone.milestoneId, milestonePatch(milestone, draft));
+        const patch = milestonePatch(milestone, draft);
+        // why: nothing the operator edited still differs from the milestone a refresh just read, so
+        // there is nothing to write — submitting an empty patch would be refused and look like a
+        // failure to the operator who only retried an edit another writer already applied.
+        if (Object.keys(patch).length === 0) {
+          setDraft(null);
+          return;
+        }
+        writes.update(milestone.milestoneId, patch);
         setWriteInFlight(true);
       }}
     >

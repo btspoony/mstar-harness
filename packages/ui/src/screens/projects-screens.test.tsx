@@ -804,6 +804,24 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     expect(patch).toEqual({ effortSessions: null });
   });
 
+  test("a refresh shows the milestone's own value for every field the operator did not touch", () => {
+    // why: keeping a stale displayed value is worse than losing the seed — an editor showing the
+    // old status makes selecting that same option a no-op, so the operator's choice never travels.
+    const milestone = stored();
+    const touchedOnlyEffort = withTouched(new Set(), "effort");
+    const kept = { name: "Renamed", effort: "20", status: "delivered", touched: [...touchedOnlyEffort] };
+    // note: the refreshed milestone another writer left behind.
+    const refreshed = { ...milestone, name: "Renamed upstream", status: "delivered" } as typeof milestone;
+    const seeded = {
+      name: kept.touched.includes("name") ? kept.name : refreshed.name,
+      effort: kept.touched.includes("effort") ? kept.effort : "",
+      status: kept.touched.includes("status") ? kept.status : (refreshed.status ?? "planned"),
+    };
+    expect(seeded.name).toBe("Renamed upstream");
+    expect(seeded.status).toBe("delivered");
+    expect(milestonePatch(refreshed, { ...seeded, touched: new Set(kept.touched) })).toEqual({ effortSessions: 20 });
+  });
+
   test("an untouched draft yields an empty patch, a changed effort the full patch", () => {
     const milestone = stored();
     expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
