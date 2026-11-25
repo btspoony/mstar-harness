@@ -105,11 +105,10 @@ PM 提交显式 opt-in 的 tracked reports 时仅用已配置身份；身份缺�
 - **`qc-specialist*`**：**不得**修改主 plan（宿主仅允许 Assignment 指定的 review bundle `.md`）；审查结论落在 `{SDD_DIR}/review/` 内。若主 plan 需新增或勾选与审查相关的条目，由 `project-manager` 或 Assignment 明确授权的角色据报告回写。
 - **只读角色**：不直接改主 plan；将建议交给 `project-manager` 代为更新清单。
 
-Plan 正文与执行行必须保持一致；不一致时以 store plan 行状态为准，尽快纠正正文或经公共动词追加 notes（`workflows/<id>/notes.jsonl`）。
+Plan front matter 与执行行必须保持一致；不一致时以 store plan 行状态为准，尽快纠正 front matter 或经公共动词追加 notes（`workflows/<id>/notes.jsonl`）。
 
 ## Done 标记方式
 
-1. **Frontmatter**（首选）：添加 `status: Done` 和可选的 `done_at: YYYY-MM-DD`。
-2. **文件名**（备选）：重命名为 `DONE__<name>.md` 或 `<name>.done.md`。
+完成标记只写 plan front matter 的 `status`（`Todo` / `InProgress` / `InReview` / `Done` / `Blocked`；无 `done_at` 字段）；不重命名文件，`DONE__<name>.md` / `<name>.done.md` 不是标记方式。
 
 执行状态经 `mstar plan complete` 等公共 plan 动词写入 store；完成交付尾段后由 `mstar status workflow-close` 收口 root register。不要手写 root `status.json` 或 workflow snapshot；它们是 migration sources / retained history，不是执行权威。主 plan 标记不是执行状态权威。

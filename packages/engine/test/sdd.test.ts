@@ -37,6 +37,7 @@ import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } fro
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
+
   SddScriptError,
   assertBaseSha,
   checkSddAction,
@@ -52,6 +53,8 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
+import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -885,7 +888,7 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   // the title authority (the registration calls declare that same title).
   writeFileSync(
     planFile,
-    `# Plan\n\n**plan_id:** ${PLAN_ID}\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n`,
+    planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n"),
   );
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
@@ -1489,8 +1492,8 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   });
 
   test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", async () => {
-    // Recorded plan header (the fixture plan carries "Main worktree branch:
-    // main") — resolves.
+    // Recorded plan front matter (the fixture plan declares
+    // main_worktree_branch: main in its front matter) — resolves.
     const root1 = tmpRoot("sdd-ctx-mainbranch-");
     try {
       const f = executionFixture(root1);
@@ -1523,6 +1526,79 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(err.message).toContain("worktree.main.expected-branch-missing");
     } finally {
       rmSync(root3, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed plan front matter refuses with the parser file:line diagnostic — never the branch.base fallback", async () => {
+    // T4-01 regression: a duplicate declaration in the registered plan's
+    // front matter is a parse failure of the residency declaration surface.
+    // Even with a populated `branch.base` (the intended fallback for a
+    // genuinely absent record), the resolver must propagate the parser's
+    // file:line diagnostic instead of silently substituting the fallback —
+    // a corrupted plan can never admit dispatch against the wrong branch.
+    const root = tmpRoot("sdd-ctx-mainbranch-malformed-");
+    try {
+      const f = executionFixture(root);
+      writeFileSync(
+        f.planFile,
+        ["---", `plan_id: ${PLAN_ID}`, `plan_id: ${PLAN_ID}`, "---", "", "# Plan", ""].join("\n"),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection).toBeInstanceOf(DocumentFrontmatterError);
+      const frontmatterError = rejection as DocumentFrontmatterError;
+      expect(frontmatterError.source).toBe(f.planFile);
+      expect(frontmatterError.message).toContain(`${f.planFile}:`);
+      expect(frontmatterError.message).not.toContain("worktree.branch-mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a present-but-invalid main_worktree_branch refuses with identity-mismatch — never the branch.base fallback", async () => {
+    // CF-02 regression: `main_worktree_branch: [other]` is a present but
+    // non-scalar declaration. The snapshot fallback applies only when the key
+    // is genuinely absent, so even a populated `branch.base` must not admit
+    // the dispatch.
+    for (const [name, lines] of [
+      ["list", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", "", "# Plan", ""]],
+      ["unterminated fence", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: other", "# no closing fence"]],
+    ] as const) {
+      const root = tmpRoot(`sdd-ctx-mainbranch-invalid-${name.replace(/\s+/g, "-")}-`);
+      try {
+        const f = executionFixture(root);
+        writeFileSync(f.planFile, lines.join("\n"));
+        await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+        const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+        expect(rejection.code).toBe("plan-path.identity-mismatch");
+        expect(rejection.message).not.toContain("worktree.branch-mismatch");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a numeric main_worktree_branch keeps its written spelling — `5.0` is compared as 5.0", async () => {
+    // CF-01 regression: the typed scalar `5` must never replace the declared
+    // spelling `5.0`; a workflow snapshot whose branch.base is the exact raw
+    // spelling resolves against the raw-text declaration. The snapshot
+    // branch.base deliberately spells the typed scalar (`5`) — resolution
+    // succeeds only when the declaration surface, not the fallback, wins.
+    const root = tmpRoot("sdd-ctx-mainbranch-numeric-");
+    try {
+      const f = executionFixture(root);
+      // The main worktree really is on a branch spelled `5.0` — the resolution
+      // succeeds only when the raw-text declaration, not the typed scalar `5`,
+      // reaches the residency comparison.
+      git(["branch", "-m", "main", "5.0"], f.primary);
+      writeFileSync(
+        f.planFile,
+        planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n", { main_worktree_branch: "5.0" }),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "5" } });
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

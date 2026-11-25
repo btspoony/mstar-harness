@@ -285,6 +285,25 @@ export interface FakeTeamMember {
   childId: string
 }
 
+/** Render a plan markdown whose declarations live in the front matter fence.
+ * The one shared plan-fixture renderer for dsh tests. */
+export function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
+
 /**
  * The two OPTIONAL rc.3 services the Agent Teams ledger reads, mounted by hand
  * on a bare `Context` or a booted app root (`ctx.provide` after apply works:

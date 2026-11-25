@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeCommand, type InvocationContext } from "@mstar-harness/commands";
 import {
+
   ensureCollaborationAuthority,
   executionContextFor,
   initializeStore,
@@ -18,6 +19,7 @@ import {
   readExecutionState,
   registerShippedCatalogExecution,
 } from "@mstar-harness/engine";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -62,7 +64,7 @@ async function recoverableFixture(): Promise<{ root: string; harness: string; pr
   );
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "plans"), { recursive: true });
-  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), `# Recover provision plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Recover provision plan\n"));
   (await initializeStore({ harnessDir: harness })).close();
   await ensureCollaborationAuthority({ harnessDir: harness });
   const workflow = {

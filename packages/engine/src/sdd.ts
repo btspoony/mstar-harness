@@ -58,6 +58,7 @@ import {
   resolveFixedHarnessDir,
   resolveSddDir,
 } from "./path.js";
+import { planDeclaredHeaders } from "./plan-path.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
@@ -703,23 +704,6 @@ function throwUsage(message: string): never {
 }
 
 /**
- * Recorded main-worktree branch from the declared plan file (the plan
- * header `**Main worktree branch**: <branch>` written at lifecycle start —
- * SDD reads the plan it already declares). Missing record → `""`: the
- * caller falls back conservatively to the governing snapshot's explicit
- * `branch.base`, never to the branch observed at check time.
- */
-function recordedMainWorktreeBranch(planFile: string): string {
-  try {
-    const text = readFileSync(planFile, "utf8");
-    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
-    return match ? match[1]! : "";
-  } catch {
-    return "";
-  }
-}
-
-/**
  * The L1 lifecycle-branch ownership set read from the ACTIVE graph: ALL
  * registered ACTIVE lifecycles (never only the governing one), projected into
  * the same snapshot shape the pure collector consumes.
@@ -981,7 +965,16 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
       isPlainObject(state.branch) && typeof state.branch.base === "string" && state.branch.base.trim() !== ""
         ? state.branch.base
         : "";
-    const expectedMainBranch = recordedMainWorktreeBranch(input.planFile) || snapshotBase;
+    // Recorded plan front matter is the declaration surface (a body label
+    // declares nothing); a missing record falls back conservatively to the
+    // governing snapshot's explicit `branch.base`, never to the branch
+    // observed at check time. A DocumentFrontmatterError (malformed or
+    // duplicate declaration) or a PlanPathError (an invalid non-scalar
+    // declaration or an unterminated fence) propagates with its diagnostic —
+    // an invalid declaration is never read as an absent one, so a corrupted
+    // plan can never silently fall back to `branch.base`. Values are the raw
+    // written scalars, so a numeric-looking branch keeps its spelling.
+    const expectedMainBranch = planDeclaredHeaders(input.planFile).get("main worktree branch") ?? snapshotBase;
     const l1 = l1PreDispatchCheck({
       workflowType: state.type === "iteration" ? "iteration" : "plan",
       integrationWorktreePath:

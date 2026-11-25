@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
+
   StoreError,
   assertStoreRuntimeSupported,
   createFsStore,
@@ -45,7 +46,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
-import { bootApp, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, planFrontMatter, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -218,7 +219,7 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   await mkdir(join(harnessDir, 'plans'), { recursive: true })
-  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
+  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), planFrontMatter("plan-a", "# Store cutover plan\n"))
   setArtifactStore(createFsStore(harnessDir))
   await expect(
     registerShippedCatalogExecution(

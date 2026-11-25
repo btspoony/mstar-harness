@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
+
   CLOSE_PHASE,
   DERIVED_PHASE_CODE,
   EXECUTE_PHASE,
@@ -48,6 +49,7 @@ import {
 } from "../src/workflow.js";
 import { PlanPathError } from "../src/plan-path.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -816,7 +818,7 @@ test("plan registration derivation stays read-only and proves the selected docum
     const planId = "20260918-derived-registration";
     const file = join(root, "plans", `${planId}.md`);
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `# Derived registration title\n\n**plan_id:** ${planId}\n`, "utf8");
+    writeFileSync(file, planFrontMatter(planId, "# Derived registration title\n"), "utf8");
 
     const derived = derivePlanRegistration({ harnessDir: root, plan: { file: `plans/${planId}.md` } });
     expect(derived.plan).toEqual({

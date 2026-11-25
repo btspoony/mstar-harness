@@ -107,7 +107,7 @@ Each task fits **one focused implementer round** — the round closes the task's
 
 | This quality bar | Existing mstar element |
 |------------------|----------------------|
-| Self-contained context | `plan.main.md` Global Constraints + per-task Files/Interfaces |
+| Self-contained context | `plan.main.md` front matter — the declarations `plan_id`, `title`, `execution`, `working_branch`, `main_worktree_branch`, `delivery_kind`, `status` live there and nowhere else in the plan; body labels are never declarations — plus Global Constraints and per-task Files/Interfaces |
 | Verification gates | `plan.main.md` per-step "Run: `cmd`" lines |
 | Hard boundaries | `plan.main.md` per-task Files (Create/Modify) — extended with explicit Out-of-scope |
 | STOP conditions | New — not previously formalized |

@@ -9,6 +9,7 @@
 import { execFileSync } from "node:child_process";
 import * as nodeFs from "node:fs";
 import {
+
   chmodSync,
   copyFileSync,
   existsSync,
@@ -124,6 +125,7 @@ import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
@@ -7471,7 +7473,7 @@ describe("remote composite flows", () => {
     const planId = "p-reg";
     const planFile = join(cache.context.harnessDir, "plans", `${planId}.md`);
     mkdirSync(dirname(planFile), { recursive: true });
-    writeFileSync(planFile, `# Registered plan\n\n**plan_id:** ${planId}\n`);
+    writeFileSync(planFile, planFrontMatter(planId, "# Registered plan\n"));
     const request = {
       operationId: "registration-remote-1",
       actor: "project-manager",

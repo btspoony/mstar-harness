@@ -28,14 +28,17 @@
  * (`path.ts#resolvePlanDir`), so a `.mstarc` `[config] plan_dir` declaration
  * and an external plan root both work without a second resolution rule.
  *
- * `planDeclaredHeaders` is the one fence-aware declaration reader: registration,
+ * `planDeclaredHeaders` is the one declaration reader: registration,
  * readiness and the path resolver all read plan declarations through it rather
- * than sitting beside a second parser. The refusal is a typed `PlanPathError`
- * carrying a `plan-path.*` code, so a caller reports or maps that code itself.
+ * than sitting beside a second parser, and it reads the front matter fence
+ * through the shared document-frontmatter reader — the body is never scanned.
+ * The refusal is a typed `PlanPathError` carrying a `plan-path.*` code, so a
+ * caller reports or maps that code itself.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, sep } from "node:path";
 import { canonicalTarget } from "./coordination-write.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterAndBody } from "./document-frontmatter.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 
 /** Why a plan pointer was refused; these codes propagate unmapped. */
@@ -66,31 +69,51 @@ export type RegisteredPlanFileInput = { harnessRoot: string; planId: string; fil
 export type RegisteredPlanFile = { planPath: string; planDir: string; declaredPlanId: string };
 
 /**
- * The plan-markdown labels the plan contract actually consults. Every other
- * `Label: value` line is plan-body content, and a real multi-task plan repeats
- * those per task (`**Files:**`, `**Task budget:**`) with a different value each
- * time — so a repeated label outside this set is not a declaration conflict.
+ * The plan front-matter keys the plan contract actually consults, keyed by the
+ * lowercased space-separated label the callers read, with values read from the
+ * front-matter keys `plan_id`, `main_worktree_branch` and `working_branch`.
+ * The body is never scanned: a `**plan_id:**` line outside the front matter is
+ * body content, not a declaration.
  */
-const PLAN_CONSULTED_HEADERS: Record<string, true> = {
-  plan_id: true,
-  "main worktree branch": true,
-  "working branch": true,
+const PLAN_CONSULTED_KEYS: Record<string, string> = {
+  "main worktree branch": "main_worktree_branch",
+  plan_id: "plan_id",
+  "working branch": "working_branch",
 };
 
 /**
- * The consulted headers one plan markdown declares, keyed by lowercased label —
- * the forms real plan documents use: the colon inside the bold
- * (`**plan_id:** value`, the dominant form in `{PLAN_DIR}`) and the colon after
- * it (`**Main worktree branch**: value`); a plain `Label: value` line is
- * accepted too. Fenced code is skipped so a quoted example is never read as a
- * declaration, and a consulted label twice with different values refuses
- * instead of silently picking one.
+ * The consulted headers one plan markdown declares, keyed by lowercased label
+ * (`'plan_id'`, `'main worktree branch'`, `'working branch'` — the shapes the
+ * consumers read), with each value taken from the shared reader's RAW scalar
+ * text so a numeric-looking spelling (`5.0`) survives. A duplicate key or an
+ * unsupported line is the shared reader's `DocumentFrontmatterError` naming
+ * `file:line`; a present but non-scalar declaration or an unterminated fence is
+ * this module's `plan-path.identity-mismatch` refusal — never an absent key.
  *
  * This exported form is what lets registration, readiness and the path resolver
  * share one parser instead of each keeping its own copy.
  */
 export function planDeclaredHeaders(planPath: string): Map<string, string> {
   return planDeclaredHeadersFromContent(readFileSync(planPath, "utf8"), planPath);
+}
+
+/** An opening front-matter fence with no closing one: the shared reader reports
+ * that as an unfenced document, but a plan whose first line is `---` declared
+ * an invalid surface rather than no declarations at all. */
+function isUnterminatedFence(content: string, extraction: FrontmatterAndBody): boolean {
+  return (
+    !extraction.fenced &&
+    extraction.frontmatter === "" &&
+    (content.startsWith("---\n") || content.startsWith("---\r\n"))
+  );
+}
+
+/** The one refusal for an unterminated plan front matter: invalid, not absent. */
+function unterminatedFenceRefusal(planPath: string): PlanPathError {
+  return new PlanPathError(
+    "plan-path.identity-mismatch",
+    `plan markdown ${planPath} opens a front matter fence that is never closed \u2014 the declaration is invalid, not absent; close the fence with a second "---" line`,
+  );
 }
 
 /**
@@ -101,45 +124,64 @@ export function planDeclaredHeaders(planPath: string): Map<string, string> {
  * only — it is never read here.
  */
 export function planDeclaredHeadersFromContent(content: string, planPath: string): Map<string, string> {
+  const extraction = extractFrontmatterAndBody(content);
+  if (isUnterminatedFence(content, extraction)) throw unterminatedFenceRefusal(planPath);
+  const entries = parseDocumentFrontmatterEntries(extraction.frontmatter, planPath);
   const headers = new Map<string, string>();
-  // The fence is tracked by its marker character and run length: it is closed
-  // only by a run of the same character at least as long, so a `~~~` example is
-  // never read as a declaration and a shorter backtick run inside a longer
-  // fence cannot close it early.
-  let marker: string | undefined;
-  let markerLength = 0;
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.trim();
-    const fence = /^(`{3,}|~{3,})/.exec(line);
-    if (fence !== null) {
-      const run = fence[1]!;
-      if (marker === undefined) {
-        marker = run.charAt(0);
-        markerLength = run.length;
-      } else if (run.charAt(0) === marker && run.length >= markerLength) {
-        marker = undefined;
-      }
+  for (const [label, key] of Object.entries(PLAN_CONSULTED_KEYS)) {
+    const entry = entries.get(key);
+    if (entry === undefined) continue;
+    // Branch on the entry's kind first: a scalar declares by its raw lexeme,
+    // a non-scalar is a present-but-invalid shape. The parser gives a bare
+    // `key:` the map kind with an empty-object value — the same kind as a key
+    // carrying indented children — so the populated value is the one
+    // observable that separates them: a bare key carries no children, reads
+    // as absent and the snapshot fallback applies, while a key whose object
+    // or array has entries refuses exactly like an explicit `[]` or `{}`
+    // (those keep a non-empty raw lexeme, so they never reach this check).
+    // The raw lexeme after the colon is the declaration — never the typed
+    // scalar: `main_worktree_branch: 5.0` is the branch spelling "5.0", and a
+    // numeric-looking plan id keeps its written form. One surrounding pair of
+    // matching quotes still strips (the quotes are the spelling's syntax, not
+    // the branch's text).
+    if (entry.kind === "scalar") {
+      // A bare `key:` with a scalar raw lexeme is impossible here — the bare
+      // key reads as the map kind — so an empty raw lexeme can only arrive
+      // with a `null` or `~`-like spelling; those carry no declaration and
+      // are absent exactly as the snapshot fallback reads them. Any other
+      // scalar uses its raw text verbatim: `5.0` stays `5.0`, never the
+      // typed scalar `5` or the literal `null`.
+      if (entry.rawText === "" || entry.rawText === "null" || entry.rawText === "~") continue;
+      const raw = entry.rawText;
+      const value =
+        raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
+          ? raw.slice(1, -1)
+          : raw;
+      headers.set(label, value);
       continue;
     }
-    if (marker !== undefined) continue;
-    // `**Label:** value` / `**Label**: value` / `Label: value`: the label may
-    // not contain `:` or `*` (those are the markup), and the value starts at
-    // the first non-space character after the closing markup and colon.
-    const match = /^\*{0,2}([^:*]+?)\*{0,2}:\*{0,2}\s*(\S.*)$/.exec(line);
-    if (match === null) continue;
-    const label = match[1]!.trim();
-    const key = label.toLowerCase();
-    if (PLAN_CONSULTED_HEADERS[key] !== true) continue;
-    const value = match[2]!.trim();
-    const prior = headers.get(key);
-    if (prior !== undefined && prior !== value) {
-      throw new PlanPathError(
-        "plan-path.conflicting-declaration",
-        `plan markdown ${planPath} declares conflicting "${label}" headers (${prior} vs ${value})`,
-        { path: planPath, header: label, prior, value },
-      );
+    // A bare `key:` with no indented children declares nothing — its value
+    // is the parser's empty tentative container, so it is absent exactly as
+    // a missing key is. Explicit empty `[]`/`{}` shapes keep their non-empty
+    // raw lexeme and never reach this exemption.
+    if (
+      entry.rawText === "" &&
+      typeof entry.value === "object" &&
+      entry.value !== null &&
+      (Array.isArray(entry.value) ? entry.value.length === 0 : Object.keys(entry.value).length === 0)
+    ) {
+      continue;
     }
-    headers.set(key, value);
+    // A present but non-scalar declaration (a list, a nested map, a block
+    // scalar) is invalid — never dropped to an absent key, because the absent
+    // key is exactly what the consumer's snapshot fallback reads. An explicit
+    // empty `[]` or `{}` is present all the same and refuses exactly like a
+    // populated one.
+    throw new PlanPathError(
+      "plan-path.identity-mismatch",
+      `plan markdown ${planPath}:${entry.line} declares an invalid ${key} \u2014 accepted value: a single scalar, not a ${entry.kind}; rewrite the declaration as ${key}: <branch>`,
+      { key, kind: entry.kind, line: entry.line },
+    );
   }
   return headers;
 }
@@ -316,6 +358,11 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
       // only this caller knows which spelling asked for it.
       throw refusal(error.code, error.message, { plan_id: planId, ...error.details });
     }
+    // The shared front-matter reader's diagnostic is the caller's contract:
+    // propagate it unchanged so the caller keeps the file:line it names.
+    if (error instanceof DocumentFrontmatterError) {
+      throw error;
+    }
     throw refusal("plan-path.unreadable", `plan ${planId} markdown ${expected} could not be read`, {
       plan_id: planId,
       cause: error instanceof Error ? error.message : String(error),
@@ -326,14 +373,14 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
   if (declaredPlanId === undefined) {
     throw refusal(
       "plan-path.identity-mismatch",
-      `plan ${planId} markdown ${expected} declares no plan_id header \u2014 the pointer cannot be traced to its reviewed plan`,
+      `plan ${planId} markdown ${expected} declares no plan_id in its front matter \u2014 the pointer cannot be traced to its reviewed plan; add a plan_id: line inside the front matter fence`,
       { plan_id: planId },
     );
   }
   if (declaredPlanId !== planId) {
     throw refusal(
       "plan-path.identity-mismatch",
-      `plan ${planId} pointer does not match the plan markdown header plan_id ${declaredPlanId} (${expected})`,
+      `plan ${planId} pointer does not match the plan markdown front matter plan_id ${declaredPlanId} (${expected})`,
       { plan_id: planId, actual: declaredPlanId },
     );
   }

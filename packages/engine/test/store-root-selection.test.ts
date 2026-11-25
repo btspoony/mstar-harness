@@ -11,6 +11,7 @@ import { readExecutionState } from "../src/execution-store.js";
 import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { openCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "../src/collaboration-store.js";
 import { initializeStore, openStore, upgradeStore, type StoreContext } from "../src/store-db.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -110,7 +111,7 @@ describe("explicit store-root selection", () => {
     // note: The repository's lane is already ACTIVE through the alternative root and
     // this checkout holds no binding of its own yet; adopt what it resolved.
     writeCollaborationBinding(selected, await readCollaborationAuthority(selected));
-    writeFileSync(join(selected.harnessDir, "plans", "selected.md"), "# Selected plan\n\n**plan_id:** selected\n");
+    writeFileSync(join(selected.harnessDir, "plans", "selected.md"), planFrontMatter("selected", "# Selected plan\n"));
     await registerCatalogEntity(
       selected,
       { kind: "plan", id: "selected", title: "Selected plan", rootKind: "plans", relativePath: "selected.md" },

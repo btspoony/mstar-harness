@@ -132,7 +132,7 @@ The integration checkout is established at Phase 2 entry; the bounded Phase 1 un
 
 | Checkout | Checked-out branch | Path recorded | Writable role |
 |----------|-------------------|---------------|---------------|
-| **Control root** = the **primary checkout** (main worktree) | the recorded **`Main worktree branch`** from the main plan header (never a lifecycle-owned branch; never switched) | **not a recorded state field** — derived from Git (`readMainWorktree`); the branch is recorded once as `Main worktree branch: <branch>` in the main plan | **Forbidden** for product edits — process-SSOT holder + Git-control cwd only |
+| **Control root** = the **primary checkout** (main worktree) | the plan's front matter `main_worktree_branch` (never a lifecycle-owned branch; never switched) | **not a recorded state field** — derived from Git (`readMainWorktree`); the branch is recorded once as `main_worktree_branch: <branch>` in the plan front matter | **Forbidden** for product edits — process-SSOT holder + Git-control cwd only |
 | **Integration worktree** | Resolved `spec_integration_branch` (same across active plans) | `integration_worktree_path` (ACTIVE store-backed workflow view) — canonical **repository root** (not `{HARNESS_DIR}`) | Sole merge cwd for serial integration merges (`integration_merge_lease`) + tracked-result commits (per-plan compound and Phase 3 specs/ADR promotion); **no product-source edits** — Phase-5 fixes use a feature worktree |
 | **Feature worktree** (per plan) | Plan's Working branch | Row `metadata.worktree_path` (ACTIVE plan view) | **Required cwd** for product/source edits |
 
@@ -149,7 +149,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 **Hard rules**
 
 - Registered `integration_worktree_path` (ACTIVE store-backed workflow view) **MUST** differ from the main worktree (control root) and from row `metadata.worktree_path` — never merge from the main checkout, never product-edit the integration checkout.
-- Main-worktree residency (engine check below): the main worktree's attached branch must equal the recorded **`Main worktree branch`** from the plan header (recorded before the lifecycle writes; never invented from the current branch at check time) and must not be owned by any non-terminal workflow (integration, plan or track). Never create a branch or switch main to make a residency check pass; `branch.base` is a creation/merge anchor, never a residency fact.
+- Main-worktree residency (engine check below): the main worktree's attached branch must equal the plan front matter's `main_worktree_branch` (recorded before the lifecycle writes; never invented from the current branch at check time) and must not be owned by any non-terminal workflow (integration, plan or track). Never create a branch or switch main to make a residency check pass; `branch.base` is a creation/merge anchor, never a residency fact.
 - A feature worktree's same-looking `{HARNESS_DIR}` path is **not** the SSOT — **never** treat it as the source of plans/status/SDD, and **never** bootstrap a second process-SSOT copy there.
 - Before writable dispatch, absolute Worktree path/Working branch appear in leaf Assignments and ordinary row source metadata. Missing/corrected facts use revisable prepare.
 - Plan Path and SDD dir are absolute control-root paths; do not resolve a feature checkout's ignored harness as process SSOT.
