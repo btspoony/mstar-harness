@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   appendOccurrence,
@@ -8,6 +8,9 @@ import {
   closeIssue,
   discardAcrossAuthorities,
   getIssue,
+  moveAcrossByDocument,
+  moveDocumentOf,
+  moveHandoffDocumentSchema,
   showIssue,
   ISSUE_ACTION_NAMES,
   ISSUE_ACTIONS,
@@ -23,6 +26,7 @@ import {
   type CaptureInput,
   type ClosureEvidence,
   type IssueActionSpec,
+  type ExchangeReceipt,
   type IssueFilter,
   type IssueLink,
   type IssueMove,
@@ -60,6 +64,10 @@ const inputSchema = z.object({
   expectStore: z.number().int().nonnegative().optional(),
   toAuthority: z.string().optional(),
   discard: z.boolean().optional(),
+  /** note: The peer checkout's move document, or `-` for stdin: the two-checkout exchange's handoff. */
+  input: z.string().optional(),
+  /** note: Where this side writes the document the other checkout needs next. */
+  out: z.string().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -184,6 +192,73 @@ function issueFilter(input: IssueInput): IssueFilter {
   };
 }
 /**
+ * note: One exchange document for the two-checkout move: an absolute path, or `-` for stdin. An
+ * unreadable path or a body that is not a JSON object refuses before any store work, exactly as the
+ * outbox lane's own document reader does.
+ */
+async function readMoveDocument(invocation: InvocationContext, value: string, flag: string): Promise<unknown> {
+  let raw: string;
+  if (value === "-") raw = await invocation.effects.readInput();
+  else if (!path.isAbsolute(value)) {
+    const error = new Error(`${flag} must be an absolute path or -`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  } else {
+    try {
+      raw = readFileSync(value, "utf8");
+    } catch (error) {
+      const failure = new Error(`${flag} ${value} cannot be read: ${error instanceof Error ? error.message : String(error)}`) as Error & { code: string; paths: string[] };
+      failure.code = "issue.invalid-payload";
+      failure.paths = [flag.replace(/^--/, "")];
+      throw failure;
+    }
+  }
+  if (raw.trim() === "") {
+    const error = new Error(`${flag} received no content; pass a move document`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    const error = new Error(`${flag} is not valid JSON`) as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = [flag.replace(/^--/, "")];
+    throw error;
+  }
+}
+
+/**
+ * invariant: The handoff is written create-only, and a failure to write it never rewrites the
+ * operation's outcome: the move already committed, so the receipt discloses the reporting failure
+ * instead of reporting the move as failed.
+ */
+function publishMoveDocument(
+  out: string,
+  document: unknown,
+): { out: string | null; documentError: { code: string; message: string } | null } {
+  const target = path.resolve(out);
+  try {
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    return { out: target, documentError: null };
+  } catch (error) {
+    return {
+      out: null,
+      documentError: {
+        code: "issue.move-document-not-written",
+        message:
+          (error as { code?: unknown })?.code === "EEXIST"
+            ? `A file already exists at ${target}; a handoff is create-only and never overwrites an existing document. The move itself completed as reported.`
+            : `The handoff could not be written at ${target} (${error instanceof Error ? error.message : String(error)}). The move itself completed as reported.`,
+      },
+    };
+  }
+}
+
+/**
  * note: A move combination neither route admits, refused by code with the route that does. It names the
  * flags rather than the engine's internals, so an operator corrects the request instead of the store.
  */
@@ -237,10 +312,12 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
     }
     if (id === "issue.move") {
       const expectStore = input.expectStore;
-      // invariant: `--expect` is the record's revision CAS on every route that reads a local record, and
-      // both of this verb's routes do, so a missing flag refuses before anything is frozen.
-      if (input.expect === undefined) {
-        const error = new Error("expect is required for a move") as Error & { code: string; paths: string[]; details: Record<string, unknown> };
+      // invariant: `--expect` is the record's revision CAS on every route that reads a local record; only
+      // the exchange's handoff half addresses a record another authority holds and carries no revision.
+      if (input.expect === undefined && input.input === undefined) {
+        const error = new Error(
+          "expect is required for a move unless --input supplies the peer's handoff document",
+        ) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
         error.code = "issue.invalid-payload";
         error.paths = ["expect"];
         error.details = {
@@ -261,6 +338,15 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         if (toAuthority === undefined) {
           throw unsupportedMove("--discard", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
         }
+        // invariant: The handoff flags belong to the staged exchange, which a discard never runs:
+        // `--discard` releases the row this checkout holds and neither reads nor emits a document,
+        // so admitting either flag here would drop it silently beside a completed discard.
+        if (input.input !== undefined) {
+          throw unsupportedMove("--input", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        }
+        if (input.out !== undefined) {
+          throw unsupportedMove("--out", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
+        }
         if (expectStore !== undefined) {
           const error = new Error(
             "expectStore is not a --discard input: a discard restores the source record and never compares the lane " +
@@ -279,8 +365,8 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         // authorizes the move authorizes abandoning it, checked before the store is touched.
         const write = mutation(input);
         assertIssueWriteSeat(write.actor);
-        // invariant: the discard route releases both halves of a one-checkout move in this one run,
-        // and refuses a checkout that holds only half of the pair.
+        // invariant: the discard route is chosen by the lanes this checkout can open: a one-checkout
+        // move releases both halves at once, a two-checkout exchange releases the half it holds here.
         const receipt = await discardAcrossAuthorities(context, {
           operationId: write.operationId,
           actor: write.actor,
@@ -300,9 +386,47 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         throw error;
       }
       // invariant: `--to-authority` selects the staged cross-authority route; without it the verb is the
-      // local project reassignment.
+      // local project reassignment. A flag neither route admits refuses by code with the route that does.
       if (toAuthority === undefined) {
+        // invariant: The handoff flags belong to the two-checkout route alone. Without a destination
+        // authority neither is read, so admitting either here would perform a different mutation than
+        // the request names; both refuse by code instead.
+        if (input.input !== undefined) {
+          throw unsupportedMove("--input", `mstar issue move --id ${addressed} --to-authority <repo-key> --input <path|->`);
+        }
+        if (input.out !== undefined) {
+          throw unsupportedMove("--out", `mstar issue move --id ${addressed} --to-authority <repo-key> --out <path>`);
+        }
         return await runMutation((write) => moveIssue(context, addressed, payload, { ...write, expectedStoreRevision: expectStore }));
+      }
+      // invariant: `--input`/`--out` select the two-checkout exchange. A checkout writes only the lane
+      // its own mode selects, so a move across a mode boundary is two halves that hand each other
+      // documents; the same command resumes from whatever phase its own ledger row holds.
+      if (input.input !== undefined || input.out !== undefined) {
+        const write = mutation(input);
+        assertIssueWriteSeat(write.actor);
+        const handoff = input.input === undefined ? null : moveDocumentOf(await readMoveDocument(invocation, input.input, "--input"));
+        const receipt: ExchangeReceipt = await moveAcrossByDocument(context, {
+          operationId: write.operationId,
+          actor: write.actor,
+          sourceIssueId: addressed,
+          destinationAuthority: toAuthority,
+          destinationProject: payload.projectId,
+          reason: payload.reason,
+          ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
+          expectedStoreRevision: expectStore,
+        }, handoff);
+        const published = input.out === undefined || receipt.document === null
+          ? { out: null, documentError: null }
+          : publishMoveDocument(input.out, receipt.document);
+        // invariant: `operationId` stays the caller's move id, so the provider intent a step froze is
+        // reported beside it: it is the operation `outbox-dispatch`/`outbox-receipt` address.
+        return ok(id, {
+          ...receipt,
+          out: published.out,
+          ...(published.documentError === null ? {} : { documentError: published.documentError }),
+          operationId: write.operationId,
+        });
       }
       return await runMutation((write) => moveIssue(context, addressed, { ...payload, toAuthority }, { ...write, expectedStoreRevision: expectStore }));
     }
@@ -402,7 +526,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", expectStore: "--expect-store <n>", payload: "--payload <json>",
-    toAuthority: "--to-authority <repo-key>", discard: "--discard",
+    toAuthority: "--to-authority <repo-key>", discard: "--discard", input: "--input <path>", out: "--out <path>",
   };
   const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
@@ -411,10 +535,13 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const commandInput = z.object({
     ...inputSchema.shape,
     id: requiresIssueId ? z.string().min(1) : z.string().optional(),
-    // invariant: `--expect` is the record's revision CAS on every route that reads a local record, and
-    // both of `issue move`'s routes do.
+    // invariant: `--expect` is the record's revision CAS on every route that reads a local record. The
+    // two-checkout exchange's destination half addresses a record it does not hold, so it carries no
+    // revision to compare: only there is the flag optional, and the requirement below states when.
     expect: expectedRevisionVerbs[verb] === true
-      ? z.number().int().nonnegative()
+      ? verb === "move"
+        ? z.number().int().nonnegative().optional()
+        : z.number().int().nonnegative()
       : z.number().int().nonnegative().optional(),
     expectStore: z.number().int().nonnegative().optional(),
   });
@@ -423,19 +550,25 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "actor" || (key === "id" && requiresIssueId))) ||
       (verb === "show" && key === "id") ||
-      (expectedRevisionVerbs[verb] === true && key === "expect"),
+      (expectedRevisionVerbs[verb] === true && key === "expect" && verb !== "move"),
     ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
-      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token. Compared by the run that stages the move." }
+      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token. Compared by the run that stages the move; a --input run continues the recorded operation." }
       : {}),
     ...(verb === "move" && key === "expectStore"
-      ? { help: "Exact current store revision of the lane this run stages in: `storeRevision` from `mstar issue list` there. Compared by the run that stages a move (its own lane's revision). Not an input of `--discard`." }
+      ? { help: "Exact current store revision of the lane this run stages in: `storeRevision` from `mstar issue list` there. Compared by the run that stages a move (its own lane's revision); a --input run continues the recorded operation. Not an input of `--discard`." }
       : {}),
     ...(verb === "move" && key === "toAuthority"
       ? { help: "Destination authority `repoKey` (`host/owner/repo`) of a staged cross-authority move; `--payload.projectId` names the destination project." }
       : {}),
     ...(verb === "move" && key === "discard"
-      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched. One run releases both lanes of a one-checkout move." }
+      ? { help: "Abandon a staged cross-authority move before its destination admission: the source record is untouched. A one-checkout move releases both lanes in one run; a two-checkout exchange releases the half this checkout holds, so each side runs it once." }
+      : {}),
+    ...(verb === "move" && key === "input"
+      ? { help: "The peer checkout's move document (absolute path, or - for stdin) for the two-checkout exchange; its shape publishes as payloadSchemas.inputDocument." }
+      : {}),
+    ...(verb === "move" && key === "out"
+      ? { help: "Absolute path where this side writes the handoff document the other checkout needs next; create-only." }
       : {}),
     ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));
@@ -450,7 +583,9 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         ...(expectedRevisionVerbs[verb] === true
           ? [{
               name: "expect", ownership: "caller" as const, route, tokenKind: "revision" as const,
-              required: true,
+              // invariant: `issue move`'s destination half addresses a record another authority holds, so it
+              // has no revision to compare; every other route reads the record it writes and requires it.
+              ...(verb === "move" ? { required: true, condition: { field: "input", present: false } } : { required: true }),
               constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write",
             }]
           : []),
@@ -459,7 +594,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
               name: "expectStore", ownership: "caller" as const, route, tokenKind: "revision" as const,
               // invariant: A discard restores the record instead of reading a lane base it cannot hold:
               // the move's own phase commits advance the store revision, so only the routes that read a
-              // base they can still compare require it.
+              // base they can still compare — the local project move and the exchange halves — require it.
               required: true, condition: { field: "discard", present: false },
               constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write",
             }]
@@ -481,8 +616,17 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb] } } }
+    // why: `issue move --input`/`--out` carry the exchange handoff, so discovery publishes its shape
+    // beside the payload schema instead of leaving the document an operator must produce undocumented.
+    ...(payloadType[verb] !== undefined || verb === "move"
+      ? {
+          payloads: {
+            ...(payloadType[verb] !== undefined
+              ? { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb] } }
+              : {}),
+            ...(verb === "move" ? { inputDocument: { schema: moveHandoffDocumentSchema } } : {}),
+          },
+        }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

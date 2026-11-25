@@ -447,3 +447,48 @@ export const remoteForkObservationDocumentSchema = z
       .min(1),
   })
   .strict();
+
+/**
+ * `issue move --input` (and the `--out` handoff): the exchange document one checkout hands the
+ * other. `payloadJson`/`stagedCounts` travel as the frozen serialized strings the receiving side
+ * re-hashes and re-parses, exactly as the runtime `moveDocumentOf` proves them; `route` is the
+ * recorded topology that decides which half a discard may release. The runtime parser stays the
+ * authority (it also proves the digest), so this descriptor publishes the shape, not a second gate.
+ */
+export const moveHandoffDocumentSchema = z
+  .object({
+    version: z.literal(1),
+    phase: z.enum(["request", "staged", "switch", "admission"]),
+    route: z.enum(["local-local", "local-remote", "remote-local", "remote-unknown"]),
+    operationId: providerId,
+    issueRef,
+    sourceAuthority: z.string(),
+    destinationAuthority: z.string(),
+    destinationProject: z.string(),
+    actor: z.string(),
+    reason: z.string(),
+    payloadJson: z.string(),
+    payloadDigest: sha256Digest,
+    stagedCounts: z.string(),
+    sourceStoreId: z.string(),
+    sourceEpoch: z.number().int().positive(),
+    sourceIssueId: z.string().nullable(),
+    destinationIssueId: providerId.nullable(),
+    confirmation: z
+      .object({
+        operationId: providerId,
+        providerIssueId: providerId,
+        counts: z
+          .object({
+            occurrences: z.number().int().nonnegative(),
+            issueTransitions: z.number().int().nonnegative(),
+            provenance: z.number().int().nonnegative(),
+            relations: z.number().int().nonnegative(),
+            issueProjectMoves: z.number().int().nonnegative(),
+          })
+          .strict(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
