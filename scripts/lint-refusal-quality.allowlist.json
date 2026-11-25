@@ -6,8 +6,8 @@
     "expectedCount": 1
   },
   {
-    "signature": "missing-recovery:packages/commands/src/families/milestone.ts:ee13cb6822a9",
-    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
+    "signature": "missing-recovery:packages/commands/src/families/milestone.ts:3bdd6ca110bd",
+    "justification": "The milestone family forwards engine-supplied recovery text with the command's own literal fallback (`engineRecovery ?? fallbackRecovery`); family-refusal.ts type-checks both strings but proves no reachable command, so strict static proof cannot evaluate which one runs \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
