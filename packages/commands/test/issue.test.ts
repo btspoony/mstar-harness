@@ -762,11 +762,17 @@ describe("issue command family", () => {
     }, { operationId: "move-project-b", actor: "project-manager" });
 
     const command = definition("issue.move");
-    expect(command.input.safeParse({
+    // invariant: `--expect-store` is a conditional requirement, so admission enforces it where the
+    // schema alone cannot: the shape without it is refused, and the shape with it is admitted.
+    const contract = getCommandSchemas(getCommandDefinitions()).find((entry) => entry.id === command.id);
+    if (contract === undefined) throw new Error("missing issue.move contract");
+    expect(admitCommandInput(command, {
       id: seed.issueId, actor: "project-manager", expect: seed.revision, payload: { projectId: "proj-b", reason: "belongs to b" },
-    }).success).toBe(false);
+    }, contract).success).toBe(false);
     expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expect", route: "cli", required: true }));
-    expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expectStore", route: "cli", required: true }));
+    expect(command.requirements).toContainEqual(expect.objectContaining({
+      name: "expectStore", route: "cli", required: true, condition: { field: "discard", present: false },
+    }));
 
     const beforeMove = await issueState(context);
     const beforePage = await definition("issue.list").execute({}, context);
@@ -809,6 +815,90 @@ describe("issue command family", () => {
     }
   });
 
+  test("the move verb publishes --to-authority, --discard and the unsupported combinations", async () => {
+    const command = definition("issue.move");
+    // note: The staged route's two flags are declared on the one verb, so an operator reads them
+    // from `--help` and a schema reader sees the same keys the CLI accepts.
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "toAuthority", flags: "--to-authority <repo-key>" }));
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "discard", flags: "--discard" }));
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, toAuthority: "github.com/acme/elsewhere",
+    }).success).toBe(true);
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, discard: true,
+    }).success).toBe(true);
+
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-staged-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const storeRevision = (page.data as { storeRevision: number }).storeRevision;
+
+    // invariant: A flag neither route admits refuses by code and names the route that does, instead
+    // of silently treating it as the local project move.
+    const discardedLocally = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-local", discard: true,
+      payload: { projectId: "proj-b", reason: "nothing to abandon" },
+    }, context);
+    expect(discardedLocally).toMatchObject({ status: "refused", code: "issue.scope-refused", details: { paths: ["discard"] } });
+    if (discardedLocally.status === "refused") {
+      expect(discardedLocally.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
+      expect(discardedLocally.message).toEqual(expect.stringContaining("--to-authority"));
+    }
+    const blankAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-blank-authority", toAuthority: "  ",
+      payload: { projectId: "proj-b", reason: "blank authority" },
+    }, context);
+    expect(blankAuthority).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    // invariant: An unsupported authority is refused before anything is frozen, and the record's own
+    // project is untouched.
+    const unknownAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-unknown-authority",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "typo" },
+    }, context);
+    expect(unknownAuthority).toMatchObject({ status: "refused", code: "collaboration.not-initialized" });
+    if (unknownAuthority.status === "refused") {
+      expect(unknownAuthority.details?.recovery).toEqual(expect.stringContaining("mstar store init"));
+    }
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+
+    // invariant: `--discard` reaches the staged route's own abandon branch, so its refusal is that
+    // route's (an authority it cannot resolve), never the local project move's. It carries the record
+    // CAS alone: the lane revision is not a base this route can compare.
+    const discarded = await command.execute({
+      id: seed.issueId, expect: seed.revision,
+      actor: "project-manager", operationId: "move-discard-authority", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon a staged move" },
+    }, context);
+    expect(discarded).toMatchObject({
+      status: "refused",
+      code: "collaboration.move-phase-invalid",
+      details: { operation_id: "move-discard-authority" },
+    });
+    // invariant: A store base the route cannot honour is refused by code, never accepted and dropped.
+    const storeBase = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-store-base", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon with a lane base" },
+    }, context);
+    expect(storeBase).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expectStore"] } });
+    // invariant: Neither refusal wrote anything: the record keeps its project and its revision.
+    const after = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(after).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+  }, 60_000);
+
   test("milestone project mismatch refusal names the cause and both alignment routes", () => {
     const envelope = milestoneFailure(
       "milestone.assign",
@@ -822,6 +912,68 @@ describe("issue command family", () => {
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("--expect-store"));
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar milestone add"));
   });
+
+  test("discard through the public verb requires the issue-write seat and refuses without mutating", async () => {
+    // invariant: Finding 4 at the public boundary — `--discard` unfreezes a record, so a leaf actor is
+    // refused by the same seat rule the move uses, before the store is touched.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "discard-seat-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const before = await issueState(context);
+    const refused = await definition("issue.move").execute({
+      id: seed.issueId, expect: seed.revision,
+      actor: "leaf-observer", operationId: "discard-without-seat", discard: true,
+      toAuthority: "github.com/acme/discard-seat-destination",
+      payload: { projectId: "proj-a", reason: "not my seat" },
+    }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    if (refused.status === "refused") expect(refused.message).toEqual(expect.stringContaining("project-manager"));
+    // invariant: Nothing moved: no ledger row, no staging, no revision change.
+    expect(await issueState(context)).toEqual(before);
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { revision: seed.revision } });
+  }, 60_000);
+
+  test("the move verb refuses a missing --expect", async () => {
+    // invariant: Every route of the verb reads a local record, so nothing may reach a route without its
+    // revision CAS, and the missing flag refuses at execute with the recovery an operator can run.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-expect-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const expectStore = (page.data as { storeRevision: number }).storeRevision;
+    const before = await issueState(context);
+    const command = definition("issue.move");
+
+    // note: Every other store/issue revision in this test is current, so the ONLY refusal each call can
+    // meet is the missing flag — the assertion cannot pass on an unrelated CAS failure.
+    const noExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-missing",
+      payload: { projectId: "proj-a", reason: "no revision" },
+    }, context);
+    expect(noExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    if (noExpect.status === "refused") {
+      expect(noExpect.details?.paths).toEqual(["expect"]);
+      expect(noExpect.details?.recovery).toEqual(expect.stringContaining("--expect"));
+    }
+    // invariant: The refusal happens before anything is frozen or written.
+    expect(await issueState(context)).toEqual(before);
+
+    // note: The staged route is the same shape: it reads a local record, so it needs the CAS.
+    const stagedNoExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-staged",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "staged without a CAS" },
+    }, context);
+    expect(stagedNoExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expect"] } });
+  }, 60_000);
 
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
     const addressed = ["occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"];
@@ -846,6 +998,16 @@ describe("issue command family", () => {
       const missingCas = definition(`issue.${verb}`).input.safeParse({
         id: "I-000001", actor: "project-manager", payload: {},
       });
+      if (verb === "move") {
+        // note: `--expect-store` stays required on this verb, so the CAS-free shape is proved with it.
+        expect(definition(`issue.${verb}`).input.safeParse({
+          id: "I-000001", actor: "project-manager", expectStore: 0, payload: {},
+        }).success).toBe(false);
+        expect(definition(`issue.${verb}`).input.safeParse({
+          id: "I-000001", actor: "project-manager", expect: 0, expectStore: 0, payload: {},
+        }).success).toBe(true);
+        continue;
+      }
       expect(missingCas.success).toBe(false);
     }
   });

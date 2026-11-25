@@ -35,6 +35,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import {
   AUTHORITY_REF,
   COLLABORATION_BINDING_FILE,
@@ -613,11 +614,162 @@ const COLLABORATION_OUTBOX_SCHEMA: Migration = {
   sql: COLLABORATION_OUTBOX_V3_SQL,
 };
 
-/** note: The lane's ordered migrations: v1 is immutable, v2 and the v3 outbox are appended. */
+/**
+ * invariant: v4 `collaboration-cross-authority` - the per-record move ledger over the v3 outbox.
+ * A relation target that lives in another authority has no local issue row, so `to_issue` becomes
+ * nullable beside the new `to_ref` and exactly one of the two is set (the spec's DDL). The partial
+ * primary unique index deduplicates cross-authority relations because SQLite never compares two NULLs in a
+ * primary key. `issue_moves` is the ledger AND the fence: the source row blocks every write to its
+ * record from `staged` on, enforced by triggers stored here instead of by calling code. The row also
+ * carries the request's `actor` and `reason`, so a replay under the same operation id is compared
+ * against the whole immutable request and the membership it records uses the values it was staged
+ * with, not the ones a later attempt supplied.
+ */
+const COLLABORATION_MOVE_V4_SQL = `
+create table relations_cross_authority_stage(
+  from_issue text not null references issues(id),
+  relation text not null check (relation in ('related','blocks','duplicate-of','superseded-by')),
+  to_issue text references issues(id),
+  to_ref text,
+  primary key (from_issue, relation, to_issue),
+  check ((to_issue is null) <> (to_ref is null)),
+  check (from_issue is not to_issue),
+  check (relation != 'related' or to_issue is null or from_issue < to_issue)
+);
+insert into relations_cross_authority_stage(from_issue, relation, to_issue)
+  select from_issue, relation, to_issue from relations;
+drop table relations;
+alter table relations_cross_authority_stage rename to relations;
+create unique index relations_to_ref on relations(from_issue, relation, to_ref) where to_ref is not null;
+create table issue_moves(
+  operation_id text not null primary key,
+  role text not null check (role in ('source','destination')),
+  request_hash text not null,
+  issue_ref text not null,
+  source_issue_id text,
+  destination_issue_id text,
+  source_authority text not null,
+  destination_authority text not null,
+  destination_project text not null,
+  actor text not null,
+  reason text not null,
+  phase text not null check (phase in ('staged','verified','switched','published','discarded')),
+  payload_json text not null,
+  payload_digest text not null,
+  staged_counts text not null,
+  source_store_id text not null,
+  source_epoch integer not null check (typeof(source_epoch) = 'integer' and source_epoch > 0),
+  removed_sync_rows integer not null default 0 check (removed_sync_rows >= 0),
+  created_at text not null,
+  updated_at text not null
+);
+create index issue_moves_record on issue_moves(role, issue_ref, phase);
+create unique index issue_moves_blocking on issue_moves(issue_ref)
+  where role = 'source' and phase in ('staged','verified','switched');
+create trigger issues_move_guard_update
+before update on issues
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = old.id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issues_move_guard_delete
+before delete on issues
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = old.id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger relations_move_guard_insert
+before insert on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (new.from_issue, new.to_issue)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger relations_move_guard_update
+before update on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.from_issue, old.to_issue, new.from_issue, new.to_issue)
+)
+-- note: the publisher's own edge rewrite is the one admitted exception: its row committed
+-- 'published' in this same transaction before the rewrite, which the 'published' probe sees.
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.to_issue
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issue_sync_state_move_guard_insert
+before insert on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched') and m.source_issue_id = new.local_id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issue_sync_state_move_guard_update
+before update on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.local_id, new.local_id)
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+create trigger issue_sync_state_move_guard_delete before delete on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id = old.local_id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+
+-- invariant: A publication delete must not strip a frozen record's links early: the relation rows
+-- are the copy the destination admitted, and only the ledger's terminal phase may remove them.
+-- The publication's own delete of its OUTGOING edges is the one admitted exception, visible the
+-- same way: the row committed 'published' in this same transaction before the children go.
+create trigger relations_move_guard_delete before delete on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.from_issue, old.to_issue)
+)
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.from_issue
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+`;
+
+const COLLABORATION_MOVE_SCHEMA: Migration = {
+  version: 4,
+  name: "collaboration-cross-authority",
+  sql: COLLABORATION_MOVE_V4_SQL,
+};
+
+/** note: The lane's ordered migrations: v1 is immutable; v2, the v3 outbox and the v4 move ledger are appended. */
 export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_SCHEMA,
   COLLABORATION_REMOTE_SCHEMA,
   COLLABORATION_OUTBOX_SCHEMA,
+  COLLABORATION_MOVE_SCHEMA,
 ];
 
 /** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
@@ -662,6 +814,7 @@ const COLLABORATION_TABLES: readonly string[] = [
   "collaboration_operations",
   "cutover_publications",
   "issue_counter",
+  "issue_moves",
   "issue_project_moves",
   "issue_sync_state",
   "issue_transitions",
@@ -776,10 +929,26 @@ const COLLABORATION_OUTBOX_COLUMNS: Readonly<Record<string, readonly string[]>> 
   remote_outbox_receipts: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
 };
 
-/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
-export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+/** note: The v4 move ledger's exact columns, and the relation row that may now carry a remote target. */
+const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  relations: ["from_issue", "relation", "to_issue", "to_ref"],
+  issue_moves: [
+    "operation_id", "role", "request_hash", "issue_ref", "source_issue_id", "destination_issue_id", "source_authority",
+    "destination_authority", "destination_project", "actor", "reason", "phase", "payload_json", "payload_digest",
+    "staged_counts", "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+  ],
+};
+
+/** note: The v3 inventory: the v2 generation plus the outbox tables, before the move ledger widened `relations`. */
+const COLLABORATION_V3_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V2_COLUMNS,
   ...COLLABORATION_OUTBOX_COLUMNS,
+};
+
+/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
+export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  ...COLLABORATION_V3_COLUMNS,
+  ...COLLABORATION_MOVE_COLUMNS,
 };
 
 /**
@@ -903,14 +1072,70 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
   ...COLLABORATION_KEY_LAYOUT_OUTBOX,
 ];
 
+/**
+ * note: The v4 keys. `relations.to_issue` is nullable now, so the exactly-one CHECK and the partial
+ * unique index on `to_ref` are what keep a cross-authority row a single, addressable relation; the
+ * blocking-phase index is the fence's own uniqueness.
+ */
+const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
+  {
+    table: "relations",
+    notNull: ["from_issue", "relation"],
+    primaryKey: ["from_issue", "relation", "to_issue"],
+    foreignKeys: [
+      [["from_issue", "issues", "id"]],
+      [["to_issue", "issues", "id"]],
+    ],
+    uniqueIndexes: [
+      { columns: ["from_issue", "relation", "to_ref"], where: "where to_ref is not null" },
+    ],
+    checks: ["check ((to_issue is null) <> (to_ref is null))"],
+  },
+  {
+    table: "issue_moves",
+    notNull: [
+      "operation_id", "role", "request_hash", "issue_ref", "source_authority", "destination_authority",
+      "destination_project", "actor", "reason", "phase", "payload_json", "payload_digest", "staged_counts",
+      "source_store_id", "source_epoch", "removed_sync_rows", "created_at", "updated_at",
+    ],
+    primaryKey: ["operation_id"],
+    foreignKeys: [],
+    uniqueIndexes: [
+      {
+        columns: ["issue_ref"],
+        where: "where role = 'source' and phase in ('staged','verified','switched')",
+      },
+    ],
+    checks: [
+      "check (role in ('source','destination'))",
+      "check (phase in ('staged','verified','switched','published','discarded'))",
+    ],
+  },
+];
+
+const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
+  ...COLLABORATION_KEY_LAYOUT,
+  ...COLLABORATION_KEY_LAYOUT_MOVE,
+];
+
+/** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
+const COLLABORATION_MOVE_TABLES: readonly string[] = ["issue_moves"];
+
+const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+  (table) => !COLLABORATION_MOVE_TABLES.includes(table),
+);
+
 /** note: The v2 inventory an explicit upgrade from v2 proves before the outbox DDL runs. */
-const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_V3_TABLES.filter(
   (table) => !COLLABORATION_OUTBOX_TABLES.includes(table),
 );
 
 /** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
 const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
-  (table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table),
+  (table) =>
+    !COLLABORATION_REMOTE_TABLES.includes(table) &&
+    !COLLABORATION_OUTBOX_TABLES.includes(table) &&
+    !COLLABORATION_MOVE_TABLES.includes(table),
 );
 
 /**
@@ -1272,13 +1497,24 @@ function assertAdmittedTarget(dbPath: string): void {
  */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
-  assertKeyLayout(db, dbPath);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
 /** note: The exact v2 shape an upgrade from v2 proves before the v3 delta: a partial v3 refuses. */
 function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V2_TABLES, COLLABORATION_V2_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
+}
+
+/**
+ * invariant: The exact v3 shape - the whole v3 inventory INCLUDING the outbox tables' columns - proven
+ * before the v4 move DDL and by the settlement admission that serves a v3 cache's outbox. A lane that
+ * kept its v3 ledger row but lost or added an outbox column is refused instead of upgraded, because
+ * the verbs that settle an intent are exactly the ones that read those columns.
+ */
+function assertOutboxSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V3_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
 }
 
 /** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
@@ -1528,16 +1764,26 @@ function admit(
   location: CollaborationLocation,
   expected: CollaborationStamp | undefined,
   requirement: "active" | "any",
+  options: RemoteCacheAdmission = {},
 ): CollaborationAuthority {
   try {
     // note: The ledger's version verdict comes FIRST: a store written by a newer
     // build is an upgrade requirement, not a damaged current schema, even when
     // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
-    if (schemaVersion < COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version) {
-      throw upgradeRequired(location, schemaVersion);
-    }
-    assertCurrentSchema(db, location.dbPath);
+    const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
+    // invariant: A v4 lane is never opened for ordinary work while an older generation is
+    // present. The ONE exception is the outbox generation on a remote cache: its pending intents
+    // are the operator's only evidence of a send that may have landed, so the verbs that settle
+    // them are admitted on exactly that shape - and on nothing else - while a replacement stays
+    // refused until the outbox is settled.
+    const settlesOutbox =
+      options.settleOutbox === true &&
+      location.mode === "remote" &&
+      schemaVersion === COLLABORATION_OUTBOX_SCHEMA.version;
+    if (schemaVersion < current && !settlesOutbox) throw upgradeRequired(location, schemaVersion);
+    if (settlesOutbox) assertOutboxSchema(db, location.dbPath);
+    else assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
       throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
@@ -1704,6 +1950,7 @@ async function openAdmission(
   requirement: "active" | "any",
   expected: CollaborationStamp | undefined,
   timeout: number,
+  options: RemoteCacheAdmission = {},
 ): Promise<CollaborationStoreHandle> {
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
@@ -1712,7 +1959,7 @@ async function openAdmission(
   // and creates no sidecar.
   const db = await connectAt(dbPath, "read", timeout);
   try {
-    return handleFor(db, admit(db, location, expected, requirement));
+    return handleFor(db, admit(db, location, expected, requirement, options));
   } catch (error) {
     db.close();
     throw error;
@@ -1763,13 +2010,149 @@ async function continueExisting(location: CollaborationLocation, timeout: number
   return authority;
 }
 
+/** note: One outbox row's state and its `resolved_by` link, as the settlement walk needs them. */
+type OutboxSettlementLink = Readonly<{ state: string; resolvedBy: string | null }>;
+
+/**
+ * note: Whether one repair chain reaches a settled terminal. Only a CONFIRMED repair settles the
+ * fork it replaced: an `abandoned` repair is a withdrawn review, so the fork it withdrew from is
+ * still repairable and another resolution may follow - it settles nothing. The chain is walked
+ * because a repair may itself conflict and be repaired again, and it stops at the first row that is
+ * still live: an `enqueued` or `unconfirmed` repair is an outstanding send, so the fork it repairs
+ * is outstanding with it.
+ */
+function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, start: string): boolean {
+  const visited = new Set<string>();
+  let cursor: string | null = start;
+  while (cursor !== null && !visited.has(cursor)) {
+    visited.add(cursor);
+    const link = chain.get(cursor);
+    if (link === undefined) return false;
+    if (link.state === "confirmed") return true;
+    if (link.state !== "conflict") return false;
+    cursor = link.resolvedBy;
+  }
+  return false;
+}
+
+/**
+ * note: The intents whose provider outcome is still unknown. `enqueued` never left the process,
+ * `unconfirmed` may have landed, and a `conflict` keeps counting only while its own repair chain
+ * has reached no settlement: `outbox-resolve` records the repair as a SEPARATE intent and links it
+ * with `resolved_by`, so the original row stays `conflict` for as long as it exists and its raw
+ * state would otherwise make a repaired fork block its own replacement forever.
+ */
+function countUnsettledOutboxIntents(db: StoreDb, dbPath: string): number {
+  const rows = db.prepare("select operation_id, state, resolved_by from remote_outbox").all() as Array<{
+    operation_id?: unknown;
+    state?: unknown;
+    resolved_by?: unknown;
+  }>;
+  const chain = new Map<string, OutboxSettlementLink>();
+  for (const row of rows) {
+    if (typeof row.operation_id !== "string" || typeof row.state !== "string") {
+      throw unreadable(dbPath, "its remote_outbox intent ledger cannot be read");
+    }
+    chain.set(row.operation_id, {
+      state: row.state,
+      resolvedBy: typeof row.resolved_by === "string" ? row.resolved_by : null,
+    });
+  }
+  let unsettled = 0;
+  for (const link of chain.values()) {
+    if (link.state === "enqueued" || link.state === "unconfirmed") unsettled += 1;
+    else if (link.state === "conflict" && (link.resolvedBy === null || !settlementReached(chain, link.resolvedBy))) {
+      unsettled += 1;
+    }
+  }
+  return unsettled;
+}
+
+/** note: One carried row, column by column, in the order its insert binds them. */
+type CarriedRow = ReadonlyArray<string | number | null>;
+
+/** note: The settled outbox ledger one replacement carries into its successor. */
+type CarriedOutboxLedger = Readonly<{
+  bindings: readonly CarriedRow[];
+  intents: readonly CarriedRow[];
+  receipts: readonly CarriedRow[];
+}>;
+
+/** note: The declared column order of each carried row, so a row is read positionally and unambiguously. */
+const CARRIED_BINDING_COLUMNS =
+  "generation, project_key, selector_commit, provider, workspace_id, team_id, provider_project_id, " +
+  "journal_issue_id, writer_id, verified_at, verification_json";
+const CARRIED_INTENT_COLUMNS =
+  "operation_id, generation, project_key, request_hash, request_json, execution_key_json, state, attempt_id, " +
+  "created_at, updated_at, abandon_reason, resolves, resolved_by";
+const CARRIED_RECEIPT_COLUMNS = "operation_id, receipt_hash, source, outcome, evidence_json, recorded_at";
+
+/**
+ * invariant: A replacement keeps the SETTLED outbox ledger. A confirmed intent's receipt is what a
+ * prepared execution composite reads to finalize without repeating the provider effect, and an
+ * abandoned row is the durable record that no effect will land; both outlive the cache generation
+ * that froze them. Every row still in the predecessor is settled (an unsettled one refused this
+ * replacement before any byte moved), so the successor carries the whole ledger - intents, their
+ * append-only receipts, and the bindings those rows name as their foreign key.
+ *
+ * The rows are read through the ordinary refusing read connection rather than an ATTACH, so a WAL
+ * predecessor's journal is never touched by the successor's build. Reads are ordered by primary key
+ * so the carried ledger is reproducible.
+ */
+async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise<CarriedOutboxLedger> {
+  const db = await connectAt(dbPath, "read", timeout);
+  try {
+    const tables = tableNamesOn(db);
+    if (!tables.has("remote_outbox")) return { bindings: [], intents: [], receipts: [] };
+    const rows = (sql: string): CarriedRow[] =>
+      (db.prepare(sql).all() as Array<Record<string, string | number | null>>).map((row) => Object.values(row));
+    return {
+      bindings: rows(
+        `select ${CARRIED_BINDING_COLUMNS} from remote_bindings b where exists ` +
+          `(select 1 from remote_outbox o where o.generation = b.generation and o.project_key = b.project_key) ` +
+          `order by generation, project_key`,
+      ),
+      intents: rows(`select ${CARRIED_INTENT_COLUMNS} from remote_outbox order by operation_id`),
+      receipts: tables.has("remote_outbox_receipts")
+        ? rows(`select ${CARRIED_RECEIPT_COLUMNS} from remote_outbox_receipts order by operation_id, receipt_hash`)
+        : [],
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** note: Write one carried outbox ledger into the successor's own (fresh) tables, at commit. */
+function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
+  if (carried.intents.length === 0) return;
+  // why: the intents cite each other through `resolves`/`resolved_by` in either order, so their
+  // foreign keys are proven once the whole carried ledger is in place, at commit.
+  db.exec("pragma defer_foreign_keys = ON");
+  const copy = (sql: string, rows: readonly CarriedRow[]): void => {
+    const insert = db.prepare(sql);
+    for (const row of rows) insert.run(...row);
+  };
+  copy(
+    "insert into remote_bindings(" + CARRIED_BINDING_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    carried.bindings,
+  );
+  copy(
+    "insert into remote_outbox(" + CARRIED_INTENT_COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    carried.intents,
+  );
+  copy(
+    "insert into remote_outbox_receipts(" + CARRIED_RECEIPT_COLUMNS + ") values (?, ?, ?, ?, ?, ?)",
+    carried.receipts,
+  );
+}
+
 /**
  * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
  * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
  * singleton naming this repository and mode (and, when this checkout records one, exactly the
- * store identity that record names), and (by being below the outbox schema) no outbox work.
- * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
- * reads: the canonical name is released after the successor is staged, never before.
+ * store identity that record names), and no unsettled outbox work. Anything unreadable, foreign,
+ * newer or another generation's is never touched. This probe only reads: the canonical name is
+ * released after the successor is staged, never before.
  */
 async function replaceDerivedLaneBelow(
   location: CollaborationLocation,
@@ -1779,9 +2162,18 @@ async function replaceDerivedLaneBelow(
 ): Promise<RetainedLaneIdentity | undefined> {
   const dbPath = location.dbPath;
   const db = await connectAt(dbPath, "read", timeout);
-  let recorded: { version: number; meta: CollaborationMeta };
+  let recorded: { version: number; meta: CollaborationMeta; unsettled: number };
   try {
-    recorded = { version: validateCollaborationMigrations(readAppliedMigrations(db, false)), meta: readMeta(db) };
+    const version = validateCollaborationMigrations(readAppliedMigrations(db, false));
+    const meta = readMeta(db);
+    // invariant: A cache below the outbox schema has no outbox at all; one at or above it may
+    // hold intents whose provider outcome is still unknown, and those are the operator's only
+    // record of a send that may have landed.
+    const unsettled =
+      version < COLLABORATION_OUTBOX_SCHEMA.version || !tableNamesOn(db).has("remote_outbox")
+        ? 0
+        : countUnsettledOutboxIntents(db, dbPath);
+    recorded = { version, meta, unsettled };
   } finally {
     db.close();
   }
@@ -1799,6 +2191,21 @@ async function replaceDerivedLaneBelow(
       dbPath,
       recorded.meta,
       `this checkout's recorded cache store ${expected.storeId} epoch ${String(expected.epoch)}`,
+    );
+  }
+  if (recorded.unsettled > 0) {
+    throw new StoreError(
+      "remote.effect-pending",
+      `The remote cache at ${dbPath} holds ${String(recorded.unsettled)} outbox intent(s) whose provider outcome is still ` +
+        `unknown (enqueued, unconfirmed or conflict), so replacing it would destroy the only evidence of a send that may ` +
+        `have landed. Settle them first with ` +
+        `\`mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid>\`, ` +
+        `\`mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->\`, ` +
+        `\`mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->\`, ` +
+        `\`mstar store collaboration remote outbox-resolve --harness <abs> --input <file|->\` or ` +
+        `\`mstar store collaboration remote outbox-abandon --harness <abs> --operation <uuid>\`, then retry the same bind. ` +
+        `Nothing was replaced.`,
+      { unsettledIntents: recorded.unsettled },
     );
   }
   return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
@@ -1824,6 +2231,30 @@ export function setRemoteCacheReplacementPublishGapForTest(
   callback: (() => void | Promise<void>) | undefined,
 ): void {
   remoteCacheReplacementPublishGapForTest = callback;
+}
+
+/**
+ * note: The predecessor-ledger seam: a real settlement write commits on the predecessor between
+ * the carried snapshot and the guard's write lock, so a regression shows whether the re-read
+ * comparison refuses the replacement instead of publishing a successor that omits that evidence.
+ */
+let remoteCacheReplacementLedgerGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementLedgerGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementLedgerGapForTest = callback;
+}
+
+/**
+ * note: The commit seam: runs INSIDE the replacement's exclusive writer scope, after the ledger
+ * comparison passed and before the rename, so a regression shows whether a settlement write that
+ * arrives there is excluded from the window instead of being lost by it.
+ */
+let remoteCacheReplacementCommitGapForTest: (() => void | Promise<void>) | undefined;
+export function setRemoteCacheReplacementCommitGapForTest(
+  callback: (() => void | Promise<void>) | undefined,
+): void {
+  remoteCacheReplacementCommitGapForTest = callback;
 }
 
 /**
@@ -1902,13 +2333,23 @@ export async function initializeRemoteCacheStore(
   expected?: RetainedLaneIdentity,
 ): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
-  // note: `remote` has existed only since v2, so every pre-current remote cache is below the outbox
-  // schema and holds no outbox work: any of them is replaced, never migrated in place. The floor is
-  // the outbox schema itself, never a later migration, so a cache that HAS an outbox is never replaced.
+  // invariant: A cache is DERIVED observation state, so any generation below this build is
+  // REPLACED by the reviewed bind instead of being refused by it - the floor is the current
+  // version, never an intermediate one. The one thing a replacement may not destroy is unsettled
+  // outbox work, which `replaceDerivedLane` probes and refuses by route before it moves any bytes.
   return createOrContinueStore(location, {
-    replaceBelowVersion: COLLABORATION_OUTBOX_SCHEMA.version,
+    replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
     expectedIdentity: expected,
   });
+}
+
+/** note: The inode the canonical name holds, or `null` when the path holds nothing examinable. */
+function laneInodeOf(dbPath: string): number | null {
+  try {
+    return statSync(dbPath).ino;
+  } catch {
+    return null;
+  }
 }
 
 /** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
@@ -1920,12 +2361,17 @@ type StagedStore = Readonly<{ stagingDir: string; stagingPath: string; authority
 /**
  * invariant: Build the complete successor in a private staging directory before it can be named:
  * every supported migration applied in order, the retained (or a fresh) identity recorded, the
- * bytes admitted as this build's own complete store, and the journal folded into one database file.
+ * settled predecessor ledger carried, the bytes admitted as this build's own complete store, and
+ * the journal folded into one database file.
+ *
+ * `carried` is the predecessor's settled outbox ledger, read before the build; writing it here
+ * keeps the copy in the SAME transaction that creates the tables it lands in.
  */
 async function stageCompleteStore(
   location: CollaborationLocation,
   retained: RetainedLaneIdentity | undefined,
   timeout: number,
+  carried: CarriedOutboxLedger = { bindings: [], intents: [], receipts: [] },
 ): Promise<StagedStore> {
   const dbPath = location.dbPath;
   const dir = dirname(dbPath);
@@ -1973,6 +2419,7 @@ async function stageCompleteStore(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
           "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', ?, 0, 0, ?)",
       ).run(location.repoKey, location.mode, retained?.storeId ?? randomUUID(), retained?.epoch ?? 1, at);
+      if (carried.intents.length > 0) carrySettledOutbox(db, carried);
       db.exec("commit");
     } catch (error) {
       try {
@@ -2057,7 +2504,15 @@ async function replaceDerivedLane(
   const dbPath = location.dbPath;
   const retained = await replaceDerivedLaneBelow(location, below, timeout, expected);
   if (retained === undefined) return continueExisting(location, timeout);
-  const staged = await stageCompleteStore(location, retained, timeout);
+  // invariant: The successor carries the predecessor's settled outbox ledger. `replaceDerivedLaneBelow`
+  // proved above that no row is unsettled, so every carried row is an outcome (or an abandonment)
+  // whose evidence a prepared composite still reads; the re-probe below discards this staging if the
+  // bytes it was copied from advanced in the meantime.
+  const carried = await readSettledOutboxLedger(dbPath, timeout);
+  // note: The predecessor-ledger window: a settlement write that commits HERE is carried by no
+  // snapshot, so only the guard's re-read comparison can keep it from being dropped.
+  await remoteCacheReplacementLedgerGapForTest?.();
+  const staged = await stageCompleteStore(location, retained, timeout, carried);
   const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
   try {
     // note: Create-only, so a preserved image of other bytes is never overwritten.
@@ -2067,20 +2522,53 @@ async function replaceDerivedLane(
     throw unreadable(dbPath, `its derived cache could not be preserved before replacement (${publicationCause(error)})`);
   }
   try {
-    await remoteCacheReplacementPublishGapForTest?.();
-    // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
-    // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
-    // cache another process advanced while the successor was staged.
-    const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
-    if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
-      // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
-      discardStaging(staged.stagingDir, staged.stagingPath);
-      rmSync(preservedPath, { force: true });
-      return continueExisting(location, timeout);
+    // invariant: The final probe, the ledger comparison and the rename are ONE exclusive writer
+    // scope, shared with `withRemoteCacheWrite`: the predecessor's write lock is held from before
+    // the probe until the rename has run (the replacement lock is already held around this whole
+    // function). A settlement write committed before this attempt took the write lock is therefore
+    // VISIBLE to the comparison and refuses the replacement; one that begins afterwards is refused
+    // `store.busy` with nothing written; and one that opened the predecessor before this scope but
+    // begins afterwards is refused by its own commit-time inode proof. Without the scope, a receipt
+    // committed between the comparison and the rename was dropped by the staged successor.
+    const guard = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true });
+    try {
+      // invariant: The lock transaction writes nothing, so it creates no journal of its own and its
+      // release never rewrites the successor this scope renames into place.
+      guard.exec("begin immediate");
+      // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
+      // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
+      // cache another process advanced while the successor was staged.
+      const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
+      if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
+        // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
+        discardStaging(staged.stagingDir, staged.stagingPath);
+        rmSync(preservedPath, { force: true });
+        return continueExisting(location, timeout);
+      }
+      // invariant: The carried ledger is RE-READ inside the same scope. The unsettled probe above
+      // cannot see a settled row that appeared while the successor was staged (a fork repaired to
+      // confirmation), so an equal ledger is the only proof that the evidence about to be published
+      // is the evidence on disk. A changed ledger keeps the predecessor, exactly like a moved
+      // identity.
+      if (!isDeepStrictEqual(await readSettledOutboxLedger(dbPath, timeout), carried)) {
+        discardStaging(staged.stagingDir, staged.stagingPath);
+        rmSync(preservedPath, { force: true });
+        return continueExisting(location, timeout);
+      }
+      // note: The publication seam stays immediately before the one atomic rename.
+      await remoteCacheReplacementCommitGapForTest?.();
+      await remoteCacheReplacementPublishGapForTest?.();
+      // note: A stale sidecar would otherwise be picked up by the replacement's name.
+      for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+      renameSync(staged.stagingPath, dbPath);
+    } finally {
+      try {
+        guard.exec("rollback");
+      } catch {
+        // note: connection-level failure; closing the handle releases the lock either way
+      }
+      guard.close();
     }
-    // note: A stale sidecar would otherwise be picked up by the replacement's name.
-    for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
-    renameSync(staged.stagingPath, dbPath);
   } catch (error) {
     // note: The canonical name still holds the predecessor; the preserved duplicate is dropped.
     discardStaging(staged.stagingDir, staged.stagingPath);
@@ -2149,6 +2637,7 @@ export type CollaborationUpgradeReceipt = Readonly<{
 export function collaborationInventoryOf(version: number): Readonly<Record<string, readonly string[]>> {
   if (version <= 1) return COLLABORATION_COLUMNS;
   if (version < COLLABORATION_OUTBOX_SCHEMA.version) return COLLABORATION_V2_COLUMNS;
+  if (version < COLLABORATION_MOVE_SCHEMA.version) return COLLABORATION_V3_COLUMNS;
   return COLLABORATION_CURRENT_COLUMNS;
 }
 
@@ -2193,12 +2682,24 @@ export function applyCollaborationLadder(
   }
   // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
   // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
-  assertRemoteCacheSchema(db, dbPath);
-  db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+  if (appliedMax < COLLABORATION_OUTBOX_SCHEMA.version) {
+    assertRemoteCacheSchema(db, dbPath);
+    db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_OUTBOX_SCHEMA.version,
+      COLLABORATION_OUTBOX_SCHEMA.name,
+      migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The v3 shape is proven before the v4 rebuild: a move ledger or a widened
+  // `relations` under a v3 ledger row is a partial apply, refused instead of re-created.
+  assertOutboxSchema(db, dbPath);
+  db.exec(COLLABORATION_MOVE_SCHEMA.sql);
   db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-    COLLABORATION_OUTBOX_SCHEMA.version,
-    COLLABORATION_OUTBOX_SCHEMA.name,
-    migrationChecksum(COLLABORATION_OUTBOX_SCHEMA),
+    COLLABORATION_MOVE_SCHEMA.version,
+    COLLABORATION_MOVE_SCHEMA.name,
+    migrationChecksum(COLLABORATION_MOVE_SCHEMA),
     nowRfc3339(),
   );
   assertCurrentSchema(db, dbPath);
@@ -3043,6 +3544,28 @@ export async function readLocalPredecessorLane(location: CollaborationLocation):
   }
 }
 
+/**
+ * note: The mode one lane path RECORDS, or `null` when the path holds no readable lane. Deliberately
+ * narrow: a destination addressed by `repoKey` is only CLASSIFIED here, so a damaged or older lane is
+ * that lane's own refusal when some path actually opens it, never a verdict guessed by this reader.
+ */
+export async function readLaneMode(location: CollaborationLocation): Promise<CollaborationMode | null> {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(location.dbPath);
+  if (!existsSync(location.dbPath)) return null;
+  const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
+  try {
+    const row = db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined;
+    const mode = row?.mode;
+    return mode === "local" || mode === "mirror" || mode === "remote" ? mode : null;
+  } catch {
+    // note: An unreadable lane here is only unclassifiable; opening it is what reports the real cause.
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
 /** note: Where one retired predecessor's bytes are preserved: beside the lane, outside every read path. */
 export function localPredecessorRetiredPath(
   location: CollaborationLocation,
@@ -3211,6 +3734,16 @@ export async function retireLocalPredecessorLane(
  */
 export type RemoteCacheAdmission = Readonly<{
   previousDuringDraining?: boolean;
+  /**
+   * note: Admit the cache's own OUTBOX generation (v3) instead of refusing it as an upgrade
+   * requirement. The verbs that settle an already-frozen intent pass this — and so does the
+   * observation that refreshes the access check their dispatch re-proves: without it an expired check
+   * behind an unsettled v3 intent could never be refreshed, because the replacement that would upgrade
+   * the lane refuses while that intent is unsettled. Both write only `remote_bindings`,
+   * `remote_observations` and the outbox tables, which exist unchanged in that generation. Every other
+   * read and write stays refused.
+   */
+  settleOutbox?: boolean;
 }>;
 
 /**
@@ -3713,7 +4246,7 @@ async function withWriteLane<T>(
   // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    const admitted = admit(probe, location, expected, "active");
+    const admitted = admit(probe, location, expected, "active", admission);
     // note: The binding is proved on the same refusing read, before a writer exists.
     if (lane === "remote-cache") assertRemoteCacheIdentity(admitted, remoteBinding!);
     else await assertControlBinding(context, location, admitted, "write");
@@ -3721,6 +4254,13 @@ async function withWriteLane<T>(
     probe.close();
   }
 
+  // invariant: The bytes this writer commits must still be the bytes its path names. A lane
+  // replacement renames a successor over the canonical name, and a handle opened before that still
+  // addresses the PREDECESSOR inode: committing through it would write evidence into a file the
+  // published cache never carries. The inode is sampled BEFORE the open and re-proved under the
+  // write lock, immediately before commit, so any replacement in between refuses rather than loses
+  // the write.
+  const openedInode = lane === "remote-cache" ? laneInodeOf(dbPath) : null;
   // invariant: The writer never creates the database and never changes its journal mode:
   // a replacement that appears between the probe and here is refused without
   // being converted, and a vanished one cannot be recreated.
@@ -3733,7 +4273,7 @@ async function withWriteLane<T>(
   try {
     db.exec("begin immediate");
     try {
-      const authority = admit(db, location, expected, "active");
+      const authority = admit(db, location, expected, "active", admission);
       // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
       // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
@@ -3768,6 +4308,17 @@ async function withWriteLane<T>(
       // generation while this writer waited refuses, and the effect rolls back.
       assertSelectionUnchanged(context, location);
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
+      // invariant: The canonical name still holds the inode this transaction wrote; a cache
+      // replacement that renamed a successor over it while this writer waited refuses here instead
+      // of committing evidence into the replaced predecessor. The transaction rolls back and the
+      // caller retries against the published generation.
+      if (openedInode !== null && laneInodeOf(dbPath) !== openedInode) {
+        throw new StoreError(
+          "collaboration.stale-binding",
+          `The remote cache at ${dbPath} was replaced by another generation while this write held its transaction, so the ` +
+            `bytes it wrote are not the cache this checkout now serves. Re-read the lane and retry; nothing was committed.`,
+        );
+      }
       db.exec("commit");
       return result;
     } catch (error) {
@@ -3807,7 +4358,7 @@ export async function openRemoteCache(
       throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
     }
   }
-  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs());
+  const handle = await openAdmission(location, "active", undefined, busyTimeoutMs(), admission);
   try {
     assertRemoteCacheIdentity(handle.authority, binding);
   } catch (error) {

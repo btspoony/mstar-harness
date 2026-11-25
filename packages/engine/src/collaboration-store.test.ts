@@ -46,10 +46,13 @@ import {
   readCollaborationBinding,
   readRemoteCacheAuthority,
   setLocalPredecessorPublicationGapForTest,
+  setRemoteCacheReplacementCommitGapForTest,
   setRemoteCacheReplacementGapForTest,
+  setRemoteCacheReplacementLedgerGapForTest,
   setRemoteCacheReplacementPublishGapForTest,
   upgradeCollaborationStore,
   withCollaborationWrite,
+  withRemoteCacheWrite,
   writeCollaborationBinding,
   writeRemoteCacheStage,
   writeRemoteCollaborationBinding,
@@ -113,6 +116,7 @@ import type { WorkflowEntry } from "./status.js";
 import type { ResidualInput } from "./coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
+import { recordIssueMove } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
@@ -154,6 +158,7 @@ const COLLABORATION_TABLES = [
   "collaboration_operations",
   "cutover_publications",
   "issue_counter",
+  "issue_moves",
   "issue_project_moves",
   "issue_sync_state",
   "issue_transitions",
@@ -373,7 +378,7 @@ describe("collaboration store", () => {
       repoKey: "github.com/acme/staged",
       mode: "local",
       state: "staged",
-      schemaVersion: 3,
+      schemaVersion: 4,
       epoch: 1,
       revision: 0,
       catalogRevision: 0,
@@ -396,6 +401,7 @@ describe("collaboration store", () => {
       { version: 1, name: "collaboration-core" },
       { version: 2, name: "collaboration-remote-cache" },
       { version: 3, name: "collaboration-remote-outbox" },
+      { version: 4, name: "collaboration-cross-authority" },
     ]);
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
@@ -504,7 +510,7 @@ describe("collaboration store", () => {
     const writer = new DatabaseSync(location.dbPath);
     try {
       writer
-        .prepare("insert into schema_version(version, name, checksum, applied_at) values (4, 'future', 'x', ?)")
+        .prepare("insert into schema_version(version, name, checksum, applied_at) values (5, 'future', 'x', ?)")
         .run("2026-11-21T00:00:00.000Z");
       // invariant: A newer layout no longer matches this build's inventory; the verdict is
       // still the upgrade requirement, never "damaged store".
@@ -514,7 +520,7 @@ describe("collaboration store", () => {
     }
     const expected = {
       code: "store.schema-unsupported",
-      details: { storeSchemaVersion: 4, supportedSchemaMax: 3, firstUnsupportedMigration: 4 },
+      details: { storeSchemaVersion: 5, supportedSchemaMax: 4, firstUnsupportedMigration: 5 },
     };
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject(expected);
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject(expected);
@@ -1535,12 +1541,12 @@ describe("collaboration remote schema ladder", () => {
     expect(receipt).toMatchObject({
       version: 1,
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: 4,
       storeId: "v1-store",
       epoch: 1,
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
 
     const refs = issueRefs(location.dbPath);
     expect(refs.map((row) => row.id)).toEqual(["I-000001", "I-000002"]);
@@ -1559,10 +1565,10 @@ describe("collaboration remote schema ladder", () => {
 
     // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
     const replay = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(replay).toMatchObject({ fromVersion: 3, toVersion: 3, issuesBackfilled: 0 });
+    expect(replay).toMatchObject({ fromVersion: 4, toVersion: 4, issuesBackfilled: 0 });
     expect(issueRefs(location.dbPath)).toEqual(refs);
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(4);
   });
 
   test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
@@ -1625,7 +1631,7 @@ describe("collaboration remote schema ladder", () => {
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
   });
 
   test("a current lane whose recorded migration name or checksum is unknown refuses admission and replay", async () => {
@@ -1696,11 +1702,11 @@ describe("collaboration remote schema ladder", () => {
     activate(stale.dbPath);
     expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
       fromVersion: 1,
-      toVersion: 3,
+      toVersion: 4,
       storeId: "v1-store",
       issuesBackfilled: 2,
     });
-    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3]);
+    expect(ledgerVersions(stale.dbPath)).toEqual([1, 2, 3, 4]);
   });
 
   test("an unbound checkout adopts an intact v1 lane, then upgrades it", async () => {
@@ -1751,8 +1757,8 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
 
     const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 3, storeId: "v1-store", issuesBackfilled: 2 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(upgraded).toMatchObject({ fromVersion: 1, toVersion: 4, storeId: "v1-store", issuesBackfilled: 2 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
     expect(issueCount(location.dbPath)).toBe(2);
   });
 
@@ -1767,12 +1773,12 @@ describe("collaboration remote schema ladder", () => {
     await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
 
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
-    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 3, storeId: "v1-store", issuesBackfilled: 0 });
-    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(receipt).toMatchObject({ fromVersion: 2, toVersion: 4, storeId: "v1-store", issuesBackfilled: 0 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3, 4]);
     expect(tableNames(location.dbPath)).toEqual(COLLABORATION_TABLES);
     // invariant: The upgraded lane admits as current only when the outbox keys, state
     // vocabulary and composite binding key match the declared v3 layout.
-    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(3);
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(4);
 
     // note: Half of the v3 delta (one outbox table without its ledger row) is a partial apply.
     const partialRepo = makeRepo("https://github.com/v3-upgrade/partial-v3.git");
@@ -1784,6 +1790,77 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(partial.dbPath)).toEqual([1, 2]);
     expect(tableNames(partial.dbPath)).not.toContain("remote_outbox_receipts");
+  });
+
+  test("a v3 outbox whose nullable columns drifted refuses the upgrade and its settlement admission", async () => {
+    // note: `execution_key_json` is the ONE outbox column no key-layout check names (it is nullable
+    // and no index covers it), so this drift is admitted by the columns check alone. That is exactly
+    // the case `COLLABORATION_V3_COLUMNS` exists for: every settlement verb selects this column.
+    const drift = (db: DatabaseSync): void => {
+      db.exec("alter table remote_outbox drop column execution_key_json");
+    };
+
+    // note: A LOCAL v3 lane - the shape `store upgrade` advances - built from the released
+    // migration bodies, then drifted on its own outbox columns.
+    const repo = makeRepo("https://github.com/v4-upgrade/outbox-drift.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV2Lane(location);
+    const drifted = new DatabaseSync(location.dbPath);
+    try {
+      const v3 = COLLABORATION_MIGRATIONS[2]!;
+      drifted.exec(v3.sql);
+      drifted.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        v3.version,
+        v3.name,
+        migrationChecksum(v3),
+        "2026-11-21T00:00:00.000Z",
+      );
+      drift(drifted);
+    } finally {
+      drifted.close();
+    }
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    const ledgerBefore = ledgerRows(location.dbPath);
+    // invariant: The v4 DDL is applied over a proven v3 shape, so a drifted outbox refuses BEFORE
+    // the ladder and records no migration at all.
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(tableNames(location.dbPath)).not.toContain("issue_moves");
+
+    // invariant: The settlement admission proves the same columns before it serves the generation,
+    // so a drifted cache is a NAMED lane refusal instead of a raw "no such column" out of the
+    // first outbox query.
+    const cacheFixture = remoteFixture("remote-v3-drifted-outbox");
+    const commit = cacheFixture.publish(cacheFixture.payload());
+    const generation = Number(cacheFixture.payload().generation);
+    const cacheContext = contextAt(cacheFixture.repo);
+    const cacheLocation = locationAt(cacheFixture.repo);
+    writeV3RemoteLane(cacheLocation);
+    const cacheMeta = metaRecord(cacheLocation.dbPath);
+    writeRemoteCollaborationBinding(cacheContext, {
+      repoKey: cacheFixture.repoKey,
+      selectorCommit: commit,
+      generation,
+      storeId: cacheMeta.store_id,
+      epoch: cacheMeta.authority_epoch,
+    });
+    const cacheDrift = new DatabaseSync(cacheLocation.dbPath);
+    try {
+      drift(cacheDrift);
+    } finally {
+      cacheDrift.close();
+    }
+    const refused = await refusalOf(() =>
+      readRemoteIntent(cacheContext, "00000000-0000-4000-8000-0000000007f1"),
+    );
+    expect(refused.code).toBe("collaboration.unreadable");
+    expect(refused.message).toContain("collaboration store");
+    expect(refused.message).toContain("remote_outbox");
   });
 });
 
@@ -2230,7 +2307,7 @@ describe("remote observation cache", () => {
 
     // invariant: `store init` requires the populated remote binding and never creates a local
     // authority in its place.
-    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 3 });
+    expect(await ensureCollaborationAuthority(context)).toMatchObject({ mode: "remote", state: "active", schemaVersion: 4 });
 
     // invariant: A restored local image never reauthorizes the provider. The receipt and
     // attestation are placeholders: the route refuses before either is read.
@@ -4270,14 +4347,16 @@ function outboxRows(dbPath: string): Array<{
   attempt_id: string | null;
   execution_key_json: string | null;
   abandon_reason: string | null;
+  resolves: string | null;
+  resolved_by: string | null;
 }> {
   const db = new DatabaseSync(dbPath);
   try {
     return (
       db
         .prepare(
-          "select operation_id, request_hash, request_json, state, attempt_id, execution_key_json, abandon_reason " +
-            "from remote_outbox order by operation_id",
+          "select operation_id, request_hash, request_json, state, attempt_id, execution_key_json, abandon_reason, " +
+            "resolves, resolved_by from remote_outbox order by operation_id",
         )
         .all() as Array<Record<string, unknown>>
     ).map((row) => ({
@@ -4288,7 +4367,38 @@ function outboxRows(dbPath: string): Array<{
       attempt_id: typeof row.attempt_id === "string" ? row.attempt_id : null,
       execution_key_json: typeof row.execution_key_json === "string" ? row.execution_key_json : null,
       abandon_reason: typeof row.abandon_reason === "string" ? row.abandon_reason : null,
+      resolves: typeof row.resolves === "string" ? row.resolves : null,
+      resolved_by: typeof row.resolved_by === "string" ? row.resolved_by : null,
     }));
+  } finally {
+    db.close();
+  }
+}
+
+/** note: The recorded receipt rows exactly as the lane holds them; the append-only evidence behind a state. */
+function outboxReceipts(dbPath: string): Array<{
+  operation_id: string;
+  receipt_hash: string;
+  source: string;
+  outcome: string;
+  evidence_json: string;
+  recorded_at: string;
+}> {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return db
+      .prepare(
+        "select operation_id, receipt_hash, source, outcome, evidence_json, recorded_at from remote_outbox_receipts " +
+          "order by operation_id, receipt_hash",
+      )
+      .all() as Array<{
+      operation_id: string;
+      receipt_hash: string;
+      source: string;
+      outcome: string;
+      evidence_json: string;
+      recorded_at: string;
+    }>;
   } finally {
     db.close();
   }
@@ -9133,6 +9243,195 @@ describe("remote outbox qc fixes", () => {
 // note: A pre-v3 remote cache is derived observation state: the reviewed bind replaces it
 // ---------------------------------------------------------------------------
 
+/**
+ * note: A real v3 lane in its recorded mode: the v1 body, the v2 delta, the v3 outbox and their
+ * three ledger rows. The mode stays whatever the caller's `.mstarc` selected.
+ */
+function writeV3Lane(location: CollaborationLocation): void {
+  writeV2Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    const v3 = COLLABORATION_MIGRATIONS[2]!;
+    db.exec(v3.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v3.version,
+      v3.name,
+      migrationChecksum(v3),
+      "2026-11-21T00:00:00.000Z",
+    );
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+/**
+ * note: A real v3 REMOTE cache: the same v3 lane with `remote` recorded in its own metadata. This
+ * is the generation the replacement floor now has to cover.
+ */
+function writeV3RemoteLane(location: CollaborationLocation): void {
+  writeV3Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    db.prepare("update collaboration_meta set mode = 'remote' where id = 1").run();
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
+/**
+ * note: Rewrite the live cache back to its v3 generation while keeping its whole outbox ledger and
+ * binding rows. This is the shape the replacement floor must handle: a v3 cache whose settled
+ * evidence a prepared composite still needs.
+ */
+function downgradeToV3(location: CollaborationLocation): void {
+  const rows = outboxRows(location.dbPath).map((row) => ({ ...row }));
+  const receipts = outboxReceipts(location.dbPath).map((row) => ({ ...row }));
+  const meta = metaRecord(location.dbPath);
+  const db = new DatabaseSync(location.dbPath);
+  let binding: Record<string, string | number>;
+  try {
+    const row = db
+      .prepare(
+        "select generation, project_key, selector_commit, provider, workspace_id, team_id, provider_project_id, " +
+          "journal_issue_id, verified_at, verification_json from remote_bindings order by project_key limit 1",
+      )
+      .get() as Record<string, string | number> | undefined;
+    if (row === undefined) throw new Error("the fixture cache records no binding to preserve");
+    binding = row;
+  } finally {
+    db.close();
+  }
+  // note: A fresh generation is built, so the previous image and its sidecars go first.
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+  writeV3Lane(location);
+  const seeded = new DatabaseSync(location.dbPath);
+  try {
+    // note: The replacement proves the lane is this checkout's own generation, so the downgrade
+    // restores the very mode and store identity the checkout bound to.
+    seeded
+      .prepare(
+        "update collaboration_meta set mode = ?, store_id = ?, authority_epoch = ?, authority_state = 'active' where id = 1",
+      )
+      .run(meta.mode, meta.store_id, meta.authority_epoch);
+    seeded
+      .prepare(
+        "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+          "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        binding.generation,
+        binding.project_key,
+        binding.selector_commit,
+        binding.workspace_id,
+        binding.team_id,
+        binding.provider_project_id,
+        binding.journal_issue_id,
+        binding.verified_at,
+        binding.verification_json,
+      );
+    // note: A fork and its repair cite each other in either row order, so the fixture defers those
+    // foreign keys to the end of its own copy transaction, exactly as a real replacement does.
+    seeded.exec("begin immediate");
+    seeded.exec("pragma defer_foreign_keys = ON");
+    const insertIntent = seeded.prepare(
+      "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+        "state, attempt_id, created_at, updated_at, abandon_reason, resolves, resolved_by) " +
+        "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const row of rows) {
+      insertIntent.run(
+        row.operation_id,
+        binding.generation,
+        binding.project_key,
+        row.request_hash,
+        row.request_json,
+        row.execution_key_json,
+        row.state,
+        row.attempt_id,
+        "2026-11-21T00:00:00.000Z",
+        "2026-11-21T00:00:00.000Z",
+        row.abandon_reason,
+        row.resolves,
+        row.resolved_by,
+      );
+    }
+    const insertReceipt = seeded.prepare(
+      "insert into remote_outbox_receipts(operation_id, receipt_hash, source, outcome, evidence_json, recorded_at) " +
+        "values (?, ?, ?, ?, ?, ?)",
+    );
+    for (const row of receipts) {
+      insertReceipt.run(row.operation_id, row.receipt_hash, row.source, row.outcome, row.evidence_json, row.recorded_at);
+    }
+    seeded.exec("commit");
+  } finally {
+    seeded.close();
+  }
+}
+
+/**
+ * note: Confirm one seeded v3 outbox row in place: a receipt row plus the `confirmed` state, exactly
+ * the shape a real send leaves. Used where the lane was rewritten to v3 and its ids must stay.
+ */
+function confirmSeededIntent(
+  dbPath: string,
+  operationId: string,
+  evidence: Readonly<{
+    attemptId: string;
+    requestHash: string;
+    issueId: string;
+    recordId: string;
+    event: RemoteEvent;
+  }>,
+): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db
+      .prepare("select generation, project_key from remote_outbox where operation_id = ?")
+      .get(operationId) as { generation?: unknown; project_key?: unknown } | undefined;
+    if (typeof row?.generation !== "number" || typeof row.project_key !== "string") {
+      throw new Error(`the seeded outbox row ${operationId} is missing`);
+    }
+    const binding = db
+      .prepare("select selector_commit from remote_bindings where generation = ? and project_key = ?")
+      .get(row.generation, row.project_key) as { selector_commit?: unknown } | undefined;
+    if (typeof binding?.selector_commit !== "string") {
+      throw new Error(`the seeded lane records no binding for ${operationId}`);
+    }
+    db.prepare("update remote_outbox set state = 'confirmed', attempt_id = ? where operation_id = ?").run(
+      evidence.attemptId,
+      operationId,
+    );
+    db.prepare(
+      "insert into remote_outbox_receipts(operation_id, receipt_hash, source, outcome, evidence_json, recorded_at) " +
+        "values (?, ?, 'receipt', 'confirmed', ?, ?)",
+    ).run(
+      operationId,
+      "e".repeat(64),
+      JSON.stringify({
+        attemptId: evidence.attemptId,
+        generation: row.generation,
+        observedAt: new Date().toISOString(),
+        operationId,
+        outcome: {
+          kind: "confirmed",
+          identity: { ...providerScope(), issueId: evidence.issueId },
+          recordId: evidence.recordId,
+          event: evidence.event,
+        },
+        projectId: row.project_key,
+        requestHash: evidence.requestHash,
+        selectorCommit: binding.selector_commit,
+        source: "receipt",
+      }),
+      "2026-11-21T00:00:02.000Z",
+    );
+  } finally {
+    db.close();
+  }
+}
+
 /** note: A real pre-v3 REMOTE cache: `remote` exists only since v2, so this is the oldest remote shape. */
 function writeV2RemoteLane(location: CollaborationLocation): void {
   writeV2Lane(location);
@@ -9144,6 +9443,99 @@ function writeV2RemoteLane(location: CollaborationLocation): void {
   }
   chmodSync(location.dbPath, 0o600);
 }
+
+describe("remote move fence", () => {
+  /** note: One blocking source row in the remote cache, the fence every provider write must meet. */
+  async function stagedMoveRow(context: StoreContext, issueRef: string, operationId: string): Promise<void> {
+    await withRemoteCacheWrite(context, (handle) => {
+      recordIssueMove(handle.db, {
+        operationId,
+        role: "source",
+        requestHash: "request-hash",
+        issueRef,
+        sourceIssueId: null,
+        destinationIssueId: null,
+        sourceAuthority: "github.com/remote-fixture/elsewhere",
+        destinationAuthority: "github.com/local-fixture/destination",
+        destinationProject: "fixture-project",
+        actor: "project-manager",
+        reason: "fence fixture",
+        phase: "staged",
+        payloadJson: "{}",
+        payloadDigest: "digest",
+        stagedCounts: "{}",
+        sourceStoreId: "store-one",
+        sourceEpoch: 1,
+        removedSyncRows: 0,
+      });
+    });
+  }
+
+  test("a provider-id-addressed replacement meets the fence a reference-addressed one meets", async () => {
+    const cache = await outboxCache("fence-provider-id");
+    const actor = "project-manager";
+    await stagedMoveRow(cache.context, FORGED_ISSUE_REF, "fence-provider-id");
+    // invariant: The write below addresses the record by its PROVIDER id, so the replay identity carries
+    // no reference to compare. The fence resolves the reference from the OBSERVED subject instead, which
+    // is the only address both shapes share: a provider-id write cannot slip past it.
+    await expect(
+      appendOccurrence(
+        cache.context,
+        MSTAR_ISSUE,
+        {
+          sourceIdentity: "review:fixture",
+          rootCauseKey: "remote.observation",
+          acceptanceKey: "remote.observation.stored",
+          occurrenceKey: "occurrence-under-fence",
+          sourceKind: "review",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "A write addressed the frozen record by provider id.",
+          evidence: [],
+          discoveredAt: "2026-11-20T00:00:00.000Z",
+        },
+        { operationId: "00000000-0000-4000-8000-000000000901", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({
+      code: "issue.move-in-progress",
+      details: expect.objectContaining({ issue_ref: FORGED_ISSUE_REF, operation_id: "fence-provider-id", phase: "staged" }),
+    });
+    // invariant: Nothing was enqueued: the refusal is the fence, not a frozen intent that failed later.
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+
+  test("the fence is read inside the freeze transaction, not before it", async () => {
+    const cache = await outboxCache("fence-inside-freeze");
+    const actor = "project-manager";
+    // note: The move is staged in the seam between the write's observation and its freeze, exactly the
+    // window a fence checked outside the transaction cannot see.
+    let staged = false;
+    setRemoteWriteScopeGapForTest(async () => {
+      if (staged) return;
+      staged = true;
+      setRemoteWriteScopeGapForTest(undefined);
+      await stagedMoveRow(cache.context, FORGED_ISSUE_REF, "fence-race");
+    });
+    await expect(
+      appendOccurrence(
+        cache.context,
+        FORGED_ISSUE_REF,
+        {
+          sourceIdentity: "review:fixture",
+          rootCauseKey: "remote.observation",
+          acceptanceKey: "remote.observation.stored",
+          occurrenceKey: "occurrence-racing-fence",
+          sourceKind: "review",
+          location: "packages/engine/src/collaboration-store.test.ts",
+          observedBehavior: "A move was staged while this write was admitted.",
+          evidence: [],
+          discoveredAt: "2026-11-20T00:00:00.000Z",
+        },
+        { operationId: "00000000-0000-4000-8000-000000000902", actor, expectedRevision: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "issue.move-in-progress" });
+    expect(outboxRows(cache.dbPath)).toEqual([]);
+  }, 30_000);
+});
 
 describe("pre-v3 remote cache recovery", () => {
   // note: The predecessor ledger is this fixture's own input; the destination ledger is the WHOLE
@@ -9312,5 +9704,766 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "enqueued" }));
+  }, 30_000);
+
+  test("a v3 cache with no unsettled intent is replaced by the bind, and one with an unsettled intent is refused", async () => {
+    // note: The replacement floor covers the whole generation below this build, so a v3 cache - the
+    // outbox's own generation - is replaced instead of refusing the bind that is its only recovery.
+    const cleanFixture = remoteFixture("remote-v3-clean");
+    const cleanCommit = cleanFixture.publish(cleanFixture.payload());
+    const cleanGeneration = Number(cleanFixture.payload().generation);
+    const cleanContext = contextAt(cleanFixture.repo);
+    const cleanLocation = locationAt(cleanFixture.repo);
+    writeV3RemoteLane(cleanLocation);
+    const cleanRecorded = recordedGeneration(cleanLocation);
+    writeRemoteCollaborationBinding(cleanContext, {
+      repoKey: cleanFixture.repoKey,
+      selectorCommit: cleanCommit,
+      generation: cleanGeneration,
+      ...cleanRecorded,
+    });
+    expect(ledgerVersions(cleanLocation.dbPath)).toEqual([1, 2, 3]);
+
+    const replaced = await bindRemoteAuthority(cleanContext, {
+      version: 1,
+      selectorCommit: cleanCommit,
+      generation: cleanGeneration,
+      checks: [positiveCheck()],
+    });
+    expect(replaced).toMatchObject({ generation: cleanGeneration, binding: { mode: "remote", ...cleanRecorded } });
+    expect(ledgerVersions(cleanLocation.dbPath)).toEqual(REGISTRY_VERSIONS);
+
+    // invariant: A cache whose provider outcome is still unknown is the operator's only evidence of
+    // a send that may have landed, so it is refused by name and left exactly in place.
+    const frozenFixture = remoteFixture("remote-v3-frozen");
+    const frozenCommit = frozenFixture.publish(frozenFixture.payload());
+    const frozenGeneration = Number(frozenFixture.payload().generation);
+    const frozenContext = contextAt(frozenFixture.repo);
+    const frozenLocation = locationAt(frozenFixture.repo);
+    writeV3RemoteLane(frozenLocation);
+    const frozenRecorded = recordedGeneration(frozenLocation);
+    writeRemoteCollaborationBinding(frozenContext, {
+      repoKey: frozenFixture.repoKey,
+      selectorCommit: frozenCommit,
+      generation: frozenGeneration,
+      ...frozenRecorded,
+    });
+    const unsettledId = "00000000-0000-4000-8000-0000000007d1";
+    const seeded = new DatabaseSync(frozenLocation.dbPath);
+    try {
+      seeded
+        .prepare(
+          "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+            "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', ?, ?, ?, ?, ?, '{}')",
+        )
+        .run(
+          frozenGeneration,
+          SELECTED_PROJECT.localProjectId,
+          frozenCommit,
+          SELECTED_PROJECT.workspaceId,
+          SELECTED_PROJECT.teamId,
+          SELECTED_PROJECT.projectId,
+          SELECTED_PROJECT.journalIssueId,
+          new Date(Date.now() - 1_000).toISOString(),
+        );
+      seeded
+        .prepare(
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+            "created_at, updated_at) values (?, ?, ?, 'frozen-hash', '{}', 'unconfirmed', ?, ?)",
+        )
+        .run(
+          unsettledId,
+          frozenGeneration,
+          SELECTED_PROJECT.localProjectId,
+          "2026-11-21T00:00:00.000Z",
+          "2026-11-21T00:00:00.000Z",
+        );
+    } finally {
+      seeded.close();
+    }
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(frozenContext, {
+        version: 1,
+        selectorCommit: frozenCommit,
+        generation: frozenGeneration,
+        checks: [positiveCheck()],
+      }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain("outbox-dispatch");
+    expect(refused.message).toContain("outbox-receipt");
+    expect(outboxRows(frozenLocation.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "unconfirmed" }),
+    );
+    expect(ledgerVersions(frozenLocation.dbPath)).toEqual([1, 2, 3]);
+  }, 30_000);
+
+  test("a pending v3 intent is settled through the outbox verbs, then the bind replaces the cache", async () => {
+    // invariant: The refusal's own recovery must be REACHABLE. A v3 cache's pending intent is the
+    // operator's only evidence of a send that may have landed, so the outbox verbs admit exactly
+    // that generation: read it, record the pre-send refusal, abandon it, and only then bind.
+    const fixture = remoteFixture("remote-v3-settlement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    writeV3RemoteLane(location);
+    const recorded = recordedGeneration(location);
+    writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
+
+    const unsettledId = "00000000-0000-4000-8000-0000000007e1";
+    const attemptId = "00000000-0000-4000-8000-0000000007e2";
+    const requestHash = "9".repeat(64);
+    // note: A frozen project-journal request exactly as `prepareRemoteIntent` would have committed
+    // it under this binding, so every settlement verb's own re-validation of the row passes.
+    const requestJson = JSON.stringify(journalIntent(fixture, commit, unsettledId));
+    const seeded = new DatabaseSync(location.dbPath);
+    try {
+      seeded
+        .prepare(
+          "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
+            "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, ?, 'linear', ?, ?, ?, ?, ?, '{}')",
+        )
+        .run(
+          generation,
+          SELECTED_PROJECT.localProjectId,
+          commit,
+          SELECTED_PROJECT.workspaceId,
+          SELECTED_PROJECT.teamId,
+          SELECTED_PROJECT.projectId,
+          SELECTED_PROJECT.journalIssueId,
+          new Date(Date.now() - 1_000).toISOString(),
+        );
+      seeded
+        .prepare(
+          "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
+            "attempt_id, created_at, updated_at) values (?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?)",
+        )
+        .run(
+          unsettledId,
+          generation,
+          SELECTED_PROJECT.localProjectId,
+          requestHash,
+          requestJson,
+          attemptId,
+          "2026-11-21T00:00:00.000Z",
+          "2026-11-21T00:00:00.000Z",
+        );
+    } finally {
+      seeded.close();
+    }
+
+    // invariant: The bind still refuses an unknown provider effect, and the intent is untouched.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "unconfirmed" }),
+    );
+
+    // invariant: The route the refusal names is admitted on the SAME v3 bytes: inspection reads the
+    // row back through the settlement admission instead of the ordinary upgrade refusal.
+    const read = await readRemoteIntent(context, unsettledId);
+    expect(read).toMatchObject({ state: "unconfirmed", attemptId, requestHash, generation });
+
+    // invariant: The original host's own pre-send receipt is what proves nothing was sent; it is
+    // recorded on the v3 cache and does not itself settle the row. (The frozen content stays
+    // withheld because this seeded lane carries no verified access check, so the receipt is
+    // asserted on its stored row.)
+    const receipt = await recordRemoteReceipt(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId: unsettledId,
+      attemptId,
+      requestHash,
+      observedAt: new Date().toISOString(),
+      outcome: { kind: "not-sent", code: "pre-send" },
+    });
+    expect(receipt).toMatchObject({ state: "unconfirmed", disclosure: "metadata" });
+    expect(outboxReceipts(location.dbPath)).toEqual([
+      expect.objectContaining({ operation_id: unsettledId, source: "receipt", outcome: "not-sent" }),
+    ]);
+
+    // invariant: Only the explicit abandonment releases the cache; the reason is retained.
+    const abandoned = await abandonRemoteIntent(context, { operationId: unsettledId, reason: "pre-send refusal" });
+    expect(abandoned).toMatchObject({ state: "abandoned" });
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "abandoned", abandon_reason: "pre-send refusal" }),
+    );
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+
+    // invariant: With the outbox settled the same bind now completes, keeping the recorded
+    // generation, and the replacement is this build's complete current lane.
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(CURRENT_VERSION);
+
+    // invariant: The abandoned row, its reason and its pre-send receipt are CARRIED, not discarded
+    // with the predecessor: the abandonment is the durable record that its effect never lands.
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: unsettledId, state: "abandoned", abandon_reason: "pre-send refusal" }),
+    );
+    expect(outboxReceipts(location.dbPath)).toEqual([
+      expect.objectContaining({ operation_id: unsettledId, source: "receipt", outcome: "not-sent" }),
+    ]);
+  }, 30_000);
+
+  test("a settled outbox ledger with a prepared composite survives the replacement and finalizes without a second send", async () => {
+    // invariant: A confirmed intent is settled, so the bind replaces the cache - but the receipt it
+    // carries is exactly what the prepared execution composite reads to finalize. Dropping the
+    // ledger would leave the composite with no proof of the provider effect it already caused.
+    const fixture = remoteFixture("remote-v3-composite-carry");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A prepared composite reserves its intent in the execution store, freezes one provider
+    // intent under that same reservation, and confirms it - the state a crash before finalization
+    // leaves behind.
+    (await initializeStore(context)).close();
+    const state = await readExecutionState(context);
+    const key = { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-carry" };
+    const intent: CompositeIntent = {
+      key,
+      kind: "residual-add",
+      requestHash: "composite-carry-hash",
+      target: { repoKey: fixture.repoKey, mode: "remote", storeId: state.storeId, epoch: state.epoch },
+      scope: { workflowId: null, planId: null },
+      actor: "project-manager",
+      expectedExecution: state.token,
+      frozenPayload: JSON.stringify({ entries: 1 }),
+    };
+    await withExecutionTransaction(context, (tx) => reserveCompositeIntent(tx, intent, { revision: tx.execution.revision }));
+    const providerId = remoteCompositeOperationId(key);
+    const executionKey = { ...key, operationId: providerId };
+    const frozen = await prepareRemoteIntent(context, {
+      ...issueIntent(fixture, commit, providerId),
+      executionKey,
+    });
+    const attemptId = attemptOf(await dispatchRemoteIntent(context, providerId));
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, providerId, attemptId, frozen.requestHash, {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: MSTAR_ISSUE },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeef",
+        event: recordedEvent(location.dbPath, providerId),
+      }),
+      generation,
+    });
+
+    // note: Back to the v3 generation with that confirmed ledger in place, which is the shape a
+    // replacement must carry rather than discard.
+    downgradeToV3(location);
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: providerId, state: "confirmed", attempt_id: attemptId }),
+    );
+    const recorded = recordedGeneration(location);
+
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+
+    // invariant: The confirmed row AND its receipt survive the replacement, so the successor still
+    // proves the provider effect; losing either leaves the composite unable to finalize safely.
+    expect(outboxRows(location.dbPath)).toContainEqual(
+      expect.objectContaining({ operation_id: providerId, state: "confirmed", attempt_id: attemptId }),
+    );
+    expect(outboxReceipts(location.dbPath)).toEqual([
+      expect.objectContaining({ operation_id: providerId, outcome: "confirmed" }),
+    ]);
+    expect(await readRemoteIntent(context, providerId)).toMatchObject({ state: "confirmed", attemptId });
+
+    // invariant: Finalizing after the bind replays the SAME confirmed effect and never issues a
+    // second provider event: prepare finds the carried intent instead of freezing a new one.
+    const finalized = await runCollaborationComposite(context, intent, {
+      apply: () => {
+        throw new Error("a remote composite never writes the local collaboration lane");
+      },
+      finalize: (_tx: ExecutionTransaction, receipt: CollaborationEffectReceipt) => receipt.facts,
+      remote: async (scope: StoreContext) =>
+        prepareRemoteIntent(scope, { ...issueIntent(fixture, commit, providerId), executionKey }),
+    });
+    expect(finalized).toContain(providerId);
+    expect(await intentPhases(context, key.operationId)).toEqual(["confirmed"]);
+    // invariant: Still exactly one intent and one receipt: the effect was READ, never re-sent.
+    expect(outboxRows(location.dbPath)).toHaveLength(1);
+    expect(outboxReceipts(location.dbPath)).toHaveLength(1);
+  }, 30_000);
+
+  test("a repaired conflict clears the replacement gate only once its repair is settled", async () => {
+    // invariant: `outbox-resolve` records the repair as a SEPARATE intent linked by `resolved_by`
+    // and the original stays `conflict` for as long as it exists, so a raw-state count can never
+    // reach zero. Only the repair chain's settlement releases the cache - and not one step earlier.
+    const fixture = remoteFixture("remote-v3-repaired-conflict");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A real conflicted fork: prepared, dispatched, and settled with the competing heads.
+    const conflictedId = "00000000-0000-4000-8000-0000000007f1";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptOf(await dispatchRemoteIntent(context, conflictedId)), conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-0000000007f2";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+    const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
+
+    // note: The v3 generation carries both rows, and the repair is still only enqueued.
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "enqueued"],
+    ]);
+
+    // invariant: A live repair is an outstanding send, so the fork it repairs still holds the cache.
+    const pending = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(pending.code).toBe("remote.effect-pending");
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+
+    // invariant: Confirming the repair settles the fork; the bind now replaces the cache, and the
+    // settled chain is carried so the original row and its repair stay inspectable.
+    confirmSeededIntent(location.dbPath, repairId, {
+      attemptId: "00000000-0000-4000-8000-0000000007f3",
+      requestHash: repairHash,
+      issueId: JOURNAL_ANCHOR,
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5",
+      event: recordedEvent(location.dbPath, repairId),
+    });
+    const bound = await bindRemoteAuthority(context, {
+      version: 1,
+      selectorCommit: commit,
+      generation,
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "confirmed"],
+    ]);
+  }, 30_000);
+
+  test("a withdrawn repair leaves its fork unsettled, so the replacement still refuses", async () => {
+    // invariant: A repair is a REVIEWED RESOLUTION, not a settlement of its own: only a confirmed
+    // repair settles the fork it replaced. Withdrawing the repair (abandoning it) leaves the
+    // original conflict exactly as unsettled as before, and another resolution may still follow -
+    // so the replacement gate stays closed instead of publishing a v3 cache whose fork never merged.
+    const fixture = remoteFixture("remote-v3-withdrawn-repair");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A real conflicted fork with a reviewed repair prepared over it.
+    const conflictedId = "00000000-0000-4000-8000-000000000801";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptOf(await dispatchRemoteIntent(context, conflictedId)), conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000802";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+
+    // note: Back to the v3 generation, which is the shape the replacement floor covers.
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+
+    // invariant: The repair is withdrawn through the real outbox verb on those same bytes.
+    const withdrawn = await abandonRemoteIntent(context, { operationId: repairId, reason: "reviewed repair withdrawn" });
+    expect(withdrawn).toMatchObject({ state: "abandoned" });
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "abandoned"],
+    ]);
+
+    // invariant: No repair ever merged the fork, so the replacement is refused by route and the v3
+    // bytes - the only record of the fork and of the withdrawal - stay exactly in place.
+    const refused = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(refused.code).toBe("remote.effect-pending");
+    expect(refused.message).toContain("outbox-resolve");
+    expect(detailsOf(refused)).toMatchObject({ unsettledIntents: 1 });
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+  }, 30_000);
+
+  test("a settlement write inside the replacement window is refused, never dropped by the rename", async () => {
+    // invariant: The final probe, the ledger comparison and the rename are one exclusive writer
+    // scope shared with `withRemoteCacheWrite`. A cooperative settlement write that begins inside
+    // that window cannot commit behind the comparison, so the successor never omits evidence that
+    // reached the predecessor: either the write is refused and the carried ledger is complete, or it
+    // committed before the window and the replacement refuses instead. Losing a committed receipt is
+    // the failure this asserts against.
+    const fixture = remoteFixture("remote-v3-concurrent-settlement");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
+    // and the conflicted row still accepts appended evidence - exactly the case a receipt landing
+    // inside the replacement window could hide.
+    const conflictedId = "00000000-0000-4000-8000-000000000811";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000812";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+    const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+    confirmSeededIntent(location.dbPath, repairId, {
+      attemptId: "00000000-0000-4000-8000-000000000813",
+      requestHash: repairHash,
+      issueId: JOURNAL_ANCHOR,
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee7",
+      event: recordedEvent(location.dbPath, repairId),
+    });
+    expect(outboxReceipts(location.dbPath)).toHaveLength(2);
+
+    // note: A real settlement write arrives exactly between the comparison and the rename.
+    let settlement = "unknown";
+    setRemoteCacheReplacementCommitGapForTest(() => {
+      return recordRemoteReceipt(context, {
+        ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, { kind: "not-sent", code: "pre-send" }, {
+          generation,
+        }),
+      }).then(
+        () => {
+          settlement = "committed";
+        },
+        (error: unknown) => {
+          settlement =
+            error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+              ? error.code
+              : "failed";
+        },
+      );
+    });
+    let bound: Awaited<ReturnType<typeof bindRemoteAuthority>> | undefined;
+    try {
+      bound = await bindRemoteAuthority(context, {
+        version: 1,
+        selectorCommit: commit,
+        generation,
+        checks: [positiveCheck()],
+      });
+    } finally {
+      setRemoteCacheReplacementCommitGapForTest(undefined);
+    }
+
+    // invariant: The window excludes the settlement writer entirely: it is either refused by the
+    // held lane (`store.busy`) - and then nothing was lost, because it never committed - or it
+    // committed BEFORE the comparison, which then refuses the replacement instead. Neither branch
+    // may end with a committed receipt that the successor omits.
+    expect(settlement).toBe("store.busy");
+    const successorReceipts = outboxReceipts(location.dbPath);
+    expect(successorReceipts).toHaveLength(2);
+    expect(successorReceipts.some((row) => row.outcome === "not-sent")).toBe(false);
+    // invariant: The replacement completed over the complete ledger, keeping the recorded identity.
+    expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
+    expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
+    expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
+      [conflictedId, "conflict"],
+      [repairId, "confirmed"],
+    ]);
+  }, 30_000);
+
+  test("a receipt committed after the carried snapshot but before the guard lock refuses the replacement and survives", async () => {
+    // invariant: The settled-ledger snapshot is taken BEFORE the guard takes the write lock, so a
+    // receipt that commits in between reaches the predecessor and is carried by no snapshot. Only
+    // the guard's re-read comparison keeps it from being dropped: the replacement must refuse and
+    // leave the predecessor - with that receipt - named.
+    const fixture = remoteFixture("remote-v3-pre-window-receipt");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
+
+    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
+    // and the conflicted row still accepts appended evidence - the receipt that lands in the gap.
+    const conflictedId = "00000000-0000-4000-8000-000000000821";
+    const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
+    const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
+    const fork = journalFork(fixture);
+    await recordRemoteReceipt(context, {
+      ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, {
+        kind: "conflict",
+        expectedHeads: [OBSERVED_PROJECT_HEAD],
+        observedHeads: fork.heads,
+        observedRecords: fork.records,
+      }),
+      generation,
+    });
+    const repairId = "00000000-0000-4000-8000-000000000822";
+    await prepareRemoteResolution(context, conflictedId, {
+      operationId: repairId,
+      operator: "operator-one",
+      reason: "merge the fork",
+      event: journalEvent(fixture, repairId, fork.heads),
+    });
+    const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
+    downgradeToV3(location);
+    const recorded = recordedGeneration(location);
+    confirmSeededIntent(location.dbPath, repairId, {
+      attemptId: "00000000-0000-4000-8000-000000000823",
+      requestHash: repairHash,
+      issueId: JOURNAL_ANCHOR,
+      recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8",
+      event: recordedEvent(location.dbPath, repairId),
+    });
+    expect(outboxReceipts(location.dbPath)).toHaveLength(2);
+
+    // note: The real settlement write commits on the predecessor AFTER the carried snapshot was
+    // read and BEFORE the guard's write lock, so it can only be caught by the re-read comparison.
+    let settlement = "unknown";
+    setRemoteCacheReplacementLedgerGapForTest(() =>
+      recordRemoteReceipt(context, {
+        ...receiptInput(commit, conflictedId, attemptId, conflicted.requestHash, { kind: "not-sent", code: "pre-send" }, {
+          generation,
+        }),
+      }).then(
+        () => {
+          settlement = "committed";
+        },
+        (error: unknown) => {
+          settlement =
+            error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+              ? error.code
+              : "failed";
+        },
+      ),
+    );
+    let refused: { code: string; message: string; details?: unknown };
+    try {
+      refused = await refusalOf(() =>
+        bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+      );
+    } finally {
+      setRemoteCacheReplacementLedgerGapForTest(undefined);
+    }
+
+    // invariant: The receipt really committed on the predecessor, so the refusal is about the
+    // changed carried ledger rather than about a write that never landed.
+    expect(settlement).toBe("committed");
+    // invariant: The changed ledger refuses the replacement by route.
+    expect(refused.code).toBe("collaboration.upgrade-required");
+    // invariant: The predecessor is still named, keeps its v3 generation and identity, and still
+    // carries the receipt the successor would have dropped.
+    expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
+    expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
+    const survivorReceipts = outboxReceipts(location.dbPath);
+    expect(survivorReceipts).toHaveLength(3);
+    expect(survivorReceipts.filter((row) => row.outcome === "not-sent")).toHaveLength(1);
+  }, 30_000);
+
+  test("the settlement admission refuses a v3 local lane, a pre-v3 remote lane and an ordinary v3 remote read", async () => {
+    // invariant: The settlement admission serves exactly one shape - the remote checkout's own v3
+    // cache. Every other lane keeps its ordinary refusal, so a regression dropping either the mode
+    // or the version condition is caught here instead of widening what the outbox verbs touch.
+    const localRepo = makeRepo("https://github.com/v3-local/settlement.git");
+    const localContext = contextAt(localRepo);
+    const localLane = locationAt(localRepo);
+    writeV3Lane(localLane);
+    activate(localLane.dbPath);
+    // invariant: A LOCAL v3 lane refuses the settlement admission by MODE: the cache scope requires a
+    // remote checkout, so a settlement request never reads or migrates its ledger.
+    const localRows = outboxRows(localLane.dbPath);
+    const localLedger = ledgerRows(localLane.dbPath);
+    const localTables = tableNames(localLane.dbPath);
+    const local = await refusalOf(() => withRemoteCacheWrite(localContext, () => "unused", { settleOutbox: true }));
+    expect(local.code).toBe("collaboration.stale-binding");
+    expect(local.message).toContain("not remote");
+    expect(outboxRows(localLane.dbPath)).toEqual(localRows);
+    expect(ledgerRows(localLane.dbPath)).toEqual(localLedger);
+    expect(tableNames(localLane.dbPath)).toEqual(localTables);
+
+    // note: A pre-v3 remote lane has no outbox at all, so the settlement admission never applies.
+    const oldFixture = remoteFixture("remote-v2-settlement");
+    const oldCommit = oldFixture.publish(oldFixture.payload());
+    const oldGeneration = Number(oldFixture.payload().generation);
+    const oldContext = contextAt(oldFixture.repo);
+    const oldLane = locationAt(oldFixture.repo);
+    writeV2RemoteLane(oldLane);
+    writeRemoteCollaborationBinding(oldContext, {
+      repoKey: oldFixture.repoKey,
+      selectorCommit: oldCommit,
+      generation: oldGeneration,
+      ...recordedGeneration(oldLane),
+    });
+    const oldLedger = ledgerRows(oldLane.dbPath);
+    const oldTables = tableNames(oldLane.dbPath);
+    const older = await refusalOf(() => withRemoteCacheWrite(oldContext, () => "unused", { settleOutbox: true }));
+    expect(older.code).toBe("collaboration.upgrade-required");
+    expect(older.message).toContain("mstar store collaboration remote bind");
+    expect(ledgerRows(oldLane.dbPath)).toEqual(oldLedger);
+    expect(tableNames(oldLane.dbPath)).toEqual(oldTables);
+
+    // invariant: An ORDINARY read of the same v3 cache stays refused: settlement admits the outbox
+    // verbs alone, never every remote read.
+    const freshFixture = remoteFixture("remote-v3-ordinary-read");
+    const freshCommit = freshFixture.publish(freshFixture.payload());
+    const freshGeneration = Number(freshFixture.payload().generation);
+    const freshContext = contextAt(freshFixture.repo);
+    const freshLane = locationAt(freshFixture.repo);
+    writeV3RemoteLane(freshLane);
+    writeRemoteCollaborationBinding(freshContext, {
+      repoKey: freshFixture.repoKey,
+      selectorCommit: freshCommit,
+      generation: freshGeneration,
+      ...recordedGeneration(freshLane),
+    });
+    const freshLedger = ledgerRows(freshLane.dbPath);
+    const freshTables = tableNames(freshLane.dbPath);
+    const ordinary = await refusalOf(() => readRemoteCacheAuthority(freshContext));
+    expect(ordinary.code).toBe("collaboration.upgrade-required");
+    expect(ordinary.message).toContain("remote bind");
+    expect(ledgerRows(freshLane.dbPath)).toEqual(freshLedger);
+    expect(tableNames(freshLane.dbPath)).toEqual(freshTables);
+    // invariant: The settlement admission is the ONE exception on the same bytes: a request that
+    // asks to settle them is admitted, proving the ordinary refusal above is the mode/version
+    // boundary rather than an unreadable lane.
+    expect(
+      await withRemoteCacheWrite(freshContext, () => "admitted", { settleOutbox: true }),
+    ).toBe("admitted");
+    expect(ledgerRows(freshLane.dbPath)).toEqual(freshLedger);
+  }, 30_000);
+
+  test("an expired access check behind an unsettled v3 intent is refreshable on that generation", async () => {
+    // invariant: The replacement that upgrades a v3 cache refuses while one intent's provider outcome is
+    // unknown, and the settlement verbs re-prove a CURRENT access check. Refusing the observation that
+    // refreshes that check left the operator with no order at all: no refresh, so no settlement, so no
+    // replacement. The observation writes only tables v3 carries unchanged, so it is admitted there.
+    const fixture = remoteFixture("v3-repair-order");
+    const commit = fixture.publish(fixture.payload());
+    const generation = Number(fixture.payload().generation);
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
+    await ingestRemoteObservation(context, { ...observation(positiveCheck()), selectorCommit: commit, generation });
+    // note: The state an interrupted settlement leaves behind: the cache is a v3 generation again, its
+    // one intent has no known provider outcome, and the check a dispatch must re-prove has expired.
+    downgradeToV3(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
+      // note: the downgrade rewrites the cache to its v3 generation, so the observation row a refresh
+      // advances is re-seeded at the revision that generation left behind.
+      db.prepare(
+        "insert into remote_observations(generation, project_key, revision, as_of, completeness, code, snapshot_json, received_at) " +
+          "values (?, ?, 1, null, 'unavailable', null, null, '2026-11-21T00:00:00.000Z')",
+      ).run(generation, SELECTED_PROJECT.localProjectId);
+      db.prepare(
+        "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, execution_key_json, " +
+          "state, attempt_id, created_at, updated_at, abandon_reason, resolves, resolved_by) " +
+          "values (?, ?, ?, ?, ?, null, 'conflict', null, ?, ?, null, null, null)",
+      ).run(
+        "repair-conflict",
+        generation,
+        SELECTED_PROJECT.localProjectId,
+        "request-hash",
+        "{}",
+        "2026-11-21T00:00:00.000Z",
+        "2026-11-21T00:00:00.000Z",
+      );
+    } finally {
+      db.close();
+    }
+    const ledgerBefore = ledgerRows(location.dbPath);
+
+    // invariant: The replacement refuses those bytes, by route, while that intent is unsettled.
+    const blocked = await refusalOf(() =>
+      bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
+    );
+    expect(blocked.code).toBe("remote.effect-pending");
+    // invariant: The lane was not replaced by that attempt.
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
+
+    // invariant: The supported first step now exists: refreshing the check on this generation.
+    const refreshed = await ingestRemoteObservation(context, {
+      ...observation(positiveCheck(), { expectRevision: 1 }),
+      selectorCommit: commit,
+      generation,
+    });
+    expect(refreshed).toMatchObject({ projectId: SELECTED_PROJECT.localProjectId, revision: 2 });
+    const bound = new DatabaseSync(location.dbPath);
+    try {
+      const row = bound.prepare("select verified_at from remote_bindings").get() as { verified_at?: unknown };
+      expect(Date.now() - Date.parse(String(row.verified_at))).toBeLessThan(61_000);
+    } finally {
+      bound.close();
+    }
+    // invariant: The refresh wrote no schema: the lane is still the v3 generation whose ledger refuses
+    // the replacement until its intent is settled.
+    expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
   }, 30_000);
 });

@@ -200,6 +200,31 @@ describe("selectPushCandidates", () => {
       close();
     }
   });
+
+  test("a record a cross-authority move froze is not a candidate, a published row is not a freeze", async () => {
+    const { db, close } = await openedStore("candidates-frozen");
+    try {
+      addIssue(db, "I-000901");
+      addIssue(db, "I-000902");
+      // note: A source row in a blocking phase is the fence the record's writes meet; a push of
+      // it could never be reconciled, so the planner never sees it. A terminal row is history.
+      for (const [operationId, issueId, phase] of [
+        ["move-frozen", "I-000901", "switched"],
+        ["move-done", "I-000902", "published"],
+      ] as const) {
+        db.prepare(
+          "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+            "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+            "staged_counts, source_store_id, source_epoch, created_at, updated_at) " +
+            "values (?, 'source', 'hash', ?, ?, null, 'fixture/repo', 'github.com/acme/elsewhere', 'p-dest', " +
+            "'project-manager', 'moved', ?, '{}', 'digest', '{}', 'store-one', 1, 'now', 'now')",
+        ).run(operationId, fixtureIssueRef(issueId), issueId, phase);
+      }
+      expect(selectPushCandidates(db, BINDING).map((entry) => entry.localId)).toEqual(["I-000902"]);
+    } finally {
+      close();
+    }
+  });
 });
 
 describe("planItem builds the payload the caller writes", () => {

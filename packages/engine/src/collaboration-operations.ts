@@ -51,7 +51,29 @@ import {
 import { StoreError, nowRfc3339, type StoreContext, type StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, terminalReopenRoute } from "./issue.js";
 
-export type CompositeKind = "residual-add" | "residual-close" | "execution-register" | "execution-import";
+export type CompositeKind =
+  | "residual-add"
+  | "residual-close"
+  | "execution-register"
+  | "execution-import"
+  | "issue-move";
+
+/**
+ * note: The closed vocabulary in one place: `readIntent` refuses a kind outside it, and the
+ * execution store's CHECK carries the same list.
+ */
+const COMPOSITE_KINDS: ReadonlySet<string> = new Set<CompositeKind>([
+  "residual-add",
+  "residual-close",
+  "execution-register",
+  "execution-import",
+  "issue-move",
+]);
+
+function assertCompositeKind(value: string, what: string): CompositeKind {
+  if (!COMPOSITE_KINDS.has(value)) throw corrupt(`${what} is ${JSON.stringify(value)}`);
+  return value as CompositeKind;
+}
 
 /**
  * The local effect key: this execution authority generation plus the caller's
@@ -338,10 +360,7 @@ function readIntent(db: StoreDb, key: CompositeKey): StoredIntent | null {
   if (phase !== "prepared" && phase !== "declined" && phase !== "confirmed") {
     throw corrupt(`${what}.phase is ${JSON.stringify(phase)}`);
   }
-  const kind = text(row.kind, `${what}.kind`);
-  if (kind !== "residual-add" && kind !== "residual-close" && kind !== "execution-register" && kind !== "execution-import") {
-    throw corrupt(`${what}.kind is ${JSON.stringify(kind)}`);
-  }
+  const kind = assertCompositeKind(text(row.kind, `${what}.kind`), `${what}.kind`);
   if (typeof row.reserved_revision !== "number" || !Number.isSafeInteger(row.reserved_revision)) {
     throw corrupt(`${what}.reserved_revision is not a safe integer`);
   }
