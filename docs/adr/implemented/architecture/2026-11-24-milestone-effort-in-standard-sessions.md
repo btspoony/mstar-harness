@@ -12,7 +12,7 @@ The stored unit and the effort convention disagreed. `project_milestones.target`
 
 ## Decision
 
-A milestone's planned effort is a count of standard sessions. A standard session is one agent run that closes one task's Files and verification gates; it is a capacity unit and is never converted to minutes or hours. The column `project_milestones.effort_sessions` is null ("unestimated") or an integer of at least 1. The count compares milestones within one project; it does not promise a date.
+A milestone's planned effort is a count of standard sessions, the unit the effort convention defines once ([skills/mstar-conventions/references/effort-estimation.md](../../../../skills/mstar-conventions/references/effort-estimation.md), § 推荐写法：T 恤尺码 + agent 标准会话带); this record does not restate that definition. The column `project_milestones.effort_sessions` is null ("unestimated") or an integer of at least 1. The count compares milestones within one project; it does not promise a date.
 
 ## Alternatives considered
 
