@@ -44,6 +44,7 @@ import {
   evaluatePhaseGate,
   evaluatePostMergeCloseFromExecutionAuthority,
   parseCompassFrontmatter,
+  parseCompassFrontmatterText,
   pushCadenceProbe,
   readCatalogCompleteness,
   validateCompassFrontmatter,
@@ -487,3 +488,37 @@ function stopAttestation(stopped: string): ActivationAttestation {
     stoppedSessions: [{ sessionId: stopped, host: "omp", state: "stopped" }],
   };
 }
+
+describe("parseCompassFrontmatterText — delegation to the shared parser keeps the compass scalar contract", () => {
+  test("an unsupported indented scalar refuses with the file and the line", () => {
+    const content = ["---", "iteration_id: v1", "  trailing-indent: yes", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(/compass\.md.*trailing-indent/);
+  });
+
+  test("plans: [] and plans: [a, b] flow forms still parse", () => {
+    const empty = parseCompassFrontmatterText(["---", "plans: []", "---", ""].join("\n"), "compass.md");
+    expect(empty).toEqual({ plans: [] });
+    const flow = parseCompassFrontmatterText(["---", "plans: [a, b]", "---", ""].join("\n"), "compass.md");
+    expect(flow).toEqual({ plans: ["a", "b"] });
+  });
+
+  test("a multi-line plans: list still parses", () => {
+    const content = ["---", "plans:", "  - plan-a", "  - plan-b", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a", "plan-b"] });
+  });
+
+  test("compass scalars stay strings: true, numbers and null-like text never type", () => {
+    const content = ["---", "flag: true", "count: 42", "end_date: null", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ flag: "true", count: "42", end_date: "null" });
+  });
+
+  test("a bare scalar value stays null", () => {
+    const content = ["---", "target_branch:", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ target_branch: null });
+  });
+
+  test("a double-quoted scalar keeps its JSON-escape decode (roadmap export writes JSON.stringify)", () => {
+    const content = ["---", "note: \"a\\nb\\\"c\"", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ note: "a\nb\"c" });
+  });
+});
