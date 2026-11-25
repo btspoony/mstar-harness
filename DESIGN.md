@@ -555,6 +555,13 @@ confirm behind which the engine's own emptiness rule answers — a non-empty rem
 through one engine verb with the read's own store revision (contract C1/C2); no
 optimistic state survives a refusal.
 
+**The effort field draws a text input, not a number input.** The prototype's create form and
+the screen's create and edit controls all use `type="text"` with `inputMode="numeric"`: a
+`type="number"` input sanitises text that is not a number to an empty value, and that empty
+value would be sent as `null` — a typo silently clearing a stored estimate. The raw
+keystrokes reach the screen's own check instead, which refuses anything that is not a whole
+number with a visible, announced message; the range (at least 1) stays the engine's refusal.
+
 **One thing this screen has that the prototype cannot**: truncation. The prototype's
 milestone name is plain text in static HTML with nothing to ellipsis. Ours must fit
 arbitrary names, so the name ellipses on its own flex-item box rather than wrapping an

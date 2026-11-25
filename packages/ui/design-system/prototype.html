@@ -2072,10 +2072,12 @@ select.ctl { cursor: pointer; max-width: 180px; }
 
           <form class="ms-create" data-ms-milestone-create="">
             <label><span data-t="rm.wName">Milestone name</span><input type="text" placeholder="Milestone name"></label>
-            <label><span data-t="rm.wEffort">Sessions</span><input type="number" min="1" step="1" placeholder="12"></label>
+            <label><span data-t="rm.wEffort">Sessions</span><input type="text" inputmode="numeric" placeholder="12"></label>
             <!-- Creation is name + effort sessions: the engine's add verb has no status field and
-                 always inserts `planned`. Status changes are the edit control's. An empty value
-                 means unestimated (null). -->
+                 always inserts `planned`. Status changes are the edit control's. The effort field
+                 is a numeric-mode text input, never a number-typed one, which sanitises text that
+                 is not a number to an empty value and would pass a typo off as an unestimated row.
+                 An empty value means unestimated (null). -->
             <button class="btn" type="button" data-t="rm.wCreate">Create</button>
           </form>
 
