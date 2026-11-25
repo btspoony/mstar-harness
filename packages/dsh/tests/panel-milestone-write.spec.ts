@@ -884,12 +884,12 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     const client = new MstarPanelSnapshotClient(gateway.connection)
     const reader = new OnceReader<{ kind: string }>()
     reader.begin('view-one', client, async () => ({ kind: 'ok' }))
-    expect(reader.state.kind).toBe('loading')
+    expect(reader.getSnapshot().kind).toBe('loading')
     await new Promise((resolve) => setTimeout(resolve, 5))
-    expect(reader.state.kind).toBe('ok')
+    expect(reader.getSnapshot().kind).toBe('ok')
     // why: navigation re-enters loading exactly as before the fix.
     reader.begin('view-two', client, async () => ({ kind: 'ok' }))
-    expect(reader.state.kind).toBe('loading')
+    expect(reader.getSnapshot().kind).toBe('loading')
   })
 })
 
