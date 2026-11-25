@@ -296,7 +296,9 @@ function Milestone(props: {
           {milestone.name}
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
-        <span className={"detail-meta"}>{milestone.effortSessions ?? copy.roadmap.noSessions}</span>
+        <span className={"detail-meta"} data-ms-effort={milestone.effortSessions ?? ""}>
+          {milestone.effortSessions ?? copy.roadmap.noSessions}
+        </span>
         {/* The prototype prints four tallies, each a number over its label. */}
         <span className={"milestone-block-counts"}>
           {[
@@ -425,9 +427,9 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-// invariant: the timeline is one node per milestone in the read's order (missing
-// targets last) plus one trailing node for the unassigned issues; every number is
-// the read's own — the retired-over-total pair and the open count.
+// invariant: the timeline is one node per milestone in the read's order, plus one
+// trailing node for the unassigned issues; every number is the read's own — the
+// retired-over-total pair and the open count.
 function MilestoneTimeline(props: { model: RoadmapModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   const ordered = model.milestones;

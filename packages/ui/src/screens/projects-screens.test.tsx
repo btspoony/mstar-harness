@@ -391,7 +391,9 @@ describe("ProjectDetail — the Roadmap feature", () => {
   test("the milestone board carries status, effort sessions, the four tallies and its issues", () => {
     expect(html).toContain('data-ms-milestone="9f2c4a10"');
     expect(html).toContain("Release the shared layer");
-    expect(html).toContain("12");
+    // The effort cell answers through its own hook: a bare "12" also matches a catalog
+    // revision, so it would pass even if the session count never rendered.
+    expect(html).toContain('data-ms-effort="12"');
     expect(html).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
