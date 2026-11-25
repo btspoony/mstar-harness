@@ -2834,7 +2834,7 @@ async function stageCompleteStore(
         "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, " +
           "revision, catalog_revision, created_at) values (1, ?, ?, ?, 'staged', ?, 0, 0, ?)",
       ).run(location.repoKey, location.mode, retained?.storeId ?? randomUUID(), retained?.epoch ?? 1, at);
-      if (carried.intents.length > 0) carrySettledOutbox(db, carried);
+      if (carried.intents.length > 0 || carried.moves.rows.length > 0) carrySettledOutbox(db, carried);
       db.exec("commit");
     } catch (error) {
       try {

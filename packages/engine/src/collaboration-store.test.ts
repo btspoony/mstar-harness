@@ -10206,6 +10206,47 @@ describe("remote move conflict settlement", () => {
     expect(published.phase).toBe("published");
   }, 30_000);
 
+  test("a staged move with no outbox intent survives the replacement field-identically", async () => {
+    // invariant: Review finding — a remote source records its staged move BEFORE any outbox intent
+    // exists, so a legitimate pre-v6 cache can hold a move row and zero intents. The replacement must
+    // invoke the carrier when EITHER collection has rows; the move-only cache is the shape an
+    // intents-only guard drops.
+    const cache = await outboxCache("move-carry-no-intents");
+    const operationId = "00000000-0000-4000-8000-000000000b51";
+    const staged = await moveAcrossByDocument(cache.context, {
+      operationId,
+      actor: "project-manager",
+      sourceIssueId: FORGED_ISSUE_REF,
+      destinationAuthority: "github.com/remote-fixture/move-carry-no-intents-destination",
+      destinationProject: "fixture-project",
+      reason: "move to a local lane",
+    }, null);
+    expect(staged.phase).toBe("staged");
+    const location = locationAt(cache.fixture.repo);
+    const rows = (dbPath: string) => {
+      const db = new DatabaseSync(dbPath);
+      try {
+        return db.prepare("select * from issue_moves order by operation_id, role").all();
+      } finally {
+        db.close();
+      }
+    };
+    const before = rows(location.dbPath);
+    expect(before).toHaveLength(1);
+    expect(outboxRows(location.dbPath)).toHaveLength(0);
+    downgradeToV5(location);
+    const bound = await bindRemoteAuthority(cache.context, {
+      version: 1,
+      selectorCommit: cache.commit,
+      generation: Number(cache.fixture.payload().generation),
+      checks: [positiveCheck()],
+    });
+    expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // invariant: the move row came through field by field, even though not one intent row exists.
+    expect(rows(location.dbPath)).toEqual(before);
+  }, 30_000);
+
   test("a move ledger that changes after the carried snapshot refuses the replacement and survives on the predecessor", async () => {
     // invariant: the re-read comparison must cover the move ledger like the outbox: a row that
     // advanced while the successor was staged aborts the swap instead of silently dropping it.
