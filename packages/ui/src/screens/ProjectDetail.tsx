@@ -70,8 +70,31 @@ function effortPatch(milestone: RoadmapModel["milestones"][number], value: strin
   return effort.sessions === milestone.effortSessions ? {} : { effortSessions: effort.sessions };
 }
 
-/** One milestone editor's text, as the operator typed it. */
-export type MilestoneDraft = { name: string; effort: string; status: string };
+/** The draft's touched set with one more field, so a handler records the edit it makes. */
+export function withTouched(
+  touched: ReadonlySet<MilestoneDraftField>,
+  field: MilestoneDraftField,
+): ReadonlySet<MilestoneDraftField> {
+  const next = new Set(touched);
+  next.add(field);
+  return next;
+}
+
+/** The draft fields an operator can edit; only these travel in a patch. */
+export type MilestoneDraftField = "name" | "effort" | "status";
+
+/**
+ * One milestone editor's text, as the operator typed it, plus the fields they actually
+ * changed. The draft is seeded from the milestone on open, so it holds fields nobody
+ * touched: after a conflict refresh those values are stale, and comparing them against
+ * the fresh milestone would send a revert of another writer's change.
+ */
+export type MilestoneDraft = {
+  name: string;
+  effort: string;
+  status: string;
+  touched: ReadonlySet<MilestoneDraftField>;
+};
 
 /**
  * The draft the editor opens with: seeded from the milestone on EVERY open, so a
@@ -82,11 +105,18 @@ export function milestoneDraft(milestone: RoadmapModel["milestones"][number]): M
     name: milestone.name,
     effort: milestone.effortSessions === null ? "" : String(milestone.effortSessions),
     status: milestone.status ?? "planned",
+    touched: new Set(),
   };
 }
 
 /** One target's draft text. The editor carries its status too; the create form never sets it. */
-export type CreateDraft = { name: string; effort: string; status?: string };
+export type CreateDraft = {
+  name: string;
+  effort: string;
+  status?: string;
+  /** note: the fields the operator edited, so a kept draft can re-open with its intent. */
+  touched?: readonly MilestoneDraftField[];
+};
 
 /**
  * The draft store the host owns OUTSIDE the read's subtree. The forms live under the
@@ -139,10 +169,14 @@ export function milestonePatch(
   milestone: RoadmapModel["milestones"][number],
   draft: MilestoneDraft,
 ): { name?: string; effortSessions?: number | null; status?: string } {
+  // invariant: only a field the operator touched can travel, and only while its typed value
+  // still differs from the milestone the refresh just read — an untouched field is never
+  // sent, whatever another writer changed it to.
+  const touched = draft.touched;
   return {
-    ...(draft.name.trim() === milestone.name ? {} : { name: draft.name.trim() }),
-    ...effortPatch(milestone, draft.effort),
-    ...(draft.status === milestone.status ? {} : { status: draft.status }),
+    ...(touched.has("name") && draft.name.trim() !== milestone.name ? { name: draft.name.trim() } : {}),
+    ...(touched.has("effort") ? effortPatch(milestone, draft.effort) : {}),
+    ...(touched.has("status") && draft.status !== milestone.status ? { status: draft.status } : {}),
   };
 }
 
@@ -324,7 +358,16 @@ function MilestoneActions(props: {
   // closed; a cancelled edit clears the entry, so the next open re-seeds from the milestone.
   const [draft, setDraftState] = useState<MilestoneDraft | null>(() => {
     const kept = props.drafts?.read(targetKey);
-    return kept === undefined ? null : { name: kept.name, effort: kept.effort, status: kept.status ?? milestone.status ?? "planned" };
+    // invariant: a kept draft re-opens with the fields the operator touched, so a retry after a
+    // conflict refresh still sends only what they edited.
+    return kept === undefined
+      ? null
+      : {
+          name: kept.name,
+          effort: kept.effort,
+          status: kept.status ?? milestone.status ?? "planned",
+          touched: new Set(kept.touched ?? []),
+        };
   });
   // why: the host store shadows the component state — a refresh unmounts this editor and
   // the re-mounted one seeds from the store, so the typed text survives. The sync is an
@@ -332,7 +375,13 @@ function MilestoneActions(props: {
   useEffect(() => {
     if (props.drafts === undefined) return;
     if (draft === null) props.drafts.clear(targetKey);
-    else props.drafts.write(targetKey, { name: draft.name, effort: draft.effort, status: draft.status });
+    else
+      props.drafts.write(targetKey, {
+        name: draft.name,
+        effort: draft.effort,
+        status: draft.status,
+        touched: [...draft.touched],
+      });
   }, [draft, props.drafts, targetKey]);
   const setDraft = setDraftState;
   const [removing, setRemoving] = useState(false);
@@ -436,7 +485,7 @@ function MilestoneActions(props: {
     >
       <label>
         {copy.roadmap.writes.nameLabel}
-        <input value={draft.name} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        <input value={draft.name} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, name: event.target.value, touched: withTouched(draft.touched, "name") })} />
       </label>
       <label>
         {copy.roadmap.writes.effortLabel}
@@ -447,7 +496,7 @@ function MilestoneActions(props: {
           inputMode="numeric"
           value={draft.effort}
           disabled={writes.busy}
-          onChange={(event) => setDraft({ ...draft, effort: event.target.value })}
+          onChange={(event) => setDraft({ ...draft, effort: event.target.value, touched: withTouched(draft.touched, "effort") })}
         />
         {effortError ? (
           <span className="muted t-11" role="alert" data-ms-effort-invalid="">
@@ -457,7 +506,7 @@ function MilestoneActions(props: {
       </label>
       <label>
         {copy.roadmap.writes.statusLabel}
-        <select value={draft.status} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
+        <select value={draft.status} disabled={writes.busy} onChange={(event) => setDraft({ ...draft, status: event.target.value, touched: withTouched(draft.touched, "status") })}>
           {MILESTONE_STATUSES.map((option) => (
             <option key={option} value={option}>
               {option}

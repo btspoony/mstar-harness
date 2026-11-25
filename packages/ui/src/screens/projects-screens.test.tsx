@@ -35,6 +35,7 @@ import {
   milestoneCreateInput,
   milestoneDraft,
   milestonePatch,
+  withTouched,
   nextMilestoneOrdinal,
   ProjectDetail as ProjectDetailScreen,
   type ProjectDetailCopy,
@@ -782,22 +783,37 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     // why: cancel throws the draft away, so reopening seeds a NEW draft from the
     // milestone — the value the stale draft held (empty) cannot come back.
     const reopened = milestoneDraft(milestone);
-    expect(reopened).toEqual({ name: "Release the shared layer", effort: "12", status: "active" });
-    const patch = milestonePatch(milestone, { ...reopened, name: "Renamed" });
+    expect(reopened).toEqual({
+      name: "Release the shared layer",
+      effort: "12",
+      status: "active",
+      touched: new Set(),
+    });
+    const patch = milestonePatch(milestone, { ...reopened, name: "Renamed", touched: withTouched(reopened.touched, "name") });
     expect(patch).toEqual({ name: "Renamed" });
     expect("effortSessions" in patch).toBe(false);
   });
 
   test("an emptied effort field contributes the explicit null to the patch", () => {
     const milestone = stored();
-    const patch = milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "" });
+    const patch = milestonePatch(milestone, {
+      ...milestoneDraft(milestone),
+      effort: "",
+      touched: withTouched(milestoneDraft(milestone).touched, "effort"),
+    });
     expect(patch).toEqual({ effortSessions: null });
   });
 
   test("an untouched draft yields an empty patch, a changed effort the full patch", () => {
     const milestone = stored();
     expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
-    expect(milestonePatch(milestone, { ...milestoneDraft(milestone), effort: "20" })).toEqual({ effortSessions: 20 });
+    expect(
+      milestonePatch(milestone, {
+        ...milestoneDraft(milestone),
+        effort: "20",
+        touched: withTouched(milestoneDraft(milestone).touched, "effort"),
+      }),
+    ).toEqual({ effortSessions: 20 });
   });
 
   test("the create form sends a count as that count and an empty field as null", () => {
@@ -825,7 +841,13 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
       expect(effortInput(text)).toEqual({ kind: "invalid" });
       expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });
     }
-    expect(milestonePatch(stored(), { ...milestoneDraft(stored()), effort: "twelve" })).toEqual({});
+    expect(
+      milestonePatch(stored(), {
+        ...milestoneDraft(stored()),
+        effort: "twelve",
+        touched: withTouched(milestoneDraft(stored()).touched, "effort"),
+      }),
+    ).toEqual({});
   });
 
   test("a NEW milestone takes one past the highest ordinal, never the count — gaps sort it last", () => {
@@ -1077,12 +1099,33 @@ describe("ProjectDetail — the host-owned draft store", () => {
     expect(empty).not.toContain('value="Typed before the conflict"');
   });
 
+  test("a conflict retry sends only the field the operator touched, never a revert of the refreshed one", () => {
+    // why: the draft is seeded with every field, so a refresh that changed an untouched field
+    // would be reverted by a patch built from the stale snapshot. Only touched fields travel.
+    const milestone = stored();
+    const seeded = { ...milestoneDraft(milestone), touched: withTouched(milestoneDraft(milestone).touched, "name") };
+    const renamed = { ...seeded, name: "Renamed" };
+    // note: the refreshed milestone another writer left behind: its estimate moved to 8.
+    const refreshed = { ...milestone, effortSessions: 8 } as typeof milestone;
+    expect(milestonePatch(refreshed, renamed)).toEqual({ name: "Renamed" });
+    // note: an untouched effort field is never sent, even though its typed text no longer matches.
+    expect("effortSessions" in milestonePatch(refreshed, renamed)).toBe(false);
+    // note: touching the field is what lets it travel, and clearing it stays expressible.
+    const cleared = { ...milestoneDraft(refreshed), effort: "", touched: withTouched(milestoneDraft(refreshed).touched, "effort") };
+    expect(milestonePatch(refreshed, cleared)).toEqual({ effortSessions: null });
+  });
+
   test("the edit editor's seed prefers the stored draft's status over the milestone's", () => {
     // why: the operator may have changed the status dropdown before the conflict; re-seeding
     // from the milestone would silently revert it to the stored state.
     const milestone = stored();
-    const kept = { name: "Renamed", effort: "9", status: "delivered" };
-    const seeded = { name: kept.name, effort: kept.effort, status: kept.status ?? milestone.status ?? "planned" };
+    const kept = { name: "Renamed", effort: "9", status: "delivered", touched: ["name", "effort", "status"] as const };
+    const seeded = {
+      name: kept.name,
+      effort: kept.effort,
+      status: kept.status ?? milestone.status ?? "planned",
+      touched: new Set(kept.touched),
+    };
     expect(seeded.status).toBe("delivered");
     expect(milestonePatch(milestone, seeded)).toEqual({ name: "Renamed", effortSessions: 9, status: "delivered" });
   });
