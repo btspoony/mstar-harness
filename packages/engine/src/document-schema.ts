@@ -1,0 +1,279 @@
+/**
+ * Document schema validator — plan / assignment / sdd-brief / pm-acceptance
+ * front matter declared in the harness plan documents (compass D15/D17).
+ *
+ * Spec sources:
+ * - Field tables and conditional budget rule: plan `20261125-frontmatter-core`
+ *   Task 3 brief; assignment semantics mirror `dispatch.ts`
+ *   `validateAssignmentFields` (`REVIEW_SEAT_ROLES`, the audit-category
+ *   trigger, the exactly-one branch form, control-write glob refusal).
+ * - Unknown-field rule (compass D15): every field of the canonical PM
+ *   assignment template is a known optional field
+ *   (`skills/mstar-roles/references/project-manager/dispatch-and-assignment.md`
+ *   `Assignment Template (Canonical)`); `document.frontmatter.unknown` fires
+ *   only for a key outside that list.
+ * - Violation codes: `document.frontmatter.missing` / `.unknown` /
+ *   `.invalid` / `.absent`; severity missing/invalid/unknown = high.
+ */
+import {
+  DocumentFrontmatterError,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatterEntries,
+  type FrontmatterEntry,
+} from "./document-frontmatter.js";
+import type { GateResult, ValidationResult } from "./core.js";
+
+export type DocumentKind = "plan" | "assignment" | "sdd-brief" | "pm-acceptance";
+
+export type DocumentFieldType = "string" | "integer" | "list" | "iso-datetime";
+
+/** One schema field row. `enum` lists the accepted scalar values; `type`
+ * pins the structural value shape; `requiredWhen` marks a conditionally
+ * required row that must also appear in `optional`/`required` per its
+ * trigger (assignment `budget` / `return_shape` / `task_budget`). */
+export type DocumentField = {
+  name: string;
+  type?: DocumentFieldType;
+  enum?: readonly string[];
+  requiredWhen?: (values: Record<string, unknown>) => boolean;
+};
+
+export type DocumentSchema = {
+  kind: DocumentKind;
+  required: readonly DocumentField[];
+  optional: readonly DocumentField[];
+};
+
+const PLAN_SCHEMA: DocumentSchema = {
+  kind: "plan",
+  required: [
+    { name: "plan_id" },
+    { name: "execution", enum: ["sdd", "inline"] },
+    { name: "working_branch" },
+    { name: "main_worktree_branch" },
+    { name: "delivery_kind", enum: ["development", "verification", "report-only"] },
+    { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
+  ],
+  optional: [{ name: "title" }],
+};
+
+const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
+
+function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
+  const role = typeof values.execute_as === "string"
+    ? values.execute_as.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? ""
+    : "";
+  const category = typeof values.task_category === "string"
+    ? values.task_category.replace(/^[*_`"'\s]+/, "").toLowerCase()
+    : "";
+  return REVIEW_SEAT_ROLES.includes(role) || /^audit(?![A-Za-z0-9])/.test(category);
+}
+
+const ASSIGNMENT_SCHEMA: DocumentSchema = {
+  kind: "assignment",
+  required: [
+    { name: "execute_as" },
+    { name: "delegation" },
+    { name: "task_category" },
+    { name: "budget", requiredWhen: isReviewOrAuditRound },
+    { name: "return_shape", requiredWhen: isReviewOrAuditRound },
+    { name: "task_budget", requiredWhen: (values) => !isReviewOrAuditRound(values) },
+  ],
+  optional: [
+    { name: "execution_mode" },
+    { name: "sdd_implementer_session" },
+    { name: "sdd_dir" },
+    { name: "sdd_context_file" },
+    { name: "skill_presets" },
+    { name: "qc_mode" },
+    { name: "review_package_path" },
+    { name: "qc_report_path" },
+    { name: "who_runs_this_turn" },
+    { name: "primary" },
+    { name: "dev_routing" },
+    { name: "parallelism" },
+    { name: "additional_gates" },
+    { name: "phase_gate_checklist" },
+    { name: "working_branch" },
+    { name: "branch_policy" },
+    { name: "control_harness_root" },
+    { name: "review_cwd" },
+    { name: "review_range" },
+    { name: "diff_basis" },
+    { name: "worktree_path" },
+    { name: "write_domain", enum: ["control", "work"] },
+    { name: "control_write_paths", type: "list" },
+    { name: "main_worktree_branch" },
+    { name: "acceptance_gate" },
+    { name: "acceptance_gate_reason" },
+    { name: "findings_cleanup" },
+    { name: "why_this_agent" },
+    { name: "pm_task_board_coverage" },
+    { name: "roadmap_deferred_scope" },
+    { name: "task" },
+    { name: "inputs" },
+    { name: "severity_bar" },
+    { name: "input_provenance" },
+    { name: "deliverables" },
+    { name: "acceptance_criteria" },
+    { name: "evidence_required" },
+    { name: "constraints" },
+    { name: "effort" },
+    { name: "orchestration_guard" },
+    { name: "plan_path" },
+    { name: "report_format" },
+    { name: "execution_evidence" },
+    { name: "enforcement", enum: ["hard"] },
+    { name: "plan_id" },
+    { name: "iteration_id" },
+    { name: "workflow_id" },
+  ],
+};
+
+const BRIEF_SCHEMA: DocumentSchema = {
+  kind: "sdd-brief",
+  required: [{ name: "plan_id" }, { name: "task", type: "integer" }],
+  optional: [{ name: "files", type: "list" }],
+};
+
+const ACCEPTANCE_SCHEMA: DocumentSchema = {
+  kind: "pm-acceptance",
+  required: [
+    { name: "plan_id" },
+    { name: "gate", enum: ["pm-acceptance"] },
+    { name: "verdict", enum: ["Approve", "Approve with residuals", "Request Changes", "Needs Discussion"] },
+    { name: "generated_at", type: "iso-datetime" },
+  ],
+  optional: [],
+};
+
+const SCHEMAS: Record<DocumentKind, DocumentSchema> = {
+  plan: PLAN_SCHEMA,
+  assignment: ASSIGNMENT_SCHEMA,
+  "sdd-brief": BRIEF_SCHEMA,
+  "pm-acceptance": ACCEPTANCE_SCHEMA,
+};
+
+/** The field table for one document kind: required and optional rows with
+ * their enum / type declarations. */
+export function documentSchema(kind: DocumentKind): DocumentSchema {
+  return SCHEMAS[kind];
+}
+
+function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
+  return { ok: false, severity, code, message, ...(fix !== undefined ? { fix } : {}) };
+}
+
+/**
+ * Validate one document's front matter against its kind schema. `content` is
+ * the whole document text (fences included); `source` is a diagnostic label
+ * naming the document in violation messages.
+ *
+ * Codes: `document.frontmatter.absent` (no closed fence), `.missing` (a
+ * required or conditionally required key absent), `.unknown` (a key outside
+ * the kind's known field list — for assignment the canonical PM template),
+ * `.invalid` (enum / type / structural violation, a duplicate key or any
+ * other parser refusal). Missing/invalid/unknown are high severity.
+ */
+export function validateDocumentFrontmatter(kind: DocumentKind, content: string, source: string): GateResult {
+  const schema = documentSchema(kind);
+  const violations: ValidationResult[] = [];
+
+  const { frontmatter } = extractFrontmatterAndBody(content);
+  if (frontmatter.trim() === "") {
+    return {
+      ok: false,
+      violations: [violation("high", "document.frontmatter.absent",
+        `${source}: no front matter fence \u2014 the document must open with a "---" line closed by a second "---" line`)],
+    };
+  }
+
+  let entries: Map<string, FrontmatterEntry>;
+  try {
+    entries = parseDocumentFrontmatterEntries(frontmatter, source);
+  } catch (error) {
+    if (error instanceof DocumentFrontmatterError) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${error.line}: invalid front matter at line ${error.line}: ${error.message}`));
+    } else {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}: invalid front matter: ${(error as Error).message}`));
+    }
+    return { ok: false, violations };
+  }
+
+  const values: Record<string, unknown> = {};
+  for (const [key, entry] of entries) values[key] = entry.value;
+
+  const known = new Set([...schema.required, ...schema.optional].map((f) => f.name));
+
+  for (const [key, entry] of entries) {
+    if (!known.has(key)) {
+      violations.push(violation("high", "document.frontmatter.unknown",
+        `${source}:${entry.line}: unknown field ${key} \u2014 not a field of the ${kind} schema`,
+        `remove ${key} or use a known ${kind} field`));
+    }
+  }
+
+  for (const field of schema.required) {
+    const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
+    if (!required) continue;
+    const present = entries.has(field.name) && entries.get(field.name)!.rawText !== "";
+    if (!present) {
+      violations.push(violation("high", "document.frontmatter.missing",
+        `${source}: missing required field ${field.name}`,
+        `add a ${field.name}: line to the front matter`));
+    }
+  }
+
+  for (const field of [...schema.required, ...schema.optional]) {
+    const entry = entries.get(field.name);
+    if (entry === undefined) continue;
+    if (field.enum !== undefined && typeof entry.value === "string" && !field.enum.includes(entry.value)) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ${field.enum.join(" | ")}`,
+        `set ${field.name} to one of: ${field.enum.join(", ")}`));
+      continue;
+    }
+    if (field.type === "integer" && !(typeof entry.value === "number" && Number.isInteger(entry.value))) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: integer`,
+        `set ${field.name} to an integer`));
+    } else if (field.type === "list" && !Array.isArray(entry.value)) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${entry.line}: invalid ${field.name} \u2014 accepted values: a list of paths`,
+        `write ${field.name} as a "- item" block list or a [a, b] flow array`));
+    } else if (field.type === "iso-datetime") {
+      const valid = typeof entry.value === "string"
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(entry.value)
+        && !Number.isNaN(Date.parse(entry.value));
+      if (!valid) {
+        violations.push(violation("high", "document.frontmatter.invalid",
+          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time`,
+          `set ${field.name} to an ISO-8601 date-time`));
+      }
+    }
+  }
+
+  if (kind === "assignment") {
+    const branchEntry = entries.get("working_branch");
+    const policyEntry = entries.get("branch_policy");
+    if (branchEntry !== undefined && policyEntry !== undefined) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${policyEntry.line}: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy, not both`,
+        "remove one of working_branch / branch_policy"));
+    }
+    const controlWritePaths = entries.get("control_write_paths");
+    if (Array.isArray(controlWritePaths?.value)) {
+      for (const target of controlWritePaths.value) {
+        if (typeof target === "string" && /[*?[\]{}]/.test(target)) {
+          violations.push(violation("high", "document.frontmatter.invalid",
+            `${source}:${controlWritePaths.line}: invalid control_write_paths entry ${JSON.stringify(target)} \u2014 accepted values: concrete paths, no globs`,
+            "list concrete paths in control_write_paths"));
+        }
+      }
+    }
+  }
+
+  return { ok: violations.length === 0, violations };
+}
