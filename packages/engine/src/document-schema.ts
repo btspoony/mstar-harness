@@ -291,19 +291,22 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
   if (kind === "assignment") {
     const branchEntry = entries.get("working_branch");
     const policyEntry = entries.get("branch_policy");
-    if (branchEntry !== undefined && policyEntry !== undefined) {
+    const hasBranch = branchEntry !== undefined && typeof branchEntry.value === "string" && branchEntry.value.trim() !== "";
+    const hasPolicy = policyEntry !== undefined && typeof policyEntry.value === "string" && policyEntry.value.trim() !== "";
+    if (hasBranch && hasPolicy) {
       violations.push(violation("high", "document.frontmatter.invalid",
-        `${source}:${policyEntry.line}: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy, not both`,
+        `${source}:${policyEntry!.line}: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy, not both`,
         "remove one of working_branch / branch_policy"));
     }
     const controlWritePaths = entries.get("control_write_paths");
     const roleValue = entries.get("execute_as")?.value;
     const role = typeof roleValue === "string" ? roleValue.trim().replace(/^@/, "").split(/\s+/)[0] ?? "" : "";
     const writable = !isReadOnlyAssignmentRole(role);
-    if (writable && branchEntry === undefined && policyEntry === undefined) {
+    if (writable && !hasBranch && !hasPolicy) {
+      const line = branchEntry?.line ?? policyEntry?.line ?? 1;
       violations.push(violation("high", "document.frontmatter.invalid",
-        `${source}:1: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy; a writable assignment carries one`,
-        "add exactly one of working_branch or branch_policy"));
+        `${source}:${line}: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy; a writable assignment carries one non-empty declaration`,
+        "add exactly one of working_branch or branch_policy with a non-empty value"));
     }
     if (Array.isArray(controlWritePaths?.value)) {
       for (const target of controlWritePaths.value) {

@@ -55,12 +55,13 @@ export class DocumentFrontmatterError extends Error {
 }
 
 /** An opening `---` line through the closing one, optional trailing newline.
- * The newline before the closing fence is optional so an empty fenced block
- * (`---` directly followed by the closing `---`) still matches; the lazy
- * capture never carries the trailing newline either way. CRLF is accepted
- * because the commands doctor classifies SKILL.md files the OpenCode loaders
- * never see, and both must agree on what has a fence. */
-const FENCE = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/;
+ * The closing fence must be a complete line: a newline before it (optional
+ * for the empty block, so `---` directly followed by the closing `---`
+ * still matches) and a newline or end-of-input after it — a `---` inside a
+ * scalar line never counts. CRLF is accepted because the commands doctor
+ * classifies SKILL.md files the OpenCode loaders never see, and both must
+ * agree on what has a fence. */
+const FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)([\s\S]*)$/;
 
 /** Split a document into its frontmatter block and body. A document with no
  * fence (or an unterminated one) returns the whole content as its body, an
@@ -70,7 +71,7 @@ const FENCE = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/;
 export function extractFrontmatterAndBody(content: string): FrontmatterAndBody {
   const match = content.match(FENCE);
   if (!match) return { frontmatter: "", body: content, fenced: false };
-  return { frontmatter: match[1], body: match[2], fenced: true };
+  return { frontmatter: match[1] ?? "", body: match[2], fenced: true };
 }
 
 const BARE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;

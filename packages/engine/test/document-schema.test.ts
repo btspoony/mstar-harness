@@ -505,6 +505,46 @@ describe("validateDocumentFrontmatter — T3-R3 exactly one branch form for writ
     const gate = validateDocumentFrontmatter("assignment", doc(fm), "assignment");
     expect(gate.ok).toBe(true);
   });
+
+  test("writable assignment with an empty working_branch is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch:`), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("non-empty");
+  });
+
+  test("writable assignment with a whitespace-only working_branch is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch:   `), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("non-empty");
+  });
+
+  test("writable assignment with an empty branch_policy is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nbranch_policy:`), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("non-empty");
+  });
+
+  test("writable assignment with a whitespace-only branch_policy is invalid", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nbranch_policy:   `), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("non-empty");
+  });
+
+  test("empty working_branch beside a non-empty branch_policy passes — empty counts as absent", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch:\nbranch_policy: direct on main — hotfix`), "assignment");
+    expect(gate.ok).toBe(true);
+  });
+
+  test("both empty branch forms count as neither declared", () => {
+    const gate = validateDocumentFrontmatter("assignment", doc(`${BASE}\nworking_branch:\nbranch_policy:`), "assignment");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("non-empty");
+  });
 });
 
 describe("validateDocumentFrontmatter — T3-R4 strict ISO-8601 generated_at", () => {

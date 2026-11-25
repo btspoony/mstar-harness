@@ -372,6 +372,28 @@ describe("extractFrontmatterAndBody — fence handling", () => {
     expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x", fenced: false });
     expect(extractFrontmatterAndBody(`---\n`)).toEqual({ frontmatter: "", body: "---\n", fenced: false });
   });
+
+  test("a scalar containing --- inside a line does not close an unterminated document", () => {
+    expect(extractFrontmatterAndBody(`---\nname: a---b`)).toEqual({ frontmatter: "", body: "---\nname: a---b", fenced: false });
+    expect(extractFrontmatterAndBody(`---\nname: a---b\nnotes: more`)).toEqual({ frontmatter: "", body: "---\nname: a---b\nnotes: more", fenced: false });
+  });
+
+  test("a scalar containing --- inside a line is not truncated in a fenced document", () => {
+    expect(extractFrontmatterAndBody(`---\nname: a---b\nnotes: x\n---\nbody`)).toEqual({
+      frontmatter: "name: a---b\nnotes: x",
+      body: "body",
+      fenced: true,
+    });
+  });
+
+  test("a closing fence at end of input without a trailing newline still closes", () => {
+    expect(extractFrontmatterAndBody(`---\nname: x\n---`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
+  });
+
+  test("an immediately closed empty block stays valid", () => {
+    expect(extractFrontmatterAndBody(`---\n---\nbody`)).toEqual({ frontmatter: "", body: "body", fenced: true });
+    expect(extractFrontmatterAndBody(`---\n---`)).toEqual({ frontmatter: "", body: "", fenced: true });
+  });
 });
 
 describe("shipped corpus — every bundled frontmatter parses", () => {
