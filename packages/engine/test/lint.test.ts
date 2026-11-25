@@ -48,12 +48,14 @@ import {
   findUntrackedTodos,
   lintAdrTree,
   lintSkillFrontmatter,
+  parseFrontmatter,
   lintSpecsDoc,
   lintSpecsTree,
   lintStrategySections,
   planQualityBar,
   sourceDialect,
 } from "../src/lint.js";
+import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
 
 /**
  * Locate the read-only skill corpus: `MSTAR_CONTROL_SKILLS` env override →
@@ -228,6 +230,19 @@ const PLAN_ELLIPSIS_IN_CODE = `# Plan
 src/{core,path,status,...}.ts
 \`\`\`
 Inline: \`...\` stays exempt.
+`;
+
+/** Valid plan-schema frontmatter fence — prepended to planQualityBar inputs
+ * whose assertions expect zero violations or violation-only shape, so the
+ * schema check does not add `lint.plan.frontmatter.absent` to their result. */
+const VALID_PLAN_FENCE = `---
+plan_id: 20991231-example-plan
+execution: inline
+working_branch: main
+main_worktree_branch: main
+delivery_kind: development
+status: InProgress
+---
 `;
 
 const PLAN_PLACEHOLDER_MIXED_CASE = `# Plan
@@ -1307,18 +1322,18 @@ Check result: exit 0; the changed rule and referenced boundary are present.
 
 describe("planQualityBar", () => {
   test("flags TBD/TODO/TBA and prose ellipsis, one violation per token with location", () => {
-    const result = planQualityBar(PLAN_WITH_PLACEHOLDERS);
+    const result = planQualityBar(VALID_PLAN_FENCE + PLAN_WITH_PLACEHOLDERS);
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual([
-      { token: "TBD", line: 2, text: "- [ ] Task 1: figure out TBD details" },
-      { token: "TODO", line: 3, text: "- [ ] Task 2: TODO list" },
-      { token: "TBA", line: 4, text: "The API version is TBA." },
-      { token: "...", line: 5, text: "Files: a.ts, b.ts, ..." },
+      { token: "TBD", line: 10, text: "- [ ] Task 1: figure out TBD details" },
+      { token: "TODO", line: 11, text: "- [ ] Task 2: TODO list" },
+      { token: "TBA", line: 12, text: "The API version is TBA." },
+      { token: "...", line: 13, text: "Files: a.ts, b.ts, ..." },
     ]);
     expect(result.violations).toHaveLength(4);
     expect(result.violations.every((v) => v.code === "lint.plan-quality.placeholder")).toBe(true);
     expect(result.violations[0].message).toContain('"TBD"');
-    expect(result.violations[0].message).toContain("line 2");
+    expect(result.violations[0].message).toContain("line 10");
   });
 
   test("matches tbd/todo case-insensitively", () => {
@@ -1327,7 +1342,7 @@ describe("planQualityBar", () => {
   });
 
   test("ignores ellipsis inside fenced code blocks and inline code spans (false-positive guard)", () => {
-    const result = planQualityBar(PLAN_ELLIPSIS_IN_CODE);
+    const result = planQualityBar(VALID_PLAN_FENCE + PLAN_ELLIPSIS_IN_CODE);
     expect(result.ok).toBe(true);
     expect(result.findings).toEqual([]);
   });
@@ -1353,7 +1368,7 @@ describe("planQualityBar", () => {
   });
 
   test("clean plan passes", () => {
-    const result = planQualityBar(PLAN_CLEAN);
+    const result = planQualityBar(VALID_PLAN_FENCE + PLAN_CLEAN);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
@@ -1382,7 +1397,7 @@ describe("planQualityBar", () => {
 // ---------------------------------------------------------------------------
 
 describe("planQualityBar verification-set", () => {
-  const ENGINE_PLAN = `# Plan
+  const ENGINE_PLAN = `${VALID_PLAN_FENCE}# Plan
 
 **Files:**
 - Modify: \`packages/engine/src/lint.ts\`
@@ -1402,7 +1417,7 @@ describe("planQualityBar verification-set", () => {
   });
 
   test("skills and scripts surfaces map to the drift check and the script's own test", () => {
-    const plan = "# Plan\n\n**Files:**\n- Modify: `skills/mstar-artifacts/SKILL.md`\n- Modify: `scripts/rule-duplication.ts`\n";
+    const plan = `${VALID_PLAN_FENCE}# Plan\n\n**Files:**\n- Modify: \`skills/mstar-artifacts/SKILL.md\`\n- Modify: \`scripts/rule-duplication.ts\`\n`;
     const codes = planQualityBar(plan).violations;
     expect(codes).toHaveLength(2);
     expect(codes.every((v) => v.code === "lint.plan-quality.verification-set")).toBe(true);
@@ -1411,41 +1426,115 @@ describe("planQualityBar verification-set", () => {
   });
 
   test("a prose-only plan names no code surface and is not flagged", () => {
-    expect(planQualityBar("# Plan\n\n- [ ] Rewrite the rationale paragraph.\n- [ ] Read the referenced contract.\n").violations).toEqual([]);
+    expect(planQualityBar(`${VALID_PLAN_FENCE}# Plan\n\n- [ ] Rewrite the rationale paragraph.\n- [ ] Read the referenced contract.\n`).violations).toEqual([]);
   });
 
   test("a script's own run counts as its check; a mention outside a verification line does not", () => {
-    const run = "**Files:**\n- Modify: `scripts/lint-refusal-quality.ts`\n\n- [ ] Scoped-check: `bun run lint:refusal-quality` exits 0.\n";
+    const run = `${VALID_PLAN_FENCE}**Files:**\n- Modify: \`scripts/lint-refusal-quality.ts\`\n\n- [ ] Scoped-check: \`bun run lint:refusal-quality\` exits 0.\n`;
     expect(planQualityBar(run).violations).toEqual([]);
-    const mention = "**Files:**\n- Modify: `scripts/rule-duplication.ts`\n\nGlobal constraint: `bun test scripts/rule-duplication.test.ts` exists.\n";
+    const mention = `${VALID_PLAN_FENCE}**Files:**\n- Modify: \`scripts/rule-duplication.ts\`\n\nGlobal constraint: \`bun test scripts/rule-duplication.test.ts\` exists.\n`;
     expect(planQualityBar(mention).violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
   });
 
   test("a package-local scripts path is not the root surface (no invented root command)", () => {
-    const plan = "**Files:**\n- Modify: `packages/ui/scripts/declaration-diff.ts`, `packages/judgment/scripts/evaluate.ts`\n\n- [ ] Run: `bun test packages/ui/test/declaration-diff.test.ts`\n";
+    const plan = `${VALID_PLAN_FENCE}**Files:**\n- Modify: \`packages/ui/scripts/declaration-diff.ts\`, \`packages/judgment/scripts/evaluate.ts\`\n\n- [ ] Run: \`bun test packages/ui/test/declaration-diff.test.ts\`\n`;
     expect(planQualityBar(plan).violations).toEqual([]);
   });
 
   test("a Files entry quoting a command names no surface", () => {
-    const plan = "**Files:**\n- Modify: only the paths `bun run release:prepare -- --minor` rewrites under `.changes/archive/`\n\n- [ ] Run: `bun run release:validate` once after the fragment moves.\n";
+    const plan = `${VALID_PLAN_FENCE}**Files:**\n- Modify: only the paths \`bun run release:prepare -- --minor\` rewrites under \`.changes/archive/\`\n\n- [ ] Run: \`bun run release:validate\` once after the fragment moves.\n`;
     expect(planQualityBar(plan).violations).toEqual([]);
   });
 
   test("a root script path with no check, no test and no run entry is still flagged", () => {
-    const plan = "**Files:**\n- Modify: `scripts/adr-check.ts`\n\n- [ ] Run: `bun test packages/engine/test/lint.test.ts`\n";
+    const plan = `${VALID_PLAN_FENCE}**Files:**\n- Modify: \`scripts/adr-check.ts\`\n\n- [ ] Run: \`bun test packages/engine/test/lint.test.ts\`\n`;
     const violations = planQualityBar(plan).violations;
     expect(violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
     expect(violations[0]!.message).toContain("bun test scripts/adr-check.test.ts");
   });
 
   test("a fenced Files example names no surface", () => {
-    const plan = "# Plan\n\n- [ ] Rewrite the rationale paragraph.\n\n```markdown\n- Modify: `skills/example/SKILL.md`\n```\n";
+    const plan = `${VALID_PLAN_FENCE}# Plan\n\n- [ ] Rewrite the rationale paragraph.\n\n\`\`\`markdown\n- Modify: \`skills/example/SKILL.md\`\n\`\`\`\n`;
     expect(planQualityBar(plan).violations).toEqual([]);
   });
 
   test("a fenced command satisfies no missing check", () => {
-    const plan = "# Plan\n\n**Files:**\n- Modify: `skills/mstar-artifacts/SKILL.md`\n\n```\n- [ ] Run: `bun run validation:drift`\n```\n";
+    const plan = `${VALID_PLAN_FENCE}# Plan\n\n**Files:**\n- Modify: \`skills/mstar-artifacts/SKILL.md\`\n\n\`\`\`\n- [ ] Run: \`bun run validation:drift\`\n\`\`\`\n`;
     expect(planQualityBar(plan).violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// planQualityBar — plan front-matter schema check (document-schema.ts
+// PLAN_SCHEMA, reported under the lint.plan.frontmatter.* namespace)
+// ---------------------------------------------------------------------------
+
+describe("planQualityBar plan front-matter schema", () => {
+  test("a plan with complete front matter carries no schema violation", () => {
+    const result = planQualityBar(`${VALID_PLAN_FENCE}# Plan\n`);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("a missing required working_branch field reports lint.plan.frontmatter.missing", () => {
+    const plan = VALID_PLAN_FENCE.replace("working_branch: main\n", "") + "# Plan\n";
+    const result = planQualityBar(plan);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.missing"]);
+    expect(result.violations[0]!.message).toContain("working_branch");
+  });
+
+  test("an enum value outside the schema reports lint.plan.frontmatter.invalid", () => {
+    const plan = VALID_PLAN_FENCE.replace("execution: inline", "execution: fast") + "# Plan\n";
+    const result = planQualityBar(plan);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.invalid"]);
+    expect(result.violations[0]!.message).toContain("execution");
+  });
+
+  test("a plan without a fence reports lint.plan.frontmatter.absent", () => {
+    const result = planQualityBar("# Plan\n- [ ] implement the gate\n");
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.absent"]);
+  });
+
+  test("an unknown front-matter field reports lint.plan.frontmatter.unknown", () => {
+    const plan = VALID_PLAN_FENCE.replace("status: InProgress", "status: InProgress\nflavor: spicy") + "# Plan\n";
+    const result = planQualityBar(plan);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.plan.frontmatter.unknown"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseFrontmatter — delegated to the shared document-frontmatter reader:
+// no continuation join, no bare unfenced body, BOM still stripped
+// ---------------------------------------------------------------------------
+
+describe("parseFrontmatter (delegated reader)", () => {
+  test("a skill front matter with the same shape parses through the delegated reader", () => {
+    const fm = parseFrontmatter(FRONTMATTER_GOOD);
+    expect(fm).not.toBeNull();
+    expect(fm!.name).toBe("example-skill");
+    expect(typeof fm!.description).toBe("string");
+  });
+
+  test("an indented description continuation refuses naming the document line", () => {
+    const text = "---\nname: example-skill\ndescription: Use when building X.\n  continuation text joins nothing\n---\n";
+    try {
+      parseFrontmatter(text);
+      expect.unreachable("the continuation line must be refused");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DocumentFrontmatterError);
+      const failure = error as DocumentFrontmatterError;
+      expect(failure.line).toBe(4);
+      expect(failure.lineText).toBe("  continuation text joins nothing");
+    }
+  });
+
+  test("a skill file with a BOM still parses", () => {
+    const fm = parseFrontmatter("\uFEFF" + FRONTMATTER_GOOD);
+    expect(fm).not.toBeNull();
+    expect(fm!.name).toBe("example-skill");
+  });
+
+  test("a bare unfenced body no longer parses — null, as no fence is present", () => {
+    expect(parseFrontmatter("name: example-skill\ndescription: Use when building X.\n")).toBeNull();
   });
 });
 

@@ -48,6 +48,13 @@ import vm from "node:vm";
 import { SOURCE_CODE, SOURCE_COMMENT, maskLiterals, scanSource } from "./comment-scan.js";
 import type { SourceDialect } from "./comment-scan.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import {
+  DocumentFrontmatterError,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatter,
+  type JsonObject,
+} from "./document-frontmatter.js";
+import { validateDocumentFrontmatter } from "./document-schema.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1162,6 +1169,17 @@ function stripInlineCode(line: string): string {
 export function planQualityBar(planText: string): PlanQualityResult {
   const findings: PlanQualityFinding[] = [];
   const violations: ValidationResult[] = [];
+  // Plan schema check (document-schema.ts PLAN_SCHEMA): missing, unknown and
+  // invalid plan front-matter fields are reported first under the lint
+  // namespace. The schema checker reads the document's own fence; the
+  // placeholder scan below keeps its permissive `---`-trimmed skip, so an
+  // unclosed fence is scanned as body exactly as before.
+  for (const schemaViolation of validateDocumentFrontmatter("plan", planText, "plan").violations) {
+    violations.push({
+      ...schemaViolation,
+      code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.plan.frontmatter."),
+    });
+  }
   const lines = planText.split(/\r?\n/);
   // Skip a leading frontmatter block (`---` on line 1, closed by the next
   // `---`): a plan's `status:` value is not a placeholder. An unclosed fence
@@ -1311,8 +1329,15 @@ const DESCRIPTION_MAX_WORDS = 120;
  */
 export function lintSkillFrontmatter(frontmatterText: string): GateResult {
   const violations: ValidationResult[] = [];
-  const fm = parseFrontmatter(frontmatterText);
-  if (fm === null) {
+  let fm: JsonObject | null = null;
+  let parseFailure: DocumentFrontmatterError | null = null;
+  try {
+    fm = parseFrontmatter(frontmatterText);
+  } catch (error) {
+    if (!(error instanceof DocumentFrontmatterError)) throw error;
+    parseFailure = error;
+  }
+  if (fm === null && parseFailure === null) {
     violations.push(
       violation(
         "medium",
@@ -1323,8 +1348,26 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     );
     return { ok: false, violations };
   }
+  if (parseFailure !== null) {
+    // The shared reader refuses a line outside the accepted subset (an
+    // indented description continuation among them) at the strict gate \u2014
+    // the file carries no usable frontmatter, so the missing-contract
+    // violation names the offending document line.
+    violations.push(
+      violation(
+        "medium",
+        "lint.frontmatter.missing",
+        `frontmatter cannot be parsed \u2014 SKILL.md:${parseFailure.line}: ${parseFailure.message.replace(/^SKILL\.md:\d+: /, "")} (mstar-skill-authoring \u00a7 Frontmatter Contract)`,
+        parseFailure.fix,
+      ),
+    );
+    return { ok: false, violations };
+  }
 
-  const name = fm.name ?? "";
+  // why: the reader's scalars arrive typed (null/number/boolean/string); the
+  // contract reads them as text, so a bare `name:` (null) and a numeric
+  // scalar both coerce \u2014 null lands as "" and counts as missing.
+  const name = typeof fm!.name === "string" ? fm!.name : fm!.name == null ? "" : String(fm!.name);
   if (name === "") {
     violations.push(
       violation(
@@ -1345,7 +1388,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     );
   }
 
-  const description = fm.description ?? "";
+  const description = typeof fm!.description === "string" ? fm!.description : fm!.description == null ? "" : String(fm!.description);
   if (description === "") {
     violations.push(
       violation(
@@ -1404,33 +1447,21 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
 }
 
 /**
- * Parse the leading `---`-fenced YAML-lite frontmatter block of a skill
- * document. Returns the key→value map, or `null` when the text does not
- * start with a frontmatter block AND no `name:`/`description:` keys appear
- * in the first lines (bare-body input is still parsed). Values support
- * single-line and indented-continuation YAML, with surrounding quotes
- * stripped. Keys are lowercased.
+ * Parse the leading `---`-fenced frontmatter block of a skill document by
+ * delegating to the one shared reader (`document-frontmatter.ts`): BOM and
+ * leading blank lines are stripped first (a skill file is a document, not a
+ * byte-exact dump), then the block is extracted and parsed with the strict
+ * `document` profile. Returns the reader's root `JsonObject`, or `null`
+ * when the text carries no closed frontmatter fence. A frontmatter line
+ * outside the accepted subset — an indented continuation among them —
+ * throws `DocumentFrontmatterError` naming the offending document line;
+ * there is no continuation join and no bare unfenced-body parse.
  */
-function parseFrontmatter(text: string): Record<string, string> | null {
-  const body = text.replace(/^\uFEFF/, "").replace(/^\s*/, "");
-  const lines = body.split(/\r?\n/);
-  const fields: Record<string, string> = {};
-  let inBlock = body.startsWith("---");
-  for (let i = inBlock ? 1 : 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (inBlock && line.trim() === "---") break;
-    const keyMatch = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
-    if (keyMatch) {
-      fields[keyMatch[1].toLowerCase()] = keyMatch[2].trim().replace(/^["']|["']$/g, "");
-    } else if (inBlock && fields.description !== undefined) {
- // indented continuation of the description value
-      fields.description = `${fields.description} ${line.trim()}`.trim();
-    } else if (!inBlock && i >= 10) {
-      break;
-    }
-  }
-  if (Object.keys(fields).length === 0) return null;
-  return fields;
+export function parseFrontmatter(text: string): JsonObject | null {
+  const body = text.replace(/^\uFEFF/, "").replace(/^\s+/, "");
+  const { frontmatter, fenced } = extractFrontmatterAndBody(body);
+  if (!fenced) return null;
+  return parseDocumentFrontmatter(frontmatter, "SKILL.md");
 }
 
 /** Required STRATEGY.md sections (mstar-knowledge/references/strategy-document.md § Shape). */
