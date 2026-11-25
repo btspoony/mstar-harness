@@ -43,83 +43,95 @@ const WORKTREE = '/srv/worktrees/mstar-dsh-package'
 const BRANCH = 'feature/dsh-package-core'
 
 /** Fully valid SDD writable Assignment (all fields the row-scope gate needs). */
-const SDD_ASSIGNMENT = `## Assignment
+const SDD_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
 /** Writable Assignment with NO `Execution mode` — plan-status trigger only. */
-const INLINE_ASSIGNMENT = `## Assignment
+const INLINE_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment resolving the plan id through the `SDD dir` fallback only. */
-const SDD_VIA_SDD_DIR = `## Assignment
+const SDD_VIA_SDD_DIR = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+execution_mode: sdd
+sdd_dir: /srv/mstar/sdd/${PLAN_ID}
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Execution mode**: sdd
-**SDD dir**: /srv/mstar/sdd/${PLAN_ID}
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment that declares no Worktree path at all. */
-const SDD_NO_WORKTREE = `## Assignment
+const SDD_NO_WORKTREE = `---
+execute_as: fullstack-dev
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment with `Enforcement: hard` + an unrecorded row scope (violation to harden on). */
-const SDD_HARD = `## Assignment
+const SDD_HARD = `---
+execute_as: fullstack-dev
+execution_mode: sdd
+enforcement: hard
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Execution mode**: sdd
-**Enforcement**: hard
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** Read-only orientation role — the row-scope gate must not block read-only dispatch. */
-const SCOUT_ASSIGNMENT = `## Assignment
+const SCOUT_ASSIGNMENT = `---
+execute_as: scout
+delegation: forbidden
+task_category: deep
+task_budget: S — read-only orientation
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+---
 
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: S — read-only orientation
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
+## Assignment
 
 Read only.
 `
@@ -287,10 +299,10 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
-    const createForm = SDD_ASSIGNMENT.replace(`**Working branch**: ${BRANCH}`, `**Working branch**: create ${BRANCH} from main`)
+    const createForm = SDD_ASSIGNMENT.replace(`working_branch: ${BRANCH}`, `working_branch: create ${BRANCH} from main`)
     const directOn = SDD_ASSIGNMENT.replace(
-      `**Working branch**: ${BRANCH}`,
-      `**Branch policy**: direct on ${BRANCH} — approved`,
+      `working_branch: ${BRANCH}`,
+      `branch_policy: direct on ${BRANCH} — approved`,
     )
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(createForm), defaultAllow)
@@ -363,7 +375,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
 
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      subagentExec(SDD_ASSIGNMENT.replace(/^\*\*Plan Path\*\*:.*\n/m, '')),
+      subagentExec(SDD_ASSIGNMENT.replace(/^plan_path:.*\n/m, '')),
       defaultAllow,
     )
 

@@ -48,137 +48,169 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment (mirrors the opencode `completeAssignment`). */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
 /** Missing `Execute as` — the opencode consumer's first field-gate case. */
-const MISSING_EXECUTE_AS = `## Assignment
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
-/** Assignment-shaped but none of the three core fields and no branch form. */
-const MISSING_ALL_CORE = `## Assignment
+/** Assignment-shaped but none of the three core fields and no branch form:
+ * the core keys are present-but-empty (the shape `validateAssignmentFields`
+ * flags), so the document is Assignment-shaped AND missing all of them. */
+const MISSING_ALL_CORE = `---
+execute_as:
+delegation:
+task_category:
+---
+
+## Assignment
 
 Do the thing.
 `
 
 /** Writable assignment with no branch form at all. */
-const MISSING_BRANCH = `## Assignment
+const MISSING_BRANCH = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `
 
 /** Writable assignment carrying BOTH branch forms. */
-const MULTIPLE_BRANCH_FORMS = `## Assignment
+const MULTIPLE_BRANCH_FORMS = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+branch_policy: direct on main — hotfix
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
-**Branch policy**: direct on main — hotfix
+## Assignment
 
 Do the thing.
 `
 
 /** Create-form Working branch without `<base>`. */
-const CREATE_WITHOUT_BASE = `## Assignment
+const CREATE_WITHOUT_BASE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: create feature/y
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: create feature/y
+## Assignment
 
 Do the thing.
 `
 
 /** Read-only orientation role — no branch form is legitimate. */
-const SCOUT_NO_BRANCH = `## Assignment
+const SCOUT_NO_BRANCH = `---
+execute_as: scout
+delegation: n/a
+task_category: deep
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
+## Assignment
 
 Survey the codebase, report only.
 `
 
 /** Existing-branch form on a default protected branch without an exception. */
-const WORKING_BRANCH_MAIN = `## Assignment
+const WORKING_BRANCH_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 Do the thing.
 `
 
 /** `Branch policy: direct on main — <reason>` — the exception matches the gate branch. */
-const DIRECT_ON_MAIN = `## Assignment
+const DIRECT_ON_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+branch_policy: direct on main — hotfix approved by user
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main — hotfix approved by user
+## Assignment
 
 Do the thing.
 `
 
 /** Self-recursion: the Assignment's `Execute as` equals the dispatcher's own role. */
-const SELF_RECURSION = `## Assignment
+const SELF_RECURSION = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Self-recursion against the SHIPPED default binding (`project-manager`). */
-const SELF_DISPATCH_PROJECT_MANAGER = `## Assignment
+const SELF_DISPATCH_PROJECT_MANAGER = `---
+execute_as: project-manager
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Execute as**: project-manager
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Hard flag in the Assignment HEADER plus a violation (branch form missing) to harden on. */
-const HARD_HEADER_FLAG = `## Assignment
+const HARD_HEADER_FLAG = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Enforcement**: hard
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `
 
 /** Hard flag quoted in the TASK BODY must NOT harden.*/
-const HARD_BODY_FLAG = `## Assignment
+const HARD_BODY_FLAG = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 ## Task
 
@@ -186,12 +218,14 @@ Example: **Enforcement**: hard
 `
 
 /** Working branch on main with a BODY-QUOTED direct-on exception — the quoted exception must not nullify the protection.*/
-const BODY_QUOTED_BRANCH_POLICY = `## Assignment
+const BODY_QUOTED_BRANCH_POLICY = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 ## Task
 
@@ -200,12 +234,14 @@ The task body quotes an example header line:
 `
 
 /** A read-only header with BODY-QUOTED Working branch / Execute as examples — must not fire false denies.*/
-const BODY_QUOTED_FIELDS = `## Assignment
+const BODY_QUOTED_FIELDS = `---
+execute_as: scout
+delegation: n/a
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 
 ## Task
 
@@ -308,7 +344,7 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(anti!.severity).toBe('critical')
   })
 
-  it('missing Execute as → advisory with assignment.field.missing-execute-as, dispatch allowed', async () => {
+  it('missing Execute as → advisory with assignment.field.execute-as, dispatch allowed', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
@@ -319,7 +355,7 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(advisories[0]!.tool).toBe('subagent')
     expect(advisories[0]!.role).toBe('')
     expect(advisories[0]!.hard).toBe(false)
-    expect(violationCodes(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('missing branch form → advisory with assignment.field.branch-missing', async () => {
@@ -451,7 +487,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
     expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
     expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
 
@@ -801,10 +837,10 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
     // missing core fields (opencode parity, 435c6fc6).
     expect(violationCodes(advisories[0]).sort()).toEqual([
       'assignment.field.branch-missing',
-      'assignment.field.missing-delegation',
-      'assignment.field.missing-execute-as',
-      'assignment.field.missing-task-category',
+      'assignment.field.delegation',
+      'assignment.field.execute-as',
       'assignment.field.task-budget-missing',
+      'assignment.field.task-category',
     ])
     // Severities match the engine contract (critical only for anti-recursion).
     expect(advisories[0]!.result.violations.every((v) => v.severity === 'high')).toBe(true)
@@ -816,7 +852,7 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
 
-    const violation = advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.missing-execute-as')
+    const violation = advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.execute-as')
     expect(violation?.aliases).toContain('assignment.presence.missing-execute-as')
   })
 
@@ -839,11 +875,13 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
 
 describe('dispatch gate — Task 4 reviewer carry-overs (explore / compass / degrade)', () => {
   /** Read-only orientation role (the reviewer note: only `scout` was fixture-covered). */
-  const EXPLORE_NO_BRANCH = `## Assignment
+  const EXPLORE_NO_BRANCH = `---
+execute_as: explore
+delegation: n/a
+task_category: deep
+---
 
-**Execute as**: explore
-**Delegation**: n/a
-**Task category**: deep
+## Assignment
 
 Survey the codebase, report only.
 `
@@ -943,22 +981,23 @@ describe('dispatch gate — Assignment header values written as markdown code sp
     // Regression: the extractor kept the wrapping backticks, so `plan.md`
     // became `` plan.md` `` — the `.md` suffix test failed and the id was
     // carried into the ledger with the backtick, matching no registered plan.
-    expect(idOf('**Plan Path**: `/x/plans/20260101-demo.md`')).toBe('20260101-demo')
+    expect(idOf('---\nplan_path: `/x/plans/20260101-demo.md`\n---\n')).toBe('20260101-demo')
   })
 
   it('a backticked SDD dir resolves the bare directory name', () => {
-    expect(idOf('**SDD dir**: `/x/.mstar/sdd/20260101-demo`')).toBe('20260101-demo')
+    expect(idOf('---\nsdd_dir: `/x/.mstar/sdd/20260101-demo`\n---\n')).toBe('20260101-demo')
   })
 
   it('a backticked plan_id resolves verbatim', () => {
-    expect(idOf('**plan_id**: `20260101-demo`')).toBe('20260101-demo')
+    expect(idOf('---\nplan_id: `20260101-demo`\n---\n')).toBe('20260101-demo')
   })
 
   it('unbackticked values are unchanged, and a multi-span value is left literal', () => {
-    expect(idOf('**Plan Path**: /x/plans/20260101-demo.md')).toBe('20260101-demo')
+    expect(idOf('---\nplan_path: /x/plans/20260101-demo.md\n---\n')).toBe('20260101-demo')
     // Only ONE clean wrapping pair is stripped: a value that wraps several
-    // spans has backticks inside, so it is left exactly as written.
-    expect(idOf('**plan_id**: `/a`, `/b`')).toBe('`/a`, `/b`')
+    // spans has backticks inside, so it is left exactly as written. The YAML
+    // scalar is quoted so the backticks survive the document parse.
+    expect(idOf('---\nplan_id: "`/a`, `/b`"\n---\n')).toBe('`/a`, `/b`')
   })
 })
 
@@ -973,16 +1012,18 @@ const OTHER_BRANCH = 'feature/somewhere-else'
 
 /** Fully valid SDD writable Assignment dispatching into the given checkout. */
 function sddAssignment(worktreePath: string, branch: string): string {
-  return `## Assignment
+  return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+working_branch: ${branch}
+worktree_path: ${worktreePath}
+plan_path: /proj/plans/${LEASE_PLAN_ID}.md
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Working branch**: ${branch}
-**Worktree path**: ${worktreePath}
-**Plan Path**: /proj/plans/${LEASE_PLAN_ID}.md
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
@@ -1302,5 +1343,143 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
     const reason = (decision as { reason?: string }).reason
     expect(reason).toContain('leaf-seat.unattributed-tool')
     expect(reason).toContain('serverName: mstar')
+  })
+})
+
+/* ===========================================================================
+ * D14/D16 — the ONE assignment source: pointer parity, containment refusals
+ * and the legacy body-label refusal
+ * ========================================================================== */
+
+/** The retired body-label format of {@link VALID_WRITABLE} — same fields as
+ * `**Label**` body lines (the format front matter replaced). */
+const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/dsh-package-core
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`
+
+describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy refusal)', () => {
+  /** Write one assignment file under the accepted harness home and return the pointer prompt. */
+  function pointerInHome(harnessDir: string, content: string): string {
+    const dir = join(harnessDir, 'assignments')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'pointer-target.md')
+    writeFileSync(file, content)
+    return `Assignment file: ${file}`
+  }
+
+  it('a pointer under an accepted assignment home produces the SAME decision as the inline form', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const inlineAdvisories = captureAdvisories(app.ctx)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    expect(inlineAdvisories).toHaveLength(1)
+    const inlineCodes = violationCodes(inlineAdvisories[0]).sort()
+
+    await app.dispose()
+    booted = undefined
+
+    const app2 = booted = await bootApp({ dispatchBinding: '' })
+    const pointerAdvisories = captureAdvisories(app2.ctx)
+    const pointer = pointerInHome(app2.harnessDir, VALID_WRITABLE)
+
+    await app2.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(pointerAdvisories).toHaveLength(1)
+    expect(violationCodes(pointerAdvisories[0]).sort()).toEqual(inlineCodes)
+    expect(violationCodes(pointerAdvisories[0])).toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an out-of-home pointer refuses dispatch.assignment.path', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, VALID_WRITABLE)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${outside}`), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' }) // warn mode: the refusal is advisory
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.path')
+  })
+
+  it('an out-of-home pointer under Enforcement: hard denies the dispatch', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, VALID_WRITABLE)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${outside}`), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+  })
+
+  it('a gate that cannot resolve the control harness root refuses the pointer (never skips containment)', async () => {
+    const app = booted = await bootApp()
+    // No explicit root AND an agent without a session cwd: the resolver
+    // cannot produce ANY harness dir, so containment cannot be proven.
+    const resolver = new HarnessResolver(undefined)
+    const config: Config = {}
+    const adapter = new DshHostAdapter(new Context(), { resolver, config })
+    const agentless = toolExec('subagent', { description: 'probe', prompt: `Assignment file: ${join(app.root, 'anywhere.md')}` })
+
+    const decision = await preExecuteListener(app.ctx, resolver, config, adapter, agentless, defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' }) // warn mode: the refusal is advisory on the log
+    // The listener path emits no advisory capture here (the adapter's own ctx
+    // is a bare Context), so the decisive evidence is the absence of a crash
+    // plus the refusal surfaced when the same input runs under hard: rerun
+    // with a hard config through the same unrooted resolver.
+    const hardConfig: Config = { enforcement: 'hard' }
+    const hardAdapter = new DshHostAdapter(new Context(), { resolver, config: hardConfig })
+    const hardDecision = await preExecuteListener(
+      app.ctx, resolver, hardConfig, hardAdapter,
+      toolExec('subagent', { description: 'probe', prompt: `Assignment file: ${join(app.root, 'anywhere.md')}` }),
+      defaultAllow,
+    )
+    expect(hardDecision.kind).toBe('deny')
+    expect(hardDecision.kind === 'deny' && hardDecision.reason).toContain('dispatch.assignment.path')
+  })
+
+  it('a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' }) // warn mode: advisory, not a veto
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
+    const legacy = advisories[0]!.result.violations.find((v) => v.code === 'dispatch.assignment.legacy-format')
+    expect(legacy!.fix).toContain('front-matter document')
+    expect(legacy!.fix).toContain('Assignment file:')
+    // The schema's generic absent-fence row is superseded — one defect, one message.
+    expect(violationCodes(advisories[0])).not.toContain('document.frontmatter.absent')
+  })
+
+  it('the legacy refusal under Enforcement: hard denies the dispatch', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+  })
+
+  it('a pointer resolving to a legacy body-label file refuses dispatch.assignment.legacy-format too', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = pointerInHome(app.harnessDir, LEGACY_BODY_LABEL)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(advisories).toHaveLength(1)
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
   })
 })

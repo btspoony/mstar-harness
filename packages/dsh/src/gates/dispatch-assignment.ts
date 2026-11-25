@@ -1,98 +1,126 @@
 /**
- * The Assignment HEADER grammar every dispatch-side gate reads: the header-field
- * extractors (`assignmentHeaderValue` / `assignmentHeaderValues` with the shared
- * code-span and first-token normalization), the placeholder guard (`isNaValue`),
- * the plan-id derivation (`planIdOf`), the shape guard (`isAssignmentShaped`),
- * the ONE hard-enforcement resolution (`resolveDispatchHard`) and the typed-
- * fields → header-text normalizer (`assignmentTextFromFields`).
+ * The Assignment FRONT MATTER grammar every dispatch-side gate reads: the
+ * header-field extractors (`assignmentHeaderValue` / `assignmentHeaderValues`
+ * with the shared code-span and first-token normalization), the placeholder
+ * guard (`isNaValue`), the plan-id derivation (`planIdOf`), the shape guard
+ * (`isAssignmentShaped`), the D16 legacy body-label detection
+ * (`legacyAssignmentShape` / `legacyFormatViolation`), the ONE hard-enforcement
+ * resolution (`resolveDispatchHard`) and the typed-fields → front-matter-text
+ * normalizer (`assignmentTextFromFields`).
  *
  * Module boundary: one responsibility — turn Assignment TEXT (or the host's
- * typed fields) into the header values a decision is made from. It makes no
- * decision itself: the lease, worktree and dispatch cores consume these values.
- * Callers MUST pass the engine `assignmentHeaderRegion` slice; the engine owns
- * the header/body boundary and this module keeps no second grammar for it.
+ * typed fields) into the front matter values a decision is made from. It makes
+ * no decision itself: the lease, worktree and dispatch cores consume these
+ * values. Callers MUST pass the engine `assignmentHeaderRegion` slice (the
+ * fenced front matter fragment); the engine owns the front-matter/body
+ * boundary and this module keeps no second grammar for it.
  *
  * No barrel: importers name this module by explicit relative path; it
  * re-exports nothing from a sibling and imports no sibling dispatch module.
  */
 import { basename } from 'node:path'
-import { assignmentHeaderRegion, parseEnforcementFlag } from '@mstar-harness/engine'
-import type { AssignmentFields } from '@mstar-harness/engine'
+import { parseEnforcementFlag } from '@mstar-harness/engine'
+import type { AssignmentFields, ValidationResult } from '@mstar-harness/engine'
 import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 
-/** `## Assignment` heading marker (opencode parity — shape guard only). */
+/** `## Assignment` heading marker (shape guard only). */
 const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
 
-/** Shape-guard match of an Assignment header field (opencode parity). */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm
+/** Shape-guard match of one Assignment core front matter key (engine parity:
+ * the snake_case key declares the shape; a body-quoted `**Label**` template
+ * line never declares it). */
+const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m
 
 /**
- * True when the text looks like an Assignment (opencode parity: `## Assignment`
- * heading or at least one core field line). Non-Assignment delegation prompts
- * stay silent — no false-positive warnings. Callers MUST pass the engine
- * `assignmentHeaderRegion` slice: a `## Assignment` heading or
- * field line quoted in the task body must not shape a non-assignment prompt.
- * Exported for the agent-flow ledger's shape guard — the shared
- * `DshHostAdapter.dispatchGate` core applies the SAME guard on both dispatch
- * surfaces, so the exec-less host-hook path records nothing for
- * non-Assignment text either).
+ * Shape-guard match of a retired body-label core field in ANY of its three
+ * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
+ * list-prefixed `- **Execute as**:` line (indentation and a numeric or bullet
+ * list marker are formatting, never the field; commands validation.ts parity).
+ */
+function legacyLabelKey(line: string): string | undefined {
+  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line)
+  return match?.[1]
+}
+
+/**
+ * D16 shape detection: true when the document carries its fields in the
+ * RETIRED body-label grammar — at least TWO distinct core labels, so a single
+ * bolded field line in ordinary prose never shapes a document as an
+ * Assignment; the `## Assignment` heading is irrelevant either way (commands
+ * `dispatch validate` parity — one detection grammar across every gate).
+ */
+export function legacyAssignmentShape(text: string): boolean {
+  if (/^---[ \t]*\r?\n/.test(text)) return false
+  const found = new Set<string>()
+  for (const line of text.split(/\r?\n/)) {
+    const key = legacyLabelKey(line)
+    if (key !== undefined) found.add(key)
+    if (found.size >= 2) return true
+  }
+  return false
+}
+
+/**
+ * The D16 legacy-format refusal violation every gate emits for an
+ * Assignment-shaped document whose fields live in body lines (the retired
+ * format): front matter is the only field contract. The refusal names BOTH
+ * recoveries — the front matter rewrite and the `Assignment file:` pointer
+ * (compass D14) — so the caller reads the ONE contract out of any gate.
+ */
+export function legacyFormatViolation(): ValidationResult {
+  return {
+    ok: false,
+    severity: 'high',
+    code: 'dispatch.assignment.legacy-format',
+    message: 'the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract',
+    fix: 'rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home',
+  }
+}
+
+/**
+ * True when the text is Assignment-shaped for the dispatch gates: front
+ * matter carrying a core key (`execute_as` / `delegation` / `task_category`
+ * — the engine `composeDispatchGate` shape grammar), a retired body-label
+ * shape ({@link legacyAssignmentShape} — the document must be gated, not
+ * silently passed), or the `## Assignment` heading of the dsh host-hook
+ * record guard.
+ *
+ * Callers pass whatever text slice suits them: the detection scans the whole
+ * input and the fenced/body distinctions are owned inside each leg.
  */
 export function isAssignmentShaped(assignmentText: string): boolean {
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
+  if (ASSIGNMENT_FM_FIELD_RE.test(assignmentText)) return true
+  if (legacyAssignmentShape(assignmentText)) return true
+  return ASSIGNMENT_HEADING_RE.test(assignmentText)
 }
 
 /**
  * Resolve the hard-enforcement flag for one dispatch: explicit Config override
- * wins, else the Assignment's OWN `Enforcement: hard` header flag (opencode
- * parity — header region only, a body-quoted example never hardens), else the
+ * wins, else the Assignment's OWN `enforcement: hard` front matter flag
+ * (fenced front matter only — a body-quoted example never hardens), else the
  * repo `.mstarc` `[config] enforcement`, else the iteration compass
  * frontmatter, else warn-only.
  */
 export function resolveDispatchHard(harnessDir: string | null, config: Config, assignmentText: string): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
-  if (parseEnforcementFlag(assignmentHeaderRegion(assignmentText)).hard) return true
+  if (parseEnforcementFlag(assignmentText).hard) return true
   return resolveSeamHard(harnessDir, config)
 }
 
 /**
- * Parse one Assignment HEADER-REGION field value with the engine
- * `parseAssignmentFields` semantics: a `**Field**: value` (bold) or
- * `Field: value` (plain) line, optionally list-bulleted, at line start.
- * Returns the trimmed value or undefined when the field is absent/empty.
- *
- * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)` slice
- * The engine owns the header/body boundary, so
- * body-quoted field examples after a `# Task` / `# Target` / `---` marker
- * never leak into header fields — the same discipline `resolveDispatchHard`
- * already honors for the Enforcement flag. This module keeps no second
- * grammar for the boundary.
- *
- * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
- * @param label - the header field label to read (e.g. `Plan Path`).
+ * Convert the legacy display label of one Assignment field to its front
+ * matter snake_case key (`Plan Path` → `plan_path`, `SDD dir` → `sdd_dir`,
+ * `Task budget (implement / ops rounds)` → `task_budget` — the
+ * parenthesized qualifier is the label suffix, never part of the key).
  */
-export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`, 'm')
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`, 'm')
-  const line = headerRegion.match(bold)?.[1] ?? headerRegion.match(plain)?.[1]
-  if (line === undefined) return undefined
-  const value = stripWrappingCodeSpan(line.trim())
-  return value === '' ? undefined : value
+function labelToFrontmatterKey(label: string): string {
+  return label.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase().replace(/\s+/g, '_')
 }
 
 /**
  * Strip ONE wrapping markdown code span from a header value.
- *
- * Assignment prose routinely writes header values as code spans —
- * ``**Plan Path**: `/x/plan.md` `` — and the extractor used to keep the
- * backticks. That failed **silently**: `planIdOf` keys off a literal `.md`
- * suffix, so `` plan.md` `` was not recognised as a plan file and the id was
- * carried into the agent-flow ledger *with* its trailing backtick, matching no
- * registered plan (and, under an iteration lease gate, producing a spurious
- * "plan is not registered" violation).
  *
  * Only a single clean pair is stripped: a value that wraps several spans
  * (`` `/a`, `/b` ``) has backticks inside and is left untouched, so no other
@@ -106,6 +134,66 @@ function stripWrappingCodeSpan(value: string): string {
   return inner.includes('`') ? value : inner.trim()
 }
 
+/** Strip one wrapping YAML quote pair from a scalar. */
+function unquoteScalar(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed.slice(1, -1)
+  if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1)
+  return trimmed
+}
+
+/**
+ * The front matter scalar lines of a fenced fragment (the engine
+ * `assignmentHeaderRegion` output keeps the `---` fences): `key: value`
+ * entries plus block-list items, repeated keys kept in order (the L2
+ * parallel-track declaration is a repeated `worktree_path` /
+ * `working_branch` pairing). Comments and blank lines are skipped; the
+ * grammar is line-shaped — nested maps are never Assignment values.
+ * shortcut: indentation-sensitive subset of YAML, upgrade to the engine
+ * entries parser when it is exported.
+ */
+function frontmatterEntries(headerRegion: string): Array<{ key: string; value: string }> {
+  const entries: Array<{ key: string; value: string }> = []
+  const lines = headerRegion.split(/\r?\n/)
+  let lastIndex = -1
+  for (const line of lines) {
+    if (line.trim() === '' || line.trim() === '---' || line.trimStart().startsWith('#')) continue
+    const listItem = /^[ \t]*-[ \t]+(.*)$/.exec(line)
+    if (listItem !== null && lastIndex >= 0) {
+      // A block-list item belongs to the most recent key.
+      entries.push({ key: entries[lastIndex]!.key, value: unquoteScalar(listItem[1]!) })
+      continue
+    }
+    const entry = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*(.*)$/.exec(line)
+    if (entry === null) { lastIndex = -1; continue }
+    entries.push({ key: entry[1]!, value: unquoteScalar(entry[2]!.replace(/[ \t]+#.*$/, '')) })
+    lastIndex = entries.length - 1
+  }
+  return entries
+}
+
+/**
+ * Parse one Assignment front matter field value by its snake_case key
+ * (`parseAssignmentFields` semantics: the fenced front matter block is the
+ * only field contract). Returns the trimmed value or undefined when the
+ * field is absent/empty.
+ *
+ * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
+ * slice. The legacy display label is still accepted (converted to its
+ * snake_case key) so the worktree/lease consumers migrate without a second
+ * grammar.
+ *
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
+ * @param label - the field label or snake_case key to read (e.g. `Plan Path`).
+ */
+export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
+  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
+  const entry = frontmatterEntries(headerRegion).find((candidate) => candidate.key === key)
+  if (entry === undefined) return undefined
+  const value = stripWrappingCodeSpan(entry.value.trim())
+  return value === '' ? undefined : value
+}
+
 /** First whitespace-delimited token of a header value (paths in this convention never contain spaces). */
 export function firstToken(value: string): string | undefined {
   const token = value.split(/\s+/)[0]
@@ -113,30 +201,24 @@ export function firstToken(value: string): string | undefined {
 }
 
 /**
- * ALL header-region values of a repeated Assignment field label (bold or
- * plain, optionally list-bulleted — the same line grammar as the engine
- * `parseAssignmentFields`). Repeated `Worktree path` / `Working branch`
- * lines declare the L2 parallel-track context; empty values are
- * dropped (consistent with {@link assignmentHeaderValue}: an empty line is
- * an absent field, never a malformed track).
+ * ALL front matter values of a repeated Assignment field key. Repeated
+ * `worktree_path` / `working_branch` lines declare the L2 parallel-track
+ * context; empty values are dropped (consistent with
+ * {@link assignmentHeaderValue}: an empty line is an absent field, never a
+ * malformed track).
  *
  * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
- * slice: body-quoted field examples after a
- * `# Task` / `# Target` / `---` marker never leak into the track
- * declarations — the same header-region discipline the dispatch gate
- * already honors.
+ * slice.
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
- * @param label - the header field label to read (e.g. `Worktree path`).
+ * @param label - the field label or snake_case key to read (e.g. `Worktree path`).
  */
 export function assignmentHeaderValues(headerRegion: string, label: string): string[] {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`)
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`)
+  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
   const values: string[] = []
-  for (const line of headerRegion.split(/\r?\n/)) {
-    const raw = (line.match(bold) ?? line.match(plain))?.[1]
-    const value = raw === undefined ? undefined : stripWrappingCodeSpan(raw.trim())
-    if (value !== undefined && value !== '') values.push(value)
+  for (const entry of frontmatterEntries(headerRegion)) {
+    if (entry.key !== key) continue
+    const value = stripWrappingCodeSpan(entry.value.trim())
+    if (value !== '') values.push(value)
   }
   return values
 }
@@ -147,21 +229,21 @@ export function isNaValue(value: string | undefined): value is undefined {
 }
 
 /**
- * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
- * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * Resolve the target plan id from the Assignment front matter: `plan_path`
+ * basename (`.md` stripped), else `sdd_dir` basename, else a `plan_id` key.
  * Exported for the agent-flow ledger's dispatch derivation (the ledger
  * records the same plan identity the gate resolved — one grammar).
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (
- * only the header is read — a plan path quoted in the task body never
+ * only the front matter is read — a plan path quoted in the task body never
  * resolves a plan id).
  */
 export function planIdOf(headerRegion: string): string | undefined {
-  const planPath = assignmentHeaderValue(headerRegion, 'Plan Path')
+  const planPath = assignmentHeaderValue(headerRegion, 'plan_path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
     return id.endsWith('.md') ? id.slice(0, -3) : id
   }
-  const sddDir = assignmentHeaderValue(headerRegion, 'SDD dir')
+  const sddDir = assignmentHeaderValue(headerRegion, 'sdd_dir')
   if (!isNaValue(sddDir)) {
     const id = basename(firstToken(sddDir) ?? '')
     return id === '' ? undefined : id
@@ -171,12 +253,12 @@ export function planIdOf(headerRegion: string): string | undefined {
 }
 
 /**
- * Rebuild the canonical Assignment HEADER text from parsed fields (the
- * engine's OWN header grammar — `parseAssignmentFields` reads exactly these
- * labels — so the engine parsers round-trip losslessly). Every typed
- * `AssignmentFields` slot is emitted under its canonical header label: the
- * implement/ops `Task budget` (capacity contract spec § A1) after
- * `Task category`, and the review-seat `Budget` / `Return shape` round
+ * Rebuild the canonical Assignment front matter text from parsed fields (the
+ * engine's OWN snake_case grammar — `parseAssignmentFields` reads exactly
+ * these keys — so the engine parsers round-trip losslessly). Every typed
+ * `AssignmentFields` slot is emitted under its canonical front matter key:
+ * the implement/ops `task_budget` (capacity contract spec § A1) after
+ * `task_category`, and the review-seat `budget` / `return_shape` round
  * bounds after the branch forms — dropping any of them would false-fire the
  * corresponding `assignment.field.*-missing` gate on a host that passed the
  * typed form. The host hook's engine-typed input is `AssignmentFields`; the
@@ -184,14 +266,15 @@ export function planIdOf(headerRegion: string): string | undefined {
  * normalized to text before gating.
  */
 export function assignmentTextFromFields(fields: AssignmentFields): string {
-  const lines = ['## Assignment', '']
-  if (fields.executeAs !== undefined) lines.push(`**Execute as**: ${fields.executeAs}`)
-  if (fields.delegation !== undefined) lines.push(`**Delegation**: ${fields.delegation}`)
-  if (fields.taskCategory !== undefined) lines.push(`**Task category**: ${fields.taskCategory}`)
-  if (fields.taskBudget !== undefined) lines.push(`**Task budget (implement / ops rounds)**: ${fields.taskBudget}`)
-  if (fields.workingBranch !== undefined) lines.push(`**Working branch**: ${fields.workingBranch}`)
-  if (fields.branchPolicy !== undefined) lines.push(`**Branch policy**: ${fields.branchPolicy}`)
-  if (fields.budget !== undefined) lines.push(`**Budget (review / QC seats)**: ${fields.budget}`)
-  if (fields.returnShape !== undefined) lines.push(`**Return shape (review / QC seats)**: ${fields.returnShape}`)
+  const lines = ['---']
+  if (fields.executeAs !== undefined) lines.push(`execute_as: ${fields.executeAs}`)
+  if (fields.delegation !== undefined) lines.push(`delegation: ${fields.delegation}`)
+  if (fields.taskCategory !== undefined) lines.push(`task_category: ${fields.taskCategory}`)
+  if (fields.taskBudget !== undefined) lines.push(`task_budget: ${fields.taskBudget}`)
+  if (fields.workingBranch !== undefined) lines.push(`working_branch: ${fields.workingBranch}`)
+  if (fields.branchPolicy !== undefined) lines.push(`branch_policy: ${fields.branchPolicy}`)
+  if (fields.budget !== undefined) lines.push(`budget: ${fields.budget}`)
+  if (fields.returnShape !== undefined) lines.push(`return_shape: ${fields.returnShape}`)
+  lines.push('---', '', '## Assignment', '')
   return lines.join('\n')
 }

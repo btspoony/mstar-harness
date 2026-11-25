@@ -12,7 +12,7 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import { type Context } from '@deepseek-ai/cordis'
-import { applyEnforcement, assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
+import { applyEnforcement, parseAssignmentFields } from '@mstar-harness/engine'
 import type { GateResult } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, formatViolation } from './_shared.ts'
@@ -58,18 +58,19 @@ async function gateAssignmentText(
   hintReadOf: () => SessionHintRead,
 ): Promise<PreToolDecision | undefined> {
   const toolName = exec.name
-  // Shape guard + advisory role read run on the header region:
-  // a `## Assignment` heading or field line quoted in the task body cannot
-  // shape a non-assignment prompt or leak into the advisory role.
-  const header = assignmentHeaderRegion(prompt)
-  if (!isAssignmentShaped(header)) return undefined
-
+  // Shape guard on the raw carrier text: an inline document is read whole
+  // (the front matter scanners fence-scope themselves); a pointer line
+  // (`Assignment file: <abs>`, compass D14) is shaped by its own prefix so
+  // the source resolution verdict — success OR refusal — is always gated.
+  // The D16 legacy body-label shape is assignment-shaped too: the document
+  // must reach the gate's legacy-format refusal, never pass silently.
+  if (!isAssignmentShaped(prompt) && !/^[ \t]*Assignment file:[ \t]*\S/m.test(prompt)) return undefined
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
   // joins the SAME verdict as the field/branch/anti-recursion checks.
-  // `hard` resolves ONCE per dispatch (
-  // : the adapter's record block and this gate decision share the
-  // single resolution instead of each re-reading the compass.
+  // `hard` resolves ONCE per dispatch: the adapter's record block and this
+  // gate decision share the single resolution instead of each re-reading
+  // the compass.
   const hard = resolveDispatchHard(harnessDir, config, prompt)
   const result = await adapter.dispatchGate(prompt, exec, hard, hintReadOf())
   const verdict = applyEnforcement(result, { hard })
@@ -83,7 +84,7 @@ async function gateAssignmentText(
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    const role = parseAssignmentFields(header).executeAs ?? ''
+    const role = parseAssignmentFields(prompt).executeAs ?? ''
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   return undefined

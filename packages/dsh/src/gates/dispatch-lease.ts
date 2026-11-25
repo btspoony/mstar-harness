@@ -9,7 +9,7 @@
  *
  * No barrel: importers name this module by explicit relative path.
  */
-import { assignmentHeaderRegion, executionModeToN, parseAssignmentBranchForms } from '@mstar-harness/engine'
+import { assignmentHeaderRegion, executionModeToN, parseAssignmentBranchForms, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
 import type { ValidationResult } from '@mstar-harness/engine'
 import { resolve } from 'node:path'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
@@ -70,9 +70,18 @@ export async function leaseGateViolations(
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null || writable === false) return []
-  const header = assignmentHeaderRegion(prompt)
-  const mode = assignmentHeaderValue(header, 'Execution mode')
-  const sdd = executionModeToN(mode ?? '').n === 3
+  // compass D14 — the lease reads the resolved assignment document: an
+  // `Assignment file: <abs>` pointer resolves against this gate's control
+  // harness root, exactly as the dispatch core resolves it, so a pointer and
+  // the inline form answer the same row-scope questions. A pointer the
+  // resolver refuses is the core's terminal refusal — the lease adds nothing.
+  const assignmentSource = readAssignmentSource(prompt, { harnessDir })
+  if (!assignmentSource.ok) return []
+  const text = assignmentSource.text
+  const header = assignmentHeaderRegion(text)
+  // `execution_mode` is the engine parsed field — the front matter scalar
+  // key is the single declaration contract (the local label scan is gone).
+  const sdd = executionModeToN(parseAssignmentFields(text).executionMode ?? '').n === 3
   const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
   let source: ExecutionWorkflowSourceRead

@@ -16,9 +16,11 @@ import {
   composeDispatchGate,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
+  readAssignmentSource,
 } from '@mstar-harness/engine'
 import type { ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { legacyAssignmentShape, legacyFormatViolation } from './dispatch-assignment.ts'
 import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isRootLikeAgent } from './steering.ts'
@@ -113,11 +115,35 @@ export async function dispatchGateCore(
   callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
-): Promise<{ violations: ValidationResult[]; writable: boolean | undefined }> {
-  const header = assignmentHeaderRegion(prompt)
+): Promise<{ violations: ValidationResult[]; writable: boolean | undefined; text: string }> {
+  // compass D14/D16 — the ONE source resolution: an `Assignment file: <abs>`
+  // pointer resolves against the gate's OWN control harness root (a root the
+  // gate cannot resolve refuses the pointer rather than skipping
+  // containment); inline front matter passes through verbatim, so a pointer
+  // and the inline form reach the composition with the SAME fields. The
+  // refusal is itself the verdict: validating the pointer text would report
+  // field violations on the wrong body.
+  const source = readAssignmentSource(prompt, { harnessDir })
+  if (!source.ok) {
+    return {
+      violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }],
+      writable: undefined,
+      text: prompt,
+    }
+  }
+  const text = source.text
+  const header = assignmentHeaderRegion(text)
   const violations: ValidationResult[] = [...worktreeL2Violations(header), ...await worktreeL1Violations(harnessDir, header, hint, activeSource)]
-  // Read-only roles (scout/explore) skip the branch-form gate entirely.
-  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
+  // D16 — an Assignment-shaped document whose fields live in the retired
+  // body-label grammar is refused `dispatch.assignment.legacy-format` on
+  // EVERY gate (commands `dispatch validate` parity). The refusal
+  // supersedes the schema's absent-fence row the composition emits for the
+  // same unfenced text — one defect, one message.
+  const legacy = legacyAssignmentShape(text)
+  if (legacy) violations.push(legacyFormatViolation())
+  // Read-only roles (scout/explore) skip the branch-form gate entirely;
+  // the role is the parsed front matter field of the document.
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
   // role, DERIVED from the calling session — an explicit binding is honoured
@@ -131,7 +157,9 @@ export async function dispatchGateCore(
   // settings save applies on the next dispatch) — and an explicitly blank
   // value still fails closed.
   violations.push(
-    ...composeDispatchGate(header, { caller: dispatchCallerOf(config, callerAgent), callerRequired: true, writable }).violations,
+    ...composeDispatchGate(text, { caller: dispatchCallerOf(config, callerAgent), callerRequired: true, writable }).violations.filter(
+      (v) => !(legacy && v.code === 'document.frontmatter.absent'),
+    ),
   )
-  return { violations, writable }
+  return { violations, writable, text }
 }

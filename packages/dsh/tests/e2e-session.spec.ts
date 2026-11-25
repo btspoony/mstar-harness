@@ -165,16 +165,18 @@ const LEASE_BRANCH = 'feature/e2e-lease'
 /** The SDD writable Assignment the row-scope gate re-verifies, parameterised by
  * the real feature checkout the row records. */
 function sddAssignment(worktreePath: string): string {
-  return `## Assignment
+  return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+plan_path: plans/${LEASE_PLAN_ID}.md
+worktree_path: ${worktreePath}
+working_branch: ${LEASE_BRANCH}
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Plan Path**: plans/${LEASE_PLAN_ID}.md
-**Worktree path**: ${worktreePath}
-**Working branch**: ${LEASE_BRANCH}
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
@@ -269,7 +271,7 @@ describe('dispatch gate — full session dispatch decisions', () => {
 
     expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
   })
 
   it('SDD assignment with a matching recorded row scope → silent allow', async () => {
