@@ -1693,6 +1693,12 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
   const own = resolveCollaborationLocation(context);
   const role: IssueMoveRole = own.repoKey === request.destinationAuthority ? "destination" : "source";
   const destinationMode = await readLaneMode(collaborationLocationOfRepoKey(request.destinationAuthority, "local"));
+  // invariant: A move this lane never recorded refuses by name before any topology question — "no
+  // such move here" is the cause the operator can act on. The check is read-only and binds the whole
+  // request, exactly as `discardMove` itself does.
+  if (role === "source" && (await boundSourceRow(context, request)) === null) {
+    throw noSuchMove(request.operationId, "discard");
+  }
   // invariant: Only the SOURCE checkout of a one-checkout move holds both halves reachably.
   if (role === "source" && own.mode !== "remote" && destinationMode !== null && destinationMode !== "remote") {
     return discardMove(context, request);
@@ -1715,7 +1721,7 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
     throw new StoreError(
       "collaboration.mode-unavailable",
       `Move ${request.operationId} keeps its source ledger row in the peer authority, which this destination checkout ` +
-        `cannot open, and a discard releases both halves in one run — only a move between two lanes this checkout can ` +
+        `cannot open, and a discard releases both halves in one run \u2014 only a move between two lanes this checkout can ` +
         `open admits that. Nothing was modified.`,
       {
         operation_id: request.operationId,
