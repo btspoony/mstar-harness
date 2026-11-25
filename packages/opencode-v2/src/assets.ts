@@ -109,7 +109,9 @@ export function loadAgentsFromDir(agentsDirPath: string): Record<string, JsonObj
       throw new Error(`bundled agent unreadable: ${filePath} (${String((error as Error).message)})`, { cause: error });
     }
     const { frontmatter, body } = extractFrontmatterAndBody(content);
-    const parsed = parseSimpleFrontmatter(frontmatter);
+    // The loader names its file as the reader's source label, so a refusal
+    // attributes the violation to this asset (path, document line and fix).
+    const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName = typeof parsed.name === "string" ? parsed.name : "";
     const id = parsedName || file.replace(/\.md$/, "");
 
@@ -140,7 +142,7 @@ export function loadCommandsFromDir(commandsDirPath: string): Record<string, Com
       throw new Error(`bundled command unreadable: ${filePath} (${String((error as Error).message)})`, { cause: error });
     }
     const { frontmatter, body } = extractFrontmatterAndBody(content);
-    const parsed = parseSimpleFrontmatter(frontmatter);
+    const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName =
       typeof parsed.name === "string" ? parsed.name : file.replace(/\.(?:md|mdc|markdown|txt)$/, "");
 

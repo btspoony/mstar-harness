@@ -270,6 +270,78 @@ Body.
     expect(loaded.permission).toEqual({ edit: { "*": "deny" } });
     expect(loaded).toMatchObject(parseSimpleFrontmatter(extractFrontmatterAndBody(QUOTED_KEY_SEAT).frontmatter));
   });
+  test("agent and command front matter with nested maps resolve to the same objects", () => {
+    // Task 4 host-parity proof: an agent seat and a command whose front
+    // matter carries nested `tools:`/`permission:` block maps must come out
+    // of the loaders as the exact object an independent parse of the same
+    // bytes produces — key spellings, nesting depth and scalars intact.
+    const COMMAND_SEAT = `---
+name: iteration-drive
+description: Drive the iteration.
+agent: fullstack-dev
+permission:
+  edit:
+    "*": deny
+---
+
+Drive the iteration.
+`;
+    const commandsDir = path.join(tmpRoot(), "harness-commands");
+    writeFileUnder(commandsDir, "iteration-drive.md", COMMAND_SEAT);
+
+    const loadedAgent = loadAgentsFromDir(agentsDirWith(PM_PRIMARY_SEAT))["project-manager"];
+    const parsedAgent = parseSimpleFrontmatter(extractFrontmatterAndBody(PM_PRIMARY_SEAT).frontmatter);
+    expect(loadedAgent).toMatchObject(parsedAgent);
+    expect(loadedAgent.tools).toEqual({ write: true, edit: true, bash: true });
+    expect((loadedAgent.permission as Record<string, Record<string, string>>).task["*"]).toBe("allow");
+
+    const loadedCommand = loadCommandsFromDir(commandsDir)["iteration-drive"];
+    const parsedCommand = parseSimpleFrontmatter(extractFrontmatterAndBody(COMMAND_SEAT).frontmatter);
+    // The command loader forwards the whitelisted scalars verbatim from the
+    // same parse; a nested permission map in the file must not disturb them.
+    expect(loadedCommand.description).toBe(parsedCommand.description);
+    expect(loadedCommand.agent).toBe(parsedCommand.agent);
+    expect(loadedCommand.template).toBe("Drive the iteration.");
+  });
+
+  test("an unsupported line inside a command's nested map propagates the shared reader's refusal", () => {
+    // T4-R1: the command loader whitelists scalar keys, so the valid fixture
+    // above can pass even if the nested map were never really parsed. An
+    // unsupported line INSIDE the nested map makes the loader's dependence on
+    // the shared reader observable: the loader passes its file path as the
+    // reader's source label, so the refusal attributes the violation to the
+    // asset — path, 1-based document line of the offending line and the
+    // reader's recovery fix ("*" alias at line 7: fence 1, name 2,
+    // description 3, agent 4, permission 5, edit 6, the offending line 7).
+    const BAD_COMMAND_SEAT = `---
+name: iteration-drive
+description: Drive the iteration.
+agent: fullstack-dev
+permission:
+  edit:
+    "*": *deny
+---
+
+Drive the iteration.
+`;
+    const commandsDir = path.join(tmpRoot(), "harness-commands");
+    writeFileUnder(commandsDir, "iteration-drive.md", BAD_COMMAND_SEAT);
+
+    let thrown: unknown;
+    try {
+      loadCommandsFromDir(commandsDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeDefined();
+    const refusal = thrown as { name?: string; source?: string; line?: number; lineText?: string; fix?: string };
+    expect(refusal.name).toBe("DocumentFrontmatterError");
+    expect(refusal.source).toBe(path.join(commandsDir, "iteration-drive.md"));
+    expect(refusal.line).toBe(7);
+    expect(refusal.lineText).toBe('    "*": *deny');
+    expect(typeof refusal.fix).toBe("string");
+    expect(refusal.fix!.length).toBeGreaterThan(0);
+  });
 
   /** The first sorted asset file whose independent parse carries a string
    * `description`, paired with the entry the loader files it under. The

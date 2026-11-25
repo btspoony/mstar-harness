@@ -44,6 +44,7 @@ import {
   evaluatePhaseGate,
   evaluatePostMergeCloseFromExecutionAuthority,
   parseCompassFrontmatter,
+  parseCompassFrontmatterText,
   pushCadenceProbe,
   readCatalogCompleteness,
   validateCompassFrontmatter,
@@ -487,3 +488,134 @@ function stopAttestation(stopped: string): ActivationAttestation {
     stoppedSessions: [{ sessionId: stopped, host: "omp", state: "stopped" }],
   };
 }
+
+describe("parseCompassFrontmatterText — delegation to the shared parser keeps the compass scalar contract", () => {
+  test("an unsupported indented scalar refuses with the file and the line", () => {
+    const content = ["---", "iteration_id: v1", "  trailing-indent: yes", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(/compass\.md.*trailing-indent/);
+  });
+
+  test("plans: [] and plans: [a, b] flow forms still parse", () => {
+    const empty = parseCompassFrontmatterText(["---", "plans: []", "---", ""].join("\n"), "compass.md");
+    expect(empty).toEqual({ plans: [] });
+    const flow = parseCompassFrontmatterText(["---", "plans: [a, b]", "---", ""].join("\n"), "compass.md");
+    expect(flow).toEqual({ plans: ["a", "b"] });
+  });
+
+  test("a multi-line plans: list still parses", () => {
+    const content = ["---", "plans:", "  - plan-a", "  - plan-b", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a", "plan-b"] });
+  });
+
+  test("compass scalars stay strings: true, numbers and null-like text never type", () => {
+    const content = ["---", "flag: true", "count: 42", "end_date: null", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ flag: "true", count: "42", end_date: "null" });
+  });
+
+  test("a bare scalar value stays null", () => {
+    const content = ["---", "target_branch:", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ target_branch: null });
+  });
+
+  test("a double-quoted scalar keeps its JSON-escape decode (roadmap export writes JSON.stringify)", () => {
+    const content = ["---", "note: \"a\\nb\\\"c\"", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ note: "a\nb\"c" });
+  });
+
+
+  test("key:value without a space stays the scalar the old parser accepted", () => {
+    const content = ["---", "target_branch:main", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ target_branch: "main" });
+  });
+
+  test("note: {} stays the string \"{}\" and >/anchor values stay plain strings", () => {
+    const content = ["---", "note: {}", "folded: >", "anchored: &value", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({
+      note: "{}",
+      folded: ">",
+      anchored: "&value",
+    });
+  });
+
+  test("block-list items with YAML structural prefixes stay plain strings (F5 regression)", () => {
+    const content = ["---", "plans:", "  - &value", "  - *x", "  - !x", "  - {a}", "  - [a]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({
+      plans: ["&value", "*x", "!x", "{a}", "[a]"],
+    });
+  });
+
+  test("a [a] block-list item stays a plain string (F5 regression)", () => {
+    const content = ["---", "plans:", "  - [a]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["[a]"] });
+  });
+
+  test("a nested map refuses with the file path, the line and the reason", () => {
+    const content = ["---", "plans:", "  unexpected: value", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(
+      /compass\.md:3: nested map in flat frontmatter/,
+    );
+  });
+
+  test("a block scalar refuses with the file path, the line and the reason", () => {
+    const content = ["---", "description: |", "  body", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(
+      /compass\.md:2: block scalar in flat frontmatter/,
+    );
+  });
+
+  test("a trailing separator in a flow list is skipped like the old flat parser", () => {
+    const content = ["---", "plans: [plan-a,]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });
+  });
+
+  test("quoted flow-list items lose their boundary quotes like the old flat parser", () => {
+    const content = ["---", `plans: ["plan-a", 'plan-b',]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a", "plan-b"] });
+  });
+
+  test("a leading quote on a flow-list item strips even when its mate sits inside the item", () => {
+    const content = ["---", `plans: ["plan-a" suffix]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: [`plan-a" suffix`] });
+  });
+
+  test("a trailing quote on a flow-list item strips even when its mate sits inside the item", () => {
+    const content = ["---", `plans: [prefix"plan-a"]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: [`prefix"plan-a`] });
+  });
+
+  test("a quoted empty flow-list item is skipped like a plain empty one", () => {
+    const content = ["---", `plans: ["", plan-a]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });
+    const onlyEmpty = ["---", `plans: ["",]`, "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(onlyEmpty, "compass.md")).toEqual({ plans: [] });
+  });
+
+  test("an interior bracket in a flow-list item refuses like the old flat parser", () => {
+    const content = ["---", "plans: [plan-a[0]]", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(/unsupported flow array/);
+  });
+
+  test("an accepted __proto__ block list survives as an own data property and the prototype is unchanged", () => {
+    const content = ["---", "__proto__:", "  - plan-a", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toEqual(["plan-a"]);
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
+
+  test("an accepted __proto__ scalar survives as an own data property", () => {
+    const content = ["---", "__proto__: value", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toBe("value");
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
+
+  test("an accepted __proto__ flow list survives as an own data property", () => {
+    const content = ["---", "__proto__: [plan-a, plan-b]", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toEqual(["plan-a", "plan-b"]);
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
+});

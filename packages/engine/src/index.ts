@@ -373,6 +373,7 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  classifyReviewOrAuditRound,
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
@@ -498,7 +499,14 @@ export {
   violationLine,
 } from "./gates.js";
 export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
-export { extractFrontmatterAndBody, parseSimpleFrontmatter } from "./document-frontmatter.js";
+export {
+  DocumentFrontmatterError,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatter,
+  parseSimpleFrontmatter,
+} from "./document-frontmatter.js";
+export type { DocumentField, DocumentFieldType, DocumentKind, DocumentSchema } from "./document-schema.js";
+export { documentSchema, validateDocumentFrontmatter } from "./document-schema.js";
 export {
   MAX_SYMLINK_HOPS,
   STORE_AUTHORITY_FILES,

@@ -32,12 +32,16 @@ describe("parseCompassFrontmatter — shared golden vectors (parity with package
 });
 
 describe("parseCompassFrontmatter — structural errors carry the file path", () => {
-  test("unsupported line → throws with the file path and line", () => {
+  test("a dangling list item refuses with the document path, line and reason", () => {
     const dir = mkdtempSync(join(tmpdir(), "mstar-compass-"));
     const file = join(dir, "broken.md");
     writeFileSync(file, "---\niteration_id: v1\n- dangling\n---\n");
     try {
-      expect(() => parseCompassFrontmatter(file)).toThrow(/unsupported frontmatter line in .*broken\.md/);
+      // Document-relative diagnostic: `---` is line 1, so `- dangling` is
+      // line 3, and the shared reader names the structural reason.
+      expect(() => parseCompassFrontmatter(file)).toThrow(
+        /broken\.md:3: list item outside a list key: "- dangling"/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

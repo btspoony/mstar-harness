@@ -140,6 +140,58 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCa
 export const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
 
 /**
+ * Audit-category classification shared with the document schema: the raw
+ * `Task category` token is read case-insensitively after stripping leading
+ * markdown decoration, tolerating a suffix (`audit`, `audit (secondary)`,
+ * `audit_secondary`) but not a longer word (`auditing`). `Task category:
+ * audit` is an independent review-round trigger: mstar-harness-core maps
+ * `audit` to `@code-reviewer`, but nothing forces the pairing, so an audit
+ * round whose `Execute as` is outside the seat set would otherwise escape
+ * the round-bounding gate.
+ */
+export function isAuditTaskCategory(rawCategory: string): boolean {
+  const category = rawCategory.replace(/^[*_`"'\s]+/, "").toLowerCase();
+  return /^audit(?![A-Za-z0-9])/.test(category);
+}
+
+/**
+ * Normalize one `Execute as` token the way the round-bounding rules read it:
+ * strip a leading `@` mention, compare case-insensitively, take the first
+ * whitespace token — `@QC-Specialist-2 (security lens)` resolves to the
+ * seat. Shared by `validateAssignmentFields` and the document schema; no
+ * second normalization copy lives in the schema.
+ */
+export function normalizeAssignmentRole(rawRole: string): string {
+  return rawRole.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * The combined review/audit round classification, owned here and consumed
+ * by both `validateAssignmentFields` and the document schema: the
+ * normalized role, whether it names a review seat, whether the task
+ * category independently triggers an audit round — and `roundBounded`,
+ * the final shared decision of whether the round-bounding fields are
+ * required. The schema keeps only its field table; every part of the
+ * decision has exactly one copy.
+ */
+export function classifyReviewOrAuditRound(rawRole: string, rawCategory: string): {
+  role: string;
+  reviewSeat: boolean;
+  auditRound: boolean;
+  roundBounded: boolean;
+} {
+  const role = normalizeAssignmentRole(rawRole);
+  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const auditRound = isAuditTaskCategory(rawCategory);
+  return {
+    role,
+    reviewSeat,
+    auditRound,
+    roundBounded: reviewSeat || auditRound,
+  };
+}
+
+/**
  * Assignment labels carrying the review-seat Budget cap. The PM template
  * (dispatch-and-assignment.md) writes the parenthesized form; the bare
  * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
@@ -491,11 +543,9 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 // `Execute as` is outside the seat set would otherwise escape the gate. The
 // category token is read case-insensitively, tolerating a suffix (`audit`,
 // `audit (secondary)`, `audit_secondary`) but not a longer word (`auditing`).
-  const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
-  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const { role, reviewSeat, roundBounded } = classifyReviewOrAuditRound(fields.executeAs ?? "", fields.taskCategory ?? "");
   const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
-  const auditRound = /^audit(?![A-Za-z0-9])/.test(category);
-  if (reviewSeat || auditRound) {
+  if (roundBounded) {
     const subject = reviewSeat ? `review seat "${role}"` : `audit round (Task category: ${category})`;
     // One code per field — the PM reads which label is missing off the code.
     const boundingFields = [
@@ -532,7 +582,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // here too, and `writable: false` only waives the branch-form gate, never
   // this field. Presence-only: absent, empty or `N/A` fails; numeric/semantic
   // adequacy stays in PM's Prepare check.
-  if (!reviewSeat && !auditRound) {
+  if (!roundBounded) {
     const missing = describeAbsence(fields.taskBudget);
     if (missing !== undefined) {
       violations.push(
