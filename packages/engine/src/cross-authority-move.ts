@@ -417,17 +417,21 @@ export function stagedMismatch(source: IssueMoveRecord, staged: IssueMoveRecord)
 
 /** note: An operation id this lane records no move under: a fresh command, not a damaged ledger. */
 function noSuchMove(operationId: string, step: string): StoreError {
+  // invariant: A discard abandons a move, so "start the move" is no recovery here: it would publish a
+  // record under a fresh id and still leave nothing to discard. The recorded operation id and the
+  // checkout that staged it are the whole runnable recovery; every other step keeps the start.
+  const recovery =
+    step === "discard"
+      ? `Confirm the operation id the staging run recorded \u2014 its --out document or the move ledger ` +
+        `\u2014 and reissue this --discard from the checkout that staged it.`
+      : `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
+        `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
+        `--actor project-manager --operation-id ${operationId}\`, then reissue that same command to resume it.`;
   return new StoreError(
     "collaboration.move-phase-invalid",
     `No cross-authority move is recorded in this authority under operation id ${JSON.stringify(operationId)}, so there is ` +
       `nothing to ${step}. A move is never resumed, discarded or published from a guess. Nothing was modified.`,
-    {
-      operation_id: operationId,
-      recovery:
-        `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
-        `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
-        `--actor project-manager --operation-id ${operationId}\`, then reissue that same command to resume it.`,
-    },
+    { operation_id: operationId, recovery },
   );
 }
 
@@ -1685,7 +1689,7 @@ export async function discardMove(context: StoreContext, request: MoveRequest): 
  * lanes this checkout can open, so one run releases both and the source record is writable again as
  * soon as its source row leaves the blocking set. Before the switch neither side holds the member,
  * which is exactly the window in which abandoning is lossless. Anything else refuses: a source
- * checkout whose peer lane is not in this home holds only the source half, and a destination
+ * checkout that cannot read the peer lane holds only the source half, and a destination
  * checkout never holds the source half — releasing one half alone would leave a move no command
  * here can finish.
  */
@@ -1694,9 +1698,10 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
   const role: IssueMoveRole = own.repoKey === request.destinationAuthority ? "destination" : "source";
   const destinationMode = await readLaneMode(collaborationLocationOfRepoKey(request.destinationAuthority, "local"));
   // invariant: A move this lane never recorded refuses by name before any topology question — "no
-  // such move here" is the cause the operator can act on. The check is read-only and binds the whole
-  // request, exactly as `discardMove` itself does.
-  if (role === "source" && (await boundSourceRow(context, request)) === null) {
+  // such move here" is the cause the operator can act on. A remote checkout skips the probe: it has
+  // no local lane to read (the open would refuse with a bind recovery a discard cannot use), and the
+  // topology refusal below is its honest cause.
+  if (role === "source" && own.mode !== "remote" && (await boundSourceRow(context, request)) === null) {
     throw noSuchMove(request.operationId, "discard");
   }
   // invariant: Only the SOURCE checkout of a one-checkout move holds both halves reachably.
@@ -1732,21 +1737,25 @@ export async function discardAcrossAuthorities(context: StoreContext, request: M
     );
   }
   const cause =
-    destinationMode === null
-      ? `no lane this checkout can open exists for ${request.destinationAuthority}, so it holds only the source half`
-      : `the lane ${request.destinationAuthority} records is ${String(destinationMode)}, which spans a \`local\`/\`remote\` ` +
-        `boundary, so it holds only the source half`;
+    own.mode === "remote"
+      ? `this checkout's own lane is a remote cache for ${own.repoKey}, so the source half of a move is a ` +
+        `ledger half it never held`
+      : destinationMode === null
+        ? `this checkout holds no readable lane for ${request.destinationAuthority} \u2014 absent or unclassifiable ` +
+          `\u2014 so it holds only the source half`
+        : `the lane ${request.destinationAuthority} records is ${String(destinationMode)}, which spans a \`local\`/\`remote\` ` +
+          `boundary, so it holds only the source half`;
+  const recovery =
+    own.mode === "remote"
+      ? `Run this --discard from the source checkout that staged the move: the local ledger half it holds is ` +
+        `what a discard releases.`
+      : `The two-checkout exchange that releases each half in its own checkout is not part of this layer; the move's ` +
+        `record stays frozen by its source row.`;
   throw new StoreError(
     "collaboration.mode-unavailable",
     `Move ${request.operationId} cannot be discarded here: ${cause}. A discard releases both halves in one run, which ` +
       `only a move between two lanes this checkout can open admits. Nothing was modified.`,
-    {
-      operation_id: request.operationId,
-      role,
-      recovery:
-        `The two-checkout exchange that releases each half in its own checkout is not part of this layer; the move's ` +
-        `record stays frozen by its source row.`,
-    },
+    { operation_id: request.operationId, role, recovery },
   );
 }
 
