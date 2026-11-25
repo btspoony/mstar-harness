@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { DocumentFrontmatterError } from "./document-frontmatter.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 import { PlanPathError, planDeclaredHeaders, planDeclaredHeadersFromContent, resolveRegisteredPlanFile } from "./plan-path.js";
 
 const PLAN_ID = "20261125-plan-alpha";
@@ -18,16 +19,14 @@ function writePlanFile(content: string): { harnessRoot: string; planPath: string
   return { harnessRoot, planPath, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+// The shared renderer carries the valid-plan shape; this wrapper only names
+// the branch values these tests assert on — the fence layout itself is never
+// re-rendered locally.
 function frontMatterPlan(bodyLines: string[] = []): string {
-  return [
-    "---",
-    `plan_id: ${PLAN_ID}`,
-    "main_worktree_branch: feature/main-wt",
-    "working_branch: feature/work",
-    "---",
-    "",
-    ...bodyLines,
-  ].join("\n");
+  return planFrontMatter(PLAN_ID, bodyLines.join("\n"), {
+    main_worktree_branch: "feature/main-wt",
+    working_branch: "feature/work",
+  });
 }
 
 function refusalOf(run: () => unknown): PlanPathError {
@@ -46,6 +45,45 @@ describe("planDeclaredHeadersFromContent", () => {
     expect(headers.get("plan_id")).toBe(PLAN_ID);
     expect(headers.get("main worktree branch")).toBe("feature/main-wt");
     expect(headers.get("working branch")).toBe("feature/work");
+  });
+
+  test("the raw lexeme is the declaration \u2014 `main_worktree_branch: 5.0` keeps its written spelling", () => {
+    // CF-01 regression: the typed scalar `5` must never replace the branch
+    // spelling `5.0`; a numeric-looking value keeps exactly what the file says.
+    const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: 5.0", "working_branch: 2.0", "---", ""].join("\n");
+    const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
+    expect(headers.get("main worktree branch")).toBe("5.0");
+    expect(headers.get("working branch")).toBe("2.0");
+  });
+
+  test("a non-scalar consulted declaration refuses identity-mismatch naming the invalid key", () => {
+    // CF-02 regression: `main_worktree_branch: [other]` is present-but-invalid,
+    // never dropped to the absent-key fallback.
+    const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", ""].join("\n");
+    let error: unknown;
+    try {
+      planDeclaredHeadersFromContent(content, "my-plan.md");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(PlanPathError);
+    expect((error as PlanPathError).code).toBe("plan-path.identity-mismatch");
+    expect((error as PlanPathError).message).toContain("main_worktree_branch");
+  });
+
+  test("an unterminated front matter fence refuses identity-mismatch, never absent declarations", () => {
+    // CF-02 regression: an opening fence without a closing one is invalid —
+    // the declarations it swallows can never read as genuinely absent.
+    const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: main", "# no closing fence"].join("\n");
+    let error: unknown;
+    try {
+      planDeclaredHeadersFromContent(content, "my-plan.md");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(PlanPathError);
+    expect((error as PlanPathError).code).toBe("plan-path.identity-mismatch");
+    expect((error as PlanPathError).message).toContain("never closed");
   });
 
   test("a `**plan_id:**` line in the body with no front matter declares nothing", () => {

@@ -56,6 +56,7 @@ import {
   sourceDialect,
 } from "../src/lint.js";
 import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 /**
  * Locate the read-only skill corpus: `MSTAR_CONTROL_SKILLS` env override →
@@ -232,18 +233,12 @@ src/{core,path,status,...}.ts
 Inline: \`...\` stays exempt.
 `;
 
-/** Valid plan-schema frontmatter fence — prepended to planQualityBar inputs
- * whose assertions expect zero violations or violation-only shape, so the
- * schema check does not add `lint.plan.frontmatter.absent` to their result. */
-const VALID_PLAN_FENCE = `---
-plan_id: 20991231-example-plan
-execution: inline
-working_branch: main
-main_worktree_branch: main
-delivery_kind: development
-status: InProgress
----
-`;
+/** Valid plan-schema frontmatter fence — rendered by the one shared fixture
+ * renderer; the renderer's final newline is cut so body concatenation lands on
+ * the exact lines the planQualityBar assertions number, and prepended to inputs
+ * whose assertions expect zero violations or violation-only shape so the schema
+ * check does not add `lint.plan.frontmatter.absent` to their result. */
+const VALID_PLAN_FENCE = planFrontMatter("20991231-example-plan", "", { execution: "inline" }).slice(0, -1);
 
 const PLAN_PLACEHOLDER_MIXED_CASE = `# Plan
 - [ ] tbd lower-case

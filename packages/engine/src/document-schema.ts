@@ -18,6 +18,7 @@ import {
   DocumentFrontmatterError,
   extractFrontmatterAndBody,
   parseDocumentFrontmatterEntries,
+  type FrontmatterAndBody,
   type FrontmatterEntry,
 } from "./document-frontmatter.js";
 import { classifyReviewOrAuditRound, isReadOnlyAssignmentRole } from "./dispatch.js";
@@ -208,9 +209,19 @@ function isIsoDateTime(value: string): boolean {
  * other parser refusal). Missing/invalid/unknown are high severity.
  */
 export function validateDocumentFrontmatter(kind: DocumentKind, content: string, source: string): GateResult {
+  return validateDocumentFrontmatterExtraction(kind, extractFrontmatterAndBody(content), source);
+}
+
+/**
+ * The same schema validation over an ALREADY-extracted front-matter block:
+ * a caller that scans the document body as well discovers the fence boundary
+ * exactly once (`extractFrontmatterAndBody`) and shares that split with the
+ * validation instead of re-walking the document.
+ */
+export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extraction: FrontmatterAndBody, source: string): GateResult {
+  const { frontmatter, fenced } = extraction;
   const schema = documentSchema(kind);
   const violations: ValidationResult[] = [];
-  const { frontmatter, fenced } = extractFrontmatterAndBody(content);
   if (!fenced) {
     return {
       ok: false,

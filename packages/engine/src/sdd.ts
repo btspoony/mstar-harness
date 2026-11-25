@@ -969,9 +969,11 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
     // declares nothing); a missing record falls back conservatively to the
     // governing snapshot's explicit `branch.base`, never to the branch
     // observed at check time. A DocumentFrontmatterError (malformed or
-    // duplicate declaration) propagates with its file:line diagnostic — an
-    // invalid declaration is never read as an absent one, so a corrupted
-    // plan can never silently fall back to `branch.base`.
+    // duplicate declaration) or a PlanPathError (an invalid non-scalar
+    // declaration or an unterminated fence) propagates with its diagnostic —
+    // an invalid declaration is never read as an absent one, so a corrupted
+    // plan can never silently fall back to `branch.base`. Values are the raw
+    // written scalars, so a numeric-looking branch keeps its spelling.
     const expectedMainBranch = planDeclaredHeaders(input.planFile).get("main worktree branch") ?? snapshotBase;
     const l1 = l1PreDispatchCheck({
       workflowType: state.type === "iteration" ? "iteration" : "plan",

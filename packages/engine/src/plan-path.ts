@@ -38,7 +38,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, sep } from "node:path";
 import { canonicalTarget } from "./coordination-write.js";
-import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatter } from "./document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterAndBody } from "./document-frontmatter.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 
 /** Why a plan pointer was refused; these codes propagate unmapped. */
@@ -84,15 +84,36 @@ const PLAN_CONSULTED_KEYS: Record<string, string> = {
 /**
  * The consulted headers one plan markdown declares, keyed by lowercased label
  * (`'plan_id'`, `'main worktree branch'`, `'working branch'` — the shapes the
- * consumers read), with values from the shared front-matter reader. A duplicate
- * key or an unsupported line is the shared reader's `DocumentFrontmatterError`
- * naming `file:line`, never a plan-path code of its own.
+ * consumers read), with each value taken from the shared reader's RAW scalar
+ * text so a numeric-looking spelling (`5.0`) survives. A duplicate key or an
+ * unsupported line is the shared reader's `DocumentFrontmatterError` naming
+ * `file:line`; a present but non-scalar declaration or an unterminated fence is
+ * this module's `plan-path.identity-mismatch` refusal — never an absent key.
  *
  * This exported form is what lets registration, readiness and the path resolver
  * share one parser instead of each keeping its own copy.
  */
 export function planDeclaredHeaders(planPath: string): Map<string, string> {
   return planDeclaredHeadersFromContent(readFileSync(planPath, "utf8"), planPath);
+}
+
+/** An opening front-matter fence with no closing one: the shared reader reports
+ * that as an unfenced document, but a plan whose first line is `---` declared
+ * an invalid surface rather than no declarations at all. */
+function isUnterminatedFence(content: string, extraction: FrontmatterAndBody): boolean {
+  return (
+    !extraction.fenced &&
+    extraction.frontmatter === "" &&
+    (content.startsWith("---\n") || content.startsWith("---\r\n"))
+  );
+}
+
+/** The one refusal for an unterminated plan front matter: invalid, not absent. */
+function unterminatedFenceRefusal(planPath: string): PlanPathError {
+  return new PlanPathError(
+    "plan-path.identity-mismatch",
+    `plan markdown ${planPath} opens a front matter fence that is never closed \u2014 the declaration is invalid, not absent; close the fence with a second "---" line`,
+  );
 }
 
 /**
@@ -103,15 +124,41 @@ export function planDeclaredHeaders(planPath: string): Map<string, string> {
  * only — it is never read here.
  */
 export function planDeclaredHeadersFromContent(content: string, planPath: string): Map<string, string> {
-  const frontmatter = extractFrontmatterAndBody(content).frontmatter;
-  const parsed = parseDocumentFrontmatter(frontmatter, planPath);
+  const extraction = extractFrontmatterAndBody(content);
+  if (isUnterminatedFence(content, extraction)) throw unterminatedFenceRefusal(planPath);
+  const entries = parseDocumentFrontmatterEntries(extraction.frontmatter, planPath);
   const headers = new Map<string, string>();
   for (const [label, key] of Object.entries(PLAN_CONSULTED_KEYS)) {
-    const value = parsed[key];
-    // A scalar is the declaration; a list, map or null carries no consulted
-    // header (the schema validator reports that shape, this reader does not).
-    if (typeof value === "string") headers.set(label, value);
-    else if (typeof value === "number" || typeof value === "boolean") headers.set(label, String(value));
+    const entry = entries.get(key);
+    if (entry === undefined) continue;
+    // The raw lexeme after the colon is the declaration — never the typed
+    // scalar: `main_worktree_branch: 5.0` is the branch spelling "5.0", and a
+    // numeric-looking plan id keeps its written form. One surrounding pair of
+    // matching quotes still strips (the quotes are the spelling's syntax, not
+    // the branch's text).
+    if (entry.kind === "scalar") {
+      const raw = entry.rawText;
+      const value =
+        raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
+          ? raw.slice(1, -1)
+          : raw;
+      headers.set(label, value);
+      continue;
+    }
+    // A present but non-scalar declaration (a list, a nested map, a block
+    // scalar) is invalid — never dropped to an absent key, because the absent
+    // key is exactly what the consumer's snapshot fallback reads. An EMPTY
+    // list or map carries no content at all and counts as absent exactly as
+    // the schema validator's usable-content rule reads it.
+    const emptyShape =
+      (entry.kind === "list" && Array.isArray(entry.value) && entry.value.length === 0) ||
+      (entry.kind === "map" && typeof entry.value === "object" && entry.value !== null && Object.keys(entry.value as object).length === 0);
+    if (emptyShape) continue;
+    throw new PlanPathError(
+      "plan-path.identity-mismatch",
+      `plan markdown ${planPath}:${entry.line} declares an invalid ${key} \u2014 accepted value: a single scalar, not a ${entry.kind}; rewrite the declaration as ${key}: <branch>`,
+      { key, kind: entry.kind, line: entry.line },
+    );
   }
   return headers;
 }

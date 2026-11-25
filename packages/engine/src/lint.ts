@@ -54,7 +54,7 @@ import {
   parseDocumentFrontmatter,
   type JsonObject,
 } from "./document-frontmatter.js";
-import { validateDocumentFrontmatter } from "./document-schema.js";
+import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1169,25 +1169,27 @@ function stripInlineCode(line: string): string {
 export function planQualityBar(planText: string): PlanQualityResult {
   const findings: PlanQualityFinding[] = [];
   const violations: ValidationResult[] = [];
+  // The front-matter boundary is discovered exactly once, here: the schema
+  // check validates the extracted block and the body scan starts after it —
+  // an unterminated fence never triggers a second walk of the document.
+  const extraction = extractFrontmatterAndBody(planText);
   // Plan schema check (document-schema.ts PLAN_SCHEMA): missing, unknown and
   // invalid plan front-matter fields are reported first under the lint
-  // namespace. The schema checker reads the document's own fence; the
-  // placeholder scan below keeps its permissive `---`-trimmed skip, so an
-  // unclosed fence is scanned as body exactly as before.
-  for (const schemaViolation of validateDocumentFrontmatter("plan", planText, "plan").violations) {
+  // namespace. With no closed fence the whole document is the body, so an
+  // unclosed fence is scanned as body exactly as before, and line numbers
+  // stay the file's own (the body's start line is the newline count before
+  // it, never a second fence search).
+  for (const schemaViolation of validateDocumentFrontmatterExtraction("plan", extraction, "plan").violations) {
     violations.push({
       ...schemaViolation,
       code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.plan.frontmatter."),
     });
   }
   const lines = planText.split(/\r?\n/);
-  // Skip a leading frontmatter block (`---` on line 1, closed by the next
-  // `---`): a plan's `status:` value is not a placeholder. An unclosed fence
-  // is scanned as body, and line numbers stay the file's own.
   let start = 0;
-  if (lines[0]?.trim() === "---") {
-    const close = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-    if (close !== -1) start = close + 1;
+  if (extraction.fenced) {
+    const prefix = planText.slice(0, planText.length - extraction.body.length);
+    start = (prefix.match(/\n/g) ?? []).length;
   }
   let inFence = false;
   // Body lines outside fences and frontmatter: the verification-set pass reads

@@ -1555,6 +1555,53 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
+  test("a present-but-invalid main_worktree_branch refuses with identity-mismatch — never the branch.base fallback", async () => {
+    // CF-02 regression: `main_worktree_branch: [other]` is a present but
+    // non-scalar declaration. The snapshot fallback applies only when the key
+    // is genuinely absent, so even a populated `branch.base` must not admit
+    // the dispatch.
+    for (const [name, lines] of [
+      ["list", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", "", "# Plan", ""]],
+      ["unterminated fence", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: other", "# no closing fence"]],
+    ] as const) {
+      const root = tmpRoot(`sdd-ctx-mainbranch-invalid-${name.replace(/\s+/g, "-")}-`);
+      try {
+        const f = executionFixture(root);
+        writeFileSync(f.planFile, lines.join("\n"));
+        await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+        const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+        expect(rejection.code).toBe("plan-path.identity-mismatch");
+        expect(rejection.message).not.toContain("worktree.branch-mismatch");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a numeric main_worktree_branch keeps its written spelling — `5.0` is compared as 5.0", async () => {
+    // CF-01 regression: the typed scalar `5` must never replace the declared
+    // spelling `5.0`; a workflow snapshot whose branch.base is the exact raw
+    // spelling resolves against the raw-text declaration. The snapshot
+    // branch.base deliberately spells the typed scalar (`5`) — resolution
+    // succeeds only when the declaration surface, not the fallback, wins.
+    const root = tmpRoot("sdd-ctx-mainbranch-numeric-");
+    try {
+      const f = executionFixture(root);
+      // The main worktree really is on a branch spelled `5.0` — the resolution
+      // succeeds only when the raw-text declaration, not the typed scalar `5`,
+      // reaches the residency comparison.
+      git(["branch", "-m", "main", "5.0"], f.primary);
+      writeFileSync(
+        f.planFile,
+        planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n", { main_worktree_branch: "5.0" }),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "5" } });
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an iteration workflow's integration worktree drives the full L1 checks", async () => {
     // Aligned, distinct integration checkout (the control worktree is on the
     // integration branch in this fixture) — full checks pass.

@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 import { PlanPathError, resolveRegisteredPlanFile, type RegisteredPlanFileInput } from "../src/plan-path.js";
 
 const PLAN_ID = "20260921-plan-path-demo";
@@ -43,21 +44,11 @@ function writePlan(dir: string, fileName: string, content: string): string {
   return path;
 }
 
-/** A plan markdown whose declarations live in the front matter fence. */
+/** A plan markdown whose declarations live in the front matter fence —
+ * rendered by the one shared fixture renderer; only the test-specific body
+ * is local. */
 function planMarkdown(planId: string, body = ""): string {
-  return [
-    "---",
-    `plan_id: ${planId}`,
-    "execution: sdd",
-    "working_branch: main",
-    "main_worktree_branch: main",
-    "delivery_kind: development",
-    "status: InProgress",
-    "---",
-    "",
-    "# Plan body",
-    body,
-  ].join("\n");
+  return planFrontMatter(planId, `# Plan body\n${body}`);
 }
 
 /** The typed refusal a call must produce (never a bare `Error`). */
