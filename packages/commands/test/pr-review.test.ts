@@ -10,12 +10,12 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const cwd = mkdtempSync(path.join(os.tmpdir(), "pr-review-family-")); roots.push(cwd);
-  const calls: Array<{ argv: readonly string[]; cwd: string; stdin?: string }> = [];
+  const calls: Array<{ argv: readonly string[]; cwd: string; stdin?: string; env: Readonly<Record<string, string>> }> = [];
   const context: InvocationContext = {
     cwd, controlRoot: null, versions: { engine: null, cli: null, plugin: null, host: null, platform: null }, signal: new AbortController().signal,
     effects: {
       async readInput() { return ""; },
-      async spawn(request) { calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) }); return { exitCode: 1, signal: null, stdout: "", stderr: "authentication required" }; },
+      async spawn(request) { calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env }); return { exitCode: 1, signal: null, stdout: "", stderr: "authentication required" }; },
       async startDashboard() { throw new Error("unexpected dashboard effect"); }, async openBrowser() { throw new Error("unexpected browser effect"); },
     },
   };
@@ -227,7 +227,7 @@ describe("pr-review command family", () => {
 
     calls.length = 0;
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/41", headRefOid: "abcdef0123456" }), stderr: "" };
     };
     const wrongTarget = await post.execute({ pr: "42", bodyFile }, context);
@@ -236,14 +236,15 @@ describe("pr-review command family", () => {
 
     calls.length = 0;
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     };
     const authorized = await post.execute({ pr: "42", bodyFile }, context);
     expect(authorized.status).toBe("ok");
     expect(calls).toHaveLength(2);
-    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "github.com", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+    expect(calls[1]!.env.GH_HOST).toBe("github.com");
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
@@ -251,6 +252,7 @@ describe("pr-review command family", () => {
     const { context, calls } = fixture();
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile: "body.md", provider: "nope" }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.unsupported-provider", exitCode: 1 });
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // why: the provider is refused before any file read or transport call.
     expect(calls).toHaveLength(0);
     expect(refused.status === "ok" ? "" : refused.message).toContain("nope");
@@ -262,13 +264,16 @@ describe("pr-review command family", () => {
     // Typo reading: the registered ids still name the correction.
     expect(recovery).toContain("github");
     expect(recovery).toContain("--provider <id>");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // why: github is listed to fix a typo, never as a suggestion that gh can
     // post to a GitLab MR — the publisher must match the target forge.
     expect(recovery).toContain("matches the target forge");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // Forge reading: an unsupported forge posts through the project's own
     // tooling per pr-delivery.md, and STOPs without a documented equivalent.
     expect(recovery).toContain("pr-delivery.md");
     expect(recovery).toContain("STOP");
+    // see skills/mstar-roles/references/project-manager/pr-delivery.md
     // why: the retry keeps the caller's other arguments, so the findings flag
     // is named only when the caller supplied it — never dropped silently.
     expect(recovery).toContain("keeping the original arguments and replacing only the provider id");
@@ -299,12 +304,14 @@ describe("pr-review command family", () => {
     const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings, provider: "fixture-forge" }, context);
     expect(result).toMatchObject({ status: "ok" });
     expect(result.status === "ok" ? result.data : {}).toMatchObject({ posted: true, comments: "posted", review_url: "https://forge.example/acme/proj/pull/42#review-9" });
+    // see packages/commands/src/families/pr.ts
     // why: the seam carries the plan's commit and inline comments, and no
     // `gh` transcript exists for a non-GitHub forge.
     expect(postedInput).toMatchObject({ pr: 42, commitId: "abcdef0123456", body: "Review summary" });
     expect(postedInput.comments).toEqual([{ path: "src/a.ts", line: 3, side: "RIGHT", body: "Finding" }]);
     expect(calls).toHaveLength(0);
 
+    // see packages/commands/src/families/pr.ts
     // why: the reachable wrong-target is a resolved URL naming another PR,
     // so the command's plan check refuses before the publisher posts.
     registerReviewPublisher("fixture-other", {
@@ -333,13 +340,14 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
     const result = await post.execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "github.com", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(calls[1]!.env.GH_HOST).toBe("github.com");
     expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({
       comments: [
         { path: "src/a.ts", line: 4, side: "RIGHT", start_line: 2, start_side: "RIGHT", body: "Range finding" },
@@ -357,19 +365,21 @@ describe("pr-review command family", () => {
     expect(rejected.message).toContain("findings[0].start_line must be an integer >= 1 and less than line (12)");
   });
 
-  test("an Enterprise URL reaches every gh api call through --hostname", async () => {
+  test("an Enterprise URL reaches every gh api call through GH_HOST", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");
     writeFileSync(bodyFile, "Review summary");
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
+    // see packages/commands/src/families/pr.ts
     // why: `gh pr view` resolves its own host, but `gh api` would fall back to
-    // the CLI's default host — every API call must name the resolved one.
+    // the CLI's default host — GH_HOST carries the resolved one because
+    // --hostname rejects a port-bearing host.
     const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://git.acme.example/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
     const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://git.acme.example/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -377,8 +387,37 @@ describe("pr-review command family", () => {
     expect(result.status).toBe("ok");
     expect(calls).toHaveLength(3);
     expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid,baseRefOid"]);
-    expect(calls[1]!.argv).toEqual(["gh", "api", "--hostname", "git.acme.example", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
-    expect(calls[2]!.argv).toEqual(["gh", "api", "--hostname", "git.acme.example", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(calls[1]!.env.GH_HOST).toBe("git.acme.example");
+    expect(calls[2]!.argv).toEqual(["gh", "api", "--method", "POST", "repos/owner/repo/pulls/42/reviews", "--input", "-"]);
+    expect(calls[2]!.env.GH_HOST).toBe("git.acme.example");
+  });
+
+  test("a port-bearing Enterprise URL still reaches gh api through GH_HOST, never --hostname", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
+    // see packages/commands/src/families/pr.ts
+    // why: `gh api --hostname` rejects a host that carries a port, so the
+    // resolved host travels on GH_HOST instead of argv.
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://ghe.example:8443/owner/repo/pull/7", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://ghe.example:8443/owner/repo/pull/7#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
+      if (request.argv[1] === "pr") return review;
+      return request.argv.includes("-H") ? diff : posted;
+    };
+    const result = await command("pr-review.post").execute({ pr: "7", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(calls).toHaveLength(3);
+    for (const apiCall of calls.slice(1)) {
+      expect(apiCall.argv).not.toContain("--hostname");
+      expect(apiCall.env.GH_HOST).toBe("ghe.example:8443");
+    }
+    expect(calls[2]!.argv).toEqual(["gh", "api", "--method", "POST", "repos/owner/repo/pulls/7/reviews", "--input", "-"]);
   });
 
   test("a range spanning two right-side hunks is refused before any POST", async () => {
@@ -391,7 +430,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -417,7 +456,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: CONTENT_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -443,7 +482,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: QUOTED_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -470,7 +509,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: SPACE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -493,7 +532,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: RENAME_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -516,7 +555,7 @@ describe("pr-review command family", () => {
     const diff = { exitCode: 0, signal: null, stdout: TAB_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return review;
       return request.argv.includes("-H") ? diff : posted;
     };
@@ -536,7 +575,7 @@ describe("pr-review command family", () => {
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
     };
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
@@ -573,7 +612,7 @@ describe("pr-review command family", () => {
     ]));
     let apiCalls = 0;
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
       if (request.argv.includes("-H")) return { exitCode: 0, signal: null, stdout: FOLD_DIFF, stderr: "" };
       apiCalls += 1;
@@ -1175,7 +1214,7 @@ describe("pr-review command family", () => {
     const bodyFile = path.join(cwd, "body.md");
     writeFileSync(bodyFile, "Review summary");
     context.effects.spawn = async (request) => {
-      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}), env: request.env });
       if (request.argv[1] === "pr") {
         return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
       }

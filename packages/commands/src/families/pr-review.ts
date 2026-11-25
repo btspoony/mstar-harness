@@ -427,7 +427,8 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
           // why: an id that names a different forge is not a typo to correct — a
           // registered publisher can only post to its own forge's PR, so the
           // recovery must route an unsupported forge to the documented
-          recovery: `If ${providerId} is a typo, rerun with a registered provider id (${registered.join(", ")}): Run mstar pr-review post --pr <n> --body-file <file>${input.findings !== undefined ? " [--findings <file.json>]" : ""} --provider <id>, keeping the original arguments and replacing only the provider id. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, post the review with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (same owner-approval and waiver rules); when no documented equivalent exists, STOP — never post by hand.`,
+          // project-tooling path instead of naming a GitHub publisher for a GitLab MR.
+          recovery: `If ${providerId} is a typo, rerun with a registered provider id (${registered.join(", ")}): Run mstar pr-review post --pr <n> --body-file <file>${input.findings !== undefined ? " [--findings <file.json>]" : ""} --provider <id>, keeping the original arguments and replacing only the provider id. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, post the review with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (posting adds no authorization step of its own); when no documented equivalent exists, STOP — never post by hand.`,
         });
       }
       const bodyFile = abs(context.cwd, need(input.bodyFile, "--body-file"));
@@ -463,6 +464,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
           return refusalEnvelope({ command: id, status: "refused", code: `${id}.range-spans-hunks`, exitCode: 1, message: `range anchor rejected: ${problem}` , recovery: "Keep start_line and line inside one right-side hunk of the PR diff, or drop start_line/start_side to anchor a single line. Run mstar pr-review post --pr <number> --body-file <review.md>."});
         }
       }
+      // see skills/mstar-audit/references/pr-review.md
       // The 422 fold-retry is a decision about what to send, so it stays here:
       // the publisher only ever sees a complete review payload.
       const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => publisher.postReview(

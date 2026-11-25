@@ -115,6 +115,7 @@ describe("planReviewPost — pr-review.md § Comment posting", () => {
       { url: "https://git.acme.example/octo/hello/pull/77", headRefOid: HEAD_OID },
       { body: "b" },
     );
+    // see skills/mstar-audit/references/pr-review.md
     // why: the posting provider seam needs the forge host, so a PR URL on any
     // host must parse — never a github.com-only grammar.
     expect(plan.host).toBe("git.acme.example");

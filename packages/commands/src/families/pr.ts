@@ -104,12 +104,12 @@ const need = (value: string | undefined, name: string): string => {
   return value;
 };
 
-async function spawn(context: InvocationContext, argv: string[], stdin?: string) {
+async function spawn(context: InvocationContext, argv: string[], options: { stdin?: string; env?: Readonly<Record<string, string>> } = {}) {
   return context.effects.spawn({
     argv,
     cwd: context.cwd,
-    env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-    ...(stdin !== undefined ? { stdin } : {}),
+    env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), ...options.env },
+    ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
     signal: context.signal,
   });
 }
@@ -183,11 +183,10 @@ const githubProvider: MergeGateProvider = {
 };
 mergeGateProviders.set("github", githubProvider);
 
-// ---------------------------------------------------------------------------
-// Review posting — the `pr-review.post` provider seam. Kept in this family so
-// the merge gate's own provider map and fixtures stay untouched; `post` looks
-// publishers up through `reviewPublisherFor`.
-// ---------------------------------------------------------------------------
+// see skills/mstar-roles/references/project-manager/pr-delivery.md
+// why: the `pr-review.post` provider seam lives in this family so the merge
+// gate's own provider map and fixtures stay untouched; `post` looks publishers
+// up through `reviewPublisherFor`.
 
 const reviewPostId = "pr-review.post";
 
@@ -200,6 +199,7 @@ export type ReviewPostFailure =
   | { cause: "unknown-outcome"; detail: string; commitId: string; probe: string };
 
 export interface ReviewPublisher {
+  // see packages/engine/src/prreview.ts
   // `resolve` returns the raw pr-view fields — planReviewPost is the only URL
   // and head validator, so a malformed view keeps its plan error, and a
   // resolved URL pointing at another PR is the command's wrong-target.
@@ -239,7 +239,8 @@ const githubReviewPublisher: ReviewPublisher = {
     if (viewResult.exitCode !== 0 || viewResult.signal !== null) return { ok: false, refusal: unauthorized(viewResult.stderr || "GitHub authentication/target lookup failed") };
     const parsedView: unknown = JSON.parse(viewResult.stdout);
     const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
-    // The raw view fields go back untouched: planReviewPost is the only URL
+    // see packages/engine/src/prreview.ts
+    // why: the raw view fields go back untouched — planReviewPost is the only URL
     // and head validator, so a malformed view reports its plan error, not an
     // auth refusal that misnames the cause.
     return { ok: true, value: {
@@ -249,9 +250,9 @@ const githubReviewPublisher: ReviewPublisher = {
     } };
   },
   async diff({ host, owner, repo, base, head }, context) {
-    // why: like the merge gate's thread scan, API calls must reach the host
-    // `gh pr view` resolved — an Enterprise PR never posts to the default host.
-    const result = await spawn(context, ["gh", "api", "--hostname", host, "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`]);
+    // see skills/mstar-audit/references/pr-review.md
+    // why: like the merge gate's thread scan, API calls must reach the host `gh pr view` resolved — GH_HOST carries it so a port-bearing Enterprise host works where --hostname's parser rejects the port.
+    const result = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${owner}/${repo}/compare/${base}...${head}`], { env: { GH_HOST: host } });
     if (result.exitCode !== 0 || result.signal !== null) {
       return { ok: false, failure: { cause: "diff-unavailable", detail: result.stderr || "gh api compare failed" } };
     }
@@ -263,15 +264,16 @@ const githubReviewPublisher: ReviewPublisher = {
       commit_id: commitId, event: "COMMENT" as const, body,
       ...(comments.length ? { comments: comments.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}),
     });
-    const response = await spawn(context, ["gh", "api", "--hostname", host, "--method", "POST", apiPath, "--input", "-"], payload);
+    const response = await spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], { stdin: payload, env: { GH_HOST: host } });
     if (response.exitCode !== 0 || response.signal !== null) {
+      // see skills/mstar-audit/references/pr-review.md
       // why: `detail` is the message fragment the command prints (stderr, or
       // the same fallback as before), while `probe` carries both streams so
       // the command's 422 fold sees exactly the text it scanned before.
       return { ok: false, failure: { cause: "unknown-outcome", detail: response.stderr || "gh api review post failed", commitId, probe: `${response.stderr}\n${response.stdout}` } };
     }
     let reviewUrl = response.stdout.trim();
-    try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* preserve successful response text */ }
+    try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* see skills/mstar-audit/references/pr-review.md — a non-JSON success body keeps its trimmed text as the review_url. */ }
     return { ok: true, value: { reviewUrl } };
   },
 };

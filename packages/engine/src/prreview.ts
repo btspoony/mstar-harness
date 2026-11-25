@@ -1696,7 +1696,7 @@ export type ReviewInlineComment = {
  * never approve-as-merge).
  */
 export type ReviewPostPlan = {
-  /** Forge host the URL named — callers must not assume `github.com`. */
+  /** Forge host the URL named — callers must not assume `github.com`; see skills/mstar-audit/references/pr-review.md. */
   host: string;
   ownerRepo: string;
   pr: number;
@@ -1716,6 +1716,7 @@ function throwPlanError(what: string, detail: string): never {
  * (`<scheme>://<host>/{owner}/{repo}/pull/{n}`) — the BASE repo that owns
  * the PR number. Fork PRs surface a different `headRepository`, which MUST
  * NOT be used (Reviews API paths are scoped to the base repo).
+ * see skills/mstar-audit/references/pr-review.md § Comment posting.
  */
 function parseOwnerRepoFromUrl(url: string): { host: string; ownerRepo: string; pr: number } {
   const match = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+?)\/pull\/(\d+)\/?$/.exec(url);
