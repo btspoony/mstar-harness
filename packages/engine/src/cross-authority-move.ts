@@ -422,8 +422,8 @@ function noSuchMove(operationId: string, step: string): StoreError {
   // checkout that staged it are the whole runnable recovery; every other step keeps the start.
   const recovery =
     step === "discard"
-      ? `Confirm the operation id your staging run reported in its receipt, and reissue this ` +
-        `--discard from the checkout that staged the move.`
+      ? `Reissue this --discard from the checkout that ran the move, passing the same ` +
+        `--operation-id you used.`
       : `Start the move with \`mstar issue move --id <issue-id> --to-authority <repo-key> --payload ` +
         `'{"projectId":"<target-project>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision> ` +
         `--actor project-manager --operation-id ${operationId}\`, then reissue that same command to resume it.`;

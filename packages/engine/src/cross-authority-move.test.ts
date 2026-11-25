@@ -2040,10 +2040,12 @@ describe("cross-authority move phase engine", () => {
       expect(refused?.code).toBe("collaboration.move-phase-invalid");
       expect(refused?.details).toMatchObject({ operation_id: request.operationId });
       const recovery = String(refused?.details?.recovery);
-      expect(recovery).toContain("operation id your staging run reported");
-      expect(recovery).toContain("checkout that staged the move");
-      // invariant: Every artifact the recovery names exists in this layer: no --out flag and no
-      // operator-readable move ledger ship here, so neither may be named.
+      expect(recovery).toContain("Reissue this --discard from the checkout that ran the move");
+      expect(recovery).toContain("--operation-id you used");
+      // invariant: Every artifact the recovery names exists in this layer: there is no --stage run,
+      // no receipt, no --out flag and no operator-readable move ledger, so none may be named.
+      expect(recovery).not.toContain("staging run");
+      expect(recovery).not.toContain("receipt");
       expect(recovery).not.toContain("--out");
       expect(recovery).not.toContain("ledger");
       expect(recovery).not.toContain("Start the move");
