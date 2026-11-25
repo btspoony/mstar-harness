@@ -1865,28 +1865,25 @@ function removeSourceRecord(db: StoreDb, row: IssueMoveRecord, counts: MoveCount
   // note: An incoming edge cannot keep a local target that is leaving; it becomes the moved
   // record's stable reference, which is the unresolved shape both local readers already render.
   // invariant: The staged incoming count is a ceiling, not a target: an edge whose OWNER already
-  // published went away with that record's own delete, and rewriting only the survivors is the
-  // correct outcome. The comparison is therefore against the edges still anchored to a record the
-  // lane holds — a row some other writer added or removed mid-flight still fails the count.
-  const surviving = countOf(
-    db,
-    "select count(*) as n from relations where to_issue = ? and from_issue in (select id from issues)",
-    issueId,
-  );
+  // published went away with that record's own delete, so the live set may hold fewer rows than
+  // the freeze recorded — but never more, because the lane's triggers refuse every insert, update
+  // and delete an in-flight record touches. The rewrite therefore rewrites the edges still anchored
+  // to a record this lane holds and refuses when it passes the frozen count: a relation that landed
+  // mid-flight rolls the whole publication back.
   const rewritten = db
     .prepare("update relations set to_issue = null, to_ref = ? where to_issue = ? and from_issue in (select id from issues)")
     .run(row.issueRef, issueId) as { changes?: number };
   const rewrittenCount = Number(rewritten?.changes ?? 0);
-  if (rewrittenCount !== surviving) {
+  if (rewrittenCount > counts.relationsLeftBehind) {
     throw new StoreError(
       "collaboration.operation-partial",
-      `Move ${row.operationId} was staged to rewrite the record's incoming edges, but ` +
-        `this publication rewrote ${String(rewrittenCount)} of ${String(surviving)} still present: a relation changed while ` +
-        `the move was in flight. The publication rolled back and the record is unchanged.`,
+      `Move ${row.operationId} counted ${String(counts.relationsLeftBehind)} incoming relation(s) when it was staged, but ` +
+        `this publication rewrote ${String(rewrittenCount)}: a relation landed while the move was in flight. The publication ` +
+        `rolled back and the record is unchanged.`,
       {
         operation_id: row.operationId,
         issue_id: issueId,
-        expected: surviving,
+        expected: counts.relationsLeftBehind,
         rewritten: rewrittenCount,
         recovery:
           "Reissue the same move once no writer holds this record; the staged payload and the source record are unchanged.",
@@ -1984,12 +1981,19 @@ export async function discardMove(context: StoreContext, request: MoveRequest): 
  * lanes this checkout can open, so one run releases both. A two-checkout exchange holds ONE half per
  * checkout — the other lives in the peer's authority, whose lane this checkout cannot open — so each
  * side releases the row it holds and the source record is writable again as soon as its own source
- * row leaves the blocking set. Before the switch neither side holds the member, which is exactly the
- * window in which abandoning is lossless.
+ * row leaves the blocking set. A move this lane never recorded refuses by name before the route is
+ * read. Before the switch neither side holds the member, which is exactly the window in which
+ * abandoning is lossless.
  */
 export async function discardAcrossAuthorities(context: StoreContext, request: MoveRequest): Promise<MoveReceipt> {
   const own = resolveCollaborationLocation(context);
   const role: IssueMoveRole = own.repoKey === request.destinationAuthority ? "destination" : "source";
+  // invariant: A move this lane never recorded refuses by name before any route question — "no
+  // such move here" is the cause the operator can act on. The check is read-only and binds the
+  // whole request, exactly as `discardMove` itself does.
+  if (role === "source" && (await boundOwnSourceRow(context, request)) === null) {
+    throw noSuchMove(request.operationId, "discard");
+  }
   const row = await ownLaneRow(context, request.operationId, role);
   if (row === null) throw noSuchMove(request.operationId, "discard");
   // invariant: Only the SOURCE checkout of a one-checkout move holds both halves reachably, and the
