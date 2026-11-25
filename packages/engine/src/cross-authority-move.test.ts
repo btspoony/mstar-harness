@@ -5,7 +5,7 @@
  * `staged` on through triggers stored in the lane rather than through calling code.
  */
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,7 @@ import {
   blockingMoveFor,
   discardAcrossAuthorities,
   discardMove,
+  exchangeLocalToRemote,
   frozenMoveRefusal,
   isForwardMoveTransition,
   moveAcrossAuthorities,
@@ -84,6 +85,7 @@ function sourceRow(
   return {
     operationId,
     role: "source",
+    route: "local-local",
     requestHash: "request-hash",
     issueRef,
     sourceIssueId: "I-000001",
@@ -389,7 +391,7 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
     }
   });
 
-  test("a lane is at the registry's top generation and a v3 lane reaches it through the ladder", async () => {
+  test("a lane is at the registry's top generation and a v3 lane reaches it through the ladder, gaining the recorded route", async () => {
     // note: The top generation is read from the migration registry, never pinned: the merge that
     // appends the next migration reddens a literal while the ladder itself still works.
     const TOP_GENERATION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
@@ -398,7 +400,7 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       expect((db.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(TOP_GENERATION);
       expect(
         (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name: string }>).map((column) => column.name),
-      ).toContain("operation_id");
+      ).toEqual(expect.arrayContaining(["operation_id", "route"]));
     } finally {
       db.close();
     }
@@ -436,6 +438,10 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       expect((upgraded.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(
         TOP_GENERATION,
       );
+      // invariant: the route column is the one the ladder adds in place, with the closed vocabulary.
+      expect(
+        upgraded.prepare("pragma table_info(issue_moves)").all().map((column) => (column as { name: string }).name),
+      ).toContain("route");
       expect(
         upgraded.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'issue_moves'").get(),
       ).toEqual({ n: 1 });
@@ -736,6 +742,35 @@ describe("cross-authority move phase engine", () => {
         /issue\.move-in-progress/,
       );
       expect(stagedMismatch(sourceRowNow!, destinationRow!)).toBeNull();
+    } finally {
+      db.close();
+    }
+  }, 60_000);
+
+  test("a terminal source row answers its receipt, never a re-emitted request document", async () => {
+    // invariant: Re-emitting a `request` for a finished move let the peer stage — and recreate — a
+    // record this lane had already published or set aside. A terminal row owes the peer no document.
+    const { context, db } = await sourceCheckout();
+    try {
+      const destination = await destinationLane("p-dest");
+      const issueId = await seededRecord(context, db, "p-source");
+      const request = {
+        operationId: "move-terminal-document",
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination.repoKey,
+        destinationProject: "p-dest",
+        reason: "leave this authority",
+      };
+      const staged = await exchangeLocalToRemote(context, request, null);
+      expect(staged.phase).toBe("staged");
+      expect(staged.document).not.toBeNull();
+      for (const phase of ["published", "discarded"] as const) {
+        db.prepare("update issue_moves set phase = ? where operation_id = ? and role = 'source'").run(phase, request.operationId);
+        const replay = await exchangeLocalToRemote(context, request, null);
+        expect(replay.phase).toBe(phase);
+        expect(replay.document).toBeNull();
+      }
     } finally {
       db.close();
     }
@@ -1860,11 +1895,12 @@ describe("cross-authority move phase engine", () => {
     }
   }, 60_000);
 
-  test("a discard is admitted by role, and only where both ledger halves are open", async () => {
-    // invariant: This branch ships no two-checkout exchange, so a discard releases both halves only
-    // when this checkout can open both: the SOURCE checkout of a one-checkout move. Every other role
-    // and every unreachable peer refuses with the cause and the recovery the operator can actually
-    // run, instead of falling through to `discardMove` or claiming a remote boundary.
+  test("a discard follows the recorded route, and a move this lane never staged refuses by name", async () => {
+    // invariant: The route the row recorded at stage decides which halves this checkout releases —
+    // never a probe of the peer's lane, which a two-checkout exchange cannot open. A one-checkout
+    // move's source still releases both halves, its destination releases the one it holds, and a
+    // lane that records no move under the operation id refuses `collaboration.move-phase-invalid`
+    // before the route is even read.
     const requestFor = (operationId: string, issueId: string, destinationAuthority: string) => ({
       operationId,
       actor: "project-manager",
@@ -1879,7 +1915,7 @@ describe("cross-authority move phase engine", () => {
         (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
       );
 
-    // note: Source checkout, peer lane present: the one topology a discard releases here.
+    // note: Source checkout, peer lane present: the one-checkout route releases both halves.
     {
       const { context, db } = await sourceCheckout();
       try {
@@ -1901,8 +1937,9 @@ describe("cross-authority move phase engine", () => {
       }
     }
 
-    // note: Source checkout, peer lane absent: the other half lives in a separate home, so the
-    // refusal names that cause and the layer that would release it — never an init recovery.
+    // note: Source checkout, peer lane absent: the recorded `local-local` route still decides, so
+    // the discard runs `discardMove` — whose own refusal names the vanished destination lane rather
+    // than probing it first. Nothing is released and the record stays frozen.
     {
       const { context, db } = await sourceCheckout();
       try {
@@ -1913,12 +1950,8 @@ describe("cross-authority move phase engine", () => {
         await stageMove(context, request);
         rmSync(destination.location.dbPath, { force: true });
         const refused = await refusalOf(discardAcrossAuthorities(context, request));
-        expect(refused?.code).toBe("collaboration.mode-unavailable");
-        expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "source" });
-        expect(String(refused?.message)).toContain(`no readable lane for ${destination.repoKey}`);
-        expect(String(refused?.message)).not.toContain("spans a `local`/`remote` boundary");
-        expect(String(refused?.details?.recovery)).toContain("two-checkout exchange");
-        // invariant: Neither half moved: the record is still frozen by its staged source row.
+        expect(refused?.code).toBe("collaboration.not-initialized");
+        expect(String(refused?.message)).toContain(destination.repoKey);
         expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
         expect(recordImage(db, issueId)).toEqual(before);
         expect(blockingMoveFor(db, issueId)?.phase).toBe("staged");
@@ -1927,9 +1960,8 @@ describe("cross-authority move phase engine", () => {
       }
     }
 
-    // note: A damaged peer lane is not an absent one — the probe cannot classify it, and the
-    // refusal must report exactly that ("no readable lane", not "no lane exists") so the operator
-    // never reads a delete as a never-staged.
+    // note: A damaged peer lane is not an absent one: the recorded `local-local` route still routes
+    // the discard through `discardMove`, whose refusal — never a probe — is what the operator sees.
     {
       const { context, db } = await sourceCheckout();
       try {
@@ -1940,13 +1972,8 @@ describe("cross-authority move phase engine", () => {
         await stageMove(context, request);
         writeFileSync(destination.location.dbPath, "not a sqlite file");
         const refused = await refusalOf(discardAcrossAuthorities(context, request));
-        expect(refused?.code).toBe("collaboration.mode-unavailable");
-        expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "source" });
-        expect(String(refused?.message)).toContain(`no readable lane for ${destination.repoKey}`);
-        expect(String(refused?.message)).toContain("absent or unclassifiable");
-        expect(String(refused?.message)).not.toContain("no lane");
-        expect(String(refused?.message)).not.toContain("exists");
-        expect(String(refused?.details?.recovery)).toContain("two-checkout exchange");
+        expect(refused).not.toBeNull();
+        expect(refused?.code).not.toBe("collaboration.move-phase-invalid");
         expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
         expect(recordImage(db, issueId)).toEqual(before);
       } finally {
@@ -1954,8 +1981,9 @@ describe("cross-authority move phase engine", () => {
       }
     }
 
-    // note: The destination checkout never holds the source half, so its refusal points at the
-    // source checkout by name — the one place the discard can run.
+    // note: The destination checkout of a one-checkout move holds its own ledger half, so its
+    // discard releases that half in place — the source row it cannot reach keeps the record
+    // frozen until the source side discards.
     {
       const { context, db } = await sourceCheckout();
       const peer = await sourceCheckout();
@@ -1970,54 +1998,35 @@ describe("cross-authority move phase engine", () => {
         const issueId = await seededRecord(context, db, "p-source", "-dest");
         const request = requestFor(`move-discard-dest-${String(engineSequence)}`, issueId, peer.repoKey);
         await stageMove(context, request);
-        const refused = await refusalOf(discardAcrossAuthorities(peer.context, request));
-        expect(refused?.code).toBe("collaboration.mode-unavailable");
-        expect(refused?.details).toMatchObject({
-          operation_id: request.operationId,
-          role: "destination",
-          source_authority: resolveCollaborationLocation(context).repoKey,
+        expect(await discardAcrossAuthorities(peer.context, request)).toMatchObject({
+          phase: "discarded",
+          resumedFrom: "staged",
         });
-        expect(String(refused?.details?.recovery)).toContain(
-          `source checkout of ${resolveCollaborationLocation(context).repoKey}`,
-        );
-        // invariant: The source row still freezes the record and the destination row is untouched.
+        // invariant: Only the destination half moved: the source row still freezes the record.
         expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
         expect(
           await readCollaborationStage(resolveCollaborationLocation(peer.context), ({ db: lane }) =>
             readIssueMove(lane, request.operationId, "destination"),
           ),
-        ).toMatchObject({ phase: "staged" });
+        ).toMatchObject({ phase: "discarded" });
       } finally {
         peer.db.close();
         db.close();
       }
     }
 
-    // note: A destination checkout whose own lane does not open still names no authority to blame,
-    // so its recovery falls back to "the move's source checkout".
+    // note: A move this lane never staged refuses by name before the route is read — the same
+    // `collaboration.move-phase-invalid` every unknown operation id draws.
     {
       const { context, db } = await sourceCheckout();
-      const peer = await sourceCheckout();
       try {
-        peer.db
-          .prepare(
-            "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
-              "values ('project', 'p-dest', 'p-dest', 'projects', 'projects/p-dest', '2026-11-21T00:00:00.000Z', " +
-              "'2026-11-21T00:00:00.000Z')",
-          )
-          .run();
-        const issueId = await seededRecord(context, db, "p-source", "-dest-gone");
-        const request = requestFor(`move-discard-dest-gone-${String(engineSequence)}`, issueId, peer.repoKey);
-        await stageMove(context, request);
-        unlinkSync(resolveCollaborationLocation(peer.context).dbPath);
-        const refused = await refusalOf(discardAcrossAuthorities(peer.context, request));
-        expect(refused?.code).toBe("collaboration.mode-unavailable");
-        expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "destination" });
-        expect(refused?.details?.source_authority).toBeUndefined();
-        expect(String(refused?.details?.recovery)).toContain("source checkout");
-        expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
+        const issueId = await seededRecord(context, db, "p-source", "-never");
+        const request = requestFor(`move-discard-never-${String(engineSequence)}`, issueId, "absent-authority");
+        const refused = await refusalOf(discardAcrossAuthorities(context, request));
+        expect(refused?.code).toBe("collaboration.move-phase-invalid");
+        expect(refused?.details).toMatchObject({ operation_id: request.operationId });
+        expect(String(refused?.message)).toContain("No cross-authority move is recorded");
       } finally {
-        peer.db.close();
         db.close();
       }
     }
@@ -2058,10 +2067,10 @@ describe("cross-authority move phase engine", () => {
     }
   }, 60_000);
 
-  test("a remote checkout's discard names the source checkout, never 'remote bind'", async () => {
-    // invariant: A remote checkout holds a verified cache, never the ledger lane a discard writes;
-    // its refusal must name the source checkout that holds the half, because a reviewed remote bind
-    // would still not put the move's ledger half in this checkout.
+  test("an unbound remote checkout's discard refuses before any ledger question", async () => {
+    // invariant: A remote checkout with no finalized binding cannot read a ledger at all — the
+    // scope check refuses with the binding recovery before the recorded-move question is asked,
+    // so nothing names a lane this checkout cannot prove it owns.
     const remote = remoteCheckout();
     const { context, db } = await sourceCheckout();
     try {
@@ -2080,13 +2089,8 @@ describe("cross-authority move phase engine", () => {
         () => null,
         (error: unknown) => error as { code?: string; message?: string; details?: Record<string, unknown> },
       );
-      expect(refused?.code).toBe("collaboration.mode-unavailable");
-      expect(refused?.details).toMatchObject({ operation_id: request.operationId, role: "source" });
-      expect(String(refused?.message)).toContain(`remote cache for ${remote.repoKey}`);
-      const recovery = String(refused?.details?.recovery);
-      expect(recovery).toContain("source checkout that staged the move");
-      expect(recovery).toContain("ledger half");
-      expect(recovery).not.toContain("bind");
+      expect(refused?.code).toBe("collaboration.stale-binding");
+      expect(String(refused?.message)).toContain("remote bind");
       // invariant: The remote checkout's lane is untouched and the source row still freezes the record.
       expect(readIssueMove(db, request.operationId, "source")?.phase).toBe("staged");
     } finally {
@@ -2347,19 +2351,57 @@ describe("cross-authority move phase engine", () => {
       db.close();
     }
   }, 60_000);
+  test("a switched local-exchange source refuses its own discard just like a remote one", async () => {
+    // invariant: Review wave 6, finding 5. The switched-source guard answers for EVERY exchange
+    // route, not only remote ones: a local-source exchange also hands its switch document to the
+    // peer checkout before `published`, so a crash in that window leaves a discarded source half
+    // beside a staged — or admitted — destination half the peer may still hold.
+    const { context, db } = await sourceCheckout();
+    try {
+      const issueId = await seededRecord(context, db, "p-source");
+      const operationId = "move-local-remote-switch";
+      const destination = "github.com/acme/other-checkout";
+      const request = {
+        operationId,
+        actor: "project-manager",
+        sourceIssueId: issueId,
+        destinationAuthority: destination,
+        destinationProject: "p-dest",
+        reason: "exchange",
+      };
+      const staged = await exchangeLocalToRemote(context, request, null);
+      expect(staged).toMatchObject({ phase: "staged", side: "source" });
+      db.prepare("update issue_moves set phase = 'switched' where operation_id = ?").run(operationId);
+
+      const refused = await discardAcrossAuthorities(context, request).then(
+        () => null,
+        (error: unknown) => error as { code?: string; message?: string },
+      );
+      expect(refused?.code).toBe("collaboration.move-phase-invalid");
+      expect(refused?.message).toContain("handed its switch document");
+      expect(db.prepare("select phase from issue_moves where operation_id = ?").get(operationId)).toEqual({
+        phase: "switched",
+      });
+    } finally {
+      db.close();
+    }
+  });
 });
+
 
 describe("cross-authority move package surface", () => {
   test("the package publishes the move routes it documents and keeps the phase engine internal", async () => {
     // invariant: The export block's comment is the contract. A consumer may call the two routes, the
-    // discard and the phase engine's terminal steps; the per-lane steps and the ledger primitives are
-    // internal to the module, so a later change cannot grow the public surface by accident and no
-    // comment has to deny what the block publishes.
+    // discard and the document parser; the phase engine, the per-lane exchange halves and the ledger
+    // primitives are internal to the module, so a later change cannot grow the public surface by
+    // accident and no comment has to deny what the block publishes.
     const surface = (await import("./index.js")) as unknown as Record<string, unknown>;
     for (const name of [
       "discardAcrossAuthorities",
       "discardMove",
       "moveAcrossAuthorities",
+      "moveAcrossByDocument",
+      "moveDocumentOf",
     ]) {
       expect(typeof surface[name]).toBe("function");
     }
@@ -2370,11 +2412,16 @@ describe("cross-authority move package surface", () => {
       "assertRecordWritable",
       "blockingMoveFor",
       "blockingMoveForRef",
+      "exchangeLocalDestination",
+      "exchangeLocalToRemote",
+      "exchangeRemoteDestination",
+      "exchangeRemoteSource",
       "frozenMoveRefusal",
       "isForwardMoveTransition",
       "publishMove",
       "readIssueMove",
       "recordIssueMove",
+      "remoteMoveOperationId",
       "stageMove",
       "stagedMismatch",
       "switchMove",

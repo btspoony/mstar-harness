@@ -8133,7 +8133,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
   if (err)
     throw err[0];
   return res;
-}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, LINEAR_ID, CANONICAL_SHA256, GIT_OBJECT_ID, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, COMPOSITE_KINDS, RECOVERABLE_CODES, init_collaboration_operations, MOVE_TRANSITIONS, MOVE_COLUMNS, CARRIED_ISSUE_COLUMNS, init_cross_authority_move, MilestoneError, OTHER_RETIRED_DISPOSITION_SQL, MILESTONE_TRANSITIONS, init_milestone_store, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text2, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text3, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, PROVIDER_ISSUE_ID, SEVERITY_RANK, TERMINAL, init_collaboration_remote_read, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_RELATIONS, ISSUE_PROVENANCE_KINDS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL2, init_issue, SOURCE_SCHEMA_FLOOR, LIVE_SESSION_STATES, LEDGER_COLUMNS, init_collaboration_cutover, RCF3339, SHA256, GIT_OBJECT_ID2, LINEAR_ID2, UUID, CAPABILITY_KEYS, URL_TOKEN, HOME_PATH, URL_CREDENTIAL_KEY, EMBEDDED_PATH, CREDENTIAL_SHAPE, AUTHORIZATION_HEADER, CREDENTIAL_ASSIGNMENT, NEGATIVE_OUTCOME_CODES, CATALOG_KINDS, CATALOG_RELATIONS, MSTAR_FIELD_KEYS, OCCURRENCE_KEYS, TRANSITION_KEYS, TRANSITION_EVIDENCE_KEYS, IMPORTED_RECORD_FIELDS, IMPORTED_RECORD_KEYS, RELATION_KEYS, PROVENANCE_KEYS, PROJECT_MOVE_KEYS, ADOPTION_CAPTURE_KEYS, ADOPTION_RETAIN_KEYS, REMOTE_UNSETTLED_STATES, REMOTE_CHANGE_KINDS, REMOTE_INTENT_STATES, INTENT_STATES, SETTLED_CLAIM_KEYS, RECEIPT_OUTCOME_KINDS, RECONCILE_OUTCOME_KINDS, ISSUE_HISTORY_KEYS, init_collaboration_remote, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, CatalogError, init_catalog, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, LINEAR_ID, CANONICAL_SHA256, GIT_OBJECT_ID, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, COMPOSITE_KINDS, RECOVERABLE_CODES, init_collaboration_operations, MilestoneError, OTHER_RETIRED_DISPOSITION_SQL, MILESTONE_TRANSITIONS, init_milestone_store, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text2, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text3, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, PROVIDER_ISSUE_ID, SEVERITY_RANK, TERMINAL, init_collaboration_remote_read, ISSUE_MOVE_ROUTES, PROVIDER_ISSUE_ID2, MOVE_TRANSITIONS, MOVE_COLUMNS, CARRIED_ISSUE_COLUMNS, DOCUMENT_PHASE, init_cross_authority_move, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_RELATIONS, ISSUE_PROVENANCE_KINDS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL2, init_issue, SOURCE_SCHEMA_FLOOR, LIVE_SESSION_STATES, LEDGER_COLUMNS, init_collaboration_cutover, RCF3339, SHA256, GIT_OBJECT_ID2, LINEAR_ID2, UUID, CAPABILITY_KEYS, URL_TOKEN, HOME_PATH, URL_CREDENTIAL_KEY, EMBEDDED_PATH, CREDENTIAL_SHAPE, AUTHORIZATION_HEADER, CREDENTIAL_ASSIGNMENT, NEGATIVE_OUTCOME_CODES, CATALOG_KINDS, CATALOG_RELATIONS, MSTAR_FIELD_KEYS, OCCURRENCE_KEYS, TRANSITION_KEYS, TRANSITION_EVIDENCE_KEYS, IMPORTED_RECORD_FIELDS, IMPORTED_RECORD_KEYS, RELATION_KEYS, PROVENANCE_KEYS, PROJECT_MOVE_KEYS, ADOPTION_CAPTURE_KEYS, ADOPTION_RETAIN_KEYS, REMOTE_UNSETTLED_STATES, REMOTE_CHANGE_KINDS, REMOTE_INTENT_STATES, INTENT_STATES, SETTLED_CLAIM_KEYS, RECEIPT_OUTCOME_KINDS, RECONCILE_OUTCOME_KINDS, ISSUE_HISTORY_KEYS, init_collaboration_remote, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, CatalogError, init_catalog, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 # Tracked results live under .agents/ and .mstarc declares the layout.
 .mstar/
 `, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
@@ -9531,13 +9531,22 @@ and not exists (
 begin
   select raise(abort, 'issue.move-in-progress');
 end;
-`, COLLABORATION_MOVE_SCHEMA, COLLABORATION_MILESTONE_EFFORT_V5_SQL = `
+`, COLLABORATION_MOVE_SCHEMA, COLLABORATION_MOVE_ROUTE_SQL = `
+alter table issue_moves add column route text not null default 'local-local'
+  check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'));
+update issue_moves set route = case
+  when issue_moves.role = 'source' then
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'remote-unknown' else 'local-remote' end
+  else
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'local-remote' else 'remote-local' end
+end;
+`, COLLABORATION_MOVE_ROUTE_SCHEMA, COLLABORATION_MILESTONE_EFFORT_V6_SQL = `
 alter table project_milestones add column effort_sessions integer check (
   effort_sessions is null or
   (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
 );
 alter table project_milestones drop column target;
-`, COLLABORATION_MILESTONE_EFFORT_SCHEMA, COLLABORATION_MIGRATIONS, COLLABORATION_REMOTE_TABLES, COLLABORATION_OUTBOX_TABLES, COLLABORATION_TABLES, COLLABORATION_V1_COLUMNS, COLLABORATION_COLUMNS, COLLABORATION_V2_COLUMNS, COLLABORATION_OUTBOX_COLUMNS, COLLABORATION_MOVE_COLUMNS, COLLABORATION_V3_COLUMNS, COLLABORATION_V4_COLUMNS, COLLABORATION_CURRENT_COLUMNS, COLLABORATION_KEY_LAYOUT_V2, COLLABORATION_KEY_LAYOUT_OUTBOX, COLLABORATION_KEY_LAYOUT, COLLABORATION_KEY_LAYOUT_MOVE, COLLABORATION_KEY_LAYOUT_CURRENT, COLLABORATION_MOVE_TABLES, COLLABORATION_V3_TABLES, COLLABORATION_V2_TABLES, COLLABORATION_V1_TABLES, COLLABORATION_CUTOVER_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, CARRIED_BINDING_COLUMNS, CARRIED_INTENT_COLUMNS, REMOTE_CACHE_REBUILD_ROUTE, SELECTOR_COMMIT, REMOTE_CACHE_RECOVERY_TABLES, RECOVERY_FORBIDDEN_FORM, RECOVERY_FORBIDDEN_REPLACE, init_collaboration_store, RoadmapError, init_roadmap_store, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
+`, COLLABORATION_MILESTONE_EFFORT_SCHEMA, COLLABORATION_MIGRATIONS, COLLABORATION_REMOTE_TABLES, COLLABORATION_OUTBOX_TABLES, COLLABORATION_TABLES, COLLABORATION_V1_COLUMNS, COLLABORATION_COLUMNS, COLLABORATION_V2_COLUMNS, COLLABORATION_OUTBOX_COLUMNS, COLLABORATION_MOVE_COLUMNS, COLLABORATION_ROUTE_COLUMNS, COLLABORATION_V3_COLUMNS, COLLABORATION_V4_COLUMNS, COLLABORATION_V5_ROUTE_COLUMNS, COLLABORATION_CURRENT_COLUMNS, COLLABORATION_KEY_LAYOUT_V2, COLLABORATION_KEY_LAYOUT_OUTBOX, COLLABORATION_KEY_LAYOUT, COLLABORATION_KEY_LAYOUT_MOVE, COLLABORATION_KEY_LAYOUT_ROUTE, COLLABORATION_KEY_LAYOUT_CURRENT, COLLABORATION_MOVE_TABLES, COLLABORATION_V3_TABLES, COLLABORATION_V2_TABLES, COLLABORATION_V1_TABLES, COLLABORATION_CUTOVER_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, CARRIED_BINDING_COLUMNS, CARRIED_INTENT_COLUMNS, REMOTE_CACHE_REBUILD_ROUTE, SELECTOR_COMMIT, REMOTE_CACHE_RECOVERY_TABLES, RECOVERY_FORBIDDEN_FORM, RECOVERY_FORBIDDEN_REPLACE, init_collaboration_store, RoadmapError, init_roadmap_store, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -10113,7 +10122,7 @@ alter table project_milestones drop column target;
       return this.issues.length === 0;
     }
   });
-}, ZodRealError, parse3, parseAsync, safeParse, safeParseAsync, encode, decode2, encodeAsync, decodeAsync, safeEncode, safeDecode, safeEncodeAsync, safeDecodeAsync, ZodType, _ZodString, ZodString, ZodStringFormat, ZodISODateTime, ZodISODate, ZodISOTime, ZodISODuration, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodNumber, ZodNumberFormat, ZodBoolean, ZodUnknown, ZodNever, ZodArray, ZodObject, ZodUnion, ZodIntersection, ZodEnum, ZodLiteral, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodCatch, ZodPipe, ZodReadonly, ZodCustom, gitObjectId, providerId2, rfc3339, sha256Digest, issueRef, providerScope, providerIssueIdentity, scopeCapabilities, scopeOutcome2, scopeCheck2, mstarSubjectFields, occurrenceRecord, closureEvidence, importedRecordSpellings, importedRecord2, transitionRecord, relationRecord, provenanceKinds2, provenanceRecord2, projectMoveRecord, subjectHistory, issueSubject, portableSubject, remoteIssue2, milestoneDocument, roadmapDocument, catalogEntityDocument, catalogLinkDocument, projectDocument, remoteSnapshot, frozenEvent2, remoteBindDocumentSchema, remoteObserveDocumentSchema, remoteAdoptionDocumentSchema, confirmedOutcome, unconfirmedOutcome, conflictOutcome, notSentOutcome, receiptEnvelopeFields, remoteReceiptDocumentSchema, remoteReconcileDocumentSchema, remoteResolutionDocumentSchema, remoteForkObservationDocumentSchema, DISPOSITIONS3, KINDS, SEVERITIES, AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)", CREDENTIAL, AUTH_VALUE, DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`, DIGEST_VALUE, DIGEST_BARE, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, EXECUTION_MIGRATION_VERSION2, EXECUTION_COVERAGE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, EXECUTION_INTENTS_MIGRATION_VERSION;
+}, ZodRealError, parse3, parseAsync, safeParse, safeParseAsync, encode, decode2, encodeAsync, decodeAsync, safeEncode, safeDecode, safeEncodeAsync, safeDecodeAsync, ZodType, _ZodString, ZodString, ZodStringFormat, ZodISODateTime, ZodISODate, ZodISOTime, ZodISODuration, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodNumber, ZodNumberFormat, ZodBoolean, ZodUnknown, ZodNever, ZodArray, ZodObject, ZodUnion, ZodIntersection, ZodEnum, ZodLiteral, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodCatch, ZodPipe, ZodReadonly, ZodCustom, gitObjectId, providerId2, rfc3339, sha256Digest, issueRef, providerScope, providerIssueIdentity, scopeCapabilities, scopeOutcome2, scopeCheck2, mstarSubjectFields, occurrenceRecord, closureEvidence, importedRecordSpellings, importedRecord2, transitionRecord, relationRecord, provenanceKinds2, provenanceRecord2, projectMoveRecord, subjectHistory, issueSubject, portableSubject, remoteIssue2, milestoneDocument, roadmapDocument, catalogEntityDocument, catalogLinkDocument, projectDocument, remoteSnapshot, frozenEvent2, remoteBindDocumentSchema, remoteObserveDocumentSchema, remoteAdoptionDocumentSchema, confirmedOutcome, unconfirmedOutcome, conflictOutcome, notSentOutcome, receiptEnvelopeFields, remoteReceiptDocumentSchema, remoteReconcileDocumentSchema, remoteResolutionDocumentSchema, remoteForkObservationDocumentSchema, moveHandoffDocumentSchema, DISPOSITIONS3, KINDS, SEVERITIES, AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)", CREDENTIAL, AUTH_VALUE, DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`, DIGEST_VALUE, DIGEST_BARE, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, EXECUTION_MIGRATION_VERSION2, EXECUTION_COVERAGE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, EXECUTION_INTENTS_MIGRATION_VERSION;
 var init_engine = __esm(() => {
   __defProp = Object.defineProperty;
   init_mstarc = __esm2(() => {
@@ -10585,35 +10594,6 @@ var init_engine = __esm(() => {
       "execution.not-active": true,
       "execution.reentrant": true
     };
-  });
-  init_cross_authority_move = __esm2(() => {
-    init_collaboration_identity();
-    init_collaboration_store();
-    init_issue();
-    init_store_db();
-    MOVE_TRANSITIONS = {
-      staged: ["verified", "discarded"],
-      verified: ["switched", "discarded"],
-      switched: ["published", "discarded"],
-      published: [],
-      discarded: []
-    };
-    MOVE_COLUMNS = "operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, source_authority, " + "destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, staged_counts, " + "source_store_id, source_epoch, removed_sync_rows, created_at, updated_at";
-    CARRIED_ISSUE_COLUMNS = [
-      "project_id",
-      "title",
-      "kind",
-      "severity",
-      "disposition",
-      "impact",
-      "acceptance",
-      "owner",
-      "registered_at",
-      "closed_at",
-      "closure_note",
-      "created_at",
-      "issue_ref"
-    ];
   });
   init_milestone_store = __esm2(() => {
     init_collaboration_identity();
@@ -13914,6 +13894,48 @@ var init_engine = __esm(() => {
     SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
     TERMINAL = new Set(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
   });
+  init_cross_authority_move = __esm2(() => {
+    init_collaboration_identity();
+    init_collaboration_store();
+    init_issue();
+    init_store_db();
+    ISSUE_MOVE_ROUTES = [
+      "local-local",
+      "local-remote",
+      "remote-local",
+      "remote-unknown"
+    ];
+    PROVIDER_ISSUE_ID2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    MOVE_TRANSITIONS = {
+      staged: ["verified", "discarded"],
+      verified: ["switched", "discarded"],
+      switched: ["published", "discarded"],
+      published: [],
+      discarded: []
+    };
+    MOVE_COLUMNS = "operation_id, role, route, request_hash, issue_ref, source_issue_id, destination_issue_id, source_authority, " + "destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, staged_counts, " + "source_store_id, source_epoch, removed_sync_rows, created_at, updated_at";
+    CARRIED_ISSUE_COLUMNS = [
+      "project_id",
+      "title",
+      "kind",
+      "severity",
+      "disposition",
+      "impact",
+      "acceptance",
+      "owner",
+      "registered_at",
+      "closed_at",
+      "closure_note",
+      "created_at",
+      "issue_ref"
+    ];
+    DOCUMENT_PHASE = {
+      request: "source",
+      staged: "destination",
+      switch: "source",
+      admission: "destination"
+    };
+  });
   init_issue = __esm2(() => {
     init_audit();
     init_collaboration_store();
@@ -14600,16 +14622,22 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       name: "collaboration-cross-authority",
       sql: COLLABORATION_MOVE_V4_SQL
     };
-    COLLABORATION_MILESTONE_EFFORT_SCHEMA = {
+    COLLABORATION_MOVE_ROUTE_SCHEMA = {
       version: 5,
+      name: "collaboration-move-route",
+      sql: COLLABORATION_MOVE_ROUTE_SQL
+    };
+    COLLABORATION_MILESTONE_EFFORT_SCHEMA = {
+      version: 6,
       name: "collaboration-milestone-effort",
-      sql: COLLABORATION_MILESTONE_EFFORT_V5_SQL
+      sql: COLLABORATION_MILESTONE_EFFORT_V6_SQL
     };
     COLLABORATION_MIGRATIONS = [
       COLLABORATION_SCHEMA,
       COLLABORATION_REMOTE_SCHEMA,
       COLLABORATION_OUTBOX_SCHEMA,
       COLLABORATION_MOVE_SCHEMA,
+      COLLABORATION_MOVE_ROUTE_SCHEMA,
       COLLABORATION_MILESTONE_EFFORT_SCHEMA
     ];
     COLLABORATION_REMOTE_TABLES = [
@@ -14906,6 +14934,9 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
         "updated_at"
       ]
     };
+    COLLABORATION_ROUTE_COLUMNS = {
+      issue_moves: [...COLLABORATION_MOVE_COLUMNS.issue_moves, "route"]
+    };
     COLLABORATION_V3_COLUMNS = {
       ...COLLABORATION_V2_COLUMNS,
       ...COLLABORATION_OUTBOX_COLUMNS
@@ -14914,8 +14945,12 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       ...COLLABORATION_V3_COLUMNS,
       ...COLLABORATION_MOVE_COLUMNS
     };
-    COLLABORATION_CURRENT_COLUMNS = {
+    COLLABORATION_V5_ROUTE_COLUMNS = {
       ...COLLABORATION_V4_COLUMNS,
+      ...COLLABORATION_ROUTE_COLUMNS
+    };
+    COLLABORATION_CURRENT_COLUMNS = {
+      ...COLLABORATION_V5_ROUTE_COLUMNS,
       project_milestones: [
         "milestone_id",
         "project_id",
@@ -15091,9 +15126,20 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
         ]
       }
     ];
+    COLLABORATION_KEY_LAYOUT_ROUTE = [
+      COLLABORATION_KEY_LAYOUT_MOVE[0],
+      {
+        ...COLLABORATION_KEY_LAYOUT_MOVE[1],
+        notNull: [...COLLABORATION_KEY_LAYOUT_MOVE[1].notNull, "route"],
+        checks: [
+          ...COLLABORATION_KEY_LAYOUT_MOVE[1].checks,
+          "check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'))"
+        ]
+      }
+    ];
     COLLABORATION_KEY_LAYOUT_CURRENT = [
       ...COLLABORATION_KEY_LAYOUT,
-      ...COLLABORATION_KEY_LAYOUT_MOVE
+      ...COLLABORATION_KEY_LAYOUT_ROUTE
     ];
     COLLABORATION_MOVE_TABLES = ["issue_moves"];
     COLLABORATION_V3_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_MOVE_TABLES.includes(table));
@@ -17945,6 +17991,36 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     asOf: rfc3339,
     coverage: literal("complete"),
     heads: array(object({ recordId: providerId2, issueRef, head: sha256Digest }).strict()).min(1)
+  }).strict();
+  moveHandoffDocumentSchema = object({
+    version: literal(1),
+    phase: _enum(["request", "staged", "switch", "admission"]),
+    route: _enum(["local-local", "local-remote", "remote-local", "remote-unknown"]),
+    operationId: providerId2,
+    issueRef,
+    sourceAuthority: string4(),
+    destinationAuthority: string4(),
+    destinationProject: string4(),
+    actor: string4(),
+    reason: string4(),
+    payloadJson: string4(),
+    payloadDigest: sha256Digest,
+    stagedCounts: string4(),
+    sourceStoreId: string4(),
+    sourceEpoch: number2().int().positive(),
+    sourceIssueId: string4().nullable(),
+    destinationIssueId: providerId2.nullable(),
+    confirmation: object({
+      operationId: providerId2,
+      providerIssueId: providerId2,
+      counts: object({
+        occurrences: number2().int().nonnegative(),
+        issueTransitions: number2().int().nonnegative(),
+        provenance: number2().int().nonnegative(),
+        relations: number2().int().nonnegative(),
+        issueProjectMoves: number2().int().nonnegative()
+      }).strict()
+    }).strict().nullable()
   }).strict();
   init_collaboration_store();
   init_issue();
