@@ -3,31 +3,32 @@
  * execution-mode → QC seat count, tri identity, anti-recursion precheck.
  *
  * Spec sources (each test cites the skill/reference section it enforces):
- * - Assignment field contract — `Execute as` / `Delegation` / `Task category`
+ * - Assignment fields live in the document FRONT MATTER (compass D15) —
+ *   `parseAssignmentFields` reads snake_case front matter keys only; a
+ *   body-quoted template label can neither satisfy nor disable a gate.
+ * - Assignment field contract — `execute_as` / `delegation` / `task_category`
  * present with non-empty values; paste-only assignments missing fields are
  * flagged: `mstar-dispatch-gates` SKILL.md § "调度防串扰（强制）" +
  * § "Assignment 顶部反模式块" + § 反模式（派发）("Assignment 已写、invoke
  * 为零（paste-only）").
  * - Branch-field forms — writable Assignment must contain EXACTLY ONE of
- * `Working branch: <existing>` | `Working branch: create <new> from <base>`
- * | `Branch policy: direct on <branch> — <reason>`; `create` without
+ * `working_branch: <existing>` | `working_branch: create <new> from <base>`
+ * | `branch_policy: direct on <branch> — <reason>`; `create` without
  * `<base>` is flagged (never assume `main`): `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）".
- * - Review/audit round-bounding fields — an Assignment whose `Execute as`
- * names a review seat, or whose `Task category` starts with `audit`, must
- * carry non-empty `Budget (review / QC seats)` and `Return shape (review / QC
- * seats)` values that are not `N/A`; the cap may only tighten the default:
- * `mstar-harness-core` SKILL.md
+ * - Review/audit round-bounding fields — an Assignment whose `execute_as`
+ * names a review seat, or whose `task_category` starts with `audit`, must
+ * carry non-empty `budget` and `return_shape` values that are not `N/A`;
+ * the cap may only tighten the default: `mstar-harness-core` SKILL.md
  * § "定向执行与验证边界" + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
  * - Task budget (implement / ops rounds) — the exact complement of the
  * review/audit rounds (implement/ops, including non-audit docs/Prepare and
- * orientation roles) must carry a non-empty `Task budget
- * (implement / ops rounds)` / `Task budget` value that is not `N/A`
- * (presence-only; adequacy stays in PM's Prepare check): capacity contract
- * spec § A1–A3.
+ * orientation roles) must carry a non-empty `task_budget` value that is not
+ * `N/A` (presence-only; adequacy stays in PM's Prepare check): capacity
+ * contract spec § A1–A3.
  * - Default-protected-branch gate — no writable work on `main`/`master`
- * unless the Assignment carries an explicit `Branch policy: direct on
+ * unless the Assignment carries an explicit `branch_policy: direct on
  * <branch> — <reason>` exception: `mstar-branch-worktree` SKILL.md
  * § "Git 功能分支门禁（业务仓库）" § 默认规则.
  * - N→seat mapping — sdd → 3 , inline → 1
@@ -39,7 +40,7 @@
  * + `mstar-roles` SKILL.md QC reviewer 参数表.
  * - Anti-recursion — leaf executor MUST NOT invoke a Task/subagent whose
  * role binding (`subagent_type` / `agent` / `subagent`) equals its own
- * `Execute as` (NEVER red line): `mstar-dispatch-gates` SKILL.md
+ * `execute_as` (NEVER red line): `mstar-dispatch-gates` SKILL.md
  * § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
  */
 import { afterAll, describe, expect, test } from "bun:test";
@@ -61,33 +62,50 @@ import {
   parseEnforcementFlag,
   validateAssignmentFields,
 } from "../src/dispatch.js";
+import { validateDocumentFrontmatter } from "../src/document-schema.js";
+
+/** snake_case keys the fixture builder emits; arrays become YAML block lists. */
+type FixtureValue = string | string[] | undefined;
 
 /** Minimal well-formed writable assignment (all required fields + one branch form). */
-const VALID_ASSIGNMENT = `## Assignment
+const VALID_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+execution_mode: sdd
+task_budget: S — one implementer round closing the declared Files and gates
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Task budget (implement / ops rounds)**: S — one implementer round closing the declared Files and gates
-**Plan Path**: .mstar/plans/20260808-example.md
+## Assignment
 `;
 
-function assignment(overrides: Record<string, string | undefined>): string {
-  const base: Record<string, string> = {
-    "Execute as": "fullstack-dev",
-    Delegation: "forbidden",
-    "Task category": "logic",
-    "Working branch": "feature/foo",
+/** Override keys may use the snake_case front matter spelling directly. */
+function assignment(overrides: Record<string, FixtureValue>): string {
+  const base: Record<string, FixtureValue> = {
+    execute_as: "fullstack-dev",
+    delegation: "forbidden",
+    task_category: "logic",
+    working_branch: "feature/foo",
   };
-  const merged: Record<string, string | undefined> = { ...base, ...overrides };
-  const lines = ["## Assignment", ""];
+  const merged: Record<string, FixtureValue> = { ...base, ...overrides };
+  const lines = ["---"];
   for (const [field, value] of Object.entries(merged)) {
     // `undefined` overrides DROP the field — the missing-field probes rely on it.
     if (value === undefined) continue;
-    lines.push(`**${field}**: ${value}`);
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        lines.push(`${field}: []`);
+      } else {
+        lines.push(`${field}:`);
+        for (const item of value) lines.push(`- ${item}`);
+      }
+    } else {
+      lines.push(`${field}: ${value}`);
+    }
   }
-  return lines.join("\n") + "\n";
+  lines.push("---", "", "## Assignment", "");
+  return lines.join("\n");
 }
 
 /**
@@ -111,7 +129,6 @@ function gateFixture(opts: { prefix?: string; harness?: boolean; dirty?: boolean
   if (opts.dirty === true) writeFileSync(join(root, "README.md"), "fixture edited\n");
   return root;
 }
-
 describe("validateAssignmentFields — required field matrix", () => {
   test("accepts a complete writable assignment", () => {
     const result = validateAssignmentFields(VALID_ASSIGNMENT);
@@ -119,115 +136,88 @@ describe("validateAssignmentFields — required field matrix", () => {
     expect(result.violations).toEqual([]);
   });
 
-  test("accepts plain (non-bold) header field form", () => {
-    const text = `## Assignment
-
-Execute as: fullstack-dev
-Delegation: forbidden
-Task category: logic
-Working branch: feature/foo
-Task budget: S — one implementer round
-`;
-    const result = validateAssignmentFields(text);
-    expect(result.ok).toBe(true);
-  });
-
-  test("missing Execute as → assignment.field.missing-execute-as", () => {
-    const text = `## Assignment
-
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-`;
-    const r = validateAssignmentFields(text);
+  test("missing execute_as → assignment.field.execute-as", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: undefined }));
     expect(r.ok).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-execute-as")).toBe(true);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-task-category")).toBe(false);
+    expect(r.violations.some((v) => v.code === "assignment.field.execute-as")).toBe(true);
+    expect(r.violations.some((v) => v.code === "assignment.field.delegation")).toBe(false);
+    expect(r.violations.some((v) => v.code === "assignment.field.task-category")).toBe(false);
   });
 
-  test("missing core fields carry the legacy presence codes as aliases (single parser(", () => {
-    const text = `## Assignment
-
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-`;
-    const r = validateAssignmentFields(text);
-    const executeAs = r.violations.find((v) => v.code === "assignment.field.missing-execute-as");
+  test("missing core fields carry the legacy presence codes as aliases (single parser)", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: undefined }));
+    const executeAs = r.violations.find((v) => v.code === "assignment.field.execute-as");
     expect(executeAs).toBeDefined();
  // Exactly ONE violation for the missing field — the presence namespace is
  // an alias on it, not a second stacked violation.
-    expect(r.violations.filter((v) => v.message.includes("Execute as"))).toHaveLength(1);
+    expect(r.violations.filter((v) => v.message.includes("execute_as"))).toHaveLength(1);
     expect(executeAs!.aliases).toContain("assignment.presence.missing-execute-as");
  // Branch-form violations carry no presence alias.
     const branchMissing = r.violations.find((v) => v.code === "assignment.field.branch-missing");
     expect(branchMissing?.aliases).toBeUndefined();
   });
 
-  test("list-bullet header fields are accepted (presence-parser acceptance folded into the single engine parser)", () => {
-    const text = `## Assignment
-
-- **Execute as**: fullstack-dev
-- **Delegation**: forbidden
-- **Task category**: logic
-- **Working branch**: feature/foo
-- **Task budget (implement / ops rounds)**: S — one implementer round
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(true);
+  test("missing delegation → assignment.field.delegation", () => {
+    const r = validateAssignmentFields(assignment({ delegation: undefined }));
+    expect(r.ok).toBe(false);
+    expect(r.violations.some((v) => v.code === "assignment.field.delegation")).toBe(true);
   });
 
-  test("missing Delegation → assignment.field.missing-delegation", () => {
-    const text = `## Assignment
+  test("missing task_category → assignment.field.task-category", () => {
+    const r = validateAssignmentFields(assignment({ task_category: undefined }));
+    expect(r.ok).toBe(false);
+    expect(r.violations.some((v) => v.code === "assignment.field.task-category")).toBe(true);
+  });
 
-**Execute as**: fullstack-dev
-**Task category**: logic
-**Working branch**: feature/foo
+  test("empty required values → assignment.field.* (one code per field, missing or empty)", () => {
+    const text = `---
+execute_as:
+delegation: ""
+task_category: logic
+working_branch: feature/foo
+---
+
+## Assignment
 `;
     const r = validateAssignmentFields(text);
     expect(r.ok).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(true);
+    const executeAs = r.violations.filter((v) => v.code === "assignment.field.execute-as");
+    expect(executeAs).toHaveLength(1);
+    expect(executeAs[0]!.message).toContain("non-empty");
+    const delegation = r.violations.filter((v) => v.code === "assignment.field.delegation");
+    expect(delegation).toHaveLength(1);
+    expect(delegation[0]!.message).toContain("non-empty");
+    expect(r.violations.some((v) => v.code === "assignment.field.task-category")).toBe(false);
   });
 
-  test("missing Task category → assignment.field.missing-task-category", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Working branch**: feature/foo
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-task-category")).toBe(true);
-  });
-
-  test("empty required values → assignment.field.invalid-* (presence shape)", () => {
-    const text = `## Assignment
-
-**Execute as**:
-**Delegation**: 
-**Task category**: logic
-**Working branch**: feature/foo
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.invalid-execute-as")).toBe(true);
-    expect(r.violations.some((v) => v.code === "assignment.field.invalid-delegation")).toBe(true);
-    expect(r.violations.some((v) => v.code === "assignment.field.missing-task-category")).toBe(false);
-    expect(r.violations.some((v) => v.code === "assignment.field.invalid-task-category")).toBe(false);
-  });
-
-  test("paste-only shell (no fields at all) flags every required field + branch form", () => {
-    const r = validateAssignmentFields("## Assignment\n\n(empty)");
+  test("paste-only shell (fenced but no fields at all) flags every required field + branch form", () => {
+    const r = validateAssignmentFields("---\n---\n\n## Assignment\n\n(empty)\n");
     expect(r.ok).toBe(false);
     const codes = r.violations.map((v) => v.code);
-    expect(codes).toContain("assignment.field.missing-execute-as");
-    expect(codes).toContain("assignment.field.missing-delegation");
-    expect(codes).toContain("assignment.field.missing-task-category");
+    expect(codes).toContain("assignment.field.execute-as");
+    expect(codes).toContain("assignment.field.delegation");
+    expect(codes).toContain("assignment.field.task-category");
     expect(codes).toContain("assignment.field.branch-missing");
   });
+
+  test("a body `**Execute as**: x` line is ignored — the front matter is the only field source", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+---
+
+## Assignment
+
+**Execute as**: scout
+**Enforcement**: hard
+`;
+    expect(parseAssignmentFields(text).executeAs).toBe("fullstack-dev");
+    expect(parseEnforcementFlag(text).hard).toBe(false);
+  });
 });
+
 describe("control write host gate", () => {
   test("validates the control checkout, branch forms and target ownership", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-control-")));
@@ -241,14 +231,14 @@ describe("control write host gate", () => {
       git("commit", "-qm", "fixture");
       const linked = join(root, "linked");
       git("worktree", "add", "-q", "-b", "feature/test", linked);
-      const base = { "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round", Enforcement: "hard" };
+      const base: Record<string, FixtureValue> = { write_domain: "control", worktree_path: root, working_branch: "main", control_write_paths: [".mstar/plans/run.md"], task_budget: "one round", enforcement: "hard" };
       expect(composeDispatchGate(assignment(base), { cwd: root }).ok).toBe(true);
-      expect(composeDispatchGate(assignment({ ...base, "Worktree path": linked }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.worktree-not-control");
-      expect(composeDispatchGate(assignment({ ...base, "Control write paths": "tracked.txt" }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.target-committable");
-      const direct = { ...base, "Working branch": undefined, "Branch policy": "direct on main \u2014 maintenance" };
+      expect(composeDispatchGate(assignment({ ...base, worktree_path: linked }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.worktree-not-control");
+      expect(composeDispatchGate(assignment({ ...base, control_write_paths: ["tracked.txt"] }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.target-committable");
+      const direct = { ...base, working_branch: undefined, branch_policy: "direct on main — maintenance" };
       expect(validateAssignmentFields(assignment(direct)).ok).toBe(true);
       expect(composeDispatchGate(assignment(direct), { cwd: root }).ok).toBe(true);
-      expect(composeDispatchGate(assignment({ ...direct, "Branch policy": "direct on other \u2014 maintenance" }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.branch-mismatch");
+      expect(composeDispatchGate(assignment({ ...direct, branch_policy: "direct on other — maintenance" }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.branch-mismatch");
       expect(composeDispatchGate(assignment(base), { cwd: join(root, "missing") }).violations.map((v) => v.code)).toContain("dispatch.control-write.control-root-unresolved");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -256,12 +246,11 @@ describe("control write host gate", () => {
   });
 });
 
-
 describe("composeDispatchGate — control root tracked-change leg (writable)", () => {
   test("a writable dispatch on a dirty harness control root is refused", () => {
     const root = gateFixture({ prefix: "dispatch-dirty-control-", harness: true, dirty: true });
     try {
-      const refused = composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root });
+      const refused = composeDispatchGate(assignment({ write_domain: "work", task_budget: "one round" }), { cwd: root });
       expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
       expect(refused.ok).toBe(false);
     } finally {
@@ -272,7 +261,7 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
   test("a writable control-domain dispatch is gated too — the question is domain-independent", () => {
     const root = gateFixture({ prefix: "dispatch-dirty-control-domain-", harness: true, dirty: true });
     try {
-      const text = assignment({ "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round" });
+      const text = assignment({ write_domain: "control", worktree_path: root, working_branch: "main", control_write_paths: [".mstar/plans/run.md"], task_budget: "one round" });
       const refused = composeDispatchGate(text, { cwd: root });
       expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
       expect(refused.ok).toBe(false);
@@ -283,13 +272,13 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
   test("a clean harness control root passes and read-only roles are unaffected", () => {
     const root = gateFixture({ prefix: "dispatch-clean-control-", harness: true });
     try {
-      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
+      expect(composeDispatchGate(assignment({ write_domain: "work", task_budget: "one round" }), { cwd: root }).ok).toBe(true);
       // invariant: ignored process state never dirties the gate.
       writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
-      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
+      expect(composeDispatchGate(assignment({ write_domain: "work", task_budget: "one round" }), { cwd: root }).ok).toBe(true);
       // invariant: the read-only leg skips the tracked-change gate even on a dirty root.
       writeFileSync(join(root, "README.md"), "fixture edited\n");
-      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root, writable: false }).ok).toBe(true);
+      expect(composeDispatchGate(assignment({ write_domain: "work", task_budget: "one round" }), { cwd: root, writable: false }).ok).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -297,16 +286,16 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
 });
 
 describe("control write assignment fields", () => {
-  const base = {
-    "Write domain": "control",
-    "Worktree path": "/control",
-    "Working branch": "main",
-    "Control write paths": ".mstar/plans/run.md",
-    "Task budget": "one round",
+  const base: Record<string, FixtureValue> = {
+    write_domain: "control",
+    worktree_path: "/control",
+    working_branch: "main",
+    control_write_paths: [".mstar/plans/run.md"],
+    task_budget: "one round",
   };
 
-  test("parses fields and comma-separated paths using the header grammar", () => {
-    const fields = parseAssignmentFields("- Worktree path: /control\n**Write domain**: control\nControl write paths: a, b , , c\n## Task\nWrite domain: work\n");
+  test("parses fields and block-list paths from the front matter", () => {
+    const fields = parseAssignmentFields("worktree_path: /control\nwrite_domain: control\ncontrol_write_paths:\n- a\n- b\n- c\n");
     expect(fields.worktreePath).toBe("/control");
     expect(fields.writeDomain).toBe("control");
     expect(fields.controlWritePaths).toEqual(["a", "b", "c"]);
@@ -314,164 +303,106 @@ describe("control write assignment fields", () => {
 
   test("accepts control and work, rejects unknown domains", () => {
     expect(validateAssignmentFields(assignment(base)).ok).toBe(true);
-    expect(validateAssignmentFields(assignment({ ...base, "Write domain": "work" })).ok).toBe(true);
-    const result = validateAssignmentFields(assignment({ ...base, "Write domain": "other" }));
+    expect(validateAssignmentFields(assignment({ ...base, write_domain: "work" })).ok).toBe(true);
+    const result = validateAssignmentFields(assignment({ ...base, write_domain: "other" }));
     expect(result.violations.some((v) => v.code === "assignment.field.write-domain-unknown" && v.severity === "high" && v.fix)).toBe(true);
   });
 
   test("requires both control fields and preserves the branch-form gate", () => {
-    const missing = validateAssignmentFields(assignment({ ...base, "Worktree path": undefined, "Working branch": undefined }));
+    const missing = validateAssignmentFields(assignment({ ...base, worktree_path: undefined, working_branch: undefined }));
     const codes = missing.violations.map((v) => v.code);
     expect(codes).toContain("assignment.field.control-write-missing-worktree");
     expect(codes).toContain("assignment.field.control-write-missing-branch");
     expect(codes).toContain("assignment.field.branch-missing");
-    const missingPaths = validateAssignmentFields(assignment({ ...base, "Control write paths": " ,  " }));
+    const missingPaths = validateAssignmentFields(assignment({ ...base, control_write_paths: [] }));
     expect(missingPaths.violations.map((v) => v.code)).toContain("assignment.field.control-write-paths-missing");
-    const glob = validateAssignmentFields(assignment({ ...base, "Control write paths": ".mstar/plans/*.md" }));
+    const glob = validateAssignmentFields(assignment({ ...base, control_write_paths: [".mstar/plans/*.md"] }));
     expect(glob.violations.map((v) => v.code)).toContain("assignment.field.control-write-path-invalid");
-    const multiple = validateAssignmentFields(assignment({ ...base, "Branch policy": "direct on main - reason" }));
+    const multiple = validateAssignmentFields(assignment({ ...base, branch_policy: "direct on main - reason" }));
     expect(multiple.violations.map((v) => v.code)).toContain("assignment.field.branch-multiple");
   });
 });
-
 describe("validateAssignmentFields — branch-form matrix (writable)", () => {
- // Implement/ops rounds must carry the Task budget capacity field (spec § A1)
+ // Implement/ops rounds must carry the task_budget capacity field (spec § A1)
  // — every otherwise-valid fixture here gains it so the branch-form cases
  // stay the only thing under test.
-  const TASK_BUDGET = { "Task budget (implement / ops rounds)": "S — one focused implementer round" };
+  const TASK_BUDGET = { task_budget: "S — one focused implementer round" };
 
-  test("Working branch: <existing> is a valid single form", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "feature/foo", ...TASK_BUDGET }));
+  test("working_branch: <existing> is a valid single form", () => {
+    const r = validateAssignmentFields(assignment({ working_branch: "feature/foo", ...TASK_BUDGET }));
     expect(r.ok).toBe(true);
   });
 
-  test("Working branch: create <new> from <base> is valid (branch base)", () => {
+  test("working_branch: create <new> from <base> is valid (branch base)", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "create feature/part2 from feature/foo", ...TASK_BUDGET }),
+      assignment({ working_branch: "create feature/part2 from feature/foo", ...TASK_BUDGET }),
     );
     expect(r.ok).toBe(true);
   });
 
-  test("Working branch: create <new> from current is valid (current HEAD base)", () => {
+  test("working_branch: create <new> from current is valid (current HEAD base)", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "create feature/bar from current", ...TASK_BUDGET }),
+      assignment({ working_branch: "create feature/bar from current", ...TASK_BUDGET }),
     );
     expect(r.ok).toBe(true);
   });
 
-  test("Branch policy: direct on <branch> — <reason> is a valid single form", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main — team hotfix convention
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    const r = validateAssignmentFields(text);
+  test("branch_policy: direct on <branch> — <reason> is a valid single form", () => {
+    const r = validateAssignmentFields(
+      assignment({ working_branch: undefined, branch_policy: "direct on main — team hotfix convention", ...TASK_BUDGET }),
+    );
     expect(r.ok).toBe(true);
   });
 
-  test("Branch policy: direct on <branch> - <reason> (ASCII hyphen) is a valid single form", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main - team hotfix convention
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(true);
+  test("branch_policy separators (- -- –) are valid single forms", () => {
+    for (const sep of ["-", "--", "–"]) {
+      const r = validateAssignmentFields(
+        assignment({ working_branch: undefined, branch_policy: `direct on main ${sep} team hotfix convention`, ...TASK_BUDGET }),
+      );
+      expect(r.ok).toBe(true);
+    }
   });
 
-  test("Branch policy: direct on <branch> -- <reason> (ASCII double hyphen) is a valid single form", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main -- team hotfix convention
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(true);
-  });
-
-  test("Branch policy: direct on <branch> – <reason> (en dash) is a valid single form", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main – team hotfix convention
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    const r = validateAssignmentFields(text);
-    expect(r.ok).toBe(true);
-  });
-
-  test("empty Working branch does not count as a form (treated as absent)", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: 
-**Branch policy**: direct on main — team hotfix convention
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    const r = validateAssignmentFields(text);
+  test("empty working_branch does not count as a form (treated as absent)", () => {
+    const r = validateAssignmentFields(
+      assignment({ working_branch: "", branch_policy: "direct on main — team hotfix convention", ...TASK_BUDGET }),
+    );
     expect(r.ok).toBe(true);
   });
 
   test("no branch form → assignment.field.branch-missing", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-`;
-    const r = validateAssignmentFields(text);
+    const r = validateAssignmentFields(assignment({ working_branch: undefined }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
   });
 
-  test("Working branch + Branch policy together → assignment.field.branch-multiple", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Branch policy**: direct on main — hotfix
-`;
-    const r = validateAssignmentFields(text);
+  test("working_branch + branch_policy together → assignment.field.branch-multiple", () => {
+    const r = validateAssignmentFields(assignment({ branch_policy: "direct on main — hotfix" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-multiple")).toBe(true);
   });
 
   test("create form without <base> → assignment.field.branch-missing-base", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "create feature/part2" }));
+    const r = validateAssignmentFields(assignment({ working_branch: "create feature/part2" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
   test("create form with dangling 'from' ('create feature/x from') → assignment.field.branch-missing-base", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "create feature/x from" }));
+    const r = validateAssignmentFields(assignment({ working_branch: "create feature/x from" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
   test("create form with 'from' but no name ('create from main') → assignment.field.branch-missing-base", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "create from main" }));
+    const r = validateAssignmentFields(assignment({ working_branch: "create from main" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
   test("create form with dangling words is not a create-form match (treated as existing branch)", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "create foo from bar extra", "Task budget (implement / ops rounds)": "S" }),
+      assignment({ working_branch: "create foo from bar extra", task_budget: "S" }),
     );
     expect(r.ok).toBe(true);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
@@ -480,7 +411,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
   test("existing branch names that merely start with 'create' pass as existing-branch forms", () => {
     for (const name of ["created", "create/foo", "create-user-flow"]) {
       const r = validateAssignmentFields(
-        assignment({ "Working branch": name, "Task budget (implement / ops rounds)": "S" }),
+        assignment({ working_branch: name, task_budget: "S" }),
       );
       expect(r.ok).toBe(true);
       expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
@@ -489,73 +420,48 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
 
   test("capitalized create form 'Create new-branch from main' is a valid create form", () => {
     const r = validateAssignmentFields(
-      assignment({ "Working branch": "Create new-branch from main", "Task budget (implement / ops rounds)": "S" }),
+      assignment({ working_branch: "Create new-branch from main", task_budget: "S" }),
     );
     expect(r.ok).toBe(true);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(false);
   });
 
   test("uppercase create form without <base> ('CREATE new-branch') → assignment.field.branch-missing-base", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "CREATE new-branch" }));
+    const r = validateAssignmentFields(assignment({ working_branch: "CREATE new-branch" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
   test("create form 'create foo' without <base> → assignment.field.branch-missing-base", () => {
-    const r = validateAssignmentFields(assignment({ "Working branch": "create foo" }));
+    const r = validateAssignmentFields(assignment({ working_branch: "create foo" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-missing-base")).toBe(true);
   });
 
-  test("Branch policy without reason → assignment.field.branch-policy-missing-reason", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main
-`;
-    const r = validateAssignmentFields(text);
+  test("branch_policy without reason → assignment.field.branch-policy-missing-reason", () => {
+    const r = validateAssignmentFields(assignment({ working_branch: undefined, branch_policy: "direct on main" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-policy-missing-reason")).toBe(true);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-policy-missing-branch")).toBe(false);
   });
 
-  test("Branch policy without branch → assignment.field.branch-policy-missing-branch", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on
-`;
-    const r = validateAssignmentFields(text);
+  test("branch_policy without branch → assignment.field.branch-policy-missing-branch", () => {
+    const r = validateAssignmentFields(assignment({ working_branch: undefined, branch_policy: "direct on" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-policy-missing-branch")).toBe(true);
   });
 
-  test("unparseable Branch policy → assignment.field.branch-policy-missing-branch", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: merge to main
-`;
-    const r = validateAssignmentFields(text);
+  test("unparseable branch_policy → assignment.field.branch-policy-missing-branch", () => {
+    const r = validateAssignmentFields(assignment({ working_branch: undefined, branch_policy: "merge to main" }));
     expect(r.ok).toBe(false);
     expect(r.violations.some((v) => v.code === "assignment.field.branch-policy-missing-branch")).toBe(true);
   });
 
   test("writable:false skips the branch-form gate (read-only assignment)", () => {
-    const text = `## Assignment
-
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
-`;
-    const r = validateAssignmentFields(text, { writable: false });
+    const r = validateAssignmentFields(
+      assignment({ execute_as: "scout", task_category: "deep", working_branch: undefined, task_budget: "XS — one orientation round" }),
+      { writable: false },
+    );
     expect(r.ok).toBe(true);
   });
 });
@@ -574,39 +480,41 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
   const returnShapeViolations = (text: string) =>
     roundFieldViolations(text).filter((v) => v.code === "assignment.field.return-shape-missing");
   const COMPLETE_ROUND = {
-    "Budget (review / QC seats)": "<= 12 file opens / <= 10 minutes",
-    "Return shape (review / QC seats)": "verdict + findings; findings: [] when clean",
+    budget: "<= 12 file opens / <= 10 minutes",
+    return_shape: "verdict + findings; findings: [] when clean",
   };
 
-  test("review seat without Budget → assignment.field.budget-missing (high, actionable fix)", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "qc-specialist", ...COMPLETE_ROUND, "Budget (review / QC seats)": undefined }));
+  test("review seat without budget → assignment.field.budget-missing (high, actionable fix)", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: "qc-specialist", ...COMPLETE_ROUND, budget: undefined }));
     expect(r.ok).toBe(false);
     const violation = r.violations.find((v) => v.code === "assignment.field.budget-missing");
     expect(violation).toBeDefined();
     expect(violation!.severity).toBe("high");
     expect(violation!.message).toContain("qc-specialist");
     expect(violation!.message).toContain("the field is absent");
- // The fix must name the field label and the tighten-only rule — a PM
+ // The fix must name the front matter key and the tighten-only rule — a PM
  // reading only the violation can repair the Assignment.
-    expect(violation!.fix).toContain("Budget (review / QC seats)");
+    expect(violation!.fix).toContain("budget:");
     expect(violation!.fix).toContain("never loosen it");
   });
 
-  test("review seat missing only Return shape → exactly assignment.field.return-shape-missing", () => {
-    const text = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": undefined });
-    const r = validateAssignmentFields(text, { writable: false });
+  test("review seat missing only return_shape → exactly assignment.field.return-shape-missing", () => {
+    const r = validateAssignmentFields(
+      assignment({ execute_as: "code-reviewer", ...COMPLETE_ROUND, return_shape: undefined }),
+      { writable: false },
+    );
     expect(r.ok).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.return-shape-missing"]);
     const violation = r.violations[0]!;
     expect(violation.severity).toBe("high");
     expect(violation.message).toContain("code-reviewer");
     expect(violation.message).toContain("the field is absent");
-    expect(violation.fix).toContain("Return shape (review / QC seats)");
+    expect(violation.fix).toContain("return_shape:");
   });
 
-  test("audit Task category gates a non-QC executor, one code per missing field", () => {
+  test("audit task_category gates a non-QC executor, one code per missing field", () => {
     const r = validateAssignmentFields(
-      assignment({ "Execute as": "architect", "Task category": "audit" }),
+      assignment({ execute_as: "architect", task_category: "audit" }),
       { writable: false },
     );
     expect(r.ok).toBe(false);
@@ -621,124 +529,96 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
   test("audit round passes with both fields; a `secondary` suffix still gates", () => {
     expect(
       validateAssignmentFields(
-        assignment({ "Execute as": "code-reviewer", "Task category": "audit", ...COMPLETE_ROUND }),
+        assignment({ execute_as: "code-reviewer", task_category: "audit", ...COMPLETE_ROUND }),
       ).ok,
     ).toBe(true);
     expect(
-      roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "audit (secondary)" })),
+      roundFieldViolations(assignment({ execute_as: "architect", task_category: "audit (secondary)" })),
     ).toHaveLength(2);
  // `audit_secondary` is the same suffix written with an underscore — still a
  // leading `audit` token, because only an ALPHANUMERIC next char excludes it.
     expect(
-      roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "audit_secondary" })),
+      roundFieldViolations(assignment({ execute_as: "architect", task_category: "audit_secondary" })),
     ).toHaveLength(2);
  // Only a LEADING `audit` triggers the gate — other categories stay untouched.
-    expect(roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "deep" }))).toHaveLength(0);
-    expect(roundFieldViolations(assignment({ "Execute as": "architect", "Task category": "auditing" }))).toHaveLength(0);
+    expect(roundFieldViolations(assignment({ execute_as: "architect", task_category: "deep" }))).toHaveLength(0);
+    expect(roundFieldViolations(assignment({ execute_as: "architect", task_category: "auditing" }))).toHaveLength(0);
   });
 
   test("implement round is unaffected by the round-bounding fields", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/impl
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-`;
-    expect(validateAssignmentFields(text).ok).toBe(true);
+    expect(validateAssignmentFields(assignment({ working_branch: "feature/impl", task_budget: "S — one focused implementer round" })).ok).toBe(true);
   });
 
-  test("Budget (review / QC seats) satisfies the gate", () => {
-    const text = assignment({
-      "Execute as": "qc-specialist-2",
-      ...COMPLETE_ROUND,
-    });
-    expect(validateAssignmentFields(text).ok).toBe(true);
-  });
-
-  test("bare Budget label is recognized (parser no longer drops the field silently)", () => {
-    const text = assignment({
-      "Execute as": "code-reviewer",
-      Budget: "<= 6 file opens",
-      "Return shape": "verdict + findings",
-    });
-    expect(validateAssignmentFields(text).ok).toBe(true);
+  test("budget satisfies the gate", () => {
+    expect(
+      validateAssignmentFields(
+        assignment({ execute_as: "qc-specialist-2", ...COMPLETE_ROUND }),
+      ).ok,
+    ).toBe(true);
   });
 
   test("N/A never satisfies the gate (case-insensitive) — it is an implement / ops value", () => {
     for (const value of ["N/A", "n/a", "N/a"]) {
-      const text = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Budget (review / QC seats)": value });
-      const violations = budgetViolations(text);
+      const violations = budgetViolations(assignment({ execute_as: "code-reviewer", ...COMPLETE_ROUND, budget: value }));
       expect(violations).toHaveLength(1);
       expect(violations[0]!.message).toContain("N/A");
     }
-    const returnShape = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": "n/a" });
+    const returnShape = assignment({ execute_as: "code-reviewer", ...COMPLETE_ROUND, return_shape: "n/a" });
     expect(returnShapeViolations(returnShape)).toHaveLength(1);
     expect(returnShapeViolations(returnShape)[0]!.message).toContain("N/A");
   });
 
-  test("empty Budget value does not satisfy the gate", () => {
-    const text = assignment({ "Execute as": "qc-specialist-3", ...COMPLETE_ROUND, "Budget (review / QC seats)": "" });
-    expect(budgetViolations(text)).toHaveLength(1);
+  test("empty budget value does not satisfy the gate", () => {
+    const violations = budgetViolations(assignment({ execute_as: "qc-specialist-3", ...COMPLETE_ROUND, budget: "" }));
+    expect(violations).toHaveLength(1);
   });
 
   test("@mention, case and trailing annotation still resolve to the seat", () => {
-    expect(budgetViolations(assignment({ "Execute as": "@QC-Specialist" }))).toHaveLength(1);
+    expect(budgetViolations(assignment({ execute_as: "@QC-Specialist" }))).toHaveLength(1);
     expect(
       roundFieldViolations(
-        assignment({ "Execute as": "qc-specialist-2 (security lens)", ...COMPLETE_ROUND }),
+        assignment({ execute_as: "qc-specialist-2 (security lens)", ...COMPLETE_ROUND }),
       ),
     ).toHaveLength(0);
   });
 
   test("every review seat is gated; other roles are unaffected", () => {
     for (const seat of ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"]) {
-      expect(roundFieldViolations(assignment({ "Execute as": seat }))).toHaveLength(2);
+      expect(roundFieldViolations(assignment({ execute_as: seat }))).toHaveLength(2);
     }
     for (const role of ["fullstack-dev", "architect", "ops-engineer", "product-manager", "scout"]) {
-      expect(roundFieldViolations(assignment({ "Execute as": role, "Task category": "logic" }))).toHaveLength(0);
+      expect(roundFieldViolations(assignment({ execute_as: role, task_category: "logic" }))).toHaveLength(0);
     }
   });
 
   test("read-only review seat is gated (writable:false skips only the branch-form gate)", () => {
-    const text = `## Assignment
-
-**Execute as**: qc-specialist
-**Delegation**: forbidden
-**Task category**: review
-`;
-    const r = validateAssignmentFields(text, { writable: false });
+    const r = validateAssignmentFields(
+      assignment({ execute_as: "qc-specialist", task_category: "review", working_branch: undefined }),
+      { writable: false },
+    );
     expect(r.violations.map((v) => v.code)).toEqual([
       "assignment.field.budget-missing",
       "assignment.field.return-shape-missing",
     ]);
   });
 
-// Dispatch text routinely QUOTES the template labels in its task body (the
-// `## Task` heading is the header boundary), so the gate reads the header
-// region only — a body-only label must not satisfy it.
-  const HEADER_AND_BODY_LABELS = (labelLines: readonly string[]) => `## Assignment
+  test("body-quoted round-bounding keys do not satisfy the gate", () => {
+    const text = `---
+execute_as: qc-specialist
+delegation: forbidden
+task_category: review
+working_branch: feature/review-seat-machine-gates
+---
 
-**Execute as**: qc-specialist
-**Delegation**: forbidden
-**Task category**: review
-**Working branch**: feature/review-seat-machine-gates
+## Assignment
 
 ## Task 1: Review the diff
 
-Reproduce this shape in your own header:
-${labelLines.join("\n")}
+Reproduce this shape in your own front matter:
+budget: <= 12 file opens
+return_shape: verdict + findings
 `;
-
-  test("body-only round-bounding labels do not satisfy the gate", () => {
-    const r = validateAssignmentFields(
-      HEADER_AND_BODY_LABELS([
-        "**Budget (review / QC seats)**: <= 12 file opens",
-        "**Return shape (review / QC seats)**: verdict + findings",
-      ]),
-      { writable: false },
-    );
+    const r = validateAssignmentFields(text, { writable: false });
     expect(r.ok).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual([
       "assignment.field.budget-missing",
@@ -746,56 +626,36 @@ ${labelLines.join("\n")}
     ]);
   });
 
-  test("the same labels in the header satisfy the gate (body scope is the only difference)", () => {
-    const r = validateAssignmentFields(
-      `## Assignment
+  test("body-quoted working_branch does not satisfy the branch-form gate", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: qc-specialist
-**Delegation**: forbidden
-**Task category**: review
-**Working branch**: feature/review-seat-machine-gates
-**Budget (review / QC seats)**: <= 12 file opens
-**Return shape (review / QC seats)**: verdict + findings
-
-## Task 1: Review the diff
-
-Reproduce this shape in your own header:
-**Budget (review / QC seats)**: <= 12 file opens
-`,
-      { writable: false },
-    );
-    expect(r.ok).toBe(true);
-  });
-
-  test("body-only Working branch does not satisfy the branch-form gate", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 ## Task 1: Implement
 
-**Working branch**: feature/foo
+working_branch: feature/foo
 `;
     expect(validateAssignmentFields(text).violations.map((v) => v.code)).toEqual([
       "assignment.field.branch-missing",
     ]);
   });
 });
-
 describe("Task budget assignment gate", () => {
  // Capacity contract spec § A1–A3: the exact complement of the review/audit
  // branch — implement/ops rounds (including non-audit docs/Prepare and
- // orientation roles) must declare `Task budget`, presence-only. Same
+ // orientation roles) must declare `task_budget`, presence-only. Same
  // normalized `role` / `auditRound` values; `writable: false` is NOT a
  // capacity exemption; adequacy stays in PM's Prepare check.
   const BUDGET = "S — one implementer round closing the declared Files and gates";
   const taskBudgetViolations = (text: string, opts: Parameters<typeof validateAssignmentFields>[1] = {}) =>
     validateAssignmentFields(text, opts).violations.filter((v) => v.code === "assignment.field.task-budget-missing");
 
-  test("absent Task budget → assignment.field.task-budget-missing (high, actionable fix)", () => {
+  test("absent task_budget → assignment.field.task-budget-missing (high, actionable fix)", () => {
     const r = validateAssignmentFields(assignment({}));
     expect(r.ok).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
@@ -803,98 +663,34 @@ describe("Task budget assignment gate", () => {
     expect(v.severity).toBe("high");
     expect(v.message).toContain("Task budget");
     expect(v.message).toContain("the field is absent");
-    expect(v.fix).toContain("Task budget (implement / ops rounds)");
+    expect(v.fix).toContain("task_budget:");
     expect(v.fix).toContain("A1");
   });
 
-  test("empty Task budget value fails (the field is empty)", () => {
-    const violations = taskBudgetViolations(assignment({ "Task budget (implement / ops rounds)": "" }));
+  test("empty task_budget value fails (the field is empty)", () => {
+    const violations = taskBudgetViolations(assignment({ task_budget: "" }));
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("the field is empty");
   });
 
   test("N/A never satisfies the gate (case-insensitive)", () => {
     for (const value of ["N/A", "n/a", "N/a"]) {
-      const violations = taskBudgetViolations(assignment({ "Task budget (implement / ops rounds)": value }));
+      const violations = taskBudgetViolations(assignment({ task_budget: value }));
       expect(violations).toHaveLength(1);
       expect(violations[0]!.message).toContain('the value is "N/A"');
     }
   });
 
-  test("parenthesized contract label satisfies the gate (byte-exact A1 label)", () => {
-    expect(validateAssignmentFields(assignment({ "Task budget (implement / ops rounds)": BUDGET })).ok).toBe(true);
-  });
-
-  test("bare bold `Task budget` label also satisfies the gate", () => {
-    expect(validateAssignmentFields(assignment({ "Task budget": BUDGET })).ok).toBe(true);
+  test("a non-empty task_budget satisfies the gate", () => {
+    expect(validateAssignmentFields(assignment({ task_budget: BUDGET })).ok).toBe(true);
   });
 
   test("presence-only: any non-empty non-N/A value passes — adequacy stays in PM's Prepare check", () => {
-    expect(validateAssignmentFields(assignment({ "Task budget (implement / ops rounds)": "when it is done" })).ok).toBe(true);
+    expect(validateAssignmentFields(assignment({ task_budget: "when it is done" })).ok).toBe(true);
   });
 
-  test("label match is case-sensitive — lowercase **task budget** is not the field", () => {
-    const violations = taskBudgetViolations(assignment({ "task budget": BUDGET }));
-    expect(violations).toHaveLength(1);
-  });
-
-  test("plain parenthesized label is NOT recognized (bold-label grammar only — plain grammar not widened)", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-Task budget (implement / ops rounds): ${BUDGET}
-`;
-    expect(parseAssignmentFields(text).taskBudget).toBeUndefined();
-    expect(taskBudgetViolations(text)).toHaveLength(1);
-  });
-
-  test("last recognized header occurrence wins (across both supported labels)", () => {
-    const text = `## Assignment
-
-**Task budget (implement / ops rounds)**: first value
-- **Task budget**: second value
-`;
-    expect(parseAssignmentFields(text).taskBudget).toBe("second value");
-  });
-
-  test("body-only Task budget cannot satisfy the gate (header region only)", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-
-## Task 1: Implement
-
-Copy this into your own header:
-**Task budget (implement / ops rounds)**: ${BUDGET}
-`;
-    expect(taskBudgetViolations(text)).toHaveLength(1);
-  });
-
-  test("a body example cannot replace a valid header value", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Task budget**: header value
-
-## Task 1: Implement
-
-Example Assignment snippet: **Task budget**: body example
-`;
-    expect(parseAssignmentFields(text).taskBudget).toBe("header value");
-    expect(validateAssignmentFields(text).ok).toBe(true);
-  });
-
-  test("normalized review role is exempt from the Task budget gate (round-bounding fields still required)", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "@QC-Specialist (security lens)" }));
+  test("normalized review role is exempt from the task_budget gate (round-bounding fields still required)", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: "@QC-Specialist (security lens)" }));
     expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual([
       "assignment.field.budget-missing",
@@ -902,8 +698,8 @@ Example Assignment snippet: **Task budget**: body example
     ]);
   });
 
-  test("audit Task category is exempt from the Task budget gate", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "architect", "Task category": "audit" }));
+  test("audit task_category is exempt from the task_budget gate", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: "architect", task_category: "audit" }));
     expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual([
       "assignment.field.budget-missing",
@@ -912,27 +708,27 @@ Example Assignment snippet: **Task budget**: body example
   });
 
   test("audit_secondary stays an audit round — exempt", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "architect", "Task category": "audit_secondary" }));
+    const r = validateAssignmentFields(assignment({ execute_as: "architect", task_category: "audit_secondary" }));
     expect(r.violations.some((v) => v.code === "assignment.field.task-budget-missing")).toBe(false);
   });
 
-  test("`auditing` is NOT an audit round — the Task budget gate applies", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "fullstack-dev", "Task category": "auditing" }));
+  test("`auditing` is NOT an audit round — the task_budget gate applies", () => {
+    const r = validateAssignmentFields(assignment({ execute_as: "fullstack-dev", task_category: "auditing" }));
     expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
   });
 
   test("non-audit docs round (Prepare/docs specialist) receives the field requirement", () => {
-    const r = validateAssignmentFields(assignment({ "Execute as": "product-manager", "Task category": "docs" }));
+    const r = validateAssignmentFields(assignment({ execute_as: "product-manager", task_category: "docs" }));
     expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.task-budget-missing"]);
   });
 
   test("read-only orientation role is not exempt; writable:false is not a capacity exemption (A3)", () => {
-    const text = assignment({ "Execute as": "scout", "Task category": "deep", "Working branch": undefined });
+    const text = assignment({ execute_as: "scout", task_category: "deep", working_branch: undefined });
     expect(validateAssignmentFields(text, { writable: false }).violations.map((v) => v.code)).toEqual([
       "assignment.field.task-budget-missing",
     ]);
     expect(
-      validateAssignmentFields(assignment({ "Execute as": "scout", "Task category": "deep", "Task budget": "XS — one orientation round" }), {
+      validateAssignmentFields(assignment({ execute_as: "scout", task_category: "deep", task_budget: "XS — one orientation round" }), {
         writable: false,
       }).ok,
     ).toBe(true);
@@ -1100,7 +896,7 @@ describe("assertTriIdentity — tri identity gate", () => {
 });
 
 describe("antiRecursionPrecheck — self-type NEVER red line", () => {
-  test("subagent_type == Execute as → critical dispatch.anti-recursion.self-type", () => {
+  test("subagent_type == execute_as → critical dispatch.anti-recursion.self-type", () => {
     const r = antiRecursionPrecheck("fullstack-dev", "fullstack-dev");
     expect(r.ok).toBe(false);
     expect(r.violations).toHaveLength(1);
@@ -1133,47 +929,46 @@ describe("antiRecursionPrecheck — self-type NEVER red line", () => {
     }
   });
 
-  test("set binding + empty Execute as → ok (field presence is validateAssignmentFields' job)", () => {
+  test("set binding + empty execute_as → ok (field presence is validateAssignmentFields' job)", () => {
     expect(antiRecursionPrecheck("fullstack-dev", "").ok).toBe(true);
     expect(antiRecursionPrecheck("fullstack-dev", "   ").ok).toBe(true);
   });
 });
-
 describe("parseAssignmentBranchForms — engine single branch-form grammar", () => {
-  test("Working branch: <existing> → workingBranch (first token)", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "feature/foo" })).workingBranch).toBe("feature/foo");
+  test("working_branch: <existing> → workingBranch (first token)", () => {
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "feature/foo" })).workingBranch).toBe("feature/foo");
   });
 
   test("existing-branch values with extra words keep the first token", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "feature/foo extra words" })).workingBranch).toBe("feature/foo");
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "feature/foo extra words" })).workingBranch).toBe("feature/foo");
   });
 
   test("create form → createForm { name, base }", () => {
-    const forms = parseAssignmentBranchForms(assignment({ "Working branch": "create feature/part2 from main" }));
+    const forms = parseAssignmentBranchForms(assignment({ working_branch: "create feature/part2 from main" }));
     expect(forms.createForm).toEqual({ name: "feature/part2", base: "main" });
     expect(forms.workingBranch).toBeUndefined();
   });
 
   test("create form without base → createForm { name } (base undefined)", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "create feature/x" })).createForm).toEqual({
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "create feature/x" })).createForm).toEqual({
       name: "feature/x",
       base: undefined,
     });
   });
 
   test("create-form token match is case-insensitive", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "Create New-Branch from main" })).createForm?.name).toBe("New-Branch");
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "Create New-Branch from main" })).createForm?.name).toBe("New-Branch");
   });
 
   test("dangling 'create X from' is a create-form (base empty) — fail-open fixed", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "create feature/x from" })).createForm).toEqual({
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "create feature/x from" })).createForm).toEqual({
       name: "feature/x",
       base: "",
     });
   });
 
   test("'create from main' is a create-form (name empty)", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "create from main" })).createForm).toEqual({
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "create from main" })).createForm).toEqual({
       name: "",
       base: "main",
     });
@@ -1181,108 +976,93 @@ describe("parseAssignmentBranchForms — engine single branch-form grammar", () 
 
   test("branch names merely starting with 'create' stay existing-branch values", () => {
     for (const name of ["created", "create/foo", "create-user-flow"]) {
-      const forms = parseAssignmentBranchForms(assignment({ "Working branch": name }));
+      const forms = parseAssignmentBranchForms(assignment({ working_branch: name }));
       expect(forms.createForm).toBeUndefined();
       expect(forms.workingBranch).toBe(name);
     }
   });
 
   test("'create foo from bar extra' is not a create-form (treated as existing branch)", () => {
-    const forms = parseAssignmentBranchForms(assignment({ "Working branch": "create foo from bar extra" }));
+    const forms = parseAssignmentBranchForms(assignment({ working_branch: "create foo from bar extra" }));
     expect(forms.createForm).toBeUndefined();
     expect(forms.workingBranch).toBe("create");
   });
 
-  test("Branch policy direct on <branch> — <reason> → directOn { branch, reason }", () => {
+  test("branch_policy direct on <branch> — <reason> → directOn { branch, reason }", () => {
     const forms = parseAssignmentBranchForms(
-      assignment({ "Working branch": "", "Branch policy": "direct on main — team hotfix convention" }),
+      assignment({ working_branch: "", branch_policy: "direct on main — team hotfix convention" }),
     );
     expect(forms.directOn).toEqual({ branch: "main", reason: "team hotfix convention" });
   });
 
-  test("Branch policy separators: -- and - and – all parse the reason", () => {
+  test("branch_policy separators: -- and - and – all parse the reason", () => {
     for (const sep of ["--", "-", "–"]) {
       const forms = parseAssignmentBranchForms(
-        assignment({ "Working branch": "", "Branch policy": `direct on main ${sep} team hotfix` }),
+        assignment({ working_branch: "", branch_policy: `direct on main ${sep} team hotfix` }),
       );
       expect(forms.directOn).toEqual({ branch: "main", reason: "team hotfix" });
     }
   });
 
-  test("Branch policy without reason → directOn { branch, reason: '' } (loose branch capture)", () => {
-    const forms = parseAssignmentBranchForms(assignment({ "Working branch": "", "Branch policy": "direct on main" }));
+  test("branch_policy without reason → directOn { branch, reason: '' } (loose branch capture)", () => {
+    const forms = parseAssignmentBranchForms(assignment({ working_branch: "", branch_policy: "direct on main" }));
     expect(forms.directOn).toEqual({ branch: "main", reason: "" });
   });
 
-  test("Branch policy 'direct on main -' (separator, no reason) → reason empty", () => {
-    const forms = parseAssignmentBranchForms(assignment({ "Working branch": "", "Branch policy": "direct on main -" }));
+  test("branch_policy 'direct on main -' (separator, no reason) → reason empty", () => {
+    const forms = parseAssignmentBranchForms(assignment({ working_branch: "", branch_policy: "direct on main -" }));
     expect(forms.directOn).toEqual({ branch: "main", reason: "" });
   });
 
-  test("non-direct-on Branch policy → no directOn", () => {
-    expect(parseAssignmentBranchForms(assignment({ "Working branch": "", "Branch policy": "merge to main" })).directOn).toBeUndefined();
+  test("non-direct-on branch_policy → no directOn", () => {
+    expect(parseAssignmentBranchForms(assignment({ working_branch: "", branch_policy: "merge to main" })).directOn).toBeUndefined();
   });
 
   test("no branch fields → empty forms", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-`;
-    expect(parseAssignmentBranchForms(text)).toEqual({});
-  });
-
-  test("list-bullet field lines parse (single grammar with the presence parser's bullet acceptance)", () => {
-    const text = `## Assignment
-
-- **Working branch**: create feature/x from main
-- **Branch policy**: direct on main — hotfix
-`;
-    const forms = parseAssignmentBranchForms(text);
-    expect(forms.createForm).toEqual({ name: "feature/x", base: "main" });
-    expect(forms.directOn).toEqual({ branch: "main", reason: "hotfix" });
+    expect(parseAssignmentBranchForms(assignment({ working_branch: undefined }))).toEqual({});
   });
 });
 
 describe("parseBranchPolicyDirectOnBranch — strict direct-on exception (CLI/plugin shared)", () => {
   test("well-formed direct-on with reason → exception branch", () => {
-    const text = assignment({ "Working branch": "", "Branch policy": "direct on main — team hotfix convention" });
+    const text = assignment({ working_branch: "", branch_policy: "direct on main — team hotfix convention" });
     expect(parseBranchPolicyDirectOnBranch(text)).toBe("main");
   });
 
   test("every separator ([—–]|--|-) yields the exception branch", () => {
     for (const sep of ["—", "–", "--", "-"]) {
-      const text = assignment({ "Working branch": "", "Branch policy": `direct on main ${sep} reason` });
+      const text = assignment({ working_branch: "", branch_policy: `direct on main ${sep} reason` });
       expect(parseBranchPolicyDirectOnBranch(text)).toBe("main");
     }
   });
 
   test("no reason → undefined (no exception)", () => {
-    expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "", "Branch policy": "direct on main" }))).toBeUndefined();
+    expect(parseBranchPolicyDirectOnBranch(assignment({ working_branch: "", branch_policy: "direct on main" }))).toBeUndefined();
   });
 
   test("dangling separator without reason → undefined", () => {
-    expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "", "Branch policy": "direct on main -" }))).toBeUndefined();
+    expect(parseBranchPolicyDirectOnBranch(assignment({ working_branch: "", branch_policy: "direct on main -" }))).toBeUndefined();
   });
 
   test("non-direct-on or absent policy → undefined", () => {
-    expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "", "Branch policy": "merge to main" }))).toBeUndefined();
-    expect(parseBranchPolicyDirectOnBranch(assignment({ "Working branch": "feature/foo" }))).toBeUndefined();
+    expect(parseBranchPolicyDirectOnBranch(assignment({ working_branch: "", branch_policy: "merge to main" }))).toBeUndefined();
+    expect(parseBranchPolicyDirectOnBranch(assignment({ working_branch: "feature/foo" }))).toBeUndefined();
   });
 
-  test("header forms win over body-quoted ones (header region only)", () => {
-    const text = `## Assignment
+  test("front matter forms win over body-quoted ones (front matter only)", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 ## Task 1: implement
 
-Example: **Working branch**: feature/body-only
-**Branch policy**: direct on main — hotfix
+Example: working_branch: feature/body-only
+branch_policy: direct on main — hotfix
 `;
     expect(parseAssignmentBranchForms(text)).toEqual({ workingBranch: "main" });
     expect(parseBranchPolicyDirectOnBranch(text)).toBeUndefined();
@@ -1304,62 +1084,68 @@ describe("isReadOnlyAssignmentRole — scout/explore read-only roles", () => {
   });
 });
 
-describe("parseAssignmentFields — exported engine field parser (single grammar)", () => {
-  test("parses bold, plain, and bullet field forms", () => {
-    const text = `## Assignment
+describe("parseAssignmentFields — front matter field parser (single grammar)", () => {
+  test("a complete front matter yields every typed field", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+working_branch: feature/foo
+branch_policy: direct on main — hotfix
+worktree_path: /control
+write_domain: work
+control_write_paths:
+- .mstar/plans/run.md
+- .mstar/notes/x.jsonl
+budget: "<= 12 file opens"
+return_shape: verdict + findings
+task_budget: S — one implementer round
+enforcement: hard
+---
 
-- **Execute as**: fullstack-dev
-Delegation: forbidden
-**Task category**: logic
-- Working branch: feature/foo
-**Branch policy**: direct on main — hotfix
+## Assignment
 `;
     const fields = parseAssignmentFields(text);
     expect(fields).toEqual({
       executeAs: "fullstack-dev",
       delegation: "forbidden",
       taskCategory: "logic",
+      executionMode: "sdd",
       workingBranch: "feature/foo",
       branchPolicy: "direct on main — hotfix",
+      worktreePath: "/control",
+      writeDomain: "work",
+      controlWritePaths: [".mstar/plans/run.md", ".mstar/notes/x.jsonl"],
+      budget: "<= 12 file opens",
+      returnShape: "verdict + findings",
+      taskBudget: "S — one implementer round",
     });
   });
 
-  test("captures round-bounding labels (parenthesized PM form and bare form)", () => {
-    expect(
-      parseAssignmentFields(`**Budget (review / QC seats)**: <= 12 file opens / <= 10 min\n`).budget,
-    ).toBe("<= 12 file opens / <= 10 min");
-    expect(parseAssignmentFields(`- **Budget**: 8 file opens\n`).budget).toBe("8 file opens");
-    expect(
-      parseAssignmentFields(`**Return shape (review / QC seats)**: verdict + findings\n`).returnShape,
-    ).toBe("verdict + findings");
-    expect(parseAssignmentFields(`- **Return shape**: verdict only\n`).returnShape).toBe("verdict only");
+  test("execution_mode joins the parsed fields", () => {
+    expect(parseAssignmentFields("execution_mode: targeted\n").executionMode).toBe("targeted");
   });
 
-  test("last duplicate field line wins", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Execute as**: architect
-`;
-    expect(parseAssignmentFields(text).executeAs).toBe("architect");
+  test("unrelated prose and unfenced body text produce no fields", () => {
+    expect(parseAssignmentFields("This is not an assignment.\nNo fields here.")).toEqual({});
+    expect(parseAssignmentFields("")).toEqual({});
   });
 
-  test("unrelated prose does not produce fields", () => {
-    expect(parseAssignmentFields("This is not an assignment.\n- one: two\nNo fields.")).toEqual({});
-  });
+  test("reads the front matter only — body-quoted keys are ignored", () => {
+    const text = `---
+execute_as: architect
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+---
 
-  test("reads the header region only — body-quoted field lines are ignored", () => {
-    const text = `## Assignment
-
-**Execute as**: architect
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
+## Assignment
 
 ## Task 1: implement
 
-Example Assignment snippet: **Execute as**: scout
-**Budget (review / QC seats)**: <= 12 file opens
+Example Assignment snippet: execute_as: scout
+budget: <= 12 file opens
 `;
     expect(parseAssignmentFields(text)).toEqual({
       executeAs: "architect",
@@ -1369,55 +1155,150 @@ Example Assignment snippet: **Execute as**: scout
     });
   });
 
-  test("an already-sliced header parses identically (self-scoping is idempotent)", () => {
-    const text = `## Assignment
+  test("an already-sliced front matter block parses identically (idempotent)", () => {
+    expect(parseAssignmentFields(assignmentHeaderRegion(VALID_ASSIGNMENT))).toEqual(parseAssignmentFields(VALID_ASSIGNMENT));
+    expect(parseAssignmentFields(VALID_ASSIGNMENT).executeAs).toBe("fullstack-dev");
+  });
 
-**Execute as**: fullstack-dev
-**Working branch**: feature/foo
+  test("duplicate keys are a schema refusal — the parser never silently picks one", () => {
+    const text = `---
+execute_as: fullstack-dev
+execute_as: architect
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+---
 
-# Change
-
-**Execute as**: qc-specialist
+## Assignment
 `;
-    expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
-    expect(parseAssignmentFields(text).executeAs).toBe("fullstack-dev");
+    expect(parseAssignmentFields(text).executeAs).toBeUndefined();
+    expect(validateDocumentFrontmatter("assignment", text, "assignment").violations.some((v) => v.code === "document.frontmatter.invalid")).toBe(true);
+  });
+
+  test("invalid front matter YAML yields no fields and never throws", () => {
+    const text = `---
+execute_as: fullstack-dev
+  bad indentation: [unclosed
+---
+
+## Assignment
+`;
+    expect(() => parseAssignmentFields(text)).not.toThrow();
+    expect(parseAssignmentFields(text).executeAs).toBeUndefined();
   });
 });
 
-describe("parseEnforcementFlag — Enforcement: hard flag (Slice 5, roadmap §8.5 C4/D2)", () => {
+describe("validateDocumentFrontmatter — unknown-field rule (compass D15)", () => {
+ // Every field of the canonical PM template is a known optional field,
+ // plan_id / iteration_id / workflow_id included; `unknown` fires only for
+ // a key outside the documentSchema("assignment") table.
+  const BASE = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nworking_branch: feature/x\ntask_budget: S — one round";
+
+  test("canonical template keys including plan_id / iteration_id / workflow_id are all known", () => {
+    const text = `---
+${BASE}
+plan_id: 20261201-synthetic-plan
+iteration_id: iter-synthetic
+workflow_id: wf-1
+execution_mode: sdd
+write_domain: work
+control_write_paths:
+- .mstar/notes/x.jsonl
+skill_presets: standard
+enforcement: hard
+---
+
+## Assignment
+`;
+    const gate = validateDocumentFrontmatter("assignment", text, "assignment");
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("an invented key → document.frontmatter.unknown", () => {
+    const text = `---
+${BASE}
+invented_key: 1
+---
+
+## Assignment
+`;
+    const gate = validateDocumentFrontmatter("assignment", text, "assignment");
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.unknown")).toBe(true);
+  });
+
+  test("validateAssignmentFields surfaces the same unknown-key violation", () => {
+    const text = `---
+${BASE}
+invented_key: 1
+---
+
+## Assignment
+`;
+    const gate = validateAssignmentFields(text);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.unknown")).toBe(true);
+  });
+
+  test("validateAssignmentFields surfaces invalid front matter YAML as document.frontmatter.invalid", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+  broken: [unclosed
+---
+
+## Assignment
+`;
+    const gate = validateAssignmentFields(text);
+    expect(gate.violations.some((v) => v.code === "document.frontmatter.invalid")).toBe(true);
+  });
+
+  test("composeDispatchGate and validateControlWriteAssignment reach the same verdicts on a front matter Assignment", () => {
+    const root = gateFixture({ prefix: "dispatch-shared-frontmatter-", harness: true });
+    try {
+      const composed = composeDispatchGate(VALID_ASSIGNMENT, { cwd: root });
+      expect(composed.ok).toBe(true);
+      expect(composed.shaped).toBe(true);
+      expect(validateAssignmentFields(VALID_ASSIGNMENT).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+describe("parseEnforcementFlag — enforcement: hard flag (Slice 5, roadmap §8.5 C4/D2)", () => {
  // Spec: roadmap §8.5 C4 + decision D2 — v2 hard gates are enabled per
- // Assignment/compass via `Enforcement: hard` (Assignment header, bold or
- // plain) or compass frontmatter `enforcement: hard`; the flag is never
- // global; rollback = unset flag; flag inert when the engine is absent.
-  test("Assignment bold form: **Enforcement**: hard → hard, source assignment", () => {
-    expect(parseEnforcementFlag(`## Assignment\n\n**Execute as**: fullstack-dev\n**Enforcement**: hard\n`)).toEqual({
+ // Assignment/compass via the lowercase YAML key `enforcement: hard` in the
+ // front matter; the flag is never global; rollback = unset flag; flag
+ // inert when the engine is absent.
+  test("Assignment front matter enforcement: hard → hard, source assignment", () => {
+    expect(parseEnforcementFlag(`---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+enforcement: hard
+---
+
+## Assignment
+`)).toEqual({
       hard: true,
       source: "assignment",
     });
   });
 
-  test("Assignment plain form: Enforcement: hard → hard, source assignment", () => {
-    expect(parseEnforcementFlag("Enforcement: hard\n")).toEqual({ hard: true, source: "assignment" });
-  });
-
-  test("Assignment list-bullet + bold form → hard, source assignment", () => {
-    expect(parseEnforcementFlag("- **Enforcement**: hard\n")).toEqual({ hard: true, source: "assignment" });
+  test("Assignment-shaped input with a soft flag → source assignment, hard false", () => {
+    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: soft\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard mode\n")).toEqual({ hard: false, source: "assignment" });
+    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement:\n")).toEqual({ hard: false, source: "assignment" });
   });
 
   test("Assignment value is case-insensitive (Hard / HARD → hard)", () => {
     for (const value of ["Hard", "HARD", "hArD"]) {
-      expect(parseEnforcementFlag(`**Enforcement**: ${value}\n`)).toEqual({
+      expect(parseEnforcementFlag(`execute_as: dev\ndelegation: forbidden\ntask_category: logic\nenforcement: ${value}\n`)).toEqual({
         hard: true,
         source: "assignment",
       });
     }
-  });
-
-  test("Assignment present but NOT hard (soft / empty / malformed value) → source assignment, hard false", () => {
-    expect(parseEnforcementFlag("**Enforcement**: soft\n")).toEqual({ hard: false, source: "assignment" });
-    expect(parseEnforcementFlag("**Enforcement**: warn\n")).toEqual({ hard: false, source: "assignment" });
-    expect(parseEnforcementFlag("**Enforcement**: hard mode\n")).toEqual({ hard: false, source: "assignment" });
-    expect(parseEnforcementFlag("**Enforcement**:\n")).toEqual({ hard: false, source: "assignment" });
   });
 
   test("compass frontmatter form: enforcement: hard → hard, source compass", () => {
@@ -1436,7 +1317,7 @@ describe("parseEnforcementFlag — Enforcement: hard flag (Slice 5, roadmap §8.
   });
 
   test("no flag anywhere → { hard: false, source: none }", () => {
-    expect(parseEnforcementFlag("## Assignment\n\n**Execute as**: fullstack-dev\n")).toEqual({
+    expect(parseEnforcementFlag("execute_as: dev\ndelegation: forbidden\ntask_category: logic\n")).toEqual({
       hard: false,
       source: "none",
     });
@@ -1447,15 +1328,12 @@ describe("parseEnforcementFlag — Enforcement: hard flag (Slice 5, roadmap §8.
     expect(parseEnforcementFlag("")).toEqual({ hard: false, source: "none" });
   });
 
-  test("Assignment form wins over compass form when both appear (per-Assignment precedence)", () => {
-    expect(parseEnforcementFlag("enforcement: hard\n\n**Enforcement**: soft\n")).toEqual({
+  test("body prose and markdown enforcement examples never set the flag", () => {
+    expect(parseEnforcementFlag("## Assignment\n\n**Execute as**: fullstack-dev\n**Enforcement**: hard\n")).toEqual({
       hard: false,
-      source: "assignment",
+      source: "none",
     });
-    expect(parseEnforcementFlag("**Enforcement**: hard\nenforcement: soft\n")).toEqual({
-      hard: true,
-      source: "assignment",
-    });
+    expect(parseEnforcementFlag("Enforcement: hard\n")).toEqual({ hard: false, source: "none" });
   });
 
   test("compass frontmatter block inside a full compass file is detected", () => {
@@ -1470,6 +1348,41 @@ enforcement: hard
     expect(parseEnforcementFlag(compass)).toEqual({ hard: true, source: "compass" });
   });
 
+  test("a body-quoted `enforcement: hard` example does not harden (front matter only)", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/example
+---
+
+## Assignment
+
+# Change
+
+Example Assignment front matter: enforcement: hard
+`;
+    expect(parseEnforcementFlag(text)).toEqual({ hard: false, source: "none" });
+  });
+
+  test("header enforcement: hard hardens even when a body example quotes a soft flag", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/example
+enforcement: hard
+---
+
+## Assignment
+
+# Change
+
+enforcement: soft (example only)
+`;
+    expect(parseEnforcementFlag(text)).toEqual({ hard: true, source: "assignment" });
+  });
+
   test("never throws on hostile input", () => {
     for (const input of ["", "*".repeat(10000), "{{{{[[[[)))) ---- \n<<<<", "enforcement" ]) {
       expect(() => parseEnforcementFlag(input)).not.toThrow();
@@ -1477,105 +1390,36 @@ enforcement: hard
   });
 });
 
-describe("assignmentHeaderRegion — Assignment header-only scope", () => {
- // Spec: the Assignment enforcement flag is read from the HEADER region
- // only — the text before the first body marker (`# Task`-style heading,
- // `---` separator, or single-`#` heading). An example
- // `**Enforcement**: hard` line quoted in the task body must not harden.
-  test("no body marker → the full text is the header region", () => {
-    const text = "## Assignment\n\n**Execute as**: fullstack-dev\n**Enforcement**: hard\n";
-    expect(assignmentHeaderRegion(text)).toBe(text);
-  });
-
-  test("cuts at the first `# ` heading (`# Change` etc.)", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Enforcement**: hard
-
-# Change
-
-Example: **Enforcement**: soft (body must not count)
-`;
-    const region = assignmentHeaderRegion(text);
-    expect(region).toContain("**Enforcement**: hard");
-    expect(region).not.toContain("# Change");
-    expect(region).not.toContain("Example:");
-  });
-
-  test("cuts at the first `## Task` / `### Task` heading (SDD task bodies)", () => {
-    for (const heading of ["## Task 1: Implement", "### Task 1 — Implement"]) {
-      const text = `## Assignment
-
-**Enforcement**: hard
-
-${heading}
-
-**Enforcement**: soft
-`;
-      const region = assignmentHeaderRegion(text);
-      expect(region).toContain("**Enforcement**: hard");
-      expect(region).not.toContain(heading);
-      expect(region).not.toContain("soft");
-    }
-  });
-
-  test("cuts at a `---` horizontal-rule separator", () => {
-    const text = `## Assignment
-
-**Enforcement**: hard
-
+describe("assignmentHeaderRegion — front matter slice (task boundary)", () => {
+ // The export is kept for the host packages Task 5 migrates: it returns the
+ // document's front matter block (fences stripped), never any body text.
+  test("fenced document → the front matter block without fences", () => {
+    const text = `---
+execute_as: fullstack-dev
+enforcement: hard
 ---
 
-**Enforcement**: soft
+## Assignment
+
+**Enforcement**: soft (body must not count)
 `;
     const region = assignmentHeaderRegion(text);
-    expect(region).toContain("**Enforcement**: hard");
-    expect(region).not.toContain("---");
+    expect(region).toContain("execute_as: fullstack-dev");
+    expect(region).toContain("enforcement: hard");
+    expect(region).not.toContain("## Assignment");
     expect(region).not.toContain("soft");
+    expect(region).not.toContain("---");
   });
 
-  test("the `## Assignment` heading itself is NOT a boundary", () => {
-    const text = `## Assignment
-
-**Enforcement**: hard
-`;
-    expect(assignmentHeaderRegion(text)).toBe(text);
-  });
-
-  test("body marker at the very start → empty header region", () => {
+  test("body-only text (no fence) → empty slice", () => {
+    expect(assignmentHeaderRegion("## Assignment\n\n**Enforcement**: hard\n")).toBe("");
     expect(assignmentHeaderRegion("# Target\nplan body only\n")).toBe("");
   });
 
-  test("body example line **Enforcement**: hard does NOT harden (header region only)", () => {
-    const text = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/example
-
-# Change
-
-Example Assignment snippet: **Enforcement**: hard
-`;
-    expect(parseEnforcementFlag(assignmentHeaderRegion(text))).toEqual({ hard: false, source: "none" });
-  });
-
-  test("header **Enforcement**: hard hardens even when a body example quotes a soft flag", () => {
-    const text = `## Assignment
-
-**Enforcement**: hard
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/example
-
-# Change
-
-**Enforcement**: soft (example only)
-`;
-    expect(parseEnforcementFlag(assignmentHeaderRegion(text))).toEqual({ hard: true, source: "assignment" });
+  test("a bare front matter slice passes through unchanged (idempotent)", () => {
+    const yaml = "execute_as: fullstack-dev\nenforcement: hard";
+    expect(assignmentHeaderRegion(yaml)).toBe(yaml);
+    expect(assignmentHeaderRegion(assignmentHeaderRegion(VALID_ASSIGNMENT))).toBe(assignmentHeaderRegion(VALID_ASSIGNMENT));
   });
 });
 
@@ -1586,12 +1430,14 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
   afterAll(() => rmSync(cwd, { recursive: true, force: true }));
 
  /** Writable assignment with NO branch form — branch-missing + env-fallback targets. */
-  const noBranchText = `## Assignment
+  const noBranchText = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 `;
 
   test("shaped writable assignment, no caller binding (target-only host) → shaped true, ok, no violations", () => {
@@ -1605,21 +1451,21 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
 
   test("issue #156: no caller + no callerRequired → anti-recursion leg SKIPPED (omp/opencode compliant dispatch never self-flags)", () => {
  // The omp/opencode/cursor binding field carries the spawn TARGET, which
- // equals `Execute as` on every compliant dispatch (mstar-host omp.md C5).
+ // equals `execute_as` on every compliant dispatch (mstar-host omp.md C5).
  // Without a caller binding the precheck must not run at all.
     const result = composeDispatchGate(VALID_ASSIGNMENT, { cwd });
     expect(result.ok).toBe(true);
     expect(result.violations.some((v) => v.code.startsWith("dispatch.anti-recursion."))).toBe(false);
   });
 
-  test("caller == Execute as → critical dispatch.anti-recursion.self-type", () => {
+  test("caller == execute_as → critical dispatch.anti-recursion.self-type", () => {
     const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "fullstack-dev", cwd });
     expect(result.ok).toBe(false);
     const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
     expect(anti?.severity).toBe("critical");
   });
 
-  test("caller != Execute as → no anti-recursion violation", () => {
+  test("caller != execute_as → no anti-recursion violation", () => {
     const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager", cwd });
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
@@ -1648,6 +1494,11 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
       shaped: false,
       enforcement: { hard: false, source: "none" },
     });
+  });
+
+  test("front matter without a core key is not shaped (compass-style front matter stays silent)", () => {
+    const result = composeDispatchGate("---\niteration_id: iter-x\nstatus: active\n---\n\n# Compass\n", { cwd });
+    expect(result.shaped).toBe(false);
   });
 
   test("writable text without a branch form → branch-missing violation", () => {
@@ -1689,13 +1540,15 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
     }
   });
 
-  test("header `Enforcement: hard` with violations → enforcement.hard true + hardBlocked true", () => {
-    const text = `## Assignment
+  test("front matter `enforcement: hard` with violations → enforcement.hard true + hardBlocked true", () => {
+    const text = `---
+delegation: forbidden
+task_category: logic
+working_branch: main
+enforcement: hard
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
-**Enforcement**: hard
+## Assignment
 `;
     const result = composeDispatchGate(text, { cwd });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
@@ -1703,31 +1556,35 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
     expect(result.ok).toBe(false);
   });
 
-  test("body-only `Enforcement: hard` example → hard false (header region only)", () => {
-    const text = `## Assignment
+  test("body-only `enforcement: hard` example → hard false (front matter only)", () => {
+    const text = `---
+delegation: forbidden
+task_category: docs
+---
 
-**Delegation**: forbidden
-**Task category**: docs
+## Assignment
 
 # Change
 
-An example Assignment template line: **Enforcement**: hard
+An example Assignment front matter line: enforcement: hard
 `;
     const result = composeDispatchGate(text, { cwd });
     expect(result.enforcement.hard).toBe(false);
     expect(result.hardBlocked).toBe(false);
-    expect(result.ok).toBe(false); // missing Execute as still a real violation
+    expect(result.ok).toBe(false); // missing execute_as still a real violation
   });
 
-  test("valid assignment + header Enforcement: hard → ok, hardBlocked false", () => {
-    const text = `## Assignment
+  test("valid assignment + enforcement: hard → ok, hardBlocked false", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+task_budget: S — one focused implementer round
+enforcement: hard
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Enforcement**: hard
+## Assignment
 `;
     const result = composeDispatchGate(text, { caller: "project-manager", cwd });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
@@ -1736,36 +1593,40 @@ An example Assignment template line: **Enforcement**: hard
   });
 
   test("body-quoted branch form neither satisfies the branch gate nor redirects the default-branch gate", () => {
-    const text = `## Assignment
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 ## Task 1: implement
 
-Example: **Working branch**: feature/body-only
+Example: working_branch: feature/body-only
 `;
     const result = composeDispatchGate(text, { caller: "project-manager", cwd });
     expect(result.ok).toBe(false);
-    // The HEADER form (`main`) is the branch the gate checks; had the body
-    // example been read, the gate would have checked `feature/body-only` and
-    // silently allowed work on the default branch.
+    // The FRONT MATTER form (`main`) is the branch the gate checks; had the
+    // body example been read, the gate would have checked `feature/body-only`
+    // and silently allowed work on the default branch.
     expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
   });
 
-  test("body-quoted `Execute as` cannot mask a self-dispatch (header region only)", () => {
-    const text = `## Assignment
+  test("body-quoted `execute_as` cannot mask a self-dispatch (front matter only)", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
+## Assignment
 
 ## Task 1: implement
 
-Example Assignment snippet: **Execute as**: scout
+Example Assignment front matter: execute_as: scout
 `;
     const result = composeDispatchGate(text, { caller: "fullstack-dev", cwd });
     expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(true);

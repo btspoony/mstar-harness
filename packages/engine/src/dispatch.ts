@@ -8,12 +8,10 @@
  * present, non-empty; paste-only assignments missing fields are flagged):
  * `mstar-dispatch-gates` SKILL.md § "调度防串扰（强制）" + § 反模式（派发）
  * ("Assignment 已写、invoke 为零（paste-only）").
- * - Assignment fields live in the Assignment HEADER region
- *   ({@link assignmentHeaderRegion}) — the field parsers apply the region to
- *   their own input, so no reader (validator, compose gate, CLI, host
- *   adapter) ever sees a line after a `## Task` heading / `---` rule /
- *   single-`#` heading, and a template label quoted in the task body can
- *   never satisfy — or disable — the gate.
+ * - Assignment fields live in the document FRONT MATTER (compass D15 —
+ *   the canonical PM template declares snake_case keys; the parsers slice
+ *   the front matter themselves, so a template label quoted in the task
+ *   body can never satisfy — or disable — the gate.
  * - Branch-field exactly-one rule + `<base>` requirement: `mstar-branch-worktree`
  * SKILL.md § "Assignment 要求（PM）" + § "`<base>` 与叠分支（stacked
  * branches）" ("若写新建但未写 `<base>`：实现侧应停下问 project-manager…
@@ -52,6 +50,8 @@ import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
+import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry } from "./document-frontmatter.js";
+import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 /**
  * The three accepted branch forms (mstar-branch-worktree § "Assignment 要求"):
@@ -67,6 +67,8 @@ export type AssignmentFields = {
   executeAs?: string;
   delegation?: string;
   taskCategory?: string;
+  /** `execution_mode` — sdd / inline / targeted (presence captured here; the N mapping is {@link executionModeToN}). */
+  executionMode?: string;
   workingBranch?: string;
   worktreePath?: string;
   writeDomain?: string;
@@ -126,9 +128,9 @@ export type ExecutionModeToNOptions = {
 export type ExecutionModeToNResult = GateResult & { n?: number };
 
 const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCategory"; label: string; code: string }> = [
-  { key: "executeAs", label: "Execute as", code: "execute-as" },
-  { key: "delegation", label: "Delegation", code: "delegation" },
-  { key: "taskCategory", label: "Task category", code: "task-category" },
+  { key: "executeAs", label: "execute_as", code: "execute-as" },
+  { key: "delegation", label: "delegation", code: "delegation" },
+  { key: "taskCategory", label: "task_category", code: "task-category" },
 ];
 
 /**
@@ -192,24 +194,18 @@ export function classifyReviewOrAuditRound(rawRole: string, rawCategory: string)
 }
 
 /**
- * Assignment labels carrying the review-seat Budget cap. The PM template
- * (dispatch-and-assignment.md) writes the parenthesized form; the bare
- * `Budget` label is accepted too — it matches neither {@link REQUIRED_FIELDS}
- * nor `Working branch` / `Branch policy`, so a hand-written dispatch would
- * otherwise drop the field silently.
+ * Retired body-label forms of the front matter round-bounding keys.
+ * `parseAssignmentFields` reads the snake_case front matter keys
+ * (`budget` / `return_shape` / `task_budget`) only — these label constants
+ * no longer feed any parse, but the export shape is kept for the host
+ * packages Task 5 migrates; they must not be widened or re-parsed.
+ * shortcut: dead vocabulary kept for export-shape parity, removed with
+ * the host migration in Task 5.
  */
 export const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
 
 /** Labels carrying the review-seat `Return shape` (same parenthesized + bare pair). */
 export const RETURN_SHAPE_LABELS: readonly string[] = ["Return shape (review / QC seats)", "Return shape"];
-
-/**
- * Labels carrying the implement/ops-round `Task budget` (capacity contract
- * spec § A1: the parenthesized contract label plus the accepted bare form).
- * The parenthesized label parses through the bold-label grammar only; the
- * bare label works bold or plain — the plain-label grammar is not widened.
- */
-const TASK_BUDGET_LABELS: readonly string[] = ["Task budget (implement / ops rounds)", "Task budget"];
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -227,44 +223,89 @@ function describeAbsence(value: string | undefined): string | undefined {
 }
 
 /**
- * Parse `**Field**: value` (or plain `Field: value`) header lines from an
- * Assignment into the dispatch-relevant fields. Only known field labels are
- * captured; values are trimmed. List-bullet prefixes (`- **Field**: value`)
- * are accepted so the engine parser is the SINGLE grammar for Assignment
- * header fields (the Slice-2 opencode presence parser tolerated bullets;
- * its acceptance is folded into this parser, not forked —).
+ * True when the text looks like front matter YAML: a complete fenced block,
+ * or bare scalar lines only (a caller that already sliced the front matter
+ * passes it fence-less). A fenced document normalizes to the block inside
+ * its fences; everything else is body prose and never a front matter slice.
+ */
+function frontMatterSlice(text: string): { yaml: string; fenced: boolean } {
+  const extraction = extractFrontmatterAndBody(text);
+  if (extraction.fenced) return { yaml: extraction.frontmatter, fenced: true };
+  const lines = text.split(/\r?\n/);
+  if (text.trim() !== "" && lines.every((line) => line.trim() === "" || /^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(line) || /^[-\s]\s*\S/.test(line))) {
+    return { yaml: text, fenced: false };
+  }
+  return { yaml: "", fenced: false };
+}
+
+/** Parse front matter entries, never throwing: invalid YAML yields no entries. */
+function safeEntries(yaml: string): Map<string, FrontmatterEntry> | null {
+  try {
+    return parseDocumentFrontmatterEntries(yaml, "assignment");
+  } catch {
+    return null;
+  }
+}
+
+/** Scalar content of one entry as the field string; non-scalars yield undefined. */
+function scalarOf(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  return undefined;
+}
+
+/**
+ * Parse an Assignment's FRONT MATTER into the dispatch-relevant fields
+ * (compass D15 — the canonical PM template declares fields in snake_case
+ * front matter keys; `parseAssignmentFields` reads the front matter ONLY).
+ * snake_case keys map onto the existing typed fields: `execute_as` →
+ * `executeAs`, `working_branch` → `workingBranch`, `control_write_paths`
+ * (a block list) → `controlWritePaths`, and so on; `execution_mode` joins
+ * the type as `executionMode`. Blank scalars yield the empty string
+ * (`key:` / `key: ""` — the field is PRESENT but empty, the shape
+ * `validateAssignmentFields` flags as invalid); absent keys yield
+ * `undefined`.
  *
- * The function scopes its OWN input: it reads the {@link
- * assignmentHeaderRegion} of whatever text it is handed, so any caller (host
- * gate, CLI, plugin) may pass the whole dispatch/prompt — a field label
- * quoted in the task body can never be read as a header field. An
- * already-sliced header may be passed as well: a slice holds no body marker,
- * so re-slicing is a no-op (idempotent). Every Assignment field/branch read
- * therefore shares ONE header rule by construction, rather than by each call
- * site remembering to pre-slice. */
+ * The function scopes its OWN input: it reads the front matter of whatever
+ * text it is handed, so any caller (host gate, CLI, plugin) may pass the
+ * whole dispatch/prompt — a field quoted in the task body can never be
+ * read as a header field. An already-sliced front matter block may be
+ * passed as well (re-normalizing is a no-op, idempotent). Body-only text
+ * (no fence, not pure YAML lines) yields no fields. Never throws: invalid
+ * front matter YAML yields no fields. */
 export function parseAssignmentFields(assignmentText: string): AssignmentFields {
   const fields: AssignmentFields = {};
-  for (const line of assignmentHeaderRegion(assignmentText).split(/\r?\n/)) {
-    const match =
-      line.match(/^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/) ??
-      line.match(/^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/);
-    if (!match) continue;
-    const label = match[1]!.trim();
-    const value = match[2]!.trim();
-    const known = REQUIRED_FIELDS.find((f) => f.label === label);
-    if (known) {
-      fields[known.key] = value;
-      continue;
+  const entries = safeEntries(frontMatterSlice(assignmentText).yaml);
+  if (entries === null) return fields;
+  const scalar = (key: string): string | undefined => {
+    const entry = entries.get(key);
+    if (entry === undefined) return undefined;
+    const value = scalarOf(entry.value);
+    if (value !== undefined) return value;
+    // A bare `key:` / blank scalar is present-but-empty.
+    if (entry.value === null || (typeof entry.value === "object" && entry.value !== null && !Array.isArray(entry.value) && Object.keys(entry.value as object).length === 0)) return "";
+    return undefined;
+  };
+  fields.executeAs = scalar("execute_as");
+  fields.delegation = scalar("delegation");
+  fields.taskCategory = scalar("task_category");
+  fields.executionMode = scalar("execution_mode");
+  fields.workingBranch = scalar("working_branch");
+  fields.branchPolicy = scalar("branch_policy");
+  fields.worktreePath = scalar("worktree_path");
+  fields.writeDomain = scalar("write_domain");
+  const writePaths = entries.get("control_write_paths");
+  if (writePaths !== undefined) {
+    if (Array.isArray(writePaths.value)) {
+      fields.controlWritePaths = writePaths.value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+    } else {
+      const single = scalarOf(writePaths.value);
+      if (single !== undefined) fields.controlWritePaths = single === "" ? [] : [single];
     }
-    if (label === "Working branch") fields.workingBranch = value;
-    else if (label === "Branch policy") fields.branchPolicy = value;
-    else if (label === "Worktree path") fields.worktreePath = value;
-    else if (label === "Write domain") fields.writeDomain = value;
-    else if (label === "Control write paths") fields.controlWritePaths = value.split(",").map((item) => item.trim()).filter(Boolean);
-    else if (BUDGET_LABELS.includes(label)) fields.budget = value;
-    else if (RETURN_SHAPE_LABELS.includes(label)) fields.returnShape = value;
-    else if (TASK_BUDGET_LABELS.includes(label)) fields.taskBudget = value;
   }
+  fields.budget = scalar("budget");
+  fields.returnShape = scalar("return_shape");
+  fields.taskBudget = scalar("task_budget");
   return fields;
 }
 
@@ -277,72 +318,42 @@ export type EnforcementFlag = {
   source: EnforcementSource;
 };
 
-/** Assignment form: `**Enforcement**: hard` (bold, optional list bullet). */
-const ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
-/** Assignment form: `Enforcement: hard` (plain; distinct from lowercase YAML key). */
-const ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
-/** Compass form: YAML frontmatter key `enforcement: hard` (lowercase key). */
-const COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
-
-/** Trim a raw flag value; YAML values may be single/double-quoted (`enforcement: "hard"`). */
-function enforcementValue(raw: string): string {
-  const value = raw.trim();
-  const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
-  return unquoted.trim().toLowerCase();
-}
-
 /**
- * Assignment body markers : the header region ends at
- * the FIRST of a `# Task`-style heading (any level — SDD task bodies use
- * `## Task N` / `### Task N`), a `---` horizontal-rule separator, or a
- * single-`#` heading (`# Target` / `# Goal` / `# Change`). The `## Assignment`
- * heading itself is NOT a boundary. Quoted Assignment-field examples in the
- * task body AFTER a marker must not be read as header fields.
- */
-const ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
-
-/**
- * Slice an Assignment's header region — the text before the first body
- * marker (see {@link ASSIGNMENT_BODY_START_RE}). Returns the full text when
- * no marker is present. This is the SINGLE header-scope rule: the Assignment
- * field parsers ({@link parseAssignmentFields} plus the branch forms built
- * on it) apply it to their own input, and the Assignment enforcement flag is
- * parsed against THIS region, so an example line `**Enforcement**: hard`
- * quoted in the task body cannot harden the dispatch. */
+ * Front matter slice of an Assignment: the document's front matter block
+ * (fences stripped) when the input opens with a `---` fence, bare front
+ * matter lines when the caller already sliced them, and the empty string
+ * for body-only text — the front matter scope is the ONE assignment field
+ * scope, so an unfenced input carries no readable front matter at all.
+ * This export is the task boundary: host packages import it today and Task
+ * 5 migrates them; it returns the document's front matter block (an
+ * equivalent front matter-scoped slice) rather than any deleted body
+ * header region. */
 export function assignmentHeaderRegion(assignmentText: string): string {
-  const marker = assignmentText.match(ASSIGNMENT_BODY_START_RE);
-  return marker !== null ? assignmentText.slice(0, marker.index) : assignmentText;
+  return frontMatterSlice(assignmentText).yaml;
 }
 
 /**
- * Parse the `Enforcement: hard` flag (roadmap §8.5 C4 + decision D2 — v2
+ * Parse the `enforcement: hard` flag (roadmap §8.5 C4 + decision D2 — v2
  * hard gates are OPT-IN per Assignment/compass, never global; rollback =
- * unset flag; inert when the engine is absent).
- *
- * Recognized forms, checked in order:
- * 1. Assignment header `**Enforcement**: hard` / `Enforcement: hard`
- * (bold or plain, optional list bullet; value case-insensitive).
- * 2. Compass frontmatter YAML key `enforcement: hard` (lowercase key;
- * value may be quoted, case-insensitive).
- *
- * The Assignment form wins over the compass form when both appear in the
- * input (per-Assignment precedence — a dispatch's own flag is decisive).
- * A present-but-non-hard value (`soft`, empty, malformed) still reports
- * its source so callers can distinguish "explicitly not hard" from
- * "not mentioned" (`source: none`). Never throws.
- *
- * Assignment-form callers MUST pass the header region (see
- * {@link assignmentHeaderRegion}) — this function itself scans the whole
- * input because the compass form is fed raw frontmatter, which has no
- * body markers. */
+ * unset flag; inert when the engine is absent). The flag is the lowercase
+ * YAML key read from the FRONT MATTER block: for an Assignment from the
+ * assignment front matter (source `assignment`); the compass form —
+ * lowercase `enforcement` key in a front matter block that carries no
+ * Assignment core keys — keeps source `compass`. The value may be quoted
+ * and is case-insensitive (`enforcement: "HARD"`). A present-but-non-hard
+ * value (`soft`, empty, malformed) still reports its source so callers
+ * distinguish "explicitly not hard" from "not mentioned" (`source: none`).
+ * Input may be a fenced document or a bare front matter slice; body-only
+ * text yields the absent flag. Never throws. */
 export function parseEnforcementFlag(text: string): EnforcementFlag {
-  const bold = text.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
-  if (bold !== null) return { hard: enforcementValue(bold[1]!) === "hard", source: "assignment" };
-  const plain = text.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
-  if (plain !== null) return { hard: enforcementValue(plain[1]!) === "hard", source: "assignment" };
-  const compass = text.match(COMPASS_ENFORCEMENT_RE);
-  if (compass !== null) return { hard: enforcementValue(compass[1]!) === "hard", source: "compass" };
-  return { hard: false, source: "none" };
+  const yaml = frontMatterSlice(text).yaml;
+  const entries = safeEntries(yaml);
+  if (entries === null) return { hard: false, source: "none" };
+  const entry = entries.get("enforcement");
+  if (entry === undefined) return { hard: false, source: "none" };
+  const value = scalarOf(entry.value) ?? "";
+  const source: EnforcementSource = isAssignmentShaped(text) ? "assignment" : "compass";
+  return { hard: value.toLowerCase() === "hard", source };
 }
 
 /**
@@ -356,18 +367,18 @@ function requireField(violations: ValidationResult[], value: string | undefined,
   if (value === undefined) {
     const v = violation(
       "high",
-      `assignment.field.missing-${code}`,
+      `assignment.field.${code}`,
       `missing required Assignment field: ${label}`,
-      `add "**${label}**: <value>" to the Assignment`,
+      `add "${label}: <value>" to the Assignment front matter`,
     );
     v.aliases = [`assignment.presence.missing-${code}`];
     violations.push(v);
   } else if (value === "") {
     const v = violation(
       "high",
-      `assignment.field.invalid-${code}`,
+      `assignment.field.${code}`,
       `${label} must be non-empty`,
-      `fill in "**${label}**: <value>"`,
+      `fill in "${label}: <value>" in the Assignment front matter`,
     );
     v.aliases = [`assignment.presence.missing-${code}`];
     violations.push(v);
@@ -491,43 +502,52 @@ export function isReadOnlyAssignmentRole(roleId: string): boolean {
  * are flagged. The three core-field violations carry the legacy
  * `assignment.presence.*` codes as aliases.
  *
- * Every read is scoped to the Assignment HEADER region — the scope is
+ * Every read is scoped to the document FRONT MATTER — the scope is
  * applied by the field parsers themselves ({@link parseAssignmentFields} /
  * {@link parseAssignmentBranchForms}), never the task body — the same rule
  * {@link parseEnforcementFlag} follows at the compose gate. Dispatch text
- * routinely quotes the field labels (template blocks, `## Task` bodies, the
- * `**Task**:` line's own prose), and a quoted `**Budget (review / QC
- * seats)**: …` line must not satisfy a gate the Assignment header left
- * open. */
+ * routinely quotes the template labels (template blocks, `## Task` bodies,
+ * the `**Task**:` line's own prose), and a quoted front matter key in the
+ * body must not satisfy a gate the Assignment front matter left open. */
 export function validateAssignmentFields(assignmentText: string, opts: ValidateAssignmentFieldsOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
+  // The document schema owns structural/declaration failures (unknown keys,
+  // enum and type shape, duplicate keys, YAML parse refusals, the absent
+  // fence); the gates below add the dispatch-semantics layer on top of the
+  // same front matter read. Schema `missing`/branch-declaration rows are
+  // dropped — dispatch reports those exact conditions with its own codes
+  // (requireField / the branch-form gates), so a merge would double-count.
+  violations.push(
+    ...validateDocumentFrontmatterExtraction("assignment", extractFrontmatterAndBody(assignmentText), "assignment").violations.filter(
+      (schemaViolation) => schemaViolation.code !== "document.frontmatter.missing" && !schemaViolation.message.includes("invalid branch declaration"),
+    ),
+  );
   const fields = parseAssignmentFields(assignmentText);
   const writable = opts.writable !== false;
-
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
   }
   if (fields.writeDomain !== undefined && fields.writeDomain !== "control" && fields.writeDomain !== "work") {
     violations.push(violation("high", "assignment.field.write-domain-unknown",
-      `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "Write domain: control" or "Write domain: work"'));
+      `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "write_domain: control" or "write_domain: work" in the Assignment front matter'));
   }
   if (fields.writeDomain === "control") {
     if (describeAbsence(fields.worktreePath) !== undefined) {
       violations.push(violation("high", "assignment.field.control-write-missing-worktree",
-        "control-domain assignment requires Worktree path", 'add "Worktree path: <control checkout path>"'));
+        "control-domain assignment requires Worktree path", 'add "worktree_path: <control checkout path>" to the Assignment front matter'));
     }
     if (describeAbsence(fields.workingBranch) !== undefined && describeAbsence(fields.branchPolicy) !== undefined) {
       violations.push(violation("high", "assignment.field.control-write-missing-branch",
-        "control-domain assignment requires a branch form", `add exactly one of: ${BRANCH_FORMS_HINT}`));
+        "control-domain assignment requires a branch form", `add exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`));
     }
     if (!fields.controlWritePaths?.length) {
       violations.push(violation("high", "assignment.field.control-write-paths-missing",
-        "control-domain assignment requires Control write paths", 'add "Control write paths: .mstar/plans/run.md"'));
+        "control-domain assignment requires Control write paths", 'add a control_write_paths: block list to the Assignment front matter'));
     }
     for (const target of fields.controlWritePaths ?? []) {
       if (/[*?[\]{}]/.test(target)) {
         violations.push(violation("high", "assignment.field.control-write-path-invalid",
-          `Control write paths does not accept globs: ${target}`, 'list concrete paths in "Control write paths"'));
+          `Control write paths does not accept globs: ${target}`, "list concrete paths in control_write_paths"));
       }
     }
   }
@@ -556,13 +576,13 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 // stay pure-ASCII `\uXXXX` escapes per the ASCII literal lint (bun 1.2.17
 // misdecodes raw multi-byte UTF-8 in the CLI bundle); the runtime string is
 // identical. Section title: mstar-harness-core § 定向执行与验证边界.
-        fix: `add "**Budget (review / QC seats)**: <cap> \u2014 may only tighten the default in mstar-harness-core \u00a7 \u5b9a\u5411\u6267\u884c\u4e0e\u9a8c\u8bc1\u8fb9\u754c, never loosen it"`,
+        fix: `add "budget: <cap> \u2014 may only tighten the default in mstar-harness-core \u00a7 \u5b9a\u5411\u6267\u884c\u4e0e\u9a8c\u8bc1\u8fb9\u754c, never loosen it" to the Assignment front matter`,
         value: fields.budget,
       },
       {
         code: "assignment.field.return-shape-missing",
         label: "Return shape",
-        fix: `add "**Return shape (review / QC seats)**: <what the seat returns and how it stops \u2014 verdict + findings shape; a clean round returns findings: [] explicitly>"`,
+        fix: `add "return_shape: <what the seat returns and how it stops \u2014 verdict + findings shape; a clean round returns findings: [] explicitly>" to the Assignment front matter`,
         value: fields.returnShape,
       },
     ] as const;
@@ -590,7 +610,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           "high",
           "assignment.field.task-budget-missing",
           `implement/ops round "${role}" must declare a Task budget \u2014 ${missing}`,
-          'add "**Task budget (implement / ops rounds)**: <one implementer round closing the task\'s declared Files list and verification gates> \u2014 capacity contract spec \u00a7 A1/A2"',
+          'add "task_budget: <one implementer round closing the task\'s declared Files list and verification gates> \u2014 capacity contract spec \u00a7 A1/A2" to the Assignment front matter',
         ),
       );
     }
@@ -608,7 +628,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           "high",
           "assignment.field.branch-missing",
           "writable assignment must contain exactly one branch form",
-          `add exactly one of: ${BRANCH_FORMS_HINT}`,
+          `add exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`,
         ),
       );
     } else if (formCount > 1) {
@@ -616,8 +636,8 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
         violation(
           "high",
           "assignment.field.branch-multiple",
-          `writable assignment contains ${formCount} branch forms (Working branch + Branch policy) \u2014 exactly one required`,
-          `keep exactly one of: ${BRANCH_FORMS_HINT}`,
+          `writable assignment contains ${formCount} branch forms (working_branch + branch_policy) \u2014 exactly one required`,
+          `keep exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`,
         ),
       );
     } else if (workingPresent) {
@@ -631,7 +651,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           violation(
             "high",
             "assignment.field.branch-missing-base",
-            `create-form Working branch is incomplete: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`,
+            `create-form working_branch is incomplete: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`,
             "write both the new branch name and the ancestor branch after `from` (main / existing feature branch / remote-tracking branch / `current`)",
           ),
         );
@@ -643,7 +663,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           violation(
             "high",
             "assignment.field.branch-policy-missing-branch",
-            `unparseable Branch policy: "${fields.branchPolicy}" (expected "direct on <branch> \u2014 <reason>")`,
+            `unparseable branch_policy: "${fields.branchPolicy}" (expected "direct on <branch> \u2014 <reason>")`,
             "start the field with `direct on <branch>`",
           ),
         );
@@ -652,7 +672,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
           violation(
             "high",
             "assignment.field.branch-policy-missing-reason",
-            `Branch policy "direct on ${direct.branch}" is missing the reason`,
+            `branch_policy "direct on ${direct.branch}" is missing the reason`,
             'append "\u2014 <reason>" after the branch name',
           ),
         );
@@ -836,42 +856,30 @@ export function assertTriIdentity(reviewerRoles: readonly string[]): GateResult 
     ],
   };
 }
-
 /**
- * `## Assignment` heading marker (shared shape-guard —): a
- * document carrying this heading is treated as Assignment-shaped and linted
- * even when none of the three core fields is found.
+ * Shape-guard match of an Assignment core front matter key. The declaration
+ * form is the snake_case scalar key (`execute_as: x`) — a body-quoted
+ * `**Execute as**: x` template line is NEVER a declaration. Shape
+ * detection ONLY: field parsing/semantics live in `parseAssignmentFields` /
+ * `validateAssignmentFields`.
  */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
+const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m;
 
 /**
- * Shape-guard match of an Assignment header field, tolerating optional list
- * bullets and `**bold**` markers around the key (`- **Execute as**: x`).
- * The value must be non-empty (`(\S.*)`) — a bare `Delegation:` counts as
- * missing. Shape detection ONLY: field parsing/semantics live in
- * `parseAssignmentFields` / `validateAssignmentFields`.
- */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
-
-/**
- * True when the text looks like an Assignment: carries the `## Assignment`
- * heading or at least one core field line (`Execute as` / `Delegation` /
- * `Task category`). Non-Assignment prompts stay silent — no false positives.
- * This is the SINGLE shape-guard grammar shared by the omp hook and the
- * opencode adapter via {@link composeDispatchGate}.
- *
- * Shape detection reads the WHOLE text on purpose: a core-field label quoted
- * anywhere (title, body, template block) makes the text an Assignment CANDIDATE
- * so the gate then validates it strictly and reports whatever the header is
- * missing. That direction is fail-closed — it can only ADD violations. Reads
- * that could LOOSEN a gate instead (`Execute as` role, branch forms) MUST stay
- * header-scoped, which is why they go through the self-scoping parsers rather
- * than a second grammar here. The dsh adapter's shape guard is header-scoped
- * instead, because there a wrong "true" would write a dispatch RECORD (a
- * phantom ledger row) for a non-Assignment prompt. */
+ * True when the text looks like an Assignment: its FRONT MATTER block
+ * declares at least one core field key (`execute_as` / `delegation` /
+ * `task_category`). This is the SINGLE shape-guard grammar shared by the
+ * omp hook and the opencode adapter via {@link composeDispatchGate}, and
+ * it is a front matter check — non-Assignment prompts (no fenced front
+ * matter, or front matter without a core key) stay silent with no false
+ * positives, including a prompt that merely quotes the Assignment template
+ * in its body. The key PATTERN is the shape evidence, not the parse
+ * result, so invalid front matter YAML that still carries the key line is
+ * shaped (fail-closed: the schema layer then reports the parse refusal). */
 function isAssignmentShaped(assignmentText: string): boolean {
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null;
+  const yaml = frontMatterSlice(assignmentText).yaml;
+  if (yaml === "") return false;
+  return ASSIGNMENT_FIELD_RE.test(yaml);
 }
 
 /**
@@ -913,7 +921,7 @@ export type ComposeDispatchGateOptions = {
 export type ComposeDispatchGateResult = GateResult & {
  /** Assignment-shaped text was recognized (heading or core-field regex). */
   shaped: boolean;
- /** Enforcement parsed from the Assignment HEADER region only (never the body). */
+ /** Enforcement parsed from the Assignment front matter only (never the body). */
   enforcement: EnforcementFlag;
 };
 
@@ -940,7 +948,7 @@ export type ComposeDispatchGateResult = GateResult & {
  * Branch policy branch), else `$MSTAR_WORKING_BRANCH`; a well-formed
  * `Branch policy: direct on <branch> — <reason>` exception is honored
  * only when its branch is the one being checked.
- * 5. Enforcement flag parsed from the Assignment HEADER region only; the
+ * 5. Enforcement flag parsed from the Assignment front matter only; the
  * result carries `hardBlocked` via `applyEnforcement`.
  *
  * Never throws on text errors: unexpected failures degrade to the same
@@ -960,11 +968,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     const writable = opts.writable !== false;
 
  // (2) Engine full field validation — read-only roles skip the branch-form gate.
-    // Every field/branch read below (and in the validator) is header-scoped by
-    // the parsers themselves (`parseAssignmentFields` /
-    // `parseAssignmentBranchForms` slice `assignmentHeaderRegion(text)`), so
-    // passing the whole dispatch here is safe by construction: a field quoted
-    // in the task body can neither satisfy nor disable a gate.
+    // Every field/branch read below (and in the validator) is front
+    // matter-scoped by the parsers themselves (`parseAssignmentFields` /
+    // `parseAssignmentBranchForms` slice the front matter), so passing the
+    // whole dispatch here is safe by construction: a field quoted in the
+    // task body can neither satisfy nor disable a gate.
     violations.push(...validateAssignmentFields(text, { writable }).violations);
 
  // (3) Anti-recursion NEVER red line — CALLER identity vs the dispatch's
@@ -1006,9 +1014,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
       }
     }
 
- // (5) Header region only: an example `**Enforcement**: hard` line quoted
-     // in the task body must not harden the dispatch.
-    const enforcement = parseEnforcementFlag(assignmentHeaderRegion(text));
+ // (5) Front matter only: an example `enforcement: hard` key quoted in the
+     // task body must not harden the dispatch. The source attribution is
+     // assignment/compass-shaped by the document — the full text is passed so
+     // an Assignment-shaped document reports source "assignment".
+    const enforcement = parseEnforcementFlag(text);
     const gate: GateResult = { ok: violations.length === 0, violations };
     return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped: true, enforcement };
   } catch {
