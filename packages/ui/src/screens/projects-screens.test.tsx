@@ -462,14 +462,16 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).not.toContain("<details");
   });
 
-  test("the milestone board carries status, effort, the four tallies and its issues", () => {
+  test("the milestone board carries status, effort sessions, the four tallies and its issues", () => {
     // why: every slot is asserted inside this milestone's own block — the timeline node
     // prints the same effort line, so a page-wide search would pass with the board slot gone.
     const block = boardBlockOf(html, "9f2c4a10");
     expect(block).not.toBe("");
     expect(block).toContain("Release the shared layer");
     expect(block).toContain(">active<");
-    expect(block).toContain("12 sessions");
+    // The effort cell answers through its own hook: a bare "12" also matches a catalog
+    // revision, so it would pass even if the session count never rendered.
+    expect(block).toContain('data-ms-effort="12"');
     expect(block).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count

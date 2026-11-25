@@ -399,7 +399,7 @@ function Milestone(props: {
           {milestone.name}
         </span>
         {milestone.status === null ? null : <StatusDot label={milestone.status} tone={milestoneStatusTone(milestone.status)} mono />}
-        <span className={"detail-meta"}>
+        <span className={"detail-meta"} data-ms-effort={milestone.effortSessions ?? ""}>
           {milestone.effortSessions === null ? copy.roadmap.unestimated : copy.roadmap.effort(milestone.effortSessions)}
         </span>
         {/* The prototype prints four tallies, each a number over its label. */}

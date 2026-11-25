@@ -3409,6 +3409,34 @@ function intentRow(db: StoreDb, operationId: string): OutboxIntentRow {
  * reads it, so a hand-edited or partially written row refuses as unreadable instead of
  * driving a send. The reviewed resolution additionally carries its operator and reason.
  */
+/**
+ * invariant: A frozen request is read under the contract that FROZE it. The effort contract
+ * retired a milestone's calendar `target` for a session count, and a date is not a count: a stored
+ * milestone that carries `target` reads as unestimated (`effortSessions: null`) instead of being
+ * reinterpreted as a number or refused as unreadable, which would strand a row the migration
+ * promised to settle in place. A new submission is unaffected - `milestone` still refuses `target`
+ * at the boundary, so the widening is the stored path's alone.
+ */
+function legacyFrozenRequest(parsed: unknown): unknown {
+  if (typeof parsed !== "object" || parsed === null) return parsed;
+  const event = (parsed as Record<string, unknown>).event;
+  if (typeof event !== "object" || event === null) return parsed;
+  const change = (event as Record<string, unknown>).change;
+  if (typeof change !== "object" || change === null) return parsed;
+  const project = (change as Record<string, unknown>).project;
+  if (typeof project !== "object" || project === null) return parsed;
+  const milestones = (project as Record<string, unknown>).milestones;
+  if (!Array.isArray(milestones)) return parsed;
+  for (const entry of milestones) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const milestone = entry as Record<string, unknown>;
+    if (!Object.hasOwn(milestone, "target")) continue;
+    delete milestone.target;
+    if (!Object.hasOwn(milestone, "effortSessions")) milestone.effortSessions = null;
+  }
+  return parsed;
+}
+
 function storedRequest(row: OutboxIntentRow): StoredRequest {
   let parsed: unknown;
   try {
@@ -3417,7 +3445,7 @@ function storedRequest(row: OutboxIntentRow): StoredRequest {
     throw malformedIntent(row.operationId, "carries no readable frozen request");
   }
   try {
-    const body = record(parsed, "request");
+    const body = record(legacyFrozenRequest(parsed), "request");
     allowOnly(body, "request", [
       "binding", "event", "target", "expectedHeads", "executionKey", "operator", "reason", "origin", "result",
     ]);

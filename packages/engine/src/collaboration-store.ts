@@ -3030,15 +3030,19 @@ export function applyCollaborationLadder(
     );
   }
   // invariant: The v3 shape is proven before the v4 rebuild: a move ledger or a widened
-  // `relations` under a v3 ledger row is a partial apply, refused instead of re-created.
-  assertOutboxSchema(db, dbPath);
-  db.exec(COLLABORATION_MOVE_SCHEMA.sql);
-  db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
-    COLLABORATION_MOVE_SCHEMA.version,
-    COLLABORATION_MOVE_SCHEMA.name,
-    migrationChecksum(COLLABORATION_MOVE_SCHEMA),
-    nowRfc3339(),
-  );
+  // `relations` under a v3 ledger row is a partial apply, refused instead of re-created. The
+  // proof guards the partial apply only: a lane whose v4 row is recorded already holds the move
+  // ledger, and that row is what proves it, so the step is skipped instead of re-run.
+  if (appliedMax < COLLABORATION_MOVE_SCHEMA.version) {
+    assertOutboxSchema(db, dbPath);
+    db.exec(COLLABORATION_MOVE_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_MOVE_SCHEMA.version,
+      COLLABORATION_MOVE_SCHEMA.name,
+      migrationChecksum(COLLABORATION_MOVE_SCHEMA),
+      nowRfc3339(),
+    );
+  }
   // invariant: The exact v4 shape is proven before the v5 DDL: an altered project_milestones
   // without its ledger row is a partial apply, and is refused instead of being repaired.
   if (appliedMax < COLLABORATION_MILESTONE_EFFORT_SCHEMA.version) {

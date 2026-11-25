@@ -1471,6 +1471,26 @@ function writeV3Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** note: A real v4 lane: the v3 body, the cross-authority move ledger and its row. */
+function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV3Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    const v4 = COLLABORATION_MIGRATIONS[3]!;
+    db.exec(v4.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      v4.version,
+      v4.name,
+      migrationChecksum(v4),
+      "2026-11-21T00:00:00.000Z",
+    );
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: The v3 lane as a REMOTE cache: `remote` lanes are only ever written by the reviewed bind. */
 function writeV3RemoteLane(location: CollaborationLocation): void {
   writeV3Lane(location);
@@ -1882,6 +1902,22 @@ describe("collaboration remote schema ladder", () => {
     expect(hasColumn(location.dbPath, "project_milestones", "effort_sessions")).toBe(true);
     expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
     expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
+  });
+
+  test("a v4 lane reaches the effort column without re-proving or re-running the move DDL", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/from-v4.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV4Lane(location);
+    activate(location.dbPath);
+    expect(ledgerVersions(location.dbPath)).toEqual(COLLABORATION_MIGRATIONS.slice(0, 4).map(({ version }) => version));
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 4, toVersion: LANE_CURRENT_VERSION });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    expect(hasColumn(location.dbPath, "project_milestones", "effort_sessions")).toBe(true);
+    expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
   });
 
   test("a lane stopped between the effort DDL and its ledger row refuses without mutation", async () => {
@@ -4677,6 +4713,66 @@ describe("remote outbox intents", () => {
     }
     // invariant: Every refusal happened before persistence.
     expect(outboxRows(location.dbPath)).toEqual([]);
+  });
+
+test("a frozen pre-upgrade request that carried a milestone target settles as unestimated", async () => {
+    // invariant: A frozen request outlives the contract that froze it. The predecessor froze each
+    // milestone with a calendar `target`; a date is not a count of sessions, so the stored row must
+    // settle as unestimated instead of refusing every settlement verb as input-invalid.
+    const fixture = remoteFixture("outbox-frozen-target");
+    const commit = fixture.publish(fixture.payload());
+    const context = contextAt(fixture.repo);
+    const location = locationAt(fixture.repo);
+    await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
+    const operationId = "00000000-0000-4000-8000-0000000000f1";
+    await prepareRemoteIntent(context, intentRequest(fixture, commit, operationId));
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      const row = db.prepare("select request_json from remote_outbox where operation_id = ?").get(operationId) as {
+        request_json: string;
+      };
+      const body = JSON.parse(row.request_json) as {
+        event: { change: { project: { milestones: Array<Record<string, unknown>> } } };
+      };
+      for (const entry of body.event.change.project.milestones) {
+        delete entry.effortSessions;
+        entry.target = "2026-12-01";
+      }
+      db.prepare("update remote_outbox set request_json = ? where operation_id = ?").run(JSON.stringify(body), operationId);
+    } finally {
+      db.close();
+    }
+
+    const shown = await readRemoteIntent(context, operationId);
+    if (shown.event?.change.kind !== "project-replace") throw new Error("expected a frozen project replacement");
+    const milestones = shown.event.change.project.milestones as Array<{ effortSessions: unknown }>;
+    expect(milestones.map((entry) => entry.effortSessions)).toEqual([null]);
+    await expect(abandonRemoteIntent(context, { operationId, reason: "superseded" })).resolves.toMatchObject({
+      state: "abandoned",
+    });
+
+    // invariant: The legacy reading is the STORED path's alone: a new submission carrying the
+    // retired member is still refused at the boundary.
+    const milestone = (completeProjectSubject().milestones as Array<Record<string, unknown>>)[0]!;
+    const fresh = "00000000-0000-4000-8000-0000000000f2";
+    await expect(
+      prepareRemoteIntent(
+        context,
+        intentRequest(fixture, commit, fresh, {
+          event: {
+            version: 1,
+            repoKey: fixture.repoKey,
+            projectId: SELECTED_PROJECT.localProjectId,
+            operationId: fresh,
+            parents: [],
+            change: {
+              kind: "project-replace",
+              project: { ...completeProjectSubject(), milestones: [{ ...milestone, target: "2026-12-01" }] },
+            },
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "remote.input-invalid" });
   });
 
   test("a shape-valid subject with a guessed semantic key is refused before any outbox row", async () => {
