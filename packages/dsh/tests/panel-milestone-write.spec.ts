@@ -887,7 +887,7 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     expect(reader.getSnapshot().kind).toBe('loading')
     await new Promise((resolve) => setTimeout(resolve, 5))
     expect(reader.getSnapshot().kind).toBe('ok')
-    // why: navigation re-enters loading exactly as before the fix.
+    // why: navigation re-enters loading because a new identity is a new read.
     reader.begin('view-two', client, async () => ({ kind: 'ok' }))
     expect(reader.getSnapshot().kind).toBe('loading')
   })
@@ -922,6 +922,9 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
       reload: () => reloads.push(1),
       onState: (state) => states.push(state),
       ids: writeOperationIds<{ expectedStoreRevision: number }>(),
+      // why: the production seat always arms the channel with the open page's project — a
+      // direct factory caller that omits it exercises a path production never takes.
+      draftsProject: '_default',
       ...(seats.onAccepted === undefined ? {} : { onAccepted: seats.onAccepted }),
     })
     return {
@@ -996,8 +999,9 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     accepted.channel.create({ name: 'Accepted draft', effortSessions: 2, ordinal: 0 })
     await accepted.settle()
     expect(accepted.channel.refusal).toBeNull()
-    // invariant: the create form's draft key is 'create' — the accepted write clears exactly it.
-    expect(cleared).toEqual(['create'])
+    // invariant: the create form's draft key is the project-scoped '_default:create' — the
+    // accepted write clears exactly it.
+    expect(cleared).toEqual(['_default:create'])
   })
 
   it('an accepted UPDATE clears the milestone-keyed entry, not the create one', async () => {
@@ -1020,7 +1024,43 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     seat.channel.update(milestoneId, { name: 'Renamed' })
     await seat.settle()
     expect(seat.channel.refusal).toBeNull()
-    expect(cleared).toEqual([milestoneId])
+    expect(cleared).toEqual([`_default:${milestoneId}`])
+  })
+
+  it('the create draft is keyed by the project the form was opened over — a project switch never re-seeds', async () => {
+    // invariant: the draft store is one per seat and survives navigation, so the key must carry
+    // the identity the form belongs to. Seed project A's create slot through the SAME key the
+    // production form computes (the roadmap's project identity plus the create target), switch
+    // to project B, and B's form must read empty; back on A the typed text is still there.
+    const { createMilestoneDraftStore, milestoneDraftTargetKey } = await import('@mstar-harness/ui')
+    const drafts = createMilestoneDraftStore()
+    const projectA = 'project-alpha'
+    const projectB = 'project-beta'
+
+    // why: the form's keystroke effect, mirrored — typing in A's create form writes A's key.
+    drafts.write(milestoneDraftTargetKey(projectA, 'create'), { name: 'Typed in project A', effort: '3' })
+
+    // why: B's form seeds from B's key — with the bare 'create' key it would read A's text.
+    expect(drafts.read(milestoneDraftTargetKey(projectB, 'create'))).toBeUndefined()
+    // invariant: returning to A re-seeds exactly what was typed there.
+    expect(drafts.read(milestoneDraftTargetKey(projectA, 'create'))).toEqual({ name: 'Typed in project A', effort: '3' })
+
+    // invariant: an accepted create in A clears A's entry through the channel's scoped target,
+    // and a draft typed in B meanwhile is untouched.
+    const { app, endpoint } = await harness('ses_draft_isolation')
+    drafts.write(milestoneDraftTargetKey(projectB, 'create'), { name: 'Typed in project B', effort: '1' })
+    const cleared: string[] = []
+    const seat = channelFor(endpoint, 'ses_draft_isolation', app.root, await observedRevision(endpoint, 'ses_draft_isolation', app.root), {
+      onAccepted: (target) => {
+        cleared.push(target)
+        drafts.clear(target)
+      },
+    })
+    seat.channel.create({ name: 'Accepted in A', effortSessions: 2, ordinal: 0 })
+    await seat.settle()
+    expect(seat.channel.refusal).toBeNull()
+    expect(cleared).toEqual([milestoneDraftTargetKey('_default', 'create')])
+    expect(drafts.read(milestoneDraftTargetKey(projectB, 'create'))).toEqual({ name: 'Typed in project B', effort: '1' })
   })
 })
 

@@ -38,6 +38,7 @@ import {
   type FocusCopy,
   type FocusOverviewInput,
   createMilestoneDraftStore,
+  milestoneDraftTargetKey,
   type Locale,
   type MilestoneDraftStore,
   type SessionBinding,
@@ -514,10 +515,12 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 }
 
 /**
- * The milestone write channel the seat hands the project page (plan Task 4).
- * The UI owns no optimistic state: a refused write only sets the refusal copy,
- * and BOTH arms re-issue the roadmap read (contract C2 — a success proves new
- * store state, a refusal may mean the observed revision moved).
+ * note: the milestone write channel the seat hands the project page (plan Task 4).
+ * The UI owns no optimistic state: a refused write only sets the refusal copy.
+ * An ACCEPTED write and a revision-conflict refusal re-issue the roadmap read
+ * (the store moved, so the open read is stale); an input refusal does not —
+ * nothing moved, and a refresh would destroy the form mid-edit for no fact.
+ * Either way the operator's draft survives in the seat-owned store.
  */
 /**
  * The one refusal class a milestone write can carry that means the OBSERVED STORE MOVED:
@@ -594,11 +597,13 @@ export function createMilestoneWrites(seats: {
   onState: (state: { busy: boolean; refusal: string | null }) => void
   /** The id policy; the seat owns one instance for its lifetime. */
   ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
+  /** note: the identity the page was opened over — the draft key is scoped with it, never re-read later. */
+  draftsProject?: string
   /** note: an ACCEPTED write clears its target's draft entry — the stored milestone is then the
    *  truth the form re-seeds from, and keeping the draft would resurrect the pre-write text. */
   onAccepted?: (target: string) => void
 }): MilestoneWriteChannel {
-  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids, onAccepted } = seats
+  const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids, onAccepted, draftsProject } = seats
   // The factory's own mirror of the busy/refusal state; the hook overrides both
   // members with its React state, but a direct caller (a spec) reads these.
   let busy = false
@@ -635,7 +640,7 @@ export function createMilestoneWrites(seats: {
       // why: the draft entry is cleared HERE and not in the form's verdict effect — the
       // reload below unmounts the forms in the same batched render the verdict arrives in,
       // so the effect never observes the accepted write.
-      if (!ambiguous && result.ok && draftTarget !== undefined) onAccepted?.(draftTarget)
+      if (!ambiguous && result.ok && draftTarget !== undefined) onAccepted?.(milestoneDraftTargetKey(draftsProject, draftTarget))
       if (!ambiguous && result.ok) reload()
       if (!ambiguous && !result.ok && isRevisionConflictCode(result.code)) reload()
     })()
@@ -749,6 +754,7 @@ function useMilestoneWrites(seats: {
     reload,
     onState: setState,
     ids: ids.current,
+    ...(projectId === null ? {} : { draftsProject: projectId }),
     ...(drafts === undefined ? {} : { onAccepted: (target: string) => drafts.clear(target) }),
   })
   // The factory's own busy flag is per-call-site state; the mirror the screen
