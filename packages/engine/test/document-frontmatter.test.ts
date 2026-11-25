@@ -21,6 +21,7 @@ import {
   parseDocumentFrontmatterEntries,
   parseSimpleFrontmatter,
 } from "../src/document-frontmatter.js";
+import * as engineIndex from "../src/index.js";
 
 function expectRefusal(frontmatter: string, line: number): DocumentFrontmatterError {
   try {
@@ -154,6 +155,16 @@ describe("parseDocumentFrontmatter — flow arrays", () => {
   test("flow array value that does not close on the same line refuses", () => {
     expectRefusal(`plans: [a, b`, 2);
   });
+
+  test("flow-array items starting with a YAML structural prefix refuse like scalars and block-list items", () => {
+    for (const item of ["&a", "*a", "!a", "{a}", "[a]"]) {
+      expectRefusal(`plans: [${item}, b]`, 2);
+    }
+  });
+
+  test("a trailing separator in a document-profile flow array refuses", () => {
+    expectRefusal(`plans: [a,]`, 2);
+  });
 });
 
 describe("parseDocumentFrontmatter — block lists", () => {
@@ -256,6 +267,47 @@ describe("parseDocumentFrontmatter — refused line forms", () => {
     expect(error.lineText).toBe("{b: c}");
   });
 
+  test("every refusal carries a fix naming the supported correction", () => {
+    for (const fm of [
+      `name: *alias`,
+      `name: &anchor value`,
+      `name: !tag value`,
+      `config: {a: b}`,
+      `description: >`,
+      `plans: [a,]`,
+      `plans:\n  - [a]`,
+      `name: a\nname: b`,
+      `outer:\n\tinner: 1`,
+      `name: x\nthis is not a key line`,
+    ]) {
+      let error: DocumentFrontmatterError | null = null;
+      try {
+        parseDocumentFrontmatter(fm, "spec-source");
+      } catch (caught) {
+        error = caught as DocumentFrontmatterError;
+      }
+      expect(error).toBeInstanceOf(DocumentFrontmatterError);
+      expect(typeof error!.fix).toBe("string");
+      expect(error!.fix.length).toBeGreaterThan(0);
+      expect(error!.message).toContain(error!.fix);
+    }
+    const alias = expectRefusal(`name: *alias`, 2);
+    expect(alias.fix).toContain("quote");
+    expect(alias.fix).toContain("supported scalar");
+  });
+
+  test("parseSimpleFrontmatter accepts a source label so a host loader names its file", () => {
+    let error: DocumentFrontmatterError | null = null;
+    try {
+      parseSimpleFrontmatter(`name: *alias`, "agents/reviewer.md");
+    } catch (caught) {
+      error = caught as DocumentFrontmatterError;
+    }
+    expect(error).toBeInstanceOf(DocumentFrontmatterError);
+    expect(error!.source).toBe("agents/reviewer.md");
+    expect(error!.message).toContain("agents/reviewer.md:2");
+  });
+
   test("document positions are reported for frontmatter extracted from a fence", () => {
     const document = `---\nname: x\ninvalid line\n---\nbody`;
     const { frontmatter } = extractFrontmatterAndBody(document);
@@ -332,6 +384,17 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(flat.get("plans")!.value).toEqual(["&value", "[a]"]);
   });
 
+  test("the flat profile skips a trailing separator and refuses interior brackets in flow lists", () => {
+    const trailing = parseDocumentFrontmatterEntries(`plans: [p1,]`, "spec-source", "flat");
+    expect(trailing.get("plans")!.value).toEqual(["p1"]);
+    expect(() => parseDocumentFrontmatterEntries(`plans: [p1[0]]`, "spec-source", "flat")).toThrow(/unsupported flow array/);
+  });
+
+  test("the flat profile keeps flow-list items with structural prefixes as plain strings", () => {
+    const entries = parseDocumentFrontmatterEntries(`plans: [&a, *x]`, "spec-source", "flat");
+    expect(entries.get("plans")!.value).toEqual(["&a", "*x"]);
+  });
+
   test("the document profile still accepts nested maps and block scalars", () => {
     const entries = parseDocumentFrontmatterEntries(`outer:\n  inner: value\nbody: |\n  text`, "spec-source");
     expect(entries.get("outer")!.kind).toBe("map");
@@ -394,6 +457,27 @@ describe("extractFrontmatterAndBody — fence handling", () => {
     expect(extractFrontmatterAndBody(`---\n---\nbody`)).toEqual({ frontmatter: "", body: "body", fenced: true });
     expect(extractFrontmatterAndBody(`---\n---`)).toEqual({ frontmatter: "", body: "", fenced: true });
   });
+
+  test("an immediately closed header never consumes a later horizontal rule in the body", () => {
+    expect(extractFrontmatterAndBody(`---\n---\n# Heading\n\n---\nRest`)).toEqual({
+      frontmatter: "",
+      body: "# Heading\n\n---\nRest",
+      fenced: true,
+    });
+    expect(extractFrontmatterAndBody(`---\r\n---\r\n# Heading\r\n\r\n---\r\nRest`)).toEqual({
+      frontmatter: "",
+      body: "# Heading\r\n\r\n---\r\nRest",
+      fenced: true,
+    });
+  });
+
+  test("a non-empty header never extends past its first closing line to a later rule", () => {
+    expect(extractFrontmatterAndBody(`---\nname: x\n---\n# Heading\n\n---\nRest`)).toEqual({
+      frontmatter: "name: x",
+      body: "# Heading\n\n---\nRest",
+      fenced: true,
+    });
+  });
 });
 
 describe("shipped corpus — every bundled frontmatter parses", () => {
@@ -455,5 +539,15 @@ describe("shipped corpus — every bundled frontmatter parses", () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe("engine entry point — the strict reader and its error are package-root exports", () => {
+  test("parseDocumentFrontmatter and DocumentFrontmatterError resolve from src/index", () => {
+    expect(typeof engineIndex.parseDocumentFrontmatter).toBe("function");
+    expect(engineIndex.DocumentFrontmatterError).toBe(DocumentFrontmatterError);
+    expect(engineIndex.parseDocumentFrontmatter).toBe(parseDocumentFrontmatter);
+    expect(typeof engineIndex.parseSimpleFrontmatter).toBe("function");
+    expect(engineIndex.extractFrontmatterAndBody).toBe(extractFrontmatterAndBody);
   });
 });

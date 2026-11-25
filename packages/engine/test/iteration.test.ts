@@ -562,4 +562,38 @@ describe("parseCompassFrontmatterText — delegation to the shared parser keeps 
       /compass\.md:2: block scalar in flat frontmatter/,
     );
   });
+
+  test("a trailing separator in a flow list is skipped like the old flat parser", () => {
+    const content = ["---", "plans: [plan-a,]", "---", ""].join("\n");
+    expect(parseCompassFrontmatterText(content, "compass.md")).toEqual({ plans: ["plan-a"] });
+  });
+
+  test("an interior bracket in a flow-list item refuses like the old flat parser", () => {
+    const content = ["---", "plans: [plan-a[0]]", "---", ""].join("\n");
+    expect(() => parseCompassFrontmatterText(content, "compass.md")).toThrow(/unsupported flow array/);
+  });
+
+  test("an accepted __proto__ block list survives as an own data property and the prototype is unchanged", () => {
+    const content = ["---", "__proto__:", "  - plan-a", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toEqual(["plan-a"]);
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
+
+  test("an accepted __proto__ scalar survives as an own data property", () => {
+    const content = ["---", "__proto__: value", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toBe("value");
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
+
+  test("an accepted __proto__ flow list survives as an own data property", () => {
+    const content = ["---", "__proto__: [plan-a, plan-b]", "---", ""].join("\n");
+    const doc = parseCompassFrontmatterText(content, "compass.md");
+    expect(Object.prototype.hasOwnProperty.call(doc, "__proto__")).toBe(true);
+    expect((doc as Record<string, unknown>).__proto__).toEqual(["plan-a", "plan-b"]);
+    expect(Object.getPrototypeOf(doc)).toBe(Object.prototype);
+  });
 });

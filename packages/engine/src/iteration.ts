@@ -44,7 +44,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseDocumentFrontmatterEntries } from "./document-frontmatter.js";
+import { parseDocumentFrontmatterEntries, setOwn } from "./document-frontmatter.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 // Call-time-only cycle with catalog.ts (which reaches this module through
 // coordination.ts): `catalogRootDir` only resolves roots when a catalog
@@ -1103,26 +1103,33 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   // decode because the roadmap export writes values with `JSON.stringify`.
   const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
+  // Every projected key lands as an own data property: a plain assignment
+  // for the accepted key `__proto__` would invoke the inherited prototype
+  // setter, dropping the value and repointing the prototype instead.
   for (const [key, entry] of entries) {
     if (entry.kind === "list") {
-      doc[key] = entry.value;
+      setOwn(doc, key, entry.value);
       continue;
     }
     const raw = entry.rawText;
     if (raw === "") {
       // A bare `key:` is null in the compass contract.
-      doc[key] = null;
+      setOwn(doc, key, null);
     } else if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
       // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
       // \\" → quote, \\\\ → backslash; a lone backslash before any
       // other character is preserved (JSON.stringify parity).
-      doc[key] = raw
-        .slice(1, -1)
-        .replace(/\\(.)/g, (_, ch: string) =>
-          ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
-        );
+      setOwn(
+        doc,
+        key,
+        raw
+          .slice(1, -1)
+          .replace(/\\(.)/g, (_, ch: string) =>
+            ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
+          ),
+      );
     } else {
-      doc[key] = raw.replace(/^["']|["']$/g, "");
+      setOwn(doc, key, raw.replace(/^["']|["']$/g, ""));
     }
   }
   return doc;

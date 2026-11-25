@@ -39,39 +39,63 @@ export type FrontmatterEntry = {
  * diagnostic label only (the caller names the document); `line` is the
  * 1-based line in the source document — the opening fence is document
  * line 1, so the first frontmatter text line is line 2 — and `lineText`
- * is the offending raw line. */
+ * is the offending raw line. Every refusal carries `fix`, the supported
+ * correction: quote the value when it is literal text, or replace an
+ * alias/anchor/tag construct with the supported scalar value. */
 export class DocumentFrontmatterError extends Error {
   readonly source: string;
   readonly line: number;
   readonly lineText: string;
+  readonly fix: string;
 
-  constructor(source: string, line: number, lineText: string, reason: string) {
-    super(`${source}:${line}: ${reason}: ${JSON.stringify(lineText)}`);
+  constructor(source: string, line: number, lineText: string, reason: string, fix: string) {
+    super(`${source}:${line}: ${reason}: ${JSON.stringify(lineText)} (fix: ${fix})`);
     this.name = "DocumentFrontmatterError";
     this.source = source;
     this.line = line;
     this.lineText = lineText;
+    this.fix = fix;
   }
 }
 
-/** An opening `---` line through the closing one, optional trailing newline.
- * The closing fence must be a complete line: a newline before it (optional
- * for the empty block, so `---` directly followed by the closing `---`
- * still matches) and a newline or end-of-input after it — a `---` inside a
- * scalar line never counts. CRLF is accepted because the commands doctor
+/** Split a document into its frontmatter block and body by scanning lines:
+ * the closing fence is the first complete `---` line after the opener —
+ * never a later one found by backtracking, so an immediately closed empty
+ * header never consumes a horizontal rule inside the body. A `---` inside
+ * a scalar line never counts. A document with no fence (or an unterminated
+ * one) returns the whole content as its body, an empty frontmatter and
+ * `fenced: false`; a closed fence — even one wrapping only whitespace —
+ * returns `fenced: true`, so a present-but-empty fence is distinguishable
+ * from an absent one. CRLF is accepted because the commands doctor
  * classifies SKILL.md files the OpenCode loaders never see, and both must
  * agree on what has a fence. */
-const FENCE = /^---\r?\n(?:([\s\S]*?)\r?\n)?---(?:\r?\n|$)([\s\S]*)$/;
-
-/** Split a document into its frontmatter block and body. A document with no
- * fence (or an unterminated one) returns the whole content as its body, an
- * empty frontmatter and `fenced: false`; a closed fence — even one wrapping
- * only whitespace — returns `fenced: true`, so a present-but-empty fence is
- * distinguishable from an absent one. */
 export function extractFrontmatterAndBody(content: string): FrontmatterAndBody {
-  const match = content.match(FENCE);
-  if (!match) return { frontmatter: "", body: content, fenced: false };
-  return { frontmatter: match[1] ?? "", body: match[2], fenced: true };
+  const notFenced: FrontmatterAndBody = { frontmatter: "", body: content, fenced: false };
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+    return notFenced;
+  }
+  const contentStart = content.indexOf("\n") + 1;
+  let lineStart = contentStart;
+  while (lineStart < content.length) {
+    const newlineAt = content.indexOf("\n", lineStart);
+    const lineEnd = newlineAt === -1 ? content.length : newlineAt;
+    const textEnd = content[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    if (content.slice(lineStart, textEnd) === "---") {
+      // The closing fence never consumes the line ending that precedes
+      // it, so the frontmatter block of `---\nfoo\n---` is `foo`.
+      let frontmatterEnd = lineStart;
+      if (content[frontmatterEnd - 1] === "\n") {
+        frontmatterEnd -= 1;
+        if (content[frontmatterEnd - 1] === "\r") frontmatterEnd -= 1;
+      }
+      const frontmatter = content.slice(contentStart, frontmatterEnd);
+      const body = newlineAt === -1 ? "" : content.slice(newlineAt + 1);
+      return { frontmatter, body, fenced: true };
+    }
+    if (newlineAt === -1) break;
+    lineStart = newlineAt + 1;
+  }
+  return notFenced;
 }
 
 const BARE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -98,8 +122,9 @@ function unquote(value: string): string {
 
 /** Assign as an own data property: a plain `target[key] = value` write for
  * the accepted key `__proto__` would invoke the inherited prototype setter
- * instead of storing the key. */
-function setOwn(target: JsonObject, key: string, value: unknown): void {
+ * instead of storing the key. Shared with the compass adapter, which faces
+ * the same accepted-key contract. */
+export function setOwn(target: JsonObject, key: string, value: unknown): void {
   Object.defineProperty(target, key, {
     value,
     writable: true,
@@ -120,8 +145,13 @@ interface Level {
 
 /** Parse a flat flow array (`[a, b]`, `[]`) into trimmed string items. A
  * comma inside a quoted item is ambiguous after a naive split, so quoted
- * items containing commas refuse outright; nested `[`/`{` items refuse too. */
-function parseFlowArray(raw: string, fail: () => never): string[] {
+ * items containing commas refuse outright in both profiles. Prefix rules
+ * are per profile: the strict `document` profile refuses empty items,
+ * bracket starts and the YAML structural prefixes (`&`, `*`, `!`); the
+ * `flat` compass profile keeps its old contract — empty parts (a trailing
+ * separator) are skipped, any interior `[`/`]` bracket refuses, and no
+ * item prefix rules apply. */
+function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => never): string[] {
   if (!raw.endsWith("]")) {
     fail();
   }
@@ -142,7 +172,27 @@ function parseFlowArray(raw: string, fail: () => never): string[] {
   const items: string[] = [];
   for (const part of inner.split(",")) {
     const item = part.trim();
-    if (item === "" || item.startsWith("[") || item.startsWith("]") || item.startsWith("{")) {
+    if (item === "") {
+      // A trailing separator yields an empty part, which the flat compass
+      // contract always discarded; the strict document profile refuses it.
+      if (profile === "flat") continue;
+      fail();
+    }
+    if (profile === "flat") {
+      if (item.includes("[") || item.includes("]")) {
+        fail();
+      }
+      items.push(item);
+      continue;
+    }
+    if (
+      item.startsWith("[") ||
+      item.startsWith("]") ||
+      item.startsWith("{") ||
+      item.startsWith("&") ||
+      item.startsWith("*") ||
+      item.startsWith("!")
+    ) {
       fail();
     }
     const first = item[0]!;
@@ -171,16 +221,23 @@ function parseFrontmatterStructure(
   frontmatter: string,
   source: string,
   profile: FrontmatterProfile,
-): { root: JsonObject; entries: Map<string, FrontmatterEntry> } {
+  collectEntries: boolean,
+): { root: JsonObject; entries: Map<string, FrontmatterEntry> | null } {
   const lines = frontmatter.split(/\r?\n/);
-  const fail = (lineIndex: number, lineText: string, reason: string): never => {
+  const fail = (lineIndex: number, lineText: string, reason: string, fix?: string): never => {
     // `+ 2` because the diagnostic contract is document-relative: the
     // opening `---` fence is document line 1, frontmatter line 0 is line 2.
-    throw new DocumentFrontmatterError(source, lineIndex + 2, lineText, reason);
+    throw new DocumentFrontmatterError(
+      source,
+      lineIndex + 2,
+      lineText,
+      reason,
+      fix ?? "rewrite the line as a supported key: scalar, list or nested-map form",
+    );
   };
 
   const root: JsonObject = {};
-  const entries = new Map<string, FrontmatterEntry>();
+  const entries = collectEntries ? new Map<string, FrontmatterEntry>() : null;
   const rootLevel: Level = { indent: -1, kind: "map", target: root, childIndent: null };
   const stack: Level[] = [rootLevel];
   /** Record the entry when a root-level key gains its value. */
@@ -193,7 +250,7 @@ function parseFrontmatterStructure(
     kind: FrontmatterEntryKind,
   ): FrontmatterEntry | undefined => {
     setOwn(target, key, value);
-    if (target !== root) return undefined;
+    if (target !== root || entries === null) return undefined;
     const entry: FrontmatterEntry = { value, rawText, line: lineIndex + 2, kind };
     entries.set(key, entry);
     return entry;
@@ -254,7 +311,12 @@ function parseFrontmatterStructure(
             item.startsWith("*") ||
             item.startsWith("!")))
       ) {
-        fail(i, raw, "unsupported list item");
+        fail(
+          i,
+          raw,
+          "unsupported list item",
+          "quote the item when it is literal text, or replace the alias, anchor, tag or flow construct with a supported scalar value",
+        );
       }
       (top.target as string[]).push(unquote(item));
       continue;
@@ -361,11 +423,14 @@ function parseFrontmatterStructure(
         }
         const blockIndent = blockLeading.length;
         if (blockLine.trim() && blockIndent <= indent) break;
-        const normalized = blockLine.startsWith(" ".repeat(indent + 2))
-          ? blockLine.slice(indent + 2)
-          : blockLine.trim()
-            ? blockLine.trim()
-            : "";
+        // The tab refusal above guarantees the measured indentation is
+        // spaces, so comparing the indent directly decides the slice.
+        const normalized =
+          blockIndent >= indent + 2
+            ? blockLine.slice(indent + 2)
+            : blockLine.trim()
+              ? blockLine.trim()
+              : "";
         blockLines.push(normalized);
         i = j;
       }
@@ -378,14 +443,38 @@ function parseFrontmatterStructure(
         fail(i, raw, "unsupported block indicator");
       }
       if (rawValue.startsWith("&") || rawValue.startsWith("*") || rawValue.startsWith("!")) {
-        fail(i, raw, "anchor, alias or tag value");
+        fail(
+          i,
+          raw,
+          "anchor, alias or tag value",
+          "quote the value when it is literal text, or replace the anchor, alias or tag with the supported scalar value",
+        );
       }
       if (rawValue.startsWith("{")) {
-        fail(i, raw, "inline flow map");
+        fail(
+          i,
+          raw,
+          "inline flow map",
+          "write the map as indented key: lines under the key, or quote the value when it is literal text",
+        );
       }
     }
     if (rawValue.startsWith("[") && (profile === "document" || /^\[.*\]$/.test(rawValue))) {
-      assign(target, key, parseFlowArray(rawValue, () => fail(i, raw, "unsupported flow array")), i, rawValue, "list");
+      assign(
+        target,
+        key,
+        parseFlowArray(rawValue, profile, () =>
+          fail(
+            i,
+            raw,
+            "unsupported flow array",
+            "write the list as indented `- item` lines, or rewrite it as a flat array of plain scalar items: [a, b]",
+          ),
+        ),
+        i,
+        rawValue,
+        "list",
+      );
       stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
       continue;
     }
@@ -403,13 +492,14 @@ function parseFrontmatterStructure(
 /** Parse the strict accepted subset of harness frontmatter. Any other line
  * form throws `DocumentFrontmatterError` with the source label, the 1-based
  * line in the document the frontmatter was extracted from and the offending
- * raw line. */
+ * raw line. The host object path never allocates the entry map — adapters
+ * that need per-key metadata use the entry API instead. */
 export function parseDocumentFrontmatter(
   frontmatter: string,
   source: string,
   profile: FrontmatterProfile = "document",
 ): JsonObject {
-  return parseFrontmatterStructure(frontmatter, source, profile).root;
+  return parseFrontmatterStructure(frontmatter, source, profile, false).root;
 }
 
 /** Entry-level companion of `parseDocumentFrontmatter` from the same single
@@ -420,12 +510,12 @@ export function parseDocumentFrontmatterEntries(
   source: string,
   profile: FrontmatterProfile = "document",
 ): Map<string, FrontmatterEntry> {
-  return parseFrontmatterStructure(frontmatter, source, profile).entries;
+  return parseFrontmatterStructure(frontmatter, source, profile, true).entries!;
 }
 
-/** Parse frontmatter without a diagnostic label. Kept as the host-facing
- * entry point: the import sites stay unchanged while the internals become
- * the strict shared parser. */
-export function parseSimpleFrontmatter(frontmatter: string): JsonObject {
-  return parseDocumentFrontmatter(frontmatter, "frontmatter");
+/** Parse frontmatter with an optional diagnostic label: a host loader passes
+ * the file it is reading so a refusal names the offending document; with no
+ * label the source reads `frontmatter`. */
+export function parseSimpleFrontmatter(frontmatter: string, source = "frontmatter"): JsonObject {
+  return parseDocumentFrontmatter(frontmatter, source);
 }
