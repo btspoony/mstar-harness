@@ -290,7 +290,7 @@ export function parseDocumentFrontmatter(frontmatter: string, source: string): J
       for (let j = i + 1; j < lines.length; j += 1) {
         const blockLine = lines[j];
         const blockLeading = blockLine.match(/^[ \t]*/)?.[0] ?? "";
-        if (blockLine.trim() && blockLeading.includes("\t")) {
+        if (blockLeading.includes("\t")) {
           fail(j, blockLine, "tab in indentation");
         }
         const blockIndent = blockLeading.length;

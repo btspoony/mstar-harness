@@ -211,6 +211,11 @@ describe("parseDocumentFrontmatter — block scalars", () => {
     const error = expectRefusal(`description: |\n\tdeeper`, 3);
     expect(error.lineText).toBe("\tdeeper");
   });
+
+  test("a whitespace-only tab line consumed into a block scalar refuses", () => {
+    const error = expectRefusal(`description: |\n  \t\n  text`, 3);
+    expect(error.lineText).toBe("  \t");
+  });
 });
 
 describe("parseDocumentFrontmatter — refused line forms", () => {
@@ -281,6 +286,15 @@ describe("extractFrontmatterAndBody — fence handling", () => {
   test("an unterminated fence is body, not frontmatter", () => {
     expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x" });
   });
+
+  test("a complete empty frontmatter block extracts empty frontmatter and the body", () => {
+    expect(extractFrontmatterAndBody(`---\n\n---\nbody`)).toEqual({ frontmatter: "", body: "body" });
+  });
+
+  test("an unterminated fence never counts as frontmatter", () => {
+    expect(extractFrontmatterAndBody(`---\nname: x`)).toEqual({ frontmatter: "", body: "---\nname: x" });
+    expect(extractFrontmatterAndBody(`---\n`)).toEqual({ frontmatter: "", body: "---\n" });
+  });
 });
 
 describe("shipped corpus — every bundled frontmatter parses", () => {
@@ -330,7 +344,7 @@ describe("shipped corpus — every bundled frontmatter parses", () => {
     for (const file of corpusFiles) {
       const content = fs.readFileSync(file, "utf8");
       const { frontmatter } = extractFrontmatterAndBody(content);
-      if (/^---\r?\n/.test(content) && frontmatter === "") {
+      if (/^---\r?\n/.test(content) && !/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(content)) {
         failures.push(`${file}: claims an opening fence but has no complete fence`);
         continue;
       }
