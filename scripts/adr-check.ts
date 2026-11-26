@@ -32,6 +32,7 @@ export type AdrFailureCode =
   | "adr.section-banned"
   | "adr.index-forbidden"
   | "adr.name-shape"
+  | "adr.implemented-superseded"
   | "adr.fence-unclosed";
 
 export type AdrFailure = {

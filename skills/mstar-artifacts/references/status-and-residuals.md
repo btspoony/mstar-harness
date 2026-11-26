@@ -11,7 +11,7 @@ Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There i
 - **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-roles/references/project-manager/workflow-close.md`「Terminal write」+「Unregister」; route → lifecycle contract §4g).
 - **ACTIVE workflow / plan state** — store `execution_*` tables, read through `mstar plan show` / `mstar status validate`. Rows hold source metadata, configuration, progress and completion. Workflow-wide integration merge exclusion is `execution_integration_leases`. Per-row execution leases are removed. `<id>` is the plan or iteration workflow id.
 - **Persist surface** — user-facing `mstar persist` and engine `ArtifactKind` accept `review` and `json` only. No internal status/snapshot writer remains. `mstar harness scaffold` does not write `status.json`.
-- **Project files** — roadmap Markdown is reviewed import/export transport/history; content authority and rules → `mstar-project-governance`. Residual registers are migration history; open items live in store issues, with project-less flows assigned to `_default`.
+- **Project files** — residual registers are migration history; open items live in store issues, with project-less flows assigned to `_default`. Project structure rules → `mstar-project-governance`.
 
 **Migration sources:** root `status.json` and the workflow snapshot are retained history. The DB execution domain is the SSOT. **open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture below）；project register 是**迁移历史**。Canonical residual definitions → **`mstar-artifacts` SKILL.md** ("Execution authority, migration sources, and open residual (summary)"); this reference covers **ACTIVE fields, severity, issue lifecycle and engine-check commands**.
 
@@ -36,7 +36,6 @@ Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There i
 - **Delivery kind is declared by live registration producers** (§1/§4a): `mstar workflow register` declares it explicitly, never infer or default it. The shared rule pairs `development` with `--branch-work`/`--branch-target` and `verification/report-only` with `--completion-policy`. Direct legacy import uses `mstar store upgrade`, not the retired standalone `migrate` producer; unresolved legacy delivery facts are reported through that upgrade's supported recovery.
 - **Physical cleanup:** separate guarded worktree cleanup, after verified row integration or terminal merged delivery. Cleanup/close never clear merge exclusion to force eligibility; direct complete releases applicable exclusion in its verified transaction. Ownership comes from retained source metadata and actual merge evidence.
 
-**`projects/<id>/roadmap.md`（legacy Markdown transport）** — frontmatter、`milestones` 与 body 的内容校验以及 store-authoritative 读写规则只见 **`mstar-project-governance`**「Roadmap 内容权威与编写约定」。本文件不另立文件读写/schema 家。
 
 ## Fail-loud handoff contract
 
@@ -134,7 +133,7 @@ Intent: clear findings in the current plan session whenever possible. Open items
 4. **`Approve with residuals`** only when every remaining open item is a true blocker-defer (Durable Roadmap Gate written) — **except `critical`** (unsafe outcome reachable on this merge, §3): a `critical` is fixed now, or the risk is explicitly accepted and the issue is **closed** per item 6, never left open as the approval's remaining item.
 5. **True defer** only: external dependency; product/scope decision for a later iteration; or explicit **current-turn** user defer — plus Durable Roadmap Gate.
 6. **`waived` / `risk-accepted`**: still require PM + user/architect alignment; **close the issue** (do not leave it open). Prefer a cheap fix over waive-as-shortcut.
-7. Plan **Done**: prefer **no open issue linked to the plan**. If any open issues remain, **every** one must be blocker-defer + roadmap and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
+7. Plan **Done**: prefer **no open issue linked to the plan**. If any open issues remain, **every** one must be blocker-defer with the Durable Roadmap Gate written and none may be `critical` (item 4); otherwise keep `InReview` / `Blocked`.
 
 ### `allow-residual`
 

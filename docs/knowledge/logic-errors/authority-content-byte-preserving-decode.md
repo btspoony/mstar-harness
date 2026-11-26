@@ -1,5 +1,5 @@
 ---
-module: packages/engine roadmap authority store + CLI roadmap authoring verbs (source decode, content/provenance hashing)
+module: packages/engine document authority store + CLI content authoring verbs (source decode, content/provenance hashing)
 date: 2026-09-25
 problem_type: logic_error
 category: logic-errors
