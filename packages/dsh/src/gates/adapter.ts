@@ -350,7 +350,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // (`document.frontmatter.absent`), so nothing in it is a declaration —
     // recording the role/category the entries parser read from that
     // undeclared block would attribute the row to fields no document
-    // declared (QC3-08). The verdict is the evidence; the ledger re-reads
+    // declared. The verdict is the evidence; the ledger re-reads
     // nothing.
     // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)
@@ -363,7 +363,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             exec,
             prompt: text,
             assignmentSource,
-            // The dispatch's ONE parse and its derived plan id (QC3-04): the
+            // The dispatch's ONE parse and its derived plan id: the
             // ledger reads the decision's map — entries `null` (malformed
             // YAML) stays final and the gate's schema layer keeps carrying
             // the structured diagnostic.

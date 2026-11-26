@@ -328,6 +328,17 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
         `write ${field.name} as a single scalar value`));
       continue;
     }
+    // The plan reader consumes a scalar declaration only (`plan_id` and the
+    // other consulted keys refuse a block scalar), so the schema refuses the
+    // same shape here: a non-blank block scalar would otherwise pass the
+    // gate and be rejected one layer later by whoever reads the plan.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    if (field.enum === undefined && requiredEntry.kind === "block-scalar") {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${requiredEntry.line}: invalid ${field.name} \u2014 accepted values: a scalar on the key line, not a block scalar`,
+        `write ${field.name}: <value> on one line`));
+      continue;
+    }
     let blankOrEmpty: boolean;
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       blankOrEmpty = String(value).trim() === "";
@@ -377,7 +388,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
       const valid = typeof entry.value === "string" && isIsoDateTime(entry.value);
       if (!valid) {
         violations.push(violation("high", "document.frontmatter.invalid",
-          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time YYYY-MM-DDTHH:mm:ssZ, optionally with a fractional-seconds part, or with a +HH:mm / -HH:mm offset`,
+          `${source}:${entry.line}: invalid ${field.name} ${JSON.stringify(entry.value)} \u2014 accepted values: ISO-8601 date-time YYYY-MM-DDTHH:mm:ssZ, optionally with a fractional-seconds part, or with a +HH:mm / -HH:mm offset between -14:00 and +14:00`,
           `set ${field.name} to an ISO-8601 date-time such as 2026-11-26T08:00:00Z`));
       }
     }

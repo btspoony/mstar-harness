@@ -52,7 +52,7 @@ import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
-import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry, type FrontmatterProfile } from "./document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, fencedCodeTracker, parseDocumentFrontmatterEntries, type FrontmatterEntry, type FrontmatterProfile } from "./document-frontmatter.js";
 import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 /**
@@ -275,7 +275,7 @@ function describeAbsence(value: string | undefined): string | undefined {
  * shape guard and the extracted-block enforcement read share it.
  * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
-const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m;
+const ASSIGNMENT_FIELD_RE = /^[ \t]*["']?(?:execute_as|delegation|task_category)["']?\s*:/m;
 
 /**
  * The ONE front matter scope of an Assignment DOCUMENT: the block inside a
@@ -1162,7 +1162,9 @@ function legacyLabelKey(line: string): string | undefined {
 export function legacyAssignmentShape(text: string): boolean {
   if (/^---[ \t]*\r?\n/.test(text)) return false;
   const found = new Set<string>();
+  const inFence = fencedCodeTracker();
   for (const line of text.split(/\r?\n/)) {
+    if (inFence(line)) continue;
     const key = legacyLabelKey(line);
     if (key !== undefined) found.add(key);
     if (found.size >= 2) return true;
@@ -1556,7 +1558,12 @@ export function readAssignmentSource(text: string, opts: { harnessDir: string | 
   // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const lines = text.split("\n");
   const first = lines.findIndex((line) => line.trim() !== "");
-  const pointerMatch = first === -1 ? null : ASSIGNMENT_POINTER_RE.exec(lines[first]!);
+  // A CRLF pointer line keeps its `\r` from the split, and `.`/`$` never match
+  // past it — without stripping it the pointer is not recognized at all and
+  // the document passes as inline text.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const firstLine = first === -1 ? "" : lines[first]!.replace(/\r$/, "");
+  const pointerMatch = first === -1 ? null : ASSIGNMENT_POINTER_RE.exec(firstLine);
   if (pointerMatch === null) return { ok: true, text };
   // Pointer plus anything else is two sources in one dispatch: refuse.
   // see docs/knowledge/architecture-patterns/assignment-file-carrier.md

@@ -1639,6 +1639,29 @@ task_budget: S — one focused implementer round
     });
   });
 
+  test("a fully quoted core key inside the fence is the same Assignment shape", () => {
+    // A quoted key is valid front matter syntax and parses to the same field,
+    // so it must enter the gate exactly as the bare spelling does — an inline
+    // quoted-key document and a pointer to the same bytes cannot disagree.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    for (const quote of ['"', "'"]) {
+      const document = [
+        "---",
+        `${quote}execute_as${quote}: fullstack-dev`,
+        `${quote}delegation${quote}: forbidden`,
+        `${quote}task_category${quote}: logic`,
+        "task_budget: S — one implementer round",
+        "working_branch: feature/foo",
+        "---",
+        "",
+        "## Assignment",
+      ].join("\n");
+      const shaped = composeDispatchGate(document, { cwd });
+      expect(shaped.shaped).toBe(true);
+      expect(shaped.violations).toEqual([]);
+    }
+  });
+
   test("an unterminated Assignment fence is refused through schema validation, never silently non-Assignment", () => {
     const result = composeDispatchGate(
       "---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard\n",
@@ -2003,6 +2026,18 @@ describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recogniz
     expect(legacyAssignmentShape(`${VALID_ASSIGNMENT}\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n`)).toBe(false);
   });
 
+  test("retired labels quoted inside a fenced example are not the legacy shape", () => {
+    // A prompt that quotes the old template in a fenced block declares
+    // nothing: without fence awareness it was a terminal legacy refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const backtick = ["## Assignment", "", "```markdown", "**Execute as**: fullstack-dev", "**Delegation**: forbidden", "```", ""].join("\n");
+    expect(legacyAssignmentShape(backtick)).toBe(false);
+    const tilde = ["## Assignment", "", "~~~markdown", "**Execute as**: fullstack-dev", "**Delegation**: forbidden", "~~~", ""].join("\n");
+    expect(legacyAssignmentShape(tilde)).toBe(false);
+    // Unfenced labels outside the example still shape the document.
+    expect(legacyAssignmentShape(`${backtick}\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n`)).toBe(true);
+  });
+
   test("the violation names both recoveries, the rewritten-target rule, and is terminal", () => {
     const v = legacyFormatViolation();
     expect(v.code).toBe("dispatch.assignment.legacy-format");
@@ -2269,6 +2304,19 @@ describe("readAssignmentSource — provenance, terminal refusals, file-type guar
     const result = readAssignmentSource(`Assignment file: ${link}\n`, { harnessDir });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(FILE_ASSIGNMENT);
+  });
+
+  test("a CRLF pointer line is the pointer form, not inline text", () => {
+    // The split keeps `\r` on the first line, where `.`/`$` never match past
+    // it — without stripping it the pointer went unrecognized and the text
+    // passed as an inline document.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const file = homeFile([".mstar", "assignments"], "crlf.md");
+    const result = readAssignmentSource(`Assignment file: ${file}\r\n`, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.path).toBe(file);
     expect(result.text).toBe(FILE_ASSIGNMENT);
   });
 

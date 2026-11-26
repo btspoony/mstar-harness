@@ -636,6 +636,27 @@ describe("validateDocumentFrontmatter — strict ISO-8601 generated_at", () => {
     expect(acceptance("Z")).toBe(true);
   });
 
+  test("the offset refusal names the accepted ±14:00 range", () => {
+    const gate = validateDocumentFrontmatter(
+      "pm-acceptance",
+      doc(ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2026-11-26T08:00:00+14:01")),
+      "acceptance",
+    );
+    const message = onlyViolation(gate).message;
+    expect(message).toContain("-14:00 and +14:00");
+  });
+
+  test("a block scalar is refused where the schema requires a scalar", () => {
+    // The plan reader consumes a scalar declaration only, so a non-blank
+    // block scalar must not pass the schema and fail one layer later.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const gate = validateDocumentFrontmatter("plan", doc(PLAN_FM.replace("plan_id: 20261201-synthetic-plan", "plan_id: |\n  the-plan")), "plan");
+    const v = onlyViolation(gate);
+    expect(v.code).toBe("document.frontmatter.invalid");
+    expect(v.message).toContain("plan_id");
+    expect(v.message).toContain("block scalar");
+  });
+
   test("leap day 2024-02-29 passes, 2026-02-29 fails", () => {
     const leap = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2024-02-29T08:00:00Z");
     expect(validateDocumentFrontmatter("pm-acceptance", doc(leap), "acceptance").ok).toBe(true);

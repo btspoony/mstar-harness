@@ -28,7 +28,7 @@ import type { Config } from './_shared.ts'
  * the snake_case key inside the document's own fence declares the shape).
  * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
-const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m
+const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*["']?(?:execute_as|delegation|task_category)["']?\s*:/m
 
 /**
  * True when the document OPENS with a front matter fence that carries a core
@@ -143,6 +143,11 @@ function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntr
  * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
+  // A one-item list declares the same single value as its scalar spelling
+  // (`worktree_path: /x` vs `worktree_path: [/x]`), so it must not read as
+  // absent; two or more items are the parallel shape and stay list-only.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  if (Array.isArray(entry.value) && entry.value.length === 1 && typeof entry.value[0] === 'string') return entry.value[0]
   if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
   if (typeof entry.value === 'string') return entry.value
   // A number/boolean is TYPED by the document profile; the written lexeme is

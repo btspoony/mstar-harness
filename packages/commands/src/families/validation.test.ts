@@ -236,6 +236,32 @@ describe("assignment files resolve through the ONE source resolver", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("worktree qc-alignment names a duplicate key instead of three missing fields", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-align-dup-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      const document = join(harness, "assignments", "dup.md");
+      writeFileSync(document, `---\nplan_id: 20261125-demo\nplan_id: 20261125-other\nreview_range: ac6bda660..HEAD\ndiff_basis: git\n---\n\n## Task\n\nReview.\n`);
+
+      const duplicate = await runVerb("worktree.qc-alignment", root, { files: [document] }, harness);
+
+      expect(duplicate.status).toBe("refused");
+      // The repeated key blocks the read; reporting plan_id/review_range/
+      // diff_basis as missing would send the caller after the wrong defect.
+      expect(duplicate).toMatchObject({ code: "qc.alignment.field.duplicate" });
+      if (duplicate.status === "refused") expect(duplicate.message).toContain("duplicate");
+
+      // A genuinely absent field still reports as missing.
+      const absent = join(harness, "assignments", "absent.md");
+      writeFileSync(absent, `---\nplan_id: 20261125-demo\n---\n\n## Task\n\nReview.\n`);
+      const missing = await runVerb("worktree.qc-alignment", root, { files: [absent] }, harness);
+      expect(missing).toMatchObject({ code: "qc.alignment.field.missing" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 const ACCEPTANCE_REPORT = `---

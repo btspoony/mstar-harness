@@ -513,6 +513,7 @@ export type { FrontmatterAndBody, FrontmatterEntry, JsonObject } from "./documen
 export {
   DocumentFrontmatterError,
   extractFrontmatterAndBody,
+  fencedCodeTracker,
   parseDocumentFrontmatterEntries,
   parseDocumentFrontmatter,
   parseSimpleFrontmatter,

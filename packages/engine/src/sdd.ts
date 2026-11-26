@@ -59,7 +59,7 @@ import {
   resolveSddDir,
 } from "./path.js";
 import { planDeclaredHeaders, planDeclaredHeadersFromContent } from "./plan-path.js";
-import { extractFrontmatterAndBody, quoteFrontmatterScalar } from "./document-frontmatter.js";
+import { extractFrontmatterAndBody, fencedCodeTracker, quoteFrontmatterScalar } from "./document-frontmatter.js";
 import { validateDocumentFrontmatter } from "./document-schema.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
@@ -409,12 +409,14 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   const records = body.endsWith("\n") ? body.split("\n").slice(0, -1) : body.split("\n");
   const headingRe = /^#+[ \t]+Task[ \t]+[0-9]+/;
   const targetRe = new RegExp(`^#+[ \t]+Task[ \t]+${taskN}([^0-9]|$)`);
-  let infence = false;
   let intask = false;
   const printed: string[] = [];
+  // Both fence kinds hide a heading: a `~~~`-fenced `## Task 2` example
+  // inside Task 1 must not open a new task slice.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const inFence = fencedCodeTracker();
   for (const line of records) {
-    if (/^```/.test(line)) infence = !infence;
-    if (!infence && headingRe.test(line)) intask = targetRe.test(line);
+    if (!inFence(line) && headingRe.test(line)) intask = targetRe.test(line);
     if (intask) printed.push(line);
   }
   if (printed.length === 0) {
@@ -435,13 +437,12 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
     );
   }
   const files = new Set<string>();
-  let entryFence = false;
+  // Both fence kinds mask an entry: a `Modify:` line inside a `~~~` example
+  // is quoted text, not a file the task touches.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const inEntryFence = fencedCodeTracker();
   for (const line of printed) {
-    if (/^```/.test(line)) {
-      entryFence = !entryFence;
-      continue;
-    }
-    if (entryFence) continue;
+    if (inEntryFence(line)) continue;
     const entry = /^- (?:Create|Modify|Test|Delete|Rename): `([^`]+)`/.exec(line);
     if (entry !== null) files.add(entry[1]!);
   }

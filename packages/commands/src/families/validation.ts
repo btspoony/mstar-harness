@@ -16,6 +16,7 @@ import {
   activeLifecyclePlanId,
   completenessLevel,
   declaredAssignmentBranches,
+  DocumentFrontmatterError,
   executionModeToN,
   extractFrontmatterAndBody,
   parseDocumentFrontmatterEntries,
@@ -308,19 +309,30 @@ function collectTargets(dir: string, accept: (file: string) => boolean = (file) 
 }
 /** why: D16 — the QC alignment fields are Assignment front matter keys, so
  * this reads the fenced block ONLY; a `**Label**: value` body line is never a
- * declaration and never satisfies the alignment check. Invalid front matter
- * yields "" (the caller reports the field as missing).
+ * declaration and never satisfies the alignment check. One parse for the
+ * three keys. A parse refusal is NOT three missing fields: a repeated key is
+ * returned as `duplicate` so the refusal names the line that blocks
+ * validation, while genuinely absent keys still produce the missing rows.
  * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
-function frontMatterScalar(text: string, key: string): string {
+function frontMatterScalars(text: string): { planId: string; reviewRange: string; diffBasis: string; duplicate?: string } {
+  const empty = { planId: "", reviewRange: "", diffBasis: "" };
   const { frontmatter } = extractFrontmatterAndBody(text);
-  if (frontmatter === "") return "";
+  if (frontmatter === "") return empty;
+  let entries: ReturnType<typeof parseDocumentFrontmatterEntries>;
   try {
-    const value = parseDocumentFrontmatterEntries(frontmatter, "assignment").get(key)?.value;
-    return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
-  } catch {
-    return "";
+    entries = parseDocumentFrontmatterEntries(frontmatter, "assignment");
+  } catch (error) {
+    if (error instanceof DocumentFrontmatterError && error.message.includes("duplicate key")) {
+      return { ...empty, duplicate: error.message };
+    }
+    return empty;
   }
+  const scalar = (key: string): string => {
+    const value = entries.get(key)?.value;
+    return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+  };
+  return { planId: scalar("plan_id"), reviewRange: scalar("review_range"), diffBasis: scalar("diff_basis") };
 }
 /**
  * why: every validation verb that reads a named assignment file goes through
@@ -680,6 +692,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // document it names).
         // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         const assignments: QcAlignmentAssignment[] = [];
+        let duplicate: string | undefined;
         for (const named of files) {
           const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
@@ -691,11 +704,19 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               source.code,
             );
           }
+          const scalars = frontMatterScalars(source.text);
+          duplicate ??= scalars.duplicate;
           assignments.push({
-            planId: frontMatterScalar(source.text, "plan_id"),
-            reviewRange: frontMatterScalar(source.text, "review_range"),
-            diffBasis: frontMatterScalar(source.text, "diff_basis"),
+            planId: scalars.planId,
+            reviewRange: scalars.reviewRange,
+            diffBasis: scalars.diffBasis,
           });
+        }
+        // A duplicate key blocks validation itself, so naming three absent
+        // fields would send the caller after the wrong defect.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        if (duplicate !== undefined) {
+          return refusal(id, "qc.alignment.field.duplicate", `duplicate front matter key blocks the QC alignment read: ${duplicate}`, { assignments }, "Remove the repeated key line from the Assignment front matter, then rerun mstar worktree qc-alignment <assignment-file>.");
         }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
           { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "review_range" }, { key: "diffBasis", label: "diff_basis" },

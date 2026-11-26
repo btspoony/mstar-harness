@@ -395,6 +395,39 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("e")!.value).toBe(`"hard`);
   });
 
+  test("a double-quoted flat scalar decodes the JSON escape set, an invalid escape stays literal", () => {
+    // The roadmap export writes values with `JSON.stringify`, so every escape
+    // it can emit must decode back to the written character; an escape JSON
+    // does not accept is not syntax and keeps the whole scalar's literal text.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const entries = parseDocumentFrontmatterEntries(
+      [
+        `n: "a\\nb"`,
+        `t: "a\\tb"`,
+        `r: "a\\rb"`,
+        `quote: "a\\"b"`,
+        `backslash: "a\\\\b"`,
+        `slash: "a\\/b"`,
+        `backspace: "a\\bb"`,
+        `formfeed: "a\\fb"`,
+        `unicode: "caf\\u00e9"`,
+        `invalid: "a\\qb"`,
+      ].join("\n"),
+      "spec-source",
+      "flat",
+    );
+    expect(entries.get("n")!.value).toBe("a\nb");
+    expect(entries.get("t")!.value).toBe("a\tb");
+    expect(entries.get("r")!.value).toBe("a\rb");
+    expect(entries.get("quote")!.value).toBe(`a"b`);
+    expect(entries.get("backslash")!.value).toBe("a\\b");
+    expect(entries.get("slash")!.value).toBe("a/b");
+    expect(entries.get("backspace")!.value).toBe("a\bb");
+    expect(entries.get("formfeed")!.value).toBe("a\fb");
+    expect(entries.get("unicode")!.value).toBe("café");
+    expect(entries.get("invalid")!.value).toBe("a\\qb");
+  });
+
   test("a nested map refuses in the flat profile with source, line and line text", () => {
     let error: DocumentFrontmatterError | null = null;
     try {

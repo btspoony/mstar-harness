@@ -106,6 +106,31 @@ export function extractFrontmatterAndBody(content: string): FrontmatterAndBody {
 
 const BARE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
+/**
+ * The ONE fenced-code tracker over a document's lines. CommonMark fences: a
+ * run of 3+ backticks or 3+ tildes opens, and only the SAME character with a
+ * run at least as long (and nothing but whitespace after it) closes. Callers
+ * that must ignore quoted examples (a body-label template, a `Modify:` entry,
+ * a `## Task` heading inside a sample) walk their lines through this instead
+ * of keeping a backtick-only copy.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+export function fencedCodeTracker(): (line: string) => boolean {
+  let open: string | undefined;
+  return (line: string): boolean => {
+    const marker = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (open === undefined) {
+      if (marker === null) return false;
+      open = marker[1]!;
+      return true;
+    }
+    if (marker !== null && marker[1]![0] === open[0] && marker[1]!.length >= open.length && marker[2]!.trim() === "") {
+      open = undefined;
+    }
+    return true;
+  };
+}
+
 function parseScalar(raw: string): string | number | boolean | null {
   const value = raw.trim();
   if (value === "true") return true;
@@ -124,9 +149,17 @@ function parseScalar(raw: string): string | number | boolean | null {
  */
 function decodeFlatScalar(raw: string): string {
   if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') {
-    return raw.slice(1, -1).replace(/\\(.)/g, (_, ch: string) =>
-      ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
-    );
+    // The roadmap export writes values with `JSON.stringify`, so a
+    // double-quoted scalar is a JSON string: the platform decoder handles the
+    // claimed escape set (`\n`, `\t`, `\r`, `\"`, `\\`, `\/`, `\b`, `\f`,
+    // `\uXXXX`) and a surrogate pair exactly. An escape JSON does not accept
+    // (`"x\qy"`) is not syntax, so the whole scalar keeps its literal text.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    try {
+      return JSON.parse(raw) as string;
+    } catch {
+      return raw.slice(1, -1);
+    }
   }
   // Only a matching boundary PAIR is syntax. A one-sided or mismatched quote
   // (`hard'`, `'hard`, `"hard'`) is literal text: stripping it would decode

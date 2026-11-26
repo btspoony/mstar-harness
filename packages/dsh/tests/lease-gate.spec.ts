@@ -321,6 +321,21 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.worktree-mismatch')
   })
 
+  it('a one-item worktree_path list behaves like the scalar it declares', async () => {
+    // A one-item list is the same single declaration as the scalar spelling,
+    // so it must not read as absent (which was a worktree-mismatch advisory).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+
+    const oneItem = SDD_ASSIGNMENT.replace(`worktree_path: ${WORKTREE}`, `worktree_path:\n- ${WORKTREE}`)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(oneItem), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
   it('Assignment Working branch differs from the row scope → advisory lease.dispatch.branch-mismatch', async () => {
     const app = booted = await bootApp()
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)

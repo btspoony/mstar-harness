@@ -723,6 +723,37 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     }
   });
 
+  test("a tilde-fenced example is not an ownership entry and hides no heading boundary", () => {
+    // Both fence kinds are examples: a `Modify:` line inside `~~~` is not a
+    // task file, and a `### Task 3` heading inside `~~~` does not open a new
+    // slice. Tracking only backticks read both as real content.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "**Files:**",
+      "- Create: `src/real.ts`",
+      "",
+      "~~~text",
+      "- Modify: `src/quoted.ts`",
+      "### Task 2: quoted heading",
+      "~~~",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("tilde-fence-plan", body));
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const { header, body: briefBody } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("files")).toEqual(["src/real.ts"]);
+      expect(briefBody).toContain("### Task 2: quoted heading");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a task without Files entries writes no files key", () => {
     const { dir, plan } = writePlan();
     try {

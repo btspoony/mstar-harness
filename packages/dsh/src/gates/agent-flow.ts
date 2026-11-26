@@ -1000,7 +1000,7 @@ export function recordDispatch(input: {
     // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const assignmentSource = input.assignmentSource ?? readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
     const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
-    // ONE parse serves the decision, the handoff and the ledger (QC3-04): the
+    // ONE parse serves the decision, the handoff and the ledger: the
     // gate's entries when handed in — a failed parse (`null`) and a derived
     // absent plan id are FINAL, never a reason to read the text again — else
     // one local parse for direct callers. taskIdOf scans the body slice only

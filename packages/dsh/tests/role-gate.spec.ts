@@ -1257,17 +1257,22 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
 
 describe('dispatch-role gate — canonical front matter rewrite', () => {
   it('prepends a front matter block when the prompt opens otherwise', () => {
-    expect(rewritePromptWithExecuteAs('Implement the work.', EXECUTE_AS)).toBe(
-      '---\nexecute_as: fullstack-dev\n---\n\nImplement the work.',
-    )
-    expect(rewritePromptWithExecuteAs('## Assignment\n\nSome prose.\n', EXECUTE_AS)).toBe(
-      '---\nexecute_as: fullstack-dev\n---\n\n## Assignment\n\nSome prose.\n',
-    )
+    const bare = rewritePromptWithExecuteAs('Implement the work.', EXECUTE_AS)
+    expect(parseAssignmentFields(bare).executeAs).toBe(EXECUTE_AS)
+    expect(bare.endsWith('\n\nImplement the work.')).toBe(true)
+    const headed = '## Assignment\n\nSome prose.\n'
+    const rewritten = rewritePromptWithExecuteAs(headed, EXECUTE_AS)
+    expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+    expect(rewritten.endsWith(headed)).toBe(true)
   })
 
   it('replaces an unusable existing `execute_as` scalar in place (no duplicate key)', () => {
     const rewritten = rewritePromptWithExecuteAs('---\nexecute_as: `fullstack-dev`\ndelegation: forbidden\n---\n', EXECUTE_AS)
-    expect(rewritten).toBe('---\nexecute_as: fullstack-dev\ndelegation: forbidden\n---\n')
+    // The repair is proven by what the seam reads, not by a transcript of the
+    // whole document: the role resolves and the unrelated field survives.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+    expect(parseAssignmentFields(rewritten).delegation).toBe('forbidden')
     expect(rewritten.match(/execute_as/g)).toHaveLength(1)
   })
 
@@ -1276,22 +1281,28 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
       '---\nrole: `fullstack-dev`\nact_as: **fullstack-dev**\n---\n',
       EXECUTE_AS,
     )
-    expect(rewritten).toBe('---\nexecute_as: fullstack-dev\n---\n')
+    expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+    expect(rewritten.match(/execute_as/g)).toHaveLength(1)
+    expect(rewritten).not.toContain('act_as')
+    expect(rewritten).not.toContain('role:')
   })
 
   it('normalizes the key of a case-variant declaration to `execute_as`', () => {
-    expect(rewritePromptWithExecuteAs('---\nExecute_As: `fullstack-dev`\n---\n', EXECUTE_AS)).toBe(
-      '---\nexecute_as: fullstack-dev\n---\n',
-    )
-    expect(rewritePromptWithExecuteAs('---\nROLE: fullstack-dev\n---\n', EXECUTE_AS)).toBe(
-      '---\nexecute_as: fullstack-dev\n---\n',
-    )
+    for (const document of ['---\nExecute_As: `fullstack-dev`\n---\n', '---\nROLE: fullstack-dev\n---\n']) {
+      const rewritten = rewritePromptWithExecuteAs(document, EXECUTE_AS)
+      expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+      expect(rewritten.match(/execute_as/g)).toHaveLength(1)
+    }
   })
 
   it('splices `execute_as` as the first line of an existing front matter block without a role key', () => {
-    expect(rewritePromptWithExecuteAs('---\ndelegation: forbidden\n---\n\n## Task\n', EXECUTE_AS)).toBe(
-      '---\nexecute_as: fullstack-dev\ndelegation: forbidden\n---\n\n## Task\n',
-    )
+    const body = '## Task\n'
+    const rewritten = rewritePromptWithExecuteAs(`---\ndelegation: forbidden\n---\n\n${body}`, EXECUTE_AS)
+    const fields = parseAssignmentFields(rewritten)
+    expect(fields.executeAs).toBe(EXECUTE_AS)
+    expect(fields.delegation).toBe('forbidden')
+    // The body is untouched: the spliced header is the only change.
+    expect(rewritten.endsWith(`---\n\n${body}`)).toBe(true)
   })
 
   it('preserves the rest of the prompt byte-for-byte', () => {
