@@ -73,6 +73,7 @@ import {
   parseAssignmentFields,
   parseSimpleFrontmatter,
   probeCollaborationAuthority,
+  readAssignmentSource,
   readJson,
   resolveExecutionReadRoute,
   resolveHarnessDir,
@@ -82,7 +83,7 @@ import {
   validateStatus,
   validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -595,6 +596,55 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind): GateResult {
 }
 
 /**
+ * Shape-guard match of a retired body-label core field in ANY of its three
+ * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
+ * list-prefixed `- **Execute as**:` line (indentation and a numeric or
+ * bullet list marker are formatting, never the field; commands
+ * validation.ts parity — one detection grammar across every gate).
+ * Detection ONLY: it never reads a field value — the carrier is never
+ * field-parsed with a label regex.
+ */
+function legacyLabelKey(line: string): string | undefined {
+  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
+  return match?.[1];
+}
+
+/**
+ * D16 shape detection: true when the document carries its fields in the
+ * RETIRED body-label grammar — at least TWO distinct core labels, so a
+ * single bolded field line in ordinary prose never shapes a document as an
+ * Assignment; the `## Assignment` heading is irrelevant either way
+ * (commands `dispatch validate` / dsh parity).
+ */
+function legacyAssignmentShape(text: string): boolean {
+  if (/^---[ \t]*\r?\n/.test(text)) return false;
+  const found = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const key = legacyLabelKey(line);
+    if (key !== undefined) found.add(key);
+    if (found.size >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * The D16 legacy-format refusal violation emitted for an Assignment-shaped
+ * document whose fields live in body lines (the retired format): front
+ * matter is the only field contract. The refusal names BOTH recoveries —
+ * the front matter rewrite and the `Assignment file:` pointer — so the
+ * caller reads the ONE contract out of any gate.
+ */
+function legacyFormatViolation(): ValidationResult {
+  return {
+    ok: false,
+    severity: "high",
+    code: "dispatch.assignment.legacy-format",
+    message: "the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract",
+    fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
+  };
+}
+
+/**
  * Dispatch-side Assignment validation (roadmap §8.5 `beforeDispatch`).
  *
  * Delegates the entire composition to the engine's single shared
@@ -664,15 +714,42 @@ export function validateDispatchAssignment(
     if (typeof assignmentText !== "string") {
       return { ok: true, violations: [] };
     }
+ // compass D14 — resolve the Assignment source ONCE through the engine
+ // resolver (inline front-matter passthrough or the `Assignment file:
+ // <abs>` pointer, containment-checked against the control harness root).
+ // A refusal is itself the verdict: validating the pointer text would
+ // report field violations on the wrong body. A null root refuses the
+ // pointer (`dispatch.assignment.path`) — containment is never skipped.
+    const harnessDir = resolveHarnessDir();
+    const source = readAssignmentSource(assignmentText, { harnessDir });
+    let violations: ValidationResult[];
+    let enforcementHard = false;
+    if (!source.ok) {
+      violations = [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }];
+    } else {
+      const text = source.text;
+      // D16 — an Assignment-shaped document whose fields live in the
+      // retired body-label grammar is refused
+      // `dispatch.assignment.legacy-format`; the refusal supersedes the
+      // schema's absent-fence row for the same unfenced text (one defect,
+      // one message).
+      const legacy = legacyAssignmentShape(text);
+      violations = legacy ? [legacyFormatViolation()] : [];
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
-    const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
-    const composed = composeDispatchGate(assignmentText, { writable });
+      const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
+      const composed = composeDispatchGate(text, { writable });
+      violations.push(
+        ...composed.violations.filter(
+          (violation) => !(legacy && violation.code === "document.frontmatter.absent"),
+        ),
+      );
+      enforcementHard = composed.enforcement.hard;
+    }
  // Header flag, else repo-level hard (`.mstarc` → compass) — the same
  // precedence the status-write gate and dsh dispatches honor.
-    const harnessDir = resolveHarnessDir();
-    const hard = composed.enforcement.hard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
-    const gated: GateResult = applyEnforcement(composed, { hard });
+    const hard = enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
+    const gated: GateResult = applyEnforcement({ ok: violations.length === 0, violations }, { hard });
 
     if (!gated.ok) {
       for (const violation of gated.violations) {

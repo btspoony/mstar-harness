@@ -337,3 +337,147 @@ describe("omp Gate-1 authority path resolution (issue #442)", () => {
     }
   });
 });
+/** Fully valid writable Assignment in the front matter field contract. */
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/omp-gate-test
+task_budget: S — one focused implementer round
+---
+
+## Assignment
+
+Do the thing, evidence-first.
+`;
+
+/** The retired body-label format of {@link VALID_WRITABLE} — same fields as
+ * `**Label**` body lines (the format front matter replaced). */
+const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/omp-gate-test
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`;
+
+describe("omp Gate-2 — D14/D16 assignment source (pointer parity and legacy refusal)", () => {
+  /** A soft-enforcement tree chdir'd for the suite: the root supplies the
+   * control harness home the pointer resolver contains against. */
+  let root = "";
+  let harness = "";
+  let previousCwd = "";
+  beforeAll(() => {
+    const base = mkdtempSync(join(tmpdir(), "omp-gate2-"));
+    root = join(base, "gate2");
+    mkdirSync(root, { recursive: true });
+    harness = join(root, ".mstar");
+    mkdirSync(join(harness, "workflows"), { recursive: true });
+    mkdirSync(join(harness, "projects"), { recursive: true });
+    writeFileSync(join(harness, "status.json"), VALID_STATUS);
+    writeCompass(harness, "soft");
+    gitInit(root);
+    previousCwd = process.cwd();
+    process.chdir(root);
+  });
+  afterAll(() => {
+    process.chdir(previousCwd);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function gate2(): { handler: (event: unknown) => Promise<unknown>; warnings: string[] } {
+    const warnings: string[] = [];
+    let handler: ((event: unknown) => Promise<unknown>) | undefined;
+    mstarGates({
+      on: (_event: string, fn: (event: unknown) => Promise<unknown>) => {
+        handler = fn;
+      },
+      logger: { warn: (m: string) => warnings.push(m), error: () => undefined },
+    } as never);
+    if (handler === undefined) throw new Error("handler was not registered");
+    return { handler, warnings };
+  }
+
+  function dispatchEvent(task: string): unknown {
+    return {
+      toolName: "task",
+      input: { name: "impl", agent: "fullstack-dev", task },
+    };
+  }
+
+  test("a pointer under an accepted assignment home passes exactly like the inline form", async () => {
+    const inline = gate2();
+    expect(await inline.handler(dispatchEvent(VALID_WRITABLE))).toBeUndefined();
+
+    mkdirSync(join(harness, "assignments"), { recursive: true });
+    const file = join(harness, "assignments", "pointer-target.md");
+    writeFileSync(file, VALID_WRITABLE);
+    const pointer = gate2();
+    expect(await pointer.handler(dispatchEvent(`Assignment file: ${file}`))).toBeUndefined();
+  });
+
+  test("a pointer to a violating assignment blocks exactly like the inline form under hard enforcement", async () => {
+    const violating = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: XS — one implementer round
+---
+
+## Assignment
+
+No branch form here.
+`;
+    const inline = gate2();
+    const inlineResult = (await inline.handler(dispatchEvent(violating))) as { block: boolean; reason: string } | undefined;
+    expect(inlineResult?.block).toBe(true);
+    expect(inlineResult?.reason).toContain("assignment.field.branch-missing");
+
+    mkdirSync(join(harness, "assignments"), { recursive: true });
+    const file = join(harness, "assignments", "hard-pointer-target.md");
+    writeFileSync(file, violating);
+    const pointer = gate2();
+    const pointerResult = (await pointer.handler(dispatchEvent(`Assignment file: ${file}`))) as { block: boolean; reason: string } | undefined;
+    expect(pointerResult?.block).toBe(true);
+    expect(pointerResult?.reason).toContain("assignment.field.branch-missing");
+  });
+
+  test("an out-of-home pointer refuses dispatch.assignment.path (warn mode advisory)", async () => {
+    const gate = gate2();
+    const outside = join(root, "outside-assignment.md");
+    writeFileSync(outside, VALID_WRITABLE);
+    const result = (await gate.handler(dispatchEvent(`Assignment file: ${outside}`))) as { block: boolean } | undefined;
+    // Soft compass: advisory, never a block.
+    expect(result).toBeUndefined();
+    expect(gate.warnings.join("\n")).toContain("dispatch.assignment.path");
+  });
+
+  test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", async () => {
+    const gate = gate2();
+    const result = (await gate.handler(dispatchEvent(LEGACY_BODY_LABEL))) as { block: boolean } | undefined;
+    expect(result).toBeUndefined();
+    const joined = gate.warnings.join("\n");
+    expect(joined).toContain("dispatch.assignment.legacy-format");
+    expect(joined).toContain("front-matter document");
+    expect(joined).toContain("Assignment file:");
+    expect(joined).not.toContain("document.frontmatter.absent");
+  });
+
+  test("the legacy refusal blocks under the document-own hard enforcement tree", async () => {
+    // Hard compass in the chdir'd tree: the same legacy document must block.
+    writeCompass(harness, "hard");
+    try {
+      const gate = gate2();
+      const result = (await gate.handler(dispatchEvent(LEGACY_BODY_LABEL))) as { block: boolean; reason: string } | undefined;
+      expect(result?.block).toBe(true);
+      expect(result?.reason).toContain("dispatch.assignment.legacy-format");
+    } finally {
+      writeCompass(harness, "soft");
+    }
+  });
+});
+
