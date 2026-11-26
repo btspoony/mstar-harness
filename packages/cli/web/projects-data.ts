@@ -249,6 +249,54 @@ export async function writeMilestone(
   }
 }
 
+/**
+ * What one settled milestone write does to the open page.
+ *
+ * The page's whole conflict contract is this function's output, so it is asserted
+ * without a DOM:
+ *
+ *  - an ACCEPTED write moved the store: the overview read re-issues (the forms must
+ *    re-arm on the new revision) and the operator's draft is cleared;
+ *  - `milestone.revision-conflict` also moved the store: the read re-issues so the
+ *    next submission carries the fresh revision — and the draft is KEPT, because
+ *    the text the operator typed is theirs and only an accepted write replaces it;
+ *  - an input refusal or any other terminal refusal wrote nothing: no re-read (a
+ *    reload would unmount the forms mid-edit for no fact) and the draft stays;
+ *  - an ambiguous transport failure (`transport-error`) is not a verdict: nothing
+ *    re-reads and the draft stays, so a retry replays the engine's receipt;
+ *  - an assignment moves an ISSUE as well, so the scoped list/picker re-read too.
+ */
+export type MilestoneWriteFollowUp = {
+  /** Re-issue the overview read (the forms' revision and the milestone body). */
+  readonly reloadOverview: boolean;
+  /** Re-issue the scoped Issues list and the assign picker. */
+  readonly refreshIssues: boolean;
+  /** Keep the operator's typed draft (`false` clears it after an accepted write). */
+  readonly keepDraft: boolean;
+  /** Surface this refusal message, or `null` after an accepted write. */
+  readonly refusal: string | null;
+  /** Keep the logical write's operation id/revision for a retry of the same intent. */
+  readonly retainOperation: boolean;
+};
+
+/** The page's conflict/idempotency policy for one settled milestone write. */
+export function milestoneWriteFollowUp(
+  request: { readonly verb: MilestoneMutationRequest["verb"] },
+  result: { status: "ok"; receipt: unknown } | { status: "refused"; code: string; message: string },
+): MilestoneWriteFollowUp {
+  const accepted = result.status === "ok";
+  const ambiguous = result.status === "refused" && result.code === "transport-error";
+  const conflict = result.status === "refused" && result.code === "milestone.revision-conflict";
+  const reloadOverview = accepted || conflict;
+  return {
+    reloadOverview,
+    refreshIssues: reloadOverview && request.verb === "assign",
+    keepDraft: !accepted,
+    refusal: result.status === "refused" ? result.message : null,
+    retainOperation: ambiguous,
+  };
+}
+
 /** The project ids the filter bar offers, from the shared list read. */
 export function projectOptions(model: ProjectListModel): readonly string[] {
   return model.rows.kind === "populated" ? model.rows.value.map((row) => row.projectId) : [];

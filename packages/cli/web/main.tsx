@@ -95,6 +95,7 @@ import {
   readProjects,
   projectMilestonesOutcome,
   milestoneWriteIds,
+  milestoneWriteFollowUp,
   writeMilestone,
   type AssignableIssuesRead,
   type MilestoneMutationRequest,
@@ -866,21 +867,17 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       operationId: retained.operationId,
       expectedStoreRevision: retained.request.expectedStoreRevision,
     }).then((result) => {
-      const ambiguous = result.status === "refused" && result.code === "transport-error";
-      if (!ambiguous) operationIds.settled();
-      setWritesState({ busy: false, refusal: result.status === "refused" ? result.message : null });
-      // why: a re-read is only right when the store MOVED — an accepted write, or the
-      // engine's own revision-conflict verdict. Reloading after an input refusal would
-      // unmount the forms mid-edit for no fact; reloading an ambiguous failure would
-      // turn the retry into a different request.
-      if (ambiguous) return;
-      if (result.status === "ok" || result.code === "milestone.revision-conflict") {
-        setReloadToken((token) => token + 1);
-        // An assignment moves an issue's milestone and revision, so the scoped list
-        // and the picker both re-read — the assigned issue leaves the offer set, and
-        // an unassigned one comes back at its new revision.
-        if (request.verb === "assign") setIssuesRefreshToken((token) => token + 1);
-      }
+      // The whole policy lives in one asserted function: accepted → re-read and clear
+      // the draft; conflict → re-read and KEEP it; input refusal → neither; ambiguous
+      // transport failure → retain the operation for a replay.
+      const followUp = milestoneWriteFollowUp(request, result);
+      if (!followUp.retainOperation) operationIds.settled();
+      setWritesState({ busy: false, refusal: followUp.refusal });
+      if (followUp.reloadOverview) setReloadToken((token) => token + 1);
+      // An assignment moves an issue's milestone and revision, so the scoped list and
+      // the picker both re-read — the assigned issue leaves the offer set, and an
+      // unassigned one comes back at its new revision.
+      if (followUp.refreshIssues) setIssuesRefreshToken((token) => token + 1);
     });
   }
 

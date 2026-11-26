@@ -24,6 +24,7 @@ import {
 
 import {
   MILESTONE_WRITE_PATH,
+  milestoneWriteFollowUp,
   projectDetailCopy,
   projectOverviewPath,
   projectOptions,
@@ -419,5 +420,71 @@ describe("the detail's fixed feature set", () => {
     for (const removed of ["1224", "storeRevision", "catalogRevision", "builtAt", "checkedAt", "sourceHash"]) {
       expect(html).not.toContain(removed);
     }
+  });
+});
+
+describe("the page's conflict policy (the production re-read and draft rules)", () => {
+  // The assertions fail if `main.tsx` drops the automatic re-read or clears drafts:
+  // the page has no policy of its own left to drift — it renders this function's
+  // output (reloadOverview → reload token, keepDraft → the draft store, etc.).
+  const accepted = { status: "ok" as const, receipt: null };
+
+  test("an accepted write re-reads the overview and CLEARS the draft", () => {
+    expect(milestoneWriteFollowUp({ verb: "update" }, accepted)).toEqual({
+      reloadOverview: true,
+      refreshIssues: false,
+      keepDraft: false,
+      refusal: null,
+      retainOperation: false,
+    });
+  });
+
+  test("a revision conflict re-reads the overview and KEEPS the typed draft", () => {
+    const conflict = milestoneWriteFollowUp(
+      { verb: "update" },
+      { status: "refused", code: "milestone.revision-conflict", message: "[milestone.revision-conflict] moved" },
+    );
+    expect(conflict.reloadOverview).toBe(true);
+    // THE regression the earlier test could not catch: a page that stopped
+    // re-reading, or cleared the draft on a conflict, fails here.
+    expect(conflict.keepDraft).toBe(true);
+    expect(conflict.refusal).toContain("milestone.revision-conflict");
+    expect(conflict.retainOperation).toBe(false);
+  });
+
+  test("an input refusal neither re-reads nor drops the draft", () => {
+    const refused = milestoneWriteFollowUp(
+      { verb: "create" },
+      { status: "refused", code: "milestone.invalid-input", message: "[milestone.invalid-input] bad name" },
+    );
+    expect(refused.reloadOverview).toBe(false);
+    expect(refused.keepDraft).toBe(true);
+    expect(refused.refusal).toContain("invalid-input");
+  });
+
+  test("an ambiguous transport failure keeps the operation for a replay and does not re-read", () => {
+    const ambiguous = milestoneWriteFollowUp(
+      { verb: "create" },
+      { status: "refused", code: "transport-error", message: "unreachable" },
+    );
+    expect(ambiguous.reloadOverview).toBe(false);
+    expect(ambiguous.retainOperation).toBe(true);
+    expect(ambiguous.keepDraft).toBe(true);
+  });
+
+  test("only an assignment refreshes the scoped list/picker", () => {
+    expect(milestoneWriteFollowUp({ verb: "assign" }, accepted).refreshIssues).toBe(true);
+    for (const verb of ["create", "update", "remove"] as const) {
+      expect(milestoneWriteFollowUp({ verb }, accepted).refreshIssues).toBe(false);
+    }
+    // A refused assignment wrote nothing: no refresh.
+    expect(
+      milestoneWriteFollowUp({ verb: "assign" }, { status: "refused", code: "milestone.revision-conflict", message: "moved" })
+        .refreshIssues,
+    ).toBe(true);
+    expect(
+      milestoneWriteFollowUp({ verb: "assign" }, { status: "refused", code: "milestone.invalid-input", message: "bad" })
+        .refreshIssues,
+    ).toBe(false);
   });
 });
