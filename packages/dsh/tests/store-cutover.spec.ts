@@ -40,7 +40,6 @@ import {
   registerShippedCatalogExecution,
   setArtifactStore,
 } from '@mstar-harness/engine'
-import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readDshStatusEmission } from '@mstar-harness/engine'
@@ -132,36 +131,6 @@ function cleanupSnapshot(planId: string, mode: 'zero-residual' | 'allow-residual
 /** The same snapshot as JSON text (the on-disk seed form). */
 function cleanupSnapshotJson(planId: string, mode: 'zero-residual' | 'allow-residual' = 'zero-residual'): string {
   return JSON.stringify(cleanupSnapshot(planId, mode))
-}
-
-/** One pending tool call in the registry pipeline shape (dsh-tools ToolExecution). */
-let execSeq = 0
-function toolExec(name: string, args: unknown): ToolExecution {
-  return {
-    callId: `c${++execSeq}`,
-    name,
-    arguments: args,
-    signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
-  } as unknown as ToolExecution
-}
-
-/** The Assignment-shaped dispatch call the `tools/pre-execute` gate sees. */
-function dispatchExec(): ToolExecution {
-  return toolExec('subagent', {
-    description: 'writable implement round',
-    prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
-  })
-}
-
-/** A shape-valid `workflow` fan-out call (no Assignment prompt — `meta.name` only). */
-function workflowExec(metaName = 'probe'): ToolExecution {
-  return toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } })
-}
-
-/** A shape-valid `ralph` fan-out call (no Assignment prompt — `objective` only). */
-function ralphExec(objective = 'probe the codebase'): ToolExecution {
-  return toolExec('ralph', { objective })
 }
 
 /**

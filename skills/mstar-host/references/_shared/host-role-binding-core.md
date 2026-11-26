@@ -39,7 +39,7 @@ execute_as: fullstack-dev
 delegation: forbidden
 task_category: deep
 working_branch: feat/example
-plan_path: .mstar/plans/20260717-example.md
+plan_path: /path/to/control-root/.mstar/plans/20260717-example.md
 task_budget: one implementer round closing this task's Files list and verification gates
 ---
 
