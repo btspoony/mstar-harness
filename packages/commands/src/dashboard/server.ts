@@ -366,7 +366,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       // HEAD is accepted for static resources only; the API is GET-only and a
       // HEAD request must not reach the store read.
       if (req.method !== "GET") {
-        sendJson(res, 405, fail("method-not-allowed", "the dashboard API is read-only: only GET is accepted"), requestHead);
+        sendJson(res, 405, fail("method-not-allowed", "no dashboard read route accepts a write: only GET is accepted here (milestone writes go to POST /api/milestones)"), requestHead);
         return;
       }
 

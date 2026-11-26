@@ -279,6 +279,8 @@ export type DetailProps = {
   readonly writes?: MilestoneWriteSurface
   /** The project's open unassigned issues, as the assign picker's options. */
   readonly assignableIssues?: AssignableIssuesRead
+  /** Re-issue the picker's read after a failure. */
+  readonly onRetryAssignable?: () => void
   /** note: the seat-owned draft store, passed to the project page's forms. */
   readonly drafts?: MilestoneDraftStore
 }
@@ -301,6 +303,7 @@ export function DetailBody({
   projects,
   writes,
   assignableIssues,
+  onRetryAssignable,
   drafts,
 }: DetailProps): React.ReactElement {
   const copy = copyFor(locale)
@@ -375,6 +378,7 @@ export function DetailBody({
           {...(projects === undefined ? {} : { projects })}
           {...(writes === undefined ? {} : { writes })}
           {...(assignableIssues === undefined ? {} : { assignableIssues })}
+          {...(onRetryAssignable === undefined ? {} : { onRetryAssignable })}
           {...(drafts === undefined ? {} : { drafts })}
         />
       )
@@ -431,6 +435,8 @@ export function ProjectDetailDestination(props: {
    */
   writes?: MilestoneWriteSurface
   assignableIssues?: AssignableIssuesRead
+  /** Re-issue the picker's read after a failure. */
+  onRetryAssignable?: () => void
   /** note: the seat-owned milestone draft store (the forms' drafts survive a read refresh). */
   drafts?: MilestoneDraftStore
   /** Test seam: the tab the page opens on. Production always starts at the default. */
@@ -530,6 +536,7 @@ export function ProjectDetailDestination(props: {
       }}
       {...(props.writes === undefined ? {} : { writes: props.writes })}
       {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
+      {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
       {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
       {...(issuesModel === null ? {} : { issuesCount: issuesModel.total })}
       onBack={props.onBack}

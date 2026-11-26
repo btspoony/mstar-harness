@@ -828,7 +828,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   // (disposition only, every page) so the address bar's filters, search and page
   // window can never shrink the offer; the unassigned subset is the picker's rule.
   const assignable = useAssignableIssues(projectId === "" ? null : projectId, issuesRefreshToken);
-  const assignableIssues: AssignableIssuesRead | undefined =
+  const assignableIssues: AssignableIssuesRead =
     assignable.read.kind === "ready"
       ? assignableOptions(assignable.read.model)
       : assignable.read.kind === "failed"
@@ -948,7 +948,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       {...(issuesCount === undefined ? {} : { issuesCount })}
       {...(iterationsCount === undefined ? {} : { iterationsCount })}
       {...(writes === undefined ? {} : { writes })}
-      {...(assignableIssues === undefined ? {} : { assignableIssues })}
+      assignableIssues={assignableIssues}
       onRetryAssignable={assignable.retry}
       drafts={drafts}
       copy={projectDetailCopy(copy)}

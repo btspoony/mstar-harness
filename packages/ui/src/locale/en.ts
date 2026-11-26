@@ -64,7 +64,7 @@ export const en = {
       projects: "Projects",
     },
     skipLink: "Skip to content",
-    footer: "Read-only · Make changes with the CLI",
+    footer: "Milestones are editable here · every other change goes through the CLI",
     openIssueCount: (n: number): string => `${n} open ${n === 1 ? "issue" : "issues"}`,
     storeRevision: (n: number) => `${n} store revision`,
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },

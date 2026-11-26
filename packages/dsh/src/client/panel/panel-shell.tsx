@@ -272,6 +272,8 @@ export function PanelShell(props: {
   writes?: MilestoneWriteChannel
   /** The assign picker's read: the offer list, or the loading/failed arm. */
   assignableIssues?: AssignableIssuesRead
+  /** Re-issue the picker's reads after a failure. */
+  onRetryAssignable?: () => void
   /** note: the seat-owned milestone draft store — the forms live under the overview read, so a
    *  refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
   drafts?: MilestoneDraftStore
@@ -320,6 +322,7 @@ export function PanelShell(props: {
               {...(props.projectsList === undefined ? {} : { projects: props.projectsList })}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
+              {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
               {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
               {...(props.onOpen === undefined ? {} : { onOpenWorkflow: (id: string) => props.onOpen?.('workflow-detail', id) })}
             />
@@ -446,6 +449,16 @@ const FAILURE_KEYS: Record<string, PanelKey> = {
 /** The dictionary key that explains one reason code (unknown → the generic one). */
 export function failureKey(reason: string): PanelKey {
   return FAILURE_KEYS[reason] ?? 'state.failure.unknown'
+}
+
+/** One issue row as the engine's issue page answers it (the picker's own read). */
+type AssignableRow = {
+  readonly id: string
+  readonly title: string
+  readonly severity: string
+  readonly disposition: string
+  readonly milestoneId: string | null
+  readonly revision: number
 }
 
 /** Stable no-op subscribe (a seat composed without a locale face). */
@@ -892,6 +905,44 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     view: detail !== null && detail.view === 'project-detail' ? 'issues' : null,
     ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
   })
+  // The assign picker's OWN read: the project's OPEN issues, one page at a time
+  // (`disposition=open`, offset-walked by re-keying the read between answers) so
+  // the address-bar filters and the first page's 200 rows cannot hide an offer.
+  const [assignablePages, setAssignablePages] = React.useState<readonly AssignableRow[]>([])
+  const [assignablePage, setAssignablePage] = React.useState<{ kind: 'idle' } | { kind: 'failed'; reason: string } | { kind: 'more' }>({ kind: 'idle' })
+  const assignableOffset = assignablePages.length
+  const assignableView = useMstarDashboardView({
+    client: panelSnapshot,
+    sessionId: wireSession,
+    cwd,
+    view: detail !== null && detail.view === 'project-detail' && assignablePage.kind !== 'failed' ? 'issues' : null,
+    ...(detail !== null && detail.view === 'project-detail'
+      ? { params: { project: detail.id, disposition: 'open', limit: '200', ...(assignableOffset === 0 ? {} : { offset: String(assignableOffset) }) } }
+      : {}),
+  })
+  const assignableAnswer = assignableView.state
+  React.useEffect(() => {
+    if (detail === null || detail.view !== 'project-detail') {
+      setAssignablePages([])
+      setAssignablePage({ kind: 'idle' })
+      return
+    }
+    if (assignableAnswer.kind !== 'ok') return
+    const page = assignableAnswer.envelope.data as { items?: AssignableRow[]; total?: number } | null
+    if (page === null || !Array.isArray(page.items)) {
+      setAssignablePage({ kind: 'failed', reason: 'the assignable issues read did not answer a page' })
+      return
+    }
+    setAssignablePages((current) => (current.length === assignableOffset ? [...current, ...page.items!] : current))
+    // A short page (or the stated total) ends the walk; anything else asks for the next.
+    setAssignablePage(page.items.length === 0 || assignableOffset + page.items.length >= (page.total ?? 0) ? { kind: 'idle' } : { kind: 'more' })
+  }, [assignableAnswer, detail, assignableOffset])
+  const retryAssignableViews = () => {
+    setAssignablePages([])
+    setAssignablePage({ kind: 'idle' })
+    assignableView.reload()
+    projectIssuesView.reload()
+  }
   const projectIterationsView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
@@ -919,24 +970,24 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     },
     drafts: milestoneDrafts,
   })
-  // The assign picker's read: the project's issues, narrowed to the OPEN,
-  // UNASSIGNED ones (id, title, severity, revision for the CAS). The scoped read
-  // is already every page and every open disposition, so the offer is complete;
-  // a read that did not answer keeps its own arm (`loading`, or `failed` with the
-  // store's reason) rather than masquerading as "nothing to assign".
+  // The picker's three arms, never two: a pending read (waiting, loading, or a
+  // settled null page still being walked) says loading; only a refused read is
+  // `failed`, carrying the store's reason and the retry that re-issues the walk.
   const assignableIssues: AssignableIssuesRead | undefined =
-    projectIssuesView.state.kind === 'ok' && projectIssuesView.state.envelope.data !== null
-      ? (
-          projectIssuesView.state.envelope.data as {
-            items: Array<{ id: string; title: string; severity: string; disposition: string; milestoneId: string | null; revision: number }>
-          }
-        ).items
-          .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
-          .slice(0, ASSIGNABLE_ISSUE_LIMIT)
-          .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
-      : projectIssuesView.state.kind === 'ok'
-        ? { kind: 'loading' }
-        : { kind: 'failed', reason: projectIssuesView.state.kind === 'unavailable' ? projectIssuesView.state.reason : 'the project issues read did not answer' }
+    detail === null || detail.view !== 'project-detail'
+      ? undefined
+      : assignablePage.kind === 'failed'
+        ? { kind: 'failed', reason: assignablePage.reason }
+        : assignablePage.kind === 'more' || assignableAnswer.kind === 'waiting' || assignableAnswer.kind === 'loading'
+          ? { kind: 'loading' }
+          : assignableAnswer.kind === 'unavailable'
+            ? { kind: 'failed', reason: assignableAnswer.reason }
+            : assignableAnswer.kind === 'ok'
+              ? assignablePages
+                  .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
+                  .slice(0, ASSIGNABLE_ISSUE_LIMIT)
+                  .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
+              : { kind: 'failed', reason: 'no harness root resolves for this workspace' }
 
   // (b) The workflow pick is the product's only write: once the commit lands,
   // every read that DEPENDS on the binding re-reads — the digest (selection),
@@ -1020,6 +1071,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       {...(destination === 'projects' ? { projectsList: destinationView.state } : {})}
       {...(milestoneWrites === undefined ? {} : { writes: milestoneWrites })}
       {...(assignableIssues === undefined ? {} : { assignableIssues })}
+      {...(detail !== null && detail.view === 'project-detail' ? { onRetryAssignable: retryAssignableViews } : {})}
       drafts={milestoneDrafts}
       destination={destination}
       locale={locale}

@@ -514,3 +514,61 @@ describe('the shell holds the open record and the project detail mounts', () => 
     expect(readOnly).not.toContain('data-ms-milestone-create')
   })
 })
+
+describe('the dsh assign picker — pending reads show loading, only a refusal is failed', () => {
+  const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
+  const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
+  const OVERVIEW = {
+    projectId: 'proj-1',
+    workflows: { state: 'not-applicable', reason: 'not read' },
+    residuals: { state: 'not-applicable', reason: 'not read' },
+    milestones: {
+      state: 'read',
+      data: {
+        projectId: 'proj-1',
+        milestones: [
+          {
+            milestoneId: 'm-1', projectId: 'proj-1', name: 'Release', effortSessions: null, status: 'planned', ordinal: 0,
+            revision: 1, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
+            totalIssues: 0, openIssues: 0, resolvedIssues: 0, otherRetiredIssues: 0,
+          },
+        ],
+        issues: [],
+        unassignedIssues: 0,
+      },
+    },
+    latestIteration: { state: 'not-applicable', reason: 'not read' },
+    issueFlow: { state: 'not-applicable', reason: 'not read' },
+  }
+  const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} }
+  const render = (assignableIssues: unknown) =>
+    renderToStaticMarkup(createElement(PanelShell, {
+      snapshot: snapshot(),
+      workflow: { state: 'read', data: WORKFLOW } as never,
+      destination: 'issues',
+      locale: 'en',
+      navLabel: 'Morning Star Workflow',
+      onSelect: () => {},
+      select: null,
+      reads: { issues: envelope({ items: [], total: 0, storeRevision: 1 }) as never },
+      detail: { view: 'project-detail', id: 'proj-1', state: envelope(OVERVIEW) },
+      onOpen: () => {},
+      onBack: () => {},
+      writes,
+      assignableIssues,
+      onRetryAssignable: () => {},
+    } as never))
+
+  it('a pending picker read renders as loading, not as a refusal', () => {
+    const markup = render({ kind: 'loading' })
+    expect(markup).toContain('data-ms-assign-loading=""')
+    expect(markup).not.toContain('data-ms-assign-error=""')
+  })
+
+  it('a refused read states the reason and offers the retry', () => {
+    const markup = render({ kind: 'failed', reason: 'the project issues read did not answer' })
+    expect(markup).toContain('data-ms-assign-error=""')
+    expect(markup).toContain('the project issues read did not answer')
+    expect(markup).toContain('data-ms-assign-retry=""')
+  })
+})

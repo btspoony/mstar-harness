@@ -51,7 +51,7 @@ export const zh: Copy = {
       projects: "项目",
     },
     skipLink: "跳到主要内容",
-    footer: "只读 · 请通过 CLI 进行修改",
+    footer: "里程碑可在此编辑 · 其余变更请通过 CLI 进行",
     openIssueCount: (n: number): string => `${n} 项未关闭`,
     storeRevision: (n) => `${n} 次存储修订`,
     theme: { label: "配色方案", light: "浅色", dark: "深色" },

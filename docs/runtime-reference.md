@@ -121,7 +121,7 @@ Payload fields: reason (required) (string), references (requiredWhen: resolved) 
 
 `requiredWhen` names the dispositions that make a field required, so the help text, the schema command, and the validation refusal use one vocabulary.
 
-**Read-only views.** `mstar-harness dashboard` serves a read-only web UI of the issue store and the execution/roadmap projections on `127.0.0.1` (loopback only, GET only); flags are listed by `mstar-harness dashboard --help`.
+**Views and the one write route.** `mstar-harness dashboard` serves the issue store and the execution projections as read views on `127.0.0.1` (loopback only; GET only outside the one write path), plus `POST /api/milestones` — the project page's bounded milestone create/edit/assign/remove route, guarded by the observed store revision (a stale observation answers `milestone.revision-conflict`) and by the engine's own validation. No other write path exists; flags are listed by `mstar-harness dashboard --help`.
 
 Exact families, flags, and refusal codes are owned by the **`mstar-use-cli`** skill; this page only states the contract shape.
 
