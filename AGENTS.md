@@ -74,6 +74,7 @@ Edit canonical sources, never the generated `harness-skills/` or `harness-agents
 
 ## Verification and delivery
 
+- **Run the comment ratchet before delivery.** For every touched code file under `packages/` or `scripts/`, build the CLI (`bun run cli:build`) and run `node packages/cli/dist/mstar-harness.js lint <file> --diff-base "$(git merge-base <pr-base> HEAD)"`. New or edited comments must take a [comments.md](skills/mstar-coding-behavior/references/comments.md) §MUST shape (bounded marker, contract pointer, `@generated`, tracked `TODO`); the `lint-scripts-hooks` job's changed-line pass fails the PR otherwise.
 - Before repeating a fix, inspect relevant history for duplicate or rejected attempts. Keep changes appropriate to the harness; project-specific behavior belongs in a separate extension.
 - Follow [core verification boundaries](skills/mstar-harness-core/SKILL.md#定向执行与验证边界): run checks mapped to the changed behavior and reuse still-valid evidence. Full local suites require explicit user authorization; CI owns routine full-suite coverage. For executable changes, run affected unit tests and scoped lint/type checks; for docs/policy changes, use targeted static checks and before/after evidence without manufacturing tests or claiming they prove model compliance.
 - For `skills/**` changes, `bun run validation:drift` is the enforcement surface: per-file line ceilings live in `scripts/skill-budgets.manifest.json`, and the corpus rules it applies are stated in [mstar-skill-authoring](skills/mstar-skill-authoring/SKILL.md).
