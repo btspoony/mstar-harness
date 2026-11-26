@@ -24,6 +24,7 @@ import {
   resolveCollaborationLocation,
   type CaptureInput,
   type MutationContext,
+  type StoreContext,
 } from "@mstar-harness/engine";
 import { createRemoteScope, REMOTE_IDS } from "../../engine/src/remote-scope.fixture.js";
 import { z } from "zod";
@@ -75,8 +76,9 @@ function mutation(operationId: string): MutationContext {
 }
 
 /** The issue lane's revision, read without creating or migrating anything. */
-function storeRevision(root: string): number {
-  const location = resolveCollaborationLocation({ harnessDir: join(root, ".mstar") });
+function storeRevision(root: string | StoreContext): number {
+  const context = typeof root === "string" ? { harnessDir: join(root, ".mstar") } : root;
+  const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath, { readOnly: true });
   try {
     return (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
@@ -221,17 +223,18 @@ describe("mstar planboard check", () => {
 
   test("unverified, malformed and overdue together in one run, exit 0, nothing written", async () => {
     // why: `unverified` means the one store this run reads refused, and that
-    // refuses EVERY issue line (a refused read is never a stale or missing one).
-    // So the joint run pairs it with the two findings the parser decides alone,
-    // and the store-backed joint run above covers stale+missing+malformed+overdue.
-    const root = fixtureRoot("mstar-planboard-cli-joint-");
-    const harness = join(root, ".mstar");
+    // refuses EVERY issue line (a refused read is never a stale or missing one),
+    // so the joint run pairs it with the two findings the parser decides alone;
+    // the store-backed joint run above covers stale+missing+malformed+overdue.
+    // The lane belongs to the fixture's own checkout, so the run and the revision
+    // read both address that checkout — a fresh temp dir would have no lane.
+    const fixture = createRemoteScope(HOME, "planboard-cli-joint");
+    const harness = fixture.harness;
+    const root = fixture.repo;
     try {
-      const fixture = createRemoteScope(HOME, "planboard-cli-joint");
       const commit = fixture.publish();
       // A published selector with no admitted observation: every issue read refuses.
       await bindRemoteAuthority(fixture.context(), fixture.batch(commit));
-      writeFileSync(join(harness, ".mstarc"), "[collaboration]\nmode=remote\n");
       writeFileSync(
         join(harness, "planboard.md"),
         [
@@ -246,18 +249,27 @@ describe("mstar planboard check", () => {
         ].join("\n"),
       );
       const before = harnessState(harness);
+      // The bind wrote this selection's cache, so the remote lane has a revision.
+      const revision = storeRevision(fixture.context());
       const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
-      const findings = report(result.stdout).data.findings;
-      expect(findings.map(({ code, line }) => ({ code, line }))).toEqual([
+      const reported = report(result.stdout).data;
+      expect(reported.findings.map(({ code, line }) => ({ code, line }))).toEqual([
         { code: "unverified", line: 4 },
         { code: "malformed", line: 5 },
         { code: "overdue", line: 8 },
       ]);
-      expect(findings[0]!.storeCode).toMatch(/^remote\.|^collaboration\./);
+      expect(reported.findings[0]!.storeCode).toMatch(/^remote\.|^collaboration\./);
+      // invariant: The pointers the parse accepted travel even when the read refused.
+      expect(reported.captured).toEqual([{ line: 4, issueId: REMOTE_IDS.issueRef, reason: "an issue this store cannot answer for" }]);
+      expect(reported.candidates).toEqual([
+        { line: 8, candidate: "an overdue candidate", evidence: "docs/specs/example.md" },
+      ]);
       expect(harnessState(harness)).toBe(before);
+      expect(storeRevision(fixture.context())).toBe(revision);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      // note: The fixture's checkout and lane live under the shared HOME.
+      rmSync(fixture.repo, { recursive: true, force: true });
     }
   });
 
