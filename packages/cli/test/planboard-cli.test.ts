@@ -19,6 +19,7 @@ import {
   captureIssue,
   closeIssue,
   ensureCollaborationAuthority,
+  initializeCollaborationStore,
   initializeStore,
   resolveCollaborationLocation,
   type CaptureInput,
@@ -193,11 +194,23 @@ describe("mstar planboard check", () => {
       const revision = storeRevision(root);
       const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
-      expect(report(result.stdout).data.findings).toEqual([
+      const combined = report(result.stdout).data;
+      expect(combined.findings).toEqual([
         { code: "stale", line: 5 },
         { code: "missing", line: 6 },
         { code: "malformed", line: 7 },
         { code: "overdue", line: 10 },
+      ]);
+      // invariant: The board's well-formed pointers travel in the envelope, so a
+      // caller that runs only the verb still reads the ordering and the
+      // candidates — the findings say which of them drifted.
+      expect(combined.captured).toEqual([
+        { line: 4, issueId: open.issueId, reason: "still open" },
+        { line: 5, issueId: closed.issueId, reason: "already closed" },
+        { line: 6, issueId: "I-999999", reason: "never captured" },
+      ]);
+      expect(combined.candidates).toEqual([
+        { line: 10, candidate: "an overdue candidate", evidence: "docs/specs/example.md" },
       ]);
       expect(harnessState(harness)).toBe(before);
       expect(storeRevision(root)).toBe(revision);
@@ -248,24 +261,36 @@ describe("mstar planboard check", () => {
     }
   });
 
-  test("a refused issue store reports every issue line as unverified with the store code", () => {
+  test("a refused issue store reports every issue line as unverified, with its code, writing nothing", async () => {
     const root = fixtureRoot("mstar-planboard-cli-refused-");
+    const harness = join(root, ".mstar");
     try {
-      const harness = join(root, ".mstar");
+      // why: A STAGED collaboration lane is a real store with a real revision that
+      // refuses every ordinary issue read, so the refused-read case can compare
+      // the revision it started with instead of merely claiming nothing was written.
+      await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
       writeFileSync(
         join(harness, "planboard.md"),
         "review_after: 2099-01-01\n## Captured\n- I-000001 \u2014 first\n- I-000002 \u2014 second\n",
       );
       const before = harnessState(harness);
+      const revision = storeRevision(root);
       const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
-      const findings = report(result.stdout).data.findings;
-      expect(findings.map((finding) => ({ code: finding.code, line: finding.line }))).toEqual([
+      const reported = report(result.stdout).data;
+      expect(reported.findings.map(({ code, line }) => ({ code, line }))).toEqual([
         { code: "unverified", line: 3 },
         { code: "unverified", line: 4 },
       ]);
-      for (const finding of findings) expect(finding.storeCode).toMatch(/^collaboration\./);
+      for (const finding of reported.findings) expect(finding.storeCode).toMatch(/^collaboration\./);
+      // invariant: A refused read still reports the pointers it parsed.
+      expect(reported.captured).toEqual([
+        { line: 3, issueId: "I-000001", reason: "first" },
+        { line: 4, issueId: "I-000002", reason: "second" },
+      ]);
+      expect(reported.candidates).toEqual([]);
       expect(harnessState(harness)).toBe(before);
+      expect(storeRevision(root)).toBe(revision);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

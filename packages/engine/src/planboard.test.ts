@@ -134,6 +134,19 @@ describe("planboard grammar", () => {
     ]);
   });
 
+  test("evidence wrapped in prose is malformed even when it names an issue", () => {
+    for (const evidence of ["see I-000001 for context", "I-000001 and more", "per docs/specs/a.md, plus"]) {
+      const parsed = parse(["review_after: 2026-12-10", "## Candidates", `- ? a candidate \u2014 ${evidence}`]);
+      expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 3 }]);
+      expect(parsed.candidates).toEqual([]);
+    }
+    // The one allowed suffix is a trailing separator, and nothing after it.
+    expect(parse(["review_after: 2026-12-10", "## Candidates", "- ? ok \u2014 I-000001;"]).findings).toEqual([]);
+    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ? bad \u2014 I-000001; and more"]).findings)).toEqual([
+      "malformed",
+    ]);
+  });
+
   test("a candidate may name an ADR record and a bare issue id as evidence", () => {
     expect(
       parse([

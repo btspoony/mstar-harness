@@ -58,15 +58,16 @@ export type PlanboardFindings = {
 const POINTER = "mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const ISSUE_LINE = new RegExp(`^- ((?:I-[0-9]{6})|(?:${POINTER})) \u2014 (.+)$`);
 const CANDIDATE_LINE = /^- \? (.+?) \u2014 (.+)$/;
-const FIRST_ISSUE_ID = /I-[0-9]{6}/;
 const ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`, "g");
 const REVIEW_AFTER = /^review_after: ([0-9]{4}-[0-9]{2}-[0-9]{2})$/;
 /** An ADR record name, as the ADR tree spells it. */
 const ADR_NAME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*(\.md)?$/;
-/** A repository path, relative or absolute. */
-const EVIDENCE_PATH = /^[\w./-]+$/;
+/** A repository path: one token, no spaces, with a separator or a file extension. */
+const EVIDENCE_PATH = /^[\w.@+-]+(?:\/[\w.@+-]+)+\/?$|^[\w.@+-]+\.(?:[a-z0-9]+)$/i;
 /** note: The stable portable issue reference, the only address a remote snapshot resolves. */
-const ISSUE_REF = /^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ISSUE_REF = new RegExp(`^${POINTER}$`);
+/** A local display issue id, on its own. */
+const DISPLAY_ISSUE_ID = /^I-[0-9]{6}$/;
 
 type IssueRef = { line: number; id: string; reason: string };
 type CandidateRef = { line: number; candidate: string; evidence: string };
@@ -89,15 +90,17 @@ function isCalendarDate(value: string): boolean {
 }
 
 /**
- * The evidence forms a candidate may name: a repository path, an ADR record
- * name, or an issue id. `not evidence` and a bare word are prose, and the
- * board is not prose.
+ * The evidence forms a candidate may name, exactly: one path token, one ADR
+ * record name, one issue pointer, or one of those followed only by a trailing
+ * separator. Anything with words around the token — `see I-000001 for context`
+ * — is prose, and the board is not prose.
  */
 function isEvidence(text: string): boolean {
-  const value = text.trim();
+  // A trailing separator is allowed and nothing after it.
+  const value = text.trim().replace(/[;,]$/, "").trim();
   if (value === "") return false;
-  if (FIRST_ISSUE_ID.test(value) || ISSUE_REF.test(value)) return true;
-  return ADR_NAME.test(value) || (EVIDENCE_PATH.test(value) && (value.includes("/") || /\.[a-z0-9]+$/i.test(value)));
+  if (DISPLAY_ISSUE_ID.test(value) || ISSUE_REF.test(value)) return true;
+  return ADR_NAME.test(value) || EVIDENCE_PATH.test(value);
 }
 
 /**
