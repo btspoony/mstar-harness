@@ -288,6 +288,30 @@ describe("lint --type acceptance", () => {
     expect(details).toContain("lint.acceptance.frontmatter.invalid");
     expect(details).toContain("Approve with residuals");
   });
+
+  test("a directory target is refused, naming the report file", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance\n", "") },
+      (dir) => runLint(dir, { target: "review", type: "acceptance" }),
+    );
+    expect(result.status).toBe("usage");
+    if (result.status !== "usage") throw new Error(`expected a usage envelope, got ${result.status}`);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain("--type acceptance");
+    expect(result.message).toContain("report file");
+  });
+
+  test("the refusal recovery keeps the type that selected the check", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance\n", "") },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("refused");
+    // pm-acceptance.md is not auto-detected, so a recovery without the flag
+    // would rerun a different check.
+    expect(result.details?.recovery).toContain("--type acceptance");
+    expect(JSON.stringify(result.details)).toContain("lint.acceptance.frontmatter.missing");
+  });
 });
 
 describe("lint --type adr", () => {

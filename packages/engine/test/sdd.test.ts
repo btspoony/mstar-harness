@@ -53,7 +53,7 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
-import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries } from "../src/document-frontmatter.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
 import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
@@ -121,6 +121,17 @@ function gitFixture(root: string): { base: string; head: string } {
   git(["commit", "-q", "-m", "head commit"], root);
   const head = git(["rev-parse", "HEAD"], root);
   return { base, head };
+}
+
+/** A written brief split by the shared reader: the parsed header values and
+ * the body below the fence. */
+function splitBrief(content: string): { header: Map<string, unknown>; body: string } {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const header = new Map<string, unknown>();
+  for (const [key, entry] of parseDocumentFrontmatterEntries(frontmatter, "brief")) {
+    header.set(key, entry.value);
+  }
+  return { header, body };
 }
 
 function errOf(fn: () => unknown): SddScriptError {
@@ -556,27 +567,21 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
   test("extracts from the matching '## Task N' heading; fenced headings and number boundaries ignored", () => {
     const out = tmpRoot("sdd-brief-");
     try {
-      const source = readFileSync(SAMPLE_PLAN, "utf8");
       const plan = samplePlan(out);
       const file = join(out, "task-2-brief.md");
       const written = taskBrief(plan, 2, file);
       expect(written).toBe(file);
-      const content = readFileSync(file, "utf8");
-      const header = "---\nplan_id: sample-plan\ntask: 2\n---\n";
-      expect(content.startsWith(header)).toBe(true);
-      // The bytes after the header are the fixture's own Task 2 slice, fence
-      // and heading boundaries included — no arbitrary prefix or suffix.
-      const start = source.indexOf("### Task 2: second task\n");
-      const end = source.indexOf("### Task 3: third task\n");
-      expect(start).toBeGreaterThan(-1);
-      expect(end).toBeGreaterThan(start);
-      const slice = source.slice(start, end);
-      expect(content.slice(header.length)).toBe(slice);
-      expect(content).not.toContain("hidden behind a fence");
-      expect(content).not.toContain("Task 1: first task");
+      const { header, body } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("sample-plan");
+      expect(header.get("task")).toBe(2);
+      // The body is the Task 2 section: it opens at that heading and the
+      // fenced Task 2 example inside it is slice content, not a boundary.
+      expect(body.slice(0, body.indexOf("\n"))).toBe("### Task 2: second task");
+      expect(body).not.toContain("Task 1: first task");
+      expect(body).not.toContain("hidden behind a fence");
       const task10 = join(out, "task-10-brief.md");
       taskBrief(plan, 10, task10);
-      expect(readFileSync(task10, "utf8")).toContain("### Task 10: tenth task");
+      expect(splitBrief(readFileSync(task10, "utf8")).body).toContain("### Task 10: tenth task");
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
@@ -674,41 +679,38 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     return { dir, plan };
   }
 
-  test("Task 2 brief declares plan_id and task, and its own files in order without duplicates", () => {
+  test("Task 2 brief declares plan_id, task and its own files in source order without duplicates", () => {
     const { dir, plan } = writePlan();
     try {
       const file = join(dir, "task-2-brief.md");
       taskBrief(plan, 2, file);
       const content = readFileSync(file, "utf8");
-      const header = content.slice(0, content.indexOf("---\n", 4) + 4);
+      const { header } = splitBrief(content);
       // A described entry (`- Modify: `src/a.ts` (only `taskBrief`)`) yields the
-      // path alone; a fenced example is not an entry; another task's file is
-      // not this task's file.
-      expect(header).toBe("---\nplan_id: plan-brief-fixture\ntask: 2\nfiles:\n- src/b.ts\n- src/a.ts\n---\n");
-      expect(header).not.toContain("not-a-file.md");
-      expect(header).not.toContain("other-task.ts");
-      expect(header).not.toContain("src/one.ts");
+      // path alone; a fenced example is not an entry; another task's file and
+      // an unrecognized label are not this task's files.
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(2);
+      expect(header.get("files")).toEqual(["src/b.ts", "src/a.ts"]);
       expect(validateDocumentFrontmatter("sdd-brief", content, "task-2-brief").ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("the body after the header is byte-identical to the task slice", () => {
+  test("the body after the header is the Task 2 section and stops at the next Task heading", () => {
     const { dir, plan } = writePlan();
     try {
       const file = join(dir, "task-2-brief.md");
       taskBrief(plan, 2, file);
-      const content = readFileSync(file, "utf8");
-      const body = content.slice(content.indexOf("---\n", 4) + 4);
-      // The slice runs from the task heading up to the next Task heading,
-      // fence and heading boundaries included; bytes are unchanged.
-      const slice = BODY.slice(
-        BODY.indexOf("### Task 2: second\n"),
-        BODY.indexOf("### Task 3: third\n"),
-      );
-      expect(slice.startsWith("### Task 2: second\n")).toBe(true);
-      expect(body).toBe(slice);
+      const { body } = splitBrief(readFileSync(file, "utf8"));
+      // Fence and heading boundaries: the section opens at its own heading,
+      // keeps the fenced example inside it, and ends before Task 3.
+      expect(body.startsWith("### Task 2: second\n")).toBe(true);
+      expect(body).toContain("Body of task two.");
+      expect(body).toContain("```text");
+      expect(body).not.toContain("### Task 3: third");
+      expect(body).not.toContain("No file entries in this task.");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -719,9 +721,10 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     try {
       const file = join(dir, "task-3-brief.md");
       taskBrief(plan, 3, file);
-      const content = readFileSync(file, "utf8");
-      expect(content.startsWith("---\nplan_id: plan-brief-fixture\ntask: 3\n---\n")).toBe(true);
-      expect(content).not.toContain("files:");
+      const { header } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(3);
+      expect(header.has("files")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -740,15 +743,58 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     }
   });
 
-  test("a plan without a declared plan_id does not create the default SDD directory", () => {
-    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
-    try {
-      const sddDir = join(dir, "missing", "sdd");
-      withEnv(SDD_DIR, sddDir, () => {
-        const err = errOf(() => taskBrief(plan, 1));
+  test("a blank plan_id is refused before any write", () => {
+    for (const declaration of ['plan_id: ""', 'plan_id: "   "']) {
+      const { dir, plan } = writePlan(`---\n${declaration}\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+      try {
+        const file = join(dir, "task-1-brief.md");
+        const err = errOf(() => taskBrief(plan, 1, file));
         expect(err.exitCode).toBe(1);
-        expect(existsSync(sddDir)).toBe(false);
-      });
+        expect(existsSync(file)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a plan_id that reads as another scalar shape round-trips as its own text", () => {
+    const { dir, plan } = writePlan(`---\nplan_id: "null"\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("plan_id")).toBe("null");
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file entry the reader would decode as a flow array stays its own path", () => {
+    const body = "### Task 1: only\n\n- Modify: `[draft].md`\n";
+    const { dir, plan } = writePlan(planFrontMatter("plan-brief-fixture", body));
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("files")).toEqual(["[draft].md"]);
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task-shaped front matter comment is not a body task", () => {
+    const { dir, plan } = writePlan(
+      "---\nplan_id: plan-brief-fixture\n# Task 1: draft\n---\n\n# Plan\n\n### Task 2: second\n\n- [ ] step\n",
+    );
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(3);
+      expect(existsSync(file)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

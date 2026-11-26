@@ -442,9 +442,9 @@ function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, 
       violations.push(...temporary.violations); break;
     }
     case "acceptance":
-      // why: the PM acceptance gate fields (compass D17) are one document
-      // schema, so the lint type reports it under its own namespace instead
-      // of a second validator.
+      // why: the PM acceptance gate fields are one document schema, so the
+      // lint type reports it under its own namespace instead of a second
+      // validator.
       for (const schemaViolation of validateDocumentFrontmatter("pm-acceptance", text, "pm-acceptance").violations) {
         violations.push({ ...schemaViolation, code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.acceptance.frontmatter.") });
       }
@@ -726,10 +726,23 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const abs = absolute(context.cwd, target);
         if (!existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
         const isDir = statSync(abs).isDirectory();
+        if (forced === "acceptance" && isDir) {
+          // One report, one check: an acceptance sweep has no selector (no
+          // extension or tree check applies), so a directory would either
+          // report success over nothing or check unrelated auto-detected
+          // files against the acceptance schema. Name the file instead.
+          throw new SddScriptError(`usage: lint <report.md> --type acceptance — the acceptance type validates one PM acceptance report and does not walk a directory; name the report file`, 2);
+        }
+        // why: the recovery must rerun the SAME check - a type the filename
+        // inference does not select (acceptance among them) is only rerun when
+        // the flag that selected it survives the refusal.
+        const rerun = forced === undefined
+          ? "Resolve each reported lint violation, then rerun mstar lint <target>."
+          : `Resolve each reported lint violation, then rerun mstar lint <target> --type ${forced}.`;
         if (forced === "specs" || forced === "adr") {
           // Document layers: a directory is the tree check, a file is one document.
           const results = [{ file: abs, violations: lintDocLayer(forced, abs, isDir), markers: [] as string[] }];
-          return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
+          return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
         }
         const extensions = forced === undefined ? undefined : typeExtensions[forced as LintType];
         const targets = !isDir
@@ -758,7 +771,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const unresolved = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNRESOLVED_POINTER_MARKER_PREFIX)).length, 0);
           if (unresolved > 0) context.effects.writeStderr?.(`unresolved comment pointers: ${unresolved}`);
         }
-        return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
+        return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
       }
       case "design-md.validate": {
         const dir = absolute(context.cwd, required(input.dir, "usage: design-md validate <dir>"));
@@ -1008,7 +1021,7 @@ const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: st
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "controlClean", flags: "--control-clean" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts, the L1/L2 worktree pre-dispatch gate, or the control root tracked-change gate (--control-clean: refuses while the Git main worktree carries committable changes; a repository without .mstar/ or .mstarc has no control-root contract and skips)." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
-  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr | acceptance). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. `--type acceptance` validates the PM acceptance front matter (plan_id, gate, verdict, generated_at) against the shared `pm-acceptance` document schema. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
+  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr | acceptance). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. `--type acceptance` validates ONE PM acceptance report's front matter (plan_id, gate, verdict, generated_at) against the shared `pm-acceptance` document schema and refuses a directory target, naming the report file. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
   "design-md.validate": { path: ["design-md", "validate"], args: [{ key: "dir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate DESIGN.md token frontmatter, parity and completeness." },
   "compound.validate": { path: ["compound", "validate"], args: [{ key: "docPath", required: true, variadic: false }], options: [{ key: "knowledgeDir", flags: "--knowledge-dir <dir>" }], effects: ["read", "validate"], description: "Validate a knowledge document and optional index scope." },
   "skill.lint": { path: ["skill", "lint"], args: [{ key: "skillDir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Lint a skill directory." },
