@@ -936,3 +936,53 @@ describe("milestonesArm — the one absence authority for the milestone body", (
     expect(model.milestones[0]!.issues.map((issue) => issue.id)).toEqual(["I-000870"]);
   });
 });
+
+describe("ProjectDetail — the assign picker's three arms", () => {
+  const writes: NonNullable<ProjectDetailProps["writes"]> = {
+    busy: false,
+    refusal: null,
+    create: () => {},
+    update: () => {},
+    assign: () => {},
+    remove: () => {},
+  };
+  const offered = [{ id: "I-000900", title: "Loose end", severity: "low", revision: 3 }];
+
+  test("a ready read offers the issues behind the control", () => {
+    const html = renderDetail({ writes, assignableIssues: offered });
+    expect(html).toContain('data-ms-milestone-assign=""');
+    expect(html).toContain('data-ms-assign-issue="I-000900"');
+    expect(html).not.toContain("data-ms-assign-error");
+  });
+
+  test("a pending read says so instead of pretending the set is empty", () => {
+    const html = renderDetail({ writes, assignableIssues: { kind: "loading" } });
+    expect(html).toContain('data-ms-assign-loading=""');
+    expect(html).toContain("Loading assignable issues");
+    expect(html).not.toContain("data-ms-assign-error");
+  });
+
+  test("a failed read states the cause in place and offers the retry", () => {
+    // The picker must not vanish (an entry the operator cannot find reads as
+    // "nothing to assign") and it must not spin forever.
+    const html = renderDetail({
+      writes,
+      assignableIssues: { kind: "failed", reason: "the store could not be read" },
+      onRetryAssignable: () => {},
+    });
+    expect(html).toContain('data-ms-assign-error=""');
+    expect(html).toContain("The assignable issues could not be read:");
+    expect(html).toContain("the store could not be read");
+    expect(html).toContain('data-ms-assign-retry=""');
+    expect(html).toContain("Retry");
+    // The control is rendered at the milestone's own actions, not above the board.
+    expect(boardBlockOf(html, "9f2c4a10")).toContain('data-ms-assign-error=""');
+  });
+
+  test("without a host retry the failure still states the cause, without a dead button", () => {
+    const html = renderDetail({ writes, assignableIssues: { kind: "failed", reason: "timeout" } });
+    expect(html).toContain('data-ms-assign-error=""');
+    expect(html).toContain("timeout");
+    expect(html).not.toContain("data-ms-assign-retry");
+  });
+});
