@@ -1,6 +1,7 @@
 import { Tool } from "@opencode/schema/tool";
 import { Effect } from "effect";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
+import { dirname } from "node:path";
 
 import * as Engine from "@mstar-harness/engine";
 
@@ -20,6 +21,8 @@ export type DispatchGateApi = Pick<
  | "applyEnforcement"
  | "composeDispatchGate"
  | "isReadOnlyAssignmentRole"
+ | "legacyAssignmentShape"
+ | "legacyFormatViolation"
  | "parseAssignmentFields"
  | "readAssignmentSource"
  | "resolveHarnessDir"
@@ -59,50 +62,6 @@ function malformedPrompt(): Tool.Error {
  "input.prompt must be a string containing the Assignment text. Align the OpenCode 2.2.5 subagent schema and retry; no subagent was spawned.",
  );
 }
-/**
- * Shape-guard match of a retired body-label core field in ANY of its three
- * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
- * list-prefixed `- **Execute as**:` line (indentation and a numeric or
- * bullet list marker are formatting, never the field; commands
- * validation.ts / dsh parity — one detection grammar across every gate).
- * Detection ONLY: it never reads a field value — the carrier is never
- * field-parsed with a label regex.
- */
-function legacyLabelKey(line: string): string | undefined {
- const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
- return match?.[1];
-}
-
-/**
- * D16 shape detection: true when the document carries its fields in the
- * RETIRED body-label grammar — at least TWO distinct core labels, so a
- * single bolded field line in ordinary prose never shapes a document as
- * an Assignment; the `## Assignment` heading is irrelevant either way.
- */
-function legacyAssignmentShape(text: string): boolean {
- if (/^---[ \t]*\r?\n/.test(text)) return false;
- const found = new Set<string>();
- for (const line of text.split(/\r?\n/)) {
- const key = legacyLabelKey(line);
- if (key !== undefined) found.add(key);
- if (found.size >= 2) return true;
- }
- return false;
-}
-
-/** The D16 legacy-format refusal violation (front matter is the only field
- * contract); the fix names BOTH recoveries — the front matter rewrite and
- * the `Assignment file:` pointer. */
-function legacyFormatViolation(): GateViolation {
- return {
- severity: "high",
- code: "dispatch.assignment.legacy-format",
- message: "the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract",
- fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
- };
-}
-
-
 function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger: StatusLogger): Effect.Effect<void, Tool.Error> {
  const input = record(event.input);
  if (input === null || typeof input.prompt !== "string") return Effect.fail(malformedPrompt());
@@ -129,11 +88,19 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  const source = api.readAssignmentSource(prompt, { harnessDir });
  let violations: readonly GateViolation[];
  let enforcementHard = false;
+ let terminal = false;
  if (!source.ok) {
  violations = [source];
- enforcementHard = true;
+ terminal = source.terminal === true;
  } else {
  const text = source.text;
+ // File provenance (compass D14): a resolved `Assignment file:` pointer
+ // commits to the Assignment contract, so its bytes validate as one even
+ // without a recognized core key — an empty or unrelated pointed file
+ // refuses instead of passing silently as an ordinary prompt. Inline
+ // prompts keep the silent path.
+ const carrier = source.path;
+ const fileCarrier = carrier !== undefined;
  const fields = api.parseAssignmentFields(text);
  // Normalize both sides the way the engine does (strip a leading @,
  // lowercase, take the first whitespace token) so `@QC-Specialist` or
@@ -152,17 +119,26 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // body-label grammar is refused `dispatch.assignment.legacy-format`;
  // the refusal supersedes the schema's absent-fence row for the same
  // unfenced text (one defect, one message).
- const legacy = legacyAssignmentShape(text);
+ const legacy = api.legacyAssignmentShape(text);
  const writable = api.isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
  const caller = typeof event.agent === "string" ? event.agent : "";
- const composed = api.composeDispatchGate(text, { caller, callerRequired: true, writable });
- violations = [
- ...(legacy ? [legacyFormatViolation()] : []),
- ...composed.violations.filter((violation) => !(legacy && violation.code === "document.frontmatter.absent")),
- ];
+ const composed = api.composeDispatchGate(text, {
+ caller,
+ callerRequired: true,
+ writable,
+ fileCarrier,
+ // Source-relative `worktree_path` resolves from the pointed file's own
+ // directory (CLI parity); inline prompts keep the checkout base.
+ cwd: carrier === undefined ? undefined : dirname(carrier),
+ });
+ // Clean path: reuse the engine violations as-is; only the legacy refusal
+ // allocates, prepending its diagnostic and dropping the superseded row.
+ violations = legacy
+ ? [api.legacyFormatViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
+ : composed.violations;
  enforcementHard = composed.enforcement.hard;
  }
- const hard = enforcementHard || (harnessDir !== null && api.resolveRepoEnforcement(harnessDir).hard);
+ const hard = terminal || enforcementHard || (harnessDir !== null && api.resolveRepoEnforcement(harnessDir).hard);
  const hardBlocked = hard && violations.length > 0;
 
  for (const violation of violations) {

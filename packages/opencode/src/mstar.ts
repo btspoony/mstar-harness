@@ -70,6 +70,8 @@ import {
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentFields,
   parseSimpleFrontmatter,
   probeCollaborationAuthority,
@@ -596,55 +598,6 @@ function validateDocByKind(doc: unknown, kind: HarnessDocKind): GateResult {
 }
 
 /**
- * Shape-guard match of a retired body-label core field in ANY of its three
- * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
- * list-prefixed `- **Execute as**:` line (indentation and a numeric or
- * bullet list marker are formatting, never the field; commands
- * validation.ts parity — one detection grammar across every gate).
- * Detection ONLY: it never reads a field value — the carrier is never
- * field-parsed with a label regex.
- */
-function legacyLabelKey(line: string): string | undefined {
-  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
-  return match?.[1];
-}
-
-/**
- * D16 shape detection: true when the document carries its fields in the
- * RETIRED body-label grammar — at least TWO distinct core labels, so a
- * single bolded field line in ordinary prose never shapes a document as an
- * Assignment; the `## Assignment` heading is irrelevant either way
- * (commands `dispatch validate` / dsh parity).
- */
-function legacyAssignmentShape(text: string): boolean {
-  if (/^---[ \t]*\r?\n/.test(text)) return false;
-  const found = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const key = legacyLabelKey(line);
-    if (key !== undefined) found.add(key);
-    if (found.size >= 2) return true;
-  }
-  return false;
-}
-
-/**
- * The D16 legacy-format refusal violation emitted for an Assignment-shaped
- * document whose fields live in body lines (the retired format): front
- * matter is the only field contract. The refusal names BOTH recoveries —
- * the front matter rewrite and the `Assignment file:` pointer — so the
- * caller reads the ONE contract out of any gate.
- */
-function legacyFormatViolation(): ValidationResult {
-  return {
-    ok: false,
-    severity: "high",
-    code: "dispatch.assignment.legacy-format",
-    message: "the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract",
-    fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
-  };
-}
-
-/**
  * Dispatch-side Assignment validation (roadmap §8.5 `beforeDispatch`).
  *
  * Delegates the entire composition to the engine's single shared
@@ -728,41 +681,60 @@ export function validateDispatchAssignment(
     const source = readAssignmentSource(assignmentText, { harnessDir });
     let violations: ValidationResult[];
     let enforcementHard = false;
+    let terminal = false;
     if (!source.ok) {
-      violations = [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }];
-      enforcementHard = true;
+      // Terminal by contract: no verified assignment to dispatch on. This
+      // host has no refusal channel (I-001258, advisory), so the terminal
+      // refusal is surfaced as the error line + `hardBlocked` for any
+      // refusal-capable caller.
+      violations = [source];
+      terminal = source.terminal === true;
     } else {
       const text = source.text;
+      // File provenance (compass D14): a resolved `Assignment file:`
+      // pointer commits to the Assignment contract, so its bytes validate
+      // as one even without a recognized core key. Inline prompts keep the
+      // silent path.
+      const carrier = source.path;
+      const fileCarrier = carrier !== undefined;
       // D16 — an Assignment-shaped document whose fields live in the
       // retired body-label grammar is refused
       // `dispatch.assignment.legacy-format`; the refusal supersedes the
       // schema's absent-fence row for the same unfenced text (one defect,
       // one message).
       const legacy = legacyAssignmentShape(text);
-      violations = legacy ? [legacyFormatViolation()] : [];
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
       const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
-      const composed = composeDispatchGate(text, { writable });
-      violations.push(
-        ...composed.violations.filter(
-          (violation) => !(legacy && violation.code === "document.frontmatter.absent"),
-        ),
-      );
+      const composed = composeDispatchGate(text, {
+        writable,
+        fileCarrier,
+        // Source-relative `worktree_path` resolves from the pointed file's
+        // own directory (CLI parity); inline prompts keep the checkout base.
+        cwd: carrier === undefined ? undefined : path.dirname(carrier),
+      });
+      // Clean path: reuse the engine violations as-is; only the legacy
+      // refusal allocates, prepending its diagnostic and dropping the
+      // superseded row.
+      violations = legacy
+        ? [legacyFormatViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
+        : composed.violations;
       enforcementHard = composed.enforcement.hard;
     }
- // Header flag, else repo-level hard (`.mstarc` → compass) — the same
- // precedence the status-write gate and dsh dispatches honor.
-    const hard = enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
+ // Header flag, terminal source refusal, else repo-level hard (`.mstarc` →
+ // compass) — the same precedence the status-write gate and dsh dispatches
+ // honor.
+    const hard = terminal || enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
     const gated: GateResult = applyEnforcement({ ok: violations.length === 0, violations }, { hard });
 
     if (!gated.ok) {
       for (const violation of gated.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (hard) {
+          const reason = terminal ? "terminal source refusal" : "Enforcement: hard";
           log(
             "error",
-            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
+            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per ${reason}; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
           );
         } else {
           log(

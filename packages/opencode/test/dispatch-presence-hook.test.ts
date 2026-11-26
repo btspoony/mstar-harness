@@ -1009,6 +1009,35 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
   });
 
+  test("an empty pointed file is refused as an invalid Assignment instead of passing as a prompt", () => {
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "empty-target.md");
+    writeFileSync(file, "");
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(`Assignment file: ${file}`, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.violations.some((violation) => violation.code === "dispatch.assignment.shape")).toBe(true);
+    expect(warnings.some((warning) => warning.includes("dispatch.assignment.shape"))).toBe(true);
+  });
+
+  test("a pointed document that declares hard enforcement hardens like the inline form", () => {
+    // Missing every declaration but `execute_as`: the same front matter in
+    // either form must produce the same hard refusal.
+    const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
+    const inline = validateDispatchAssignment(unshapedHard, { log: () => undefined });
+    expect(inline!.ok).toBe(false);
+    expect(inline!.hardBlocked).toBe(true);
+    expect(inline!.violations.some((violation) => violation.code === "assignment.field.delegation")).toBe(true);
+
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "hard-parity.md");
+    writeFileSync(file, unshapedHard);
+    const pointer = validateDispatchAssignment(`Assignment file: ${file}`, { log: () => undefined });
+    expect(pointer!.ok).toBe(false);
+    expect(pointer!.hardBlocked).toBe(true);
+    expect(pointer!.violations.some((violation) => violation.code === "assignment.field.delegation")).toBe(true);
+  });
+
   test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", () => {
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment(LEGACY_BODY_LABEL, { log });

@@ -331,6 +331,39 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(joined).not.toContain("document.frontmatter.absent");
   });
 
+  test("an empty pointed file is validated as an invalid Assignment, not a silent prompt", async () => {
+    mkdirSync(join(controlRoot, ".mstar", "assignments"), { recursive: true });
+    const file = join(controlRoot, ".mstar", "assignments", "empty-target.md");
+    writeFileSync(file, "");
+    const logs: string[] = [];
+    const soft = await fixture((_level, message) => logs.push(message));
+    await soft.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${file}`));
+    expect(soft.bodyCalls()).toBe(1);
+    // The pointer named an Assignment: an empty file is that Assignment's
+    // shape violation, never the silent non-Assignment prompt path.
+    expect(logs.join("\n")).toContain("dispatch.assignment.shape");
+  });
+
+  test("a pointed document that declares hard enforcement refuses like the inline form", async () => {
+    // Missing every declaration but `execute_as`: both forms carry the same
+    // front matter, so both must refuse with the same field code.
+    const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
+    const inline = await fixture();
+    const inlineError = await inline.invoke(makeEvent("project-manager", "fullstack-dev", unshapedHard)).catch((error: unknown) => error);
+    expect(inlineError).toBeInstanceOf(Tool.Error);
+    expect((inlineError as Tool.Error).message).toContain("assignment.field.delegation");
+    expect(inline.bodyCalls()).toBe(0);
+
+    mkdirSync(join(controlRoot, ".mstar", "assignments"), { recursive: true });
+    const file = join(controlRoot, ".mstar", "assignments", "hard-parity.md");
+    writeFileSync(file, unshapedHard);
+    const pointer = await fixture();
+    const pointerError = await pointer.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${file}`)).catch((error: unknown) => error);
+    expect(pointerError).toBeInstanceOf(Tool.Error);
+    expect((pointerError as Tool.Error).message).toContain("assignment.field.delegation");
+    expect(pointer.bodyCalls()).toBe(0);
+  });
+
   test("the legacy refusal under repo-level hard refuses the dispatch", async () => {
     writeFileSync(join(controlRoot, ".mstarc"), "[config]\nenforcement=hard\n");
     try {

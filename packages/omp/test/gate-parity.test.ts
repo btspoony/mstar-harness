@@ -474,6 +474,35 @@ No branch form here.
     }
   });
 
+  test("an empty pointed file is reported as an invalid Assignment, not a silent prompt", async () => {
+    mkdirSync(join(harness, "assignments"), { recursive: true });
+    const file = join(harness, "assignments", "empty-target.md");
+    writeFileSync(file, "");
+    const gate = gate2();
+    // Soft tree: no block, but the pointer named an Assignment, so the empty
+    // file is that Assignment's shape violation — never a silent pass.
+    expect(await gate.handler(dispatchEvent(`Assignment file: ${file}`))).toBeUndefined();
+    expect(gate.warnings.join("\n")).toContain("dispatch.assignment.shape");
+  });
+
+  test("a pointed document that declares hard enforcement blocks like the inline form", async () => {
+    // Missing every declaration but `execute_as`: the same front matter in
+    // either form must produce the same refusal code.
+    const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
+    const inline = gate2();
+    const inlineResult = (await inline.handler(dispatchEvent(unshapedHard))) as { block: boolean; reason: string } | undefined;
+    expect(inlineResult?.block).toBe(true);
+    expect(inlineResult?.reason).toContain("assignment.field.delegation");
+
+    mkdirSync(join(harness, "assignments"), { recursive: true });
+    const file = join(harness, "assignments", "hard-parity.md");
+    writeFileSync(file, unshapedHard);
+    const pointer = gate2();
+    const pointerResult = (await pointer.handler(dispatchEvent(`Assignment file: ${file}`))) as { block: boolean; reason: string } | undefined;
+    expect(pointerResult?.block).toBe(true);
+    expect(pointerResult?.reason).toContain("assignment.field.delegation");
+  });
+
   test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", async () => {
     const gate = gate2();
     const result = (await gate.handler(dispatchEvent(LEGACY_BODY_LABEL))) as { block: boolean } | undefined;

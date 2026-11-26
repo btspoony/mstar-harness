@@ -17,7 +17,7 @@
  * caller-scoped recursion constraints. Unexpected gate errors return explicit
  * block envelopes; intentional refusals keep their existing shape.
  */
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
@@ -313,7 +313,7 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
  * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
  * but the two produce different one-time warnings.
  */
-type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean }) => {
+type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean; fileCarrier?: boolean; cwd?: string }) => {
   ok: boolean;
   shaped: boolean;
   enforcement: { hard: boolean };
@@ -325,10 +325,20 @@ type ReadAssignmentSourceFn = (
   opts: { harnessDir: string | null },
 ) =>
   | { ok: true; text: string; path?: string }
-  | { ok: false; severity: string; code: string; message: string; fix?: string };
+  | { ok: false; severity: string; code: string; message: string; fix?: string; terminal?: boolean };
+
+/** The engine exports Gate 2 calls: one composition, one resolver and the
+ * ONE shared D16 recognizer (hosts keep no local copy of the retired
+ * grammar). */
+type DispatchEngineGates = {
+  gate: DispatchGateFn;
+  readSource: ReadAssignmentSourceFn;
+  legacyShape: (text: string) => boolean;
+  legacyViolation: () => ValidationResult;
+};
 
 type ComposeDispatchGateLoad =
-  | { status: "ok"; gate: DispatchGateFn; readSource: ReadAssignmentSourceFn }
+  | ({ status: "ok" } & DispatchEngineGates)
   | { status: "missing" }
   | { status: "error"; error: unknown };
 
@@ -337,11 +347,16 @@ let cachedDispatchGate: Promise<ComposeDispatchGateLoad> | null = null;
 export function loadComposeDispatchGate(): Promise<ComposeDispatchGateLoad> {
   cachedDispatchGate ??= import("@mstar-harness/engine")
     .then((mod) =>
-      typeof mod.composeDispatchGate === "function" && typeof mod.readAssignmentSource === "function"
+      typeof mod.composeDispatchGate === "function" &&
+      typeof mod.readAssignmentSource === "function" &&
+      typeof mod.legacyAssignmentShape === "function" &&
+      typeof mod.legacyFormatViolation === "function"
         ? ({
             status: "ok",
             gate: mod.composeDispatchGate as DispatchGateFn,
             readSource: mod.readAssignmentSource as ReadAssignmentSourceFn,
+            legacyShape: mod.legacyAssignmentShape,
+            legacyViolation: mod.legacyFormatViolation,
           } as const)
         : ({ status: "missing" } as const),
     )
@@ -379,7 +394,7 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
   }
   const message =
     reason === "missing"
-      ? "mstar-gates: installed engine lacks composeDispatchGate — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
+      ? "mstar-gates: installed engine lacks composeDispatchGate or the shared D16 recognizer — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
       : `mstar-gates: task dispatch gate (Gate 2) disabled: engine import failed — ${error instanceof Error ? error.message : String(error)}; status gate unaffected`;
   try {
     (
@@ -390,50 +405,6 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
   } catch {
  // degrade path must never throw
   }
-}
-
-/**
- * Shape-guard match of a retired body-label core field in ANY of its three
- * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
- * list-prefixed `- **Execute as**:` line (indentation and a numeric or
- * bullet list marker are formatting, never the field; commands
- * validation.ts / dsh parity — one detection grammar across every gate).
- * Detection ONLY: it never reads a field value — the carrier is never
- * field-parsed with a label regex.
- */
-function legacyLabelKey(line: string): string | undefined {
-  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
-  return match?.[1];
-}
-
-/**
- * D16 shape detection: true when the document carries its fields in the
- * RETIRED body-label grammar — at least TWO distinct core labels, so a
- * single bolded field line in ordinary prose never shapes a document as
- * an Assignment; the `## Assignment` heading is irrelevant either way.
- */
-function legacyAssignmentShape(text: string): boolean {
-  if (/^---[ \t]*\r?\n/.test(text)) return false;
-  const found = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const key = legacyLabelKey(line);
-    if (key !== undefined) found.add(key);
-    if (found.size >= 2) return true;
-  }
-  return false;
-}
-
-/** The D16 legacy-format refusal violation (front matter is the only field
- * contract); the fix names BOTH recoveries — the front matter rewrite and
- * the `Assignment file:` pointer. */
-function legacyFormatViolation(): ValidationResult {
-  return {
-    ok: false,
-    severity: "high",
-    code: "dispatch.assignment.legacy-format",
-    message: "the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract",
-    fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
-  };
 }
 
 /**
@@ -453,8 +424,7 @@ function legacyFormatViolation(): ValidationResult {
  */
 function validateDispatchEntry(
   entry: DispatchEntry,
-  composeDispatchGate: DispatchGateFn,
-  readSource: ReadAssignmentSourceFn,
+  engine: DispatchEngineGates,
   harnessDir: string | null,
 ): { violations: ValidationResult[]; hard: boolean } {
 // compass D14 — resolve the Assignment source ONCE through the engine
@@ -463,31 +433,50 @@ function validateDispatchEntry(
 // a null root refuses the pointer — containment is never skipped). A
 // refusal is itself the verdict: validating the pointer text would
 // report field violations on the wrong body. A source-resolution
-// refusal is CRITICAL by contract (unreadable / out-of-home / unrooted /
-// ambiguous pointer): there is no verified assignment to dispatch on,
+// refusal is `terminal` by contract (unreadable / out-of-home / unrooted
+// / ambiguous pointer): there is no verified assignment to dispatch on,
 // so it is hard independently of document or repo enforcement — the
 // call fails closed on every compass setting.
-  const source = readSource(entry.task, { harnessDir });
+  const source = engine.readSource(entry.task, { harnessDir });
   if (!source.ok) {
     return {
-      violations: [{ ok: false, severity: source.severity as ValidationResult["severity"], code: source.code, message: source.message, fix: source.fix }],
-      hard: true,
+      violations: [{
+        ok: false,
+        severity: source.severity as ValidationResult["severity"],
+        code: source.code,
+        message: source.message,
+        fix: source.fix,
+        terminal: source.terminal === true,
+      }],
+      hard: source.terminal === true,
     };
   }
   const text = source.text;
+  // File provenance (compass D14): a resolved `Assignment file:` pointer
+  // commits to the Assignment contract, so its bytes validate as one even
+  // without a recognized core key. Inline prompts keep the silent path.
+  const carrier = source.path;
+  const fileCarrier = carrier !== undefined;
   // D16 — an Assignment-shaped document whose fields live in the retired
   // body-label grammar is refused `dispatch.assignment.legacy-format`;
   // the refusal supersedes the schema's absent-fence row for the same
   // unfenced text (one defect, one message).
-  const legacy = legacyAssignmentShape(text);
+  const legacy = engine.legacyShape(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
-  const composed = composeDispatchGate(text, { writable });
+  const composed = engine.gate(text, {
+    writable,
+    fileCarrier,
+    // Source-relative `worktree_path` resolves from the pointed file's own
+    // directory (CLI parity); inline prompts keep the checkout base.
+    cwd: carrier === undefined ? undefined : dirname(carrier),
+  });
+  // Clean path: reuse the engine violations as-is; only the legacy refusal
+  // allocates, prepending its diagnostic and dropping the superseded row.
   return {
-    violations: [
-      ...(legacy ? [legacyFormatViolation()] : []),
-      ...composed.violations.filter((violation) => !(legacy && violation.code === "document.frontmatter.absent")),
-    ],
+    violations: legacy
+      ? [engine.legacyViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
+      : composed.violations,
     hard: composed.enforcement.hard,
   };
 }
@@ -502,10 +491,10 @@ function validateDispatchEntry(
  * violations never block but ARE warn-logged through `logSoft` (opencode
  * warn-channel parity — silent drops hide gate/model drift).
  *
- * When the engine build lacks `composeDispatchGate` (predating the export)
- * or the engine import itself fails, Gate 2 is SKIPPED entirely — no
- * blocking, no violations — with a one-time warning; Gate 1 (status) keeps
- * working (engine-version compatibility).
+ * When the engine build lacks `composeDispatchGate` and the shared D16
+ * recognizer (predating those exports) or the engine import itself fails,
+ * Gate 2 is SKIPPED entirely — no blocking, no violations — with a one-time
+ * warning; Gate 1 (status) keeps working (engine-version compatibility).
  */
 async function gateTaskDispatch(
   eventInput: unknown,
@@ -517,14 +506,12 @@ async function gateTaskDispatch(
     warnDegraded(load.status, load.status === "error" ? load.error : undefined);
     return undefined;
   }
-  const composeDispatchGate = load.gate;
- // Repo-level hard (`.mstarc` wins, else compass) hardens flag-less
- // entries — same source Gate 1 uses for coordination writes.
   const harnessDir = resolveHarnessDir();
   const repoHard = harnessDir !== null && resolveRepoEnforcement(harnessDir).hard;
-  const blocked: string[] = [];
+  // Allocated on the first blocked entry: the clean path allocates nothing.
+  let blocked: string[] | undefined;
   for (const entry of taskDispatchEntries(eventInput)) {
-    const { violations, hard } = validateDispatchEntry(entry, composeDispatchGate, load.readSource, harnessDir);
+    const { violations, hard } = validateDispatchEntry(entry, load, harnessDir);
     if (violations.length === 0) continue;
     const label = entry.name !== "" ? `"${entry.name}"` : entry.agent !== "" ? `agent "${entry.agent}"` : "(unnamed)";
     if (!hard && !repoHard) {
@@ -534,11 +521,12 @@ async function gateTaskDispatch(
       }
       continue;
     }
+    blocked ??= [];
     for (const violation of violations) {
       blocked.push(`task dispatch entry ${label}: ${violationLine(violation)} (${DISPATCH_SKILL_POINTER})`);
     }
   }
-  if (blocked.length === 0) return undefined;
+  if (blocked === undefined) return undefined;
   return { block: true, reason: blocked.join("\n") };
 }
 
