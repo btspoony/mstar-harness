@@ -16,16 +16,6 @@ export function str(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
-/** Boolean field: real boolean, else null. */
-export function bool(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null
-}
-
-/** Count field: finite number, else null. */
-export function count(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
 /** Plain-object record (null and arrays are not records), else null. */
 export function record(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

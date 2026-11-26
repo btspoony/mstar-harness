@@ -23,8 +23,8 @@
  * `spec_integration_branch`, PR base = `target_branch`):
  * `skills/mstar-iteration/references/phase-3-iteration-close.md` §3.5.
  * - Push cadence probe (never push while CI is queued/in_progress or an AI
- * review wave is running): `skills/mstar-iteration/SKILL.md` §5.1a +
- * `skills/mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a
+ * review wave is running): `skills/mstar-iteration/SKILL.md` §2.6 +
+ * the project-manager role's `pr-delivery.md`「Push cadence」
  * (push gate 1 + 2).
  * - Catalog completeness (every discovered iteration/plan store has a
  * catalog row; the README tables are not registers): state-projection
@@ -319,7 +319,7 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
     expect(result.exit.violations.some((v) => v.code === "EXIT_PR_BASE_UNVERIFIABLE")).toBe(true);
   });
 
-  test("entry + exit checkable subsets all green → phase-4-pr-delivery (transition table → Phase 4)", () => {
+  test("entry + exit checkable subsets all green → phase-3-close with ok as the readiness signal", () => {
     const result = evaluatePhaseGate(
       snapshotDoc({ "plan-a": "Done", "plan-b": "Done" }),
       compass({ status: "completed", end_date: "2026-08-10" }),
@@ -329,7 +329,9 @@ describe("evaluatePhaseGate — phase transitions on workflow snapshot input (ms
         prBaseBranch: "main",
       },
     );
-    expect(result.transition).toBe("phase-4-pr-delivery");
+    // see skills/mstar-artifacts/references/plan-workflow-lifecycle-contract.md —
+    // the close is the transition once every plan is Done; a green checklist adds no stage.
+    expect(result.transition).toBe("phase-3-close");
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
     expect(result.entry.ok).toBe(true);

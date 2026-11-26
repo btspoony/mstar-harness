@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { getCommandDefinitions } from "@mstar-harness/commands";
 import { createMcpEffects } from "../src/mcp/effects.js";
+import { createContextResolver } from "../src/mcp/stdio.js";
 import { startBounded } from "../src/browser-opener.js";
 
 function fakeChild(): ChildProcess {
@@ -55,5 +60,64 @@ describe("mcp process effects", () => {
       signal: new AbortController().signal,
     });
     expect(result).toMatchObject({ exitCode: 0, signal: null });
+  });
+
+  test("a missing executable rejects with the shared process.not-found shape", async () => {
+    // see packages/commands/src/families/pr.ts
+    // why: `pr merge-gate` builds its install hint off the `executable` field;
+    // an MCP-side ENOENT that keeps the raw spawn message would lose the name.
+    const error = await createMcpEffects([]).spawn({
+      argv: ["mstar-no-such-executable-for-test"],
+      cwd: process.cwd(),
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.not-found", exitCode: 127, executable: "mstar-no-such-executable-for-test" });
+  });
+
+  test("a vanished working directory refuses as a directory fault, not a missing executable", async () => {
+    // see packages/commands/src/effects/process.ts
+    // why: the spawn error names argv[0] even when the directory is what
+    // vanished, so classifying it as a missing binary tells the operator to
+    // install a tool that is already installed.
+    const cwd = path.join(os.tmpdir(), "mstar-effects-vanished-workspace");
+    const error = await createMcpEffects([]).spawn({
+      argv: [process.execPath, "-e", "0"],
+      cwd,
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.cwd-not-found", details: { cwd } });
+    expect(error).not.toHaveProperty("executable");
+  });
+
+  test("a missing executable in an existing directory still reports process.not-found", async () => {
+    // see packages/commands/src/effects/process.ts
+    // why: the directory probe must not swallow the genuine missing-binary case.
+    const error = await createMcpEffects([]).spawn({
+      argv: ["mstar-no-such-executable-for-test"],
+      cwd: os.tmpdir(),
+      env: {},
+      signal: new AbortController().signal,
+    }).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "process.not-found", executable: "mstar-no-such-executable-for-test" });
+  });
+
+  test("a vanished declared workspace names the MCP reconnection, not a directory change", async () => {
+    // see packages/cli/src/mcp/stdio.ts
+    // why: the server runs every call from the `--workspace` path it was
+    // launched with, so a retry on the same connection re-enters the vanished
+    // directory. The gate's recovery therefore has to name the reconnection —
+    // "change directory and rerun" only repairs the CLI.
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "mstar-mcp-vanished-"));
+    rmSync(workspace, { recursive: true, force: true });
+    const definition = getCommandDefinitions().find((entry) => entry.id === "pr.merge-gate");
+    if (definition === undefined) throw new Error("missing command: pr.merge-gate");
+    const context = await createContextResolver({ workspace })(definition, undefined, new AbortController().signal, [], createMcpEffects([]));
+    expect(context.cwd).toBe(workspace);
+    const refused = await definition.execute({ pr: "42" }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "process.cwd-not-found", details: { cwd: workspace } });
+    const recovery = refused.status === "ok" ? "" : (refused.details?.recovery as string);
+    expect(recovery).toContain("mstar mcp --workspace");
   });
 });

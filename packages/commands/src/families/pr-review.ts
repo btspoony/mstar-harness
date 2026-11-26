@@ -11,6 +11,7 @@ import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
+import { registeredReviewPublisherIds, reviewPublisherFor, type ReviewPostFailure } from "./pr.js";
 import { launchDirectoryRefusal, launchDirectoryDiagnostics } from "./launch-workspace.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -22,16 +23,16 @@ type Input = {
   unmetAcTests?: string; unmetAcDocs?: string;
   stopped?: string; requiredDomains?: string; openedDomains?: string; diffBasis?: string; partialScope?: string[];
   reviewsDir?: string; target?: string; stage?: string; slug?: string; date?: string; reportFile?: string;
-  pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean;
+  pr?: string; bodyFile?: string; body?: string; worktreePath?: string; branch?: string; reportSaved?: boolean; provider?: string;
   base?: string; head?: string; largestFileTotal?: string;
   domain?: string; seat?: string; worktree?: string; security?: boolean; skillRoot?: string; recon?: string[]; tier?: string; diffFile?: string; collectFolded?: boolean; remainingMinutes?: string;
 };
 const inputSchema = z.object({
   findings: z.string().optional(), unmetAcUnsafe: z.string().optional(), unmetAcSafe: z.string().optional(),
-  unmetAcTests: z.string().optional(), unmetAcDocs: z.string().optional(),
   stopped: z.string().optional(), requiredDomains: z.string().optional(), openedDomains: z.string().optional(), diffBasis: z.string().optional(), partialScope: z.array(z.string()).optional(),
+  unmetAcTests: z.string().optional(), unmetAcDocs: z.string().optional(),
+  pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(), provider: z.string().optional(),
   reviewsDir: z.string().optional(), target: z.string().optional(), stage: z.string().optional(), slug: z.string().optional(), date: z.string().optional(), reportFile: z.string().optional(),
-  pr: z.string().optional(), bodyFile: z.string().optional(), body: z.string().optional(), worktreePath: z.string().optional(), branch: z.string().optional(), reportSaved: z.boolean().optional(),
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(), remainingMinutes: z.string().optional(),
 });
@@ -39,7 +40,7 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
   tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true, help: "Required; path to a JSON array of {mergeClass: must-fix | should-fix | may-fix | nit}." }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; implementation-surface leftover ACs, increments must-fix." }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; implementation-surface leftover ACs, increments should-fix." }, { key: "unmetAcTests", flags: "--unmet-ac-tests <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; tests-surface leftover ACs increment may-fix only." }, { key: "unmetAcDocs", flags: "--unmet-ac-docs <n>", required: false, defaultValue: "0", help: "Optional; non-negative integer no greater than 50; defaults to 0; docs-surface leftover ACs increment may-fix only." }, { key: "stopped", flags: "--stopped <text>", required: false, help: "Optional; non-blank single line naming why the run stopped before synthesis; presence derives the incomplete verdict." }, { key: "requiredDomains", flags: "--required-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per required seat (a domain with two seats appears twice); at least one; omitted is refused, never inferred." }, { key: "openedDomains", flags: "--opened-domains <d,d,...>", required: false, help: "Required; comma-separated single-line domain names, one entry per seat that returned evidence (a domain with two seats needs two matching entries when both returned); an explicitly empty value means none, omission is refused." }, { key: "diffBasis", flags: "--diff-basis <readable|unreadable>", required: false, help: "Required; one of readable | unreadable; omitted is refused, never defaulted." }, { key: "partialScope", flags: "--partial-scope <scope...>", required: false, defaultValue: [], help: "Optional; repeat once per scope a seat declared as truncated coverage; when the run is unsettled these join the derived unscanned list, and when it settles they are echoed as declaredScopes." }], effects: ["read", "validate"], description: "Compute the PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|may-fix|nit}. The incomplete verdict is derived from run facts (--stopped, --required-domains/--opened-domains one entry per seat, --diff-basis, --partial-scope for truncated scopes), never elapsed time; the three coverage/basis facts are required. --unmet-ac-unsafe, --unmet-ac-safe, --unmet-ac-tests and --unmet-ac-docs default to 0, cap at 50, and split by surface: tests/docs increment may-fix and never select a verdict, implementation increments must-fix (unsafe) or should-fix (safe)." },
   "report-path": { args: [], options: [{ key: "reviewsDir", flags: "--reviews-dir <dir>", required: false, help: "Review root; defaults to {REVIEW_DIR} under the harness dir." }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false, help: "Optional, but if supplied it requires --slug; stage must be 1 or 2." }, { key: "slug", flags: "--slug <domain-seat>", required: false, help: "Optional, but if supplied it requires --stage." }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date; no report file is written or reserved." }], effects: ["read"], description: "Compute the report path inside the target's run directory under {REVIEW_DIR} from the PR/branch/diff target, optional paired stage/slug, and local-date default. This command does not write the report, inspect collision state, or add a revision suffix." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report and return its structured violations." },
-  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
+  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }, { key: "provider", flags: "--provider <id>", required: false, defaultValue: "github", help: "Optional; the registered forge adapter that resolves the PR and posts the review. Defaults to github; an unregistered id refuses." }], effects: ["read", "validate", "process", "service"], description: "Post a body and optional parsed inline findings to the requested PR's resolved current head. If GitHub returns 422 for inline comments, retry once with those comments folded into the review body. A failed final response has unknown outcome: inspect the PR before retrying." },
   "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false, help: "Only true is an explicit saved-report assertion; otherwise the recorded sidecar must already say true." }], effects: ["read", "write", "process"], description: "Remove the recorded PR-review worktree and branch only when --report-saved=true or the recorded sidecar says reportSaved=true, and only when the supplied branch matches its recorded branch." },
   size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false, help: "If omitted, derive the largest touched-file line count from Git at head." }], effects: ["read", "process"], description: "Classify base...head changes from Git; derive largest touched-file total from the referenced head when --largest-file-total is omitted." },
   "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true, help: "Must be 1 or 2; collect-folded=true further restricts this value to 2." }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: false, help: "Defaults to the invocation current working directory." }, { key: "security", flags: "--security", required: false, defaultValue: false, help: "Defaults to false; collect-folded=true forbids a security seat." }, { key: "skillRoot", flags: "--skill-root <dir>", required: false, defaultValue: "skills/mstar-audit" }, { key: "recon", flags: "--recon <facts...>", required: false, defaultValue: [] }, { key: "tier", flags: "--tier <quick|default|deep>", required: false, defaultValue: "default" }, { key: "diffFile", flags: "--diff-file <path>", required: false, help: "Required when --collect-folded is true." }, { key: "collectFolded", flags: "--collect-folded", required: false, defaultValue: false, help: "Defaults to false; true requires --stage 2 and --diff-file, and cannot be used for a security seat." }, { key: "remainingMinutes", flags: "--remaining-minutes <n>", required: false, help: "Minutes left of the tier's shared soft wall-clock cap at dispatch; negative = already over. Omitted = the prompt states the cap without a remaining figure." }], effects: ["read"], description: "Generate a read-only PR-review seat prompt; worktree defaults to invocation cwd, skillRoot to skills/mstar-audit, recon to [], security and collectFolded to false, tier to default, and no remaining-budget figure." },
@@ -412,6 +413,24 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const unnamedRepository = launchDirectoryRefusal(id, context, { subject: "the repository this review is posted to" });
       if (unnamedRepository !== undefined) return unnamedRepository;
       if (!/^\d+$/.test(need(input.pr, "--pr")) || Number(input.pr) < 1) throw new UsageError("--pr requires a positive integer");
+      const providerId = input.provider ?? "github";
+      const publisher = reviewPublisherFor(providerId);
+      if (publisher === undefined) {
+        const registered = registeredReviewPublisherIds();
+        // see docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md
+        // reachability: manual — the interpolation lists registered provider ids (names, not command paths) and retains the caller's --findings placeholder when supplied; the runnable retry is the literal `mstar pr-review post --pr <n> --body-file <file> --provider <id>` this recovery names.
+        return refusalEnvelope({
+          command: id, status: "refused", code: `${id}.unsupported-provider`, exitCode: 1,
+          message: `pr-review posting provider ${providerId} is not registered`,
+          details: { provider: providerId, registered },
+          // see skills/mstar-roles/references/project-manager/pr-delivery.md
+          // why: an id that names a different forge is not a typo to correct — a
+          // registered publisher can only post to its own forge's PR, so the
+          // recovery must route an unsupported forge to the documented
+          // project-tooling path instead of naming a GitHub publisher for a GitLab MR.
+          recovery: `If ${providerId} is a typo, rerun with a registered provider id (${registered.join(", ")}): Run mstar pr-review post --pr <n> --body-file <file>${input.findings !== undefined ? " [--findings <file.json>]" : ""} --provider <id>, keeping the original arguments and replacing only the provider id. A registered id may be selected only when it matches the target forge's provider. For a forge no registered adapter serves, post the review with the project's own tooling per skills/mstar-roles/references/project-manager/pr-delivery.md (posting adds no authorization step of its own); when no documented equivalent exists, STOP — never post by hand.`,
+        });
+      }
       const bodyFile = abs(context.cwd, need(input.bodyFile, "--body-file"));
       if (!existsSync(bodyFile)) throw new Error(`body file not found: ${bodyFile}`);
       const body = readFileSync(bodyFile, "utf8");
@@ -423,53 +442,50 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (!Array.isArray(parsed)) throw new UsageError("--findings must be a JSON array");
         comments = parsed.flatMap((entry, index) => { const value = parseFinding(entry, index); return value ? [value] : []; });
       }
-      const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid,baseRefOid"]);
-
-      if (viewResult.exitCode !== 0 || viewResult.signal !== null) {
-        return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review-file>."});
-      }
-      const parsedView: unknown = JSON.parse(viewResult.stdout);
-      const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
-      const plan = planReviewPost(
-        {
-          ...(typeof record.url === "string" ? { url: record.url } : {}),
-          ...(typeof record.headRefOid === "string" ? { headRefOid: record.headRefOid } : {}),
-        },
-        { body, comments },
-      );
+      const resolved = await publisher.resolve({ pr: Number(input.pr) }, context);
+      if (!resolved.ok) return resolved.refusal;
+      const { url, head, base } = resolved.value;
+      const plan = planReviewPost({ url, headRefOid: head }, { body, comments });
       if (plan.pr !== Number(input.pr)) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
+      const [owner = "", repo = ""] = plan.ownerRepo.split("/", 2);
       // why: GitHub accepts `start_line` + `line` only when both ends sit in
       // one diff hunk, so a cross-hunk range would 422-fold the whole review
       // (suggestion included) — verify the anchor against the SAME head the
       // POST names as commit_id, never the moving current head.
       if (plan.inlineComments.some((comment) => comment.start_line !== undefined)) {
-        const baseOid = record.baseRefOid;
         const unavailable = (cause: string) => refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor at ${plan.commitId}: ${cause}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
-        if (typeof baseOid !== "string" || !/^[0-9a-f]{7,40}$/.test(baseOid)) return unavailable("pr view returned no baseRefOid");
-        const diff = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${plan.ownerRepo}/compare/${baseOid}...${plan.commitId}`]);
-        if (diff.exitCode !== 0 || diff.signal !== null) return unavailable(diff.stderr || "gh api compare failed");
-        const problem = rangeHunkProblem(diff.stdout, plan.inlineComments);
+        if (!/^[0-9a-f]{7,40}$/.test(base)) return unavailable("pr view returned no baseRefOid");
+        const diff = await publisher.diff({ host: plan.host, owner, repo, base, head: plan.commitId }, context);
+        if (!diff.ok) return unavailable(diff.failure.detail);
+        const problem = rangeHunkProblem(diff.value, plan.inlineComments);
         if (problem !== null) {
           return refusalEnvelope({ command: id, status: "refused", code: `${id}.range-spans-hunks`, exitCode: 1, message: `range anchor rejected: ${problem}` , recovery: "Keep start_line and line inside one right-side hunk of the PR diff, or drop start_line/start_side to anchor a single line. Run mstar pr-review post --pr <number> --body-file <review.md>."});
         }
       }
-      const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
-      const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}) });
-      const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], context.cwd, payload(kept, dropped));
+      // see skills/mstar-audit/references/pr-review.md
+      // The 422 fold-retry is a decision about what to send, so it stays here:
+      // the publisher only ever sees a complete review payload.
+      const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => publisher.postReview(
+        { host: plan.host, owner, repo, pr: plan.pr, commitId: plan.commitId, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, comments: kept },
+        context,
+      );
       let response = await send(plan.inlineComments, []);
-      if (response.exitCode !== 0 && /HTTP\s+422|"status"\s*:\s*422/.test(`${response.stderr}\n${response.stdout}`) && plan.inlineComments.length) response = await send([], plan.inlineComments);
-      if (response.exitCode !== 0 || response.signal !== null) {
-        return {
-          version: 1, command: id, status: "error", code: `${id}.unknown-outcome`, exitCode: 1,
-          message: `GitHub review post outcome is unknown; inspect PR ${plan.pr} before retrying: ${response.stderr || "gh api review post failed"}`,
-          details: { outcome: "unknown", pr: plan.pr, commitId: plan.commitId },
-        };
+      if (!response.ok && /HTTP\s+422|"status"\s*:\s*422/.test("probe" in response.failure ? response.failure.probe : response.failure.detail) && plan.inlineComments.length) response = await send([], plan.inlineComments);
+      if (!response.ok) {
+        const postFailure: ReviewPostFailure = response.failure;
+        if (postFailure.cause === "unknown-outcome") {
+          return {
+            version: 1, command: id, status: "error", code: `${id}.unknown-outcome`, exitCode: 1,
+            message: `GitHub review post outcome is unknown; inspect PR ${plan.pr} before retrying: ${postFailure.detail}`,
+            details: { outcome: "unknown", pr: plan.pr, commitId: postFailure.commitId },
+          };
+        }
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.${postFailure.cause}`, exitCode: 1, message: postFailure.detail,
+          recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>." });
       }
-      let reviewUrl = response.stdout.trim();
-      try { const parsed = JSON.parse(response.stdout) as { html_url?: unknown }; if (typeof parsed.html_url === "string") reviewUrl = parsed.html_url; } catch { /* preserve successful response text */ }
-      return ok(id, { posted: true, comments: "posted", review_url: reviewUrl || "(gh response)" });
+      return ok(id, { posted: true, comments: "posted", review_url: response.value.reviewUrl || "(gh response)" });
     }
     if (verb === "worktree-cleanup") {
       // This action DELETES the worktree and branch the setup sidecar records,

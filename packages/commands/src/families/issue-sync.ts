@@ -1,33 +1,4 @@
-/**
- * note: issue-sync family — the local half of the Linear mirror. Three verbs, no
- * Linear request anywhere in mstar:
- *
- *   mstar issue-sync pending --project <project_id> [--harness <root>]
- *   mstar issue-sync apply   --project <project_id> --results <file|-> [--adopt <localId>=<ref>...]
- *                                                   [--force-adopt <localId>...] [--release <localId>...] [--take-run]
- *   mstar issue-sync ingest  --project <project_id> --records <file|-> [--harness <root>]
- *
- * The agent holding the host's Linear tools performs every Linear call. mstar
- * hands it the payloads to write (`pending`), records what its tools reported
- * (`apply`), and associates a listing it fetched back with the local rows those
- * issues mirror (`ingest`). A run is one `pending`/`apply` pair over ONE run
- * lease per binding: `pending` claims it and leaves it held, `apply` continues
- * that run under its token, and either a completed `apply` or an explicit
- * `--take-run` ends it. The lease excludes a second RUNNING run, not a delivered
- * tool call: a call the predecessor already issued may still land, which is why
- * an unconfirmed create stays `pending` and the next `ingest`/`pending`
- * reconciles it by correlation marker instead of creating again.
- *
- * Refusal vocabulary: the `sync.*` ledger codes are unchanged (including
- * `sync.identity-conflict` for a recorded-identity conflict); the
- * `.mstarc`/`git` refusals are `linear.binding-absent`,
- * `linear.binding-invalid`, `linear.binding-incomplete`,
- * `linear.repo-unresolved`, `linear.author-unresolved`, plus the binding
- * state `linear.provider-disabled` and `linear.mode-refused`; and a refused
- * tool result is recorded as `linear.write-refused`. Every refusal names its
- * recovery; none tells the operator to hand-edit a credential file, because
- * no credential lives in mstar.
- */
+/** see docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md */
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { refusalEnvelope } from "../envelope.js";
@@ -144,12 +115,6 @@ function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: id + ".ok", exitCode: 0, data };
 }
 
-/**
- * note: a SyncError refusal survives as a refusal, never an internal error.
- * why: one code can cover conditions whose repairs differ, so the thrown error may
- * carry its own recovery line and `engineErrorFacts` preserves it into the envelope;
- * a caller that supplies none keeps the shared per-code text.
- */
 function refused(code: string, message: string, recovery?: string): Error {
   const error = Object.assign(new Error("[" + code + "] " + message), { code });
   return recovery === undefined ? error : Object.assign(error, { recovery });
@@ -519,11 +484,6 @@ type PendingReport = {
   unresolved: Array<{ localId: string; cause: string }>;
 };
 
-/**
- * note: Plan every pushable item and hand the caller the payloads. No Linear call is
- * made here, and the run lease stays HELD: the caller's tools run between this
- * verb and `apply`, which ends the run.
- */
 async function runPending(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
   return syncWrite(target, (db, authority) => {
@@ -599,10 +559,6 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
   });
 }
 
-/**
- * note: Operator verbs are validated against each other before the first write, so a
- * self-contradicting request cannot land half-applied behind a later refusal.
- */
 function assertOperatorVerbsAgree(
   adoptions: ReadonlyArray<{ localId: string; reference: string }>,
   released: ReadonlySet<string>,
@@ -695,12 +651,6 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
   return { results, refused };
 }
 
-/**
- * note: the identity a caller-supplied result names, through the same normalizer `--adopt`
- * uses, so `LIN-9` and the issue URL that resolves to it compare equal.
- * why: a value the normalizer rejects cannot match any adoption, and the recorder reports it
- * per item, so the preflight stays out of that decision.
- */
 function normalizedOrNull(externalId: string): string | null {
   try {
     return externalIdOf(externalId);
@@ -1036,10 +986,6 @@ type IngestEnvelope = IngestReport & {
   counts: { associated: number; drift: number; foreign: number; orphan: number; unmanaged: number };
 };
 
-/**
- * note: Associate a listing with the local rows it mirrors. mstar makes no Linear call
- * and writes no local issue: the ledger's association is the whole effect.
- */
 async function runIngest(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const target = await resolveTarget(invocation, input);
   const records = parseRecords(await readJsonArgument(invocation, input.records, "--records"));

@@ -110,6 +110,28 @@ describe("planReviewPost — pr-review.md § Comment posting", () => {
     expect(plan.inlineComments).toEqual([INLINE_OK]);
   });
 
+  test("a non-GitHub forge host parses and yields that host alongside owner/repo", () => {
+    const plan = planReviewPost(
+      { url: "https://git.acme.example/octo/hello/pull/77", headRefOid: HEAD_OID },
+      { body: "b" },
+    );
+    // see skills/mstar-audit/references/pr-review.md
+    // why: the posting provider seam needs the forge host, so a PR URL on any
+    // host must parse — never a github.com-only grammar.
+    expect(plan.host).toBe("git.acme.example");
+    expect(plan.ownerRepo).toBe("octo/hello");
+    expect(plan.pr).toBe(77);
+  });
+
+  test("a malformed URL still throws the plan error", () => {
+    expect(() =>
+      planReviewPost(
+        { url: "https://git.acme.example/octo/hello/merge_requests/77", headRefOid: HEAD_OID },
+        { body: "b" },
+      ),
+    ).toThrow(/cannot parse owner\/repo from url/);
+  });
+
   test("headRepository is NEVER a fallback: missing/unparsable url throws even when the fork data is present", () => {
     // The headRepository-derived repo must fail loudly, not silently route
     // the POST at the fork (Reviews API paths are scoped to the base repo).

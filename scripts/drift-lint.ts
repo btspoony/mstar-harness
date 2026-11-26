@@ -23,7 +23,7 @@
  * 3. skills corpus — no ephemeral citations anywhere in the skills/
  * markdown tree (engine findEphemeralCitations over the full corpus),
  * turning the manual corpus smoke into a permanent CI guard.
- * 4. roles/load-order corpus ( * every `skills/mstar-*` SKILL.md must declare
+ * 4. roles/load-order corpus ( * every `mstar-*` SKILL.md under `skills` must declare
  * `mstar-harness-core` in a Load Order / First action section (engine
  * `lintLoadOrder`; the engine-absent archive is exempt by exact name and is
  * instead linted inbound-only over its whole text face, `SKILL.md` +
@@ -32,7 +32,7 @@
  * (engine `validateRoleMapping` on `skills/mstar-roles`).
  * 5. skills corpus — five-question runtime smoke (audit finding 5;
  * classifier wiring per the shared lint-classifier):
- * every shipped `skills/mstar-*` SKILL.md selected as `runtime` by the
+ * every shipped `mstar-*` SKILL.md under `skills` selected as `runtime` by the
  * shared Engine classifier (`classifySkillLint`; the
  * `mstar-harness-core` hub and the standard-bearing
  * `mstar-skill-authoring` are not runtime corpus) must pass engine
@@ -85,6 +85,64 @@
  * (`report-template.md` under two skills) resolve to the file a citation
  * names; an owner prefix disambiguates a collision, then the citing skill's
  * own file, and only a genuinely ambiguous basename fails.
+ * 16. prompt face — retired stage names (`checkRetiredStageNames`): the
+ * iteration delivery stages 4, 5 and 6 no longer exist, so a tracked line
+ * under the prompt roots (`skills/`, `commands/`, `agents/`, `codex/`,
+ * `docs/`, the routing-eval assets, `.changes/unreleased/`) or in
+ * `AGENTS.md`, `README.md`, `README_CN.md`, `INSTALL.md` that cites a retired
+ * section (`§5.x`, `§6.x`, or its word spellings `policy 5.x` /
+ * `section 5.x`), or names stage 4, 5 or 6 (`Phase 4`, `phase-4-…`,
+ * `phase5-…`, a stage list after `phase(s)` such as `Phase 2 → 3 → 4`),
+ * fails. A stage number is the whole number, so `Phase 14` is not stage 4 and
+ * `Phase 123 to 4` still reaches 4. Section citations are removed before a
+ * stage list is read, so `Phase 3 §3.4` stays clean. Text faces are `.md`,
+ * `.svg`, `.html`, `.json`, `.toml` (the Codex prompt sources) and, in
+ * `assets/`, only a direct `*.svg`, `*.html` or `*.archify.json` child.
+ * Diagram text counts:
+ * the `<text>`, `<title>`, `<desc>` and `aria-label` values are read with
+ * comments skipped, inline markup joined and numeric character references
+ * decoded, and so are the `data-node-*` / `data-edge-*` detail attributes an
+ * interactive viewer renders on demand, in either quote style. A diagram label is literal text: a
+ * backtick is a character a reader sees, so a probe in a label is prose. An
+ * `.html` page also has its ordinary prose judged as rendered blocks:
+ * block-level elements, separate controls and embedded blocks separate runs,
+ * a source line break or `<br>` inside a run renders as one space, and an
+ * inline tag is dropped without adding one, so `Pha<b>se</b>
+ * 4` and a `Phase` / `4` line break both read as `Phase 4`. Both passes read
+ * one element list (`BLOCK_ELEMENTS`), so a diagram's embedded HTML and the
+ * page prose cannot disagree about what a block is. Each run's
+ * diagnostic names the line its text starts on. A `foreignObject`'s embedded
+ * HTML is read the same way, so `section<br>5.1` reads as `section 5.1`.
+ * The same decode runs on Markdown and on a JSON prompt's `\\uXXXX` escape,
+ * and adjacent prose lines are judged as one block. One rule decides the join:
+ * a line joins its predecessor only when the predecessor is a **paragraph**
+ * line — not a heading, fence or table row — and it then either continues the
+ * same blockquote container, carries a quote prefix equal to the previous
+ * container's, or carries none under a quoted paragraph, which is a lazy
+ * continuation. A new block opener always breaks: a heading, a fence, a table
+ * row, or a list marker `-`/`*`/`+`/`1.`/`1)` in either spelling at any
+ * indentation, never a wrapped line. So `> Phase` / `4 delivery` joins (a
+ * lazy continuation), `> Phase` / `> 4 delivery` joins (one container), a
+ * quoted heading `> ## Phase` does not join the paragraph below it even in the
+ * same quote, and a quote opened after a plain paragraph is its own block. A
+ * blank line ends the block and the quote prefix is dropped before the join; a
+ * match wholly inside the earlier line is reported there only. `<code>` is
+ * judged
+ * like a backtick span in Markdown, and a span opens and closes on a whole
+ * backtick run of equal length. A fence
+ * closes only on its own character, at least as long as the opener, with
+ * nothing after it, and may sit inside a blockquote. The two engine probes
+ * `--phase 6` and `PHASE6_` pass only inside an inline
+ * code span or a fenced block, matched at their boundaries (the `PHASE6_`
+ * code family is exempt by prefix, and a code element's or fence's own
+ * whitespace run inside `--phase 6` folds to one space, so the flag and its
+ * value stay exempt together while `--phase6` without its space fails), and
+ * their presence in prose fails. No other retired spelling is exempt, so
+ * `phase-4-pr-delivery` fails in a code span as it does in prose.
+ * Generated bundles and changelog history are skipped; skills whose numbered
+ * steps are their own process (`mstar-audit`, `mstar-knowledge`) are exempt
+ * by path. Guard-or-clear-error: a failed `git ls-files` reports the guard as
+ * skipped, and an unreadable file becomes one named row.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -1582,7 +1640,584 @@ export function readReferenceCorpus(repoRoot: string): {
   return { files, referenceFiles, failures: [] };
 }
 
-/** Advisory inventory of oversized test suites; this never contributes failure rows. */
+/* Guard 16: retired stage names — the rule lives in this file's header (item 16).
+ * see scripts/drift-lint.ts */
+
+/** Roots of the prompt face a retired stage name may not survive in. */
+export const RETIRED_STAGE_ROOTS = [
+  "skills/",
+  "commands/",
+  "agents/",
+  "codex/",
+  "docs/",
+  ".cursor/skills/mstar-routing-eval/",
+  ".changes/unreleased/",
+  "assets/",
+] as const;
+/** Prompt-face files outside those roots. */
+export const RETIRED_STAGE_FILES = ["AGENTS.md", "README.md", "README_CN.md", "INSTALL.md"] as const;
+/** Text faces read from that set: Markdown, diagram text, evaluation cases,
+ * and the Codex prompt sources. */
+export const RETIRED_STAGE_EXTS = [".md", ".svg", ".html", ".json", ".toml"] as const;
+/** Tracked trees the scan skips: generated bundles and changelog history. */
+export const RETIRED_STAGE_EXEMPTS = ["harness-skills/", "harness-agents/", ".changes/archive/"] as const;
+/** The two engine probes that stay, only inside a code span or fenced block. */
+export const RETIRED_STAGE_MACHINE_LITERALS = ["--phase 6", "PHASE6_"] as const;
+/** Skills whose numbered steps are their own process, not delivery stages. */
+export const RETIRED_STAGE_OWN_PROCESS = ["skills/mstar-audit/", "skills/mstar-knowledge/"] as const;
+
+/** Guard 16 result: corpus size plus one failure row per retired spelling. */
+export interface RetiredStageResult {
+  filesScanned: number;
+  hits: string[];
+}
+
+/** see scripts/drift-lint.ts § 16 — a retired section citation: `§5.x` / `§6.x` and the word spellings the
+ * English workflow diagram uses. */
+const RETIRED_SECTION = /§\s*[56]\.\d+/g;
+const RETIRED_SECTION_WORD = /\b(?:policy|section)\s+[56]\.\d+/gi;
+/** see scripts/drift-lint.ts § 16 — why: a stage number is the whole number, so `Phase 14` is not stage 4. */
+const isRetiredStage = (digits: string): boolean => digits === "4" || digits === "5" || digits === "6";
+/** see scripts/drift-lint.ts § 16 — a compact stage spelling: `Phase 4`, `phase-4-…`, `phase5-…`. */
+const RETIRED_COMPACT_STAGE = /\bphase[- ]?([0-9]+)\b/gi;
+/** see scripts/drift-lint.ts § 16 — a stage run after `phase(s)`: numbers joined only by list separators, so
+ * a sentence that merely follows a stage number (`Phase 3 completes 4 checks`)
+ * does not read as a list. */
+const STAGE_RUN =
+  /\bphases?\s*[:：]?\s*([0-9]+(?:\s*(?:→|->|–|—|-|~|,|、|\/|&|\+|to|through|and)\s*[0-9]+)*)/gi;
+/** see scripts/drift-lint.ts § 16 — the unquoted remainder of a tag: a `>` inside a quoted attribute is
+ * part of the tag, so it can never end it. Every tag matcher below is built from this one body. */
+const TAG_BODY = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+/** see scripts/drift-lint.ts § 16 — an element name ends at whitespace, `/` or `>`. A `\b` boundary also
+ * accepts a hyphen, so `<li-item>` would read as the block element `<li>`. */
+const NAME_END = `(?=[\\s/>])`;
+/** see scripts/drift-lint.ts § 16 — an inline code span; its content is judged in place, so a stage run that
+ * straddles prose and a span keeps its list context. */
+const INLINE_CODE = /(?<!`)(`+)([^`]*)\1(?!`)/g;
+/** see scripts/drift-lint.ts § 16 — a diagram text node or label; the value is decoded before it is judged.
+ * `desc` is reader-visible too (tooltip and screen-reader text). */
+const SVG_NODE = new RegExp(`<(?:text|title|desc)${NAME_END}${TAG_BODY}>([\\s\\S]*?)<\\/(?:text|title|desc)>`, "gi");
+const SVG_ARIA = /aria-label\s*=\s*(["'])([\s\S]*?)\1/gi;
+// see scripts/drift-lint.ts § 16 — node and edge detail attributes feed the interactive viewer's on-demand text;
+// the quote style is not part of the contract, so either pair opens the value.
+const DATA_TEXT = /\bdata-(?:node|edge)-(?:label|sublabel)\s*=\s*(["'])([\s\S]*?)\1/gi;
+/** see scripts/drift-lint.ts § 16 — why: a probe exemption must name the probe, not a longer identifier —
+ * the `PHASE6_` code family is exempt by prefix because the CLI names its
+ * delivery codes that way. The `--phase 6` probe needs its space: the engine
+ * takes the flag and the value apart, so `--phase6` is a retired spelling and
+ * reports again; a code element's or fence's own whitespace run still joins
+ * the pair. `phase-4-pr-delivery` is NOT here: it is a retired stage name the
+ * guard rejects in a code span too, so the vocabulary cannot be re-licensed. */
+const PROBE_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w])--phase\s+6(?![\w])`,
+    String.raw`PHASE6_`,
+  ].join("|"),
+  "g",
+);
+/** see scripts/drift-lint.ts § 16 — one token of element body text: a whole tag (a `>` inside a quoted
+ * attribute is part of the tag, not the label) or the text between two tags or comment boundaries. */
+const TAG = new RegExp(`<${TAG_BODY}>`, "g");
+const TAG_OR_TEXT = new RegExp(`<${TAG_BODY}>|[^\\0<]+`, "g");
+/** see scripts/drift-lint.ts § 16 — an HTML code element; render-equivalent to a backtick span. */
+const HTML_CODE = new RegExp(`<code${NAME_END}${TAG_BODY}>([\\s\\S]*?)</code>`, "gi");
+/** see scripts/drift-lint.ts § 16 — the one element list both prose passes read: block-level elements,
+ * separate controls and embedded blocks break a text run, while an inline element is dropped without
+ * adding whitespace. */
+const BLOCK_ELEMENTS = [
+  "address", "article", "aside", "audio", "blockquote", "br", "button", "canvas", "caption", "dd",
+  "details", "dialog", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "iframe", "li", "main", "nav",
+  "noscript", "object", "ol", "option", "p", "picture", "pre", "section", "select", "summary",
+  "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "tr", "ul", "video",
+].join("|");
+/** see scripts/drift-lint.ts § 16 — the `foreignObject` pass tests a single tag token against the list. */
+const BLOCK_TAG = new RegExp(`^</?(?:${BLOCK_ELEMENTS})${NAME_END}`, "i");
+/** see scripts/drift-lint.ts § 16 — the HTML prose pass splits a page on the same list. */
+const BLOCK_ELEMENT = new RegExp(`</?(?:${BLOCK_ELEMENTS})${NAME_END}${TAG_BODY}>`, "gi");
+/** see scripts/drift-lint.ts § 16 — why: `<br>` renders a line break inside a run, which a reader sees as
+ * whitespace, so it joins its neighbours with one space instead of ending the run; `br` sits in the list
+ * above, so a pass that tests this first keeps that meaning. */
+const BR_TAG = new RegExp(`^<br${NAME_END}`, "i");
+/** see scripts/drift-lint.ts § 16 — the full `<br>` tag token, for the HTML pass's whitespace blanking. */
+const BR_ELEMENT = new RegExp(`<br${NAME_END}${TAG_BODY}>`, "gi");
+/** see scripts/drift-lint.ts § 16 — an SVG element that embeds HTML the reader sees as ordinary prose. */
+const FOREIGN_OBJECT = new RegExp(`<foreignObject${NAME_END}${TAG_BODY}>([\\s\\S]*?)<\\/foreignObject>`, "gi");
+/** see scripts/drift-lint.ts § 16 — why: a diagram may spell a stage as a numeric character reference, which
+ * renders as the stage number; decode before matching. */
+function decodeXmlEntities(text: string): string {
+  // see scripts/drift-lint.ts § 16 — why: an out-of-range code point must not abort the whole lint; a
+  // rendering that cannot be produced cannot hide a retired name either.
+  const fromCodePoint = (codePoint: number): string =>
+    codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "\uFFFD";
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, dec: string) => fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+/** see scripts/drift-lint.ts § 16 — why: the two engine probes survive only where the reader sees them as a
+ * literal, so the scan removes them from a code span or fence and reports
+ * them anywhere else. Other span content is judged like prose: a retired
+ * stage name in backticks is still a retired stage name. `markup: false`
+ * judges literal text (a diagram label, where a backtick is a character a
+ * reader sees, not Markdown). */
+export function findRetiredStageSpellings(line: string, inFence = false, markup = true): string[] {
+  const hits: string[] = [];
+  // see scripts/drift-lint.ts § 16 — why: span recognition must see the source form. A decoded `&lt;code&gt;`
+  // renders as literal angle brackets, not as an HTML code element.
+  let rest = line;
+  const stripProbes = (inner: string): string => inner.replace(PROBE_PATTERN, " ");
+  if (inFence) {
+    rest = stripProbes(decodeXmlEntities(rest));
+  } else if (!markup) {
+    // see scripts/drift-lint.ts § 16 — literal text: nothing here is a code span, so a probe is prose. The
+    // caller already decoded it (a JSON value or a diagram label), so no second decode runs here.
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
+  } else {
+    // see scripts/drift-lint.ts § 16 — a span keeps its position: only the probe literals leave it, so a
+    // stage run written across prose and backticks is still one run. `<code>` is the render-equivalent
+    // HTML form and is judged the same way, and a code span opens and closes with a matching run of
+    // backticks, not only one.
+    rest = rest.replace(INLINE_CODE, (_match, _fence: string, inner: string) => stripProbes(inner));
+    rest = rest.replace(HTML_CODE, (_match, inner: string) => stripProbes(inner));
+    for (const literal of RETIRED_STAGE_MACHINE_LITERALS) if (rest.includes(literal)) hits.push(literal);
+  }
+  // see scripts/drift-lint.ts § 16 — a render-equivalent spelling may be written as `&#52;`; decode before
+  // the spelling rules read the text. A literal-text caller already decoded its input, so decoding again
+  // would read `&amp;lt;` as a tag.
+  if (markup || inFence) rest = decodeXmlEntities(rest);
+  for (const match of rest.matchAll(RETIRED_SECTION)) hits.push(match[0]);
+  for (const match of rest.matchAll(RETIRED_SECTION_WORD)) hits.push(match[0]);
+  // see scripts/drift-lint.ts § 16 — section citations are removed before a stage run is read, so
+  // `Phase 3 §3.4` is not mistaken for a list that reaches stage 4.
+  const withoutSections = rest.replace(/§\s*\d+(?:\.\d+)?/g, " ");
+  for (const match of withoutSections.matchAll(RETIRED_COMPACT_STAGE)) {
+    if (isRetiredStage(match[1])) hits.push(match[0]);
+  }
+  for (const match of withoutSections.matchAll(STAGE_RUN)) {
+    if (match[1].split(/[^0-9]+/).some((digits) => digits !== "" && isRetiredStage(digits))) hits.push(match[0].trim());
+  }
+  const unique = [...new Set(hits)];
+  // see scripts/drift-lint.ts § 16 — a probe literal already names the compact spelling inside it; report
+  // the longer match once rather than twice.
+  return unique.filter((hit) => !unique.some((other) => other !== hit && other.includes(hit)));
+}
+
+/** see scripts/drift-lint.ts § 16 — text a reader of a diagram sees: `<text>`/`<title>`/`<desc>` bodies and
+ * `aria-label` values (either quote style), entity-decoded. Comments and whole tags (a `>` inside a quoted
+ * attribute still belongs to the tag) are dropped, and the fragments they leave are joined the way the
+ * browser renders them, each run keeping the source offset of its first visible character. */
+function svgTextSegments(text: string): Array<{ text: string; line: number }> {
+  const segments: Array<{ text: string; line: number }> = [];
+  // see scripts/drift-lint.ts § 16 — a comment renders as nothing: its text is invisible, and a comment or
+  // tag inside a label joins the fragments around it with no whitespace. One sentinel per UTF-16 unit,
+  // line breaks included, keeps every later offset in place while making the whole comment a boundary the
+  // structure regexes cannot match into; extraction drops the sentinels instead of rendering them as
+  // spaces, so a label split by a comment reads as the joined word a browser shows.
+  const markup = text.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[\s\S]/g, "\0"));
+  const lineStarts: number[] = [0];
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
+  const lineAt = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid] <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+  // see scripts/drift-lint.ts § 16 — one element body renders as one run: the tag itself and any inline
+  // markup are dropped without adding whitespace, and the diagnostic names the line the visible text
+  // starts on, not the line the opening tag sits on.
+  for (const match of markup.matchAll(SVG_NODE)) {
+    const body = match[1];
+    const bodyOffset = (match.index ?? 0) + (match[0].match(TAG)?.[0].length ?? 0);
+    const parts: string[] = [];
+    let first = -1;
+    for (const token of body.matchAll(TAG_OR_TEXT)) {
+      const fragment = token[0];
+      if (fragment.startsWith("<")) continue;
+      const lead = fragment.search(/\S/);
+      if (first < 0 && lead >= 0) first = bodyOffset + (token.index ?? 0) + lead;
+      parts.push(fragment);
+    }
+    const rendered = decodeXmlEntities(parts.join("").replace(/\s+/g, " "));
+    if (rendered.trim() === "") continue;
+    segments.push({ text: rendered, line: lineAt(first >= 0 ? first : (match.index ?? 0)) });
+  }
+  for (const match of markup.matchAll(SVG_ARIA)) {
+    const value = decodeXmlEntities(match[2].replace(/\0+/g, ""));
+    if (value.trim() === "") continue;
+    segments.push({ text: value, line: lineAt(match.index ?? 0) });
+  }
+  // see scripts/drift-lint.ts § 16 — an interactive viewer renders some text from element attributes on
+  // demand, so a clean static caption does not prove the interactive detail is clean.
+  for (const match of markup.matchAll(DATA_TEXT)) {
+    const value = decodeXmlEntities(match[2].replace(/\0+/g, ""));
+    if (value.trim() === "") continue;
+    segments.push({ text: value, line: lineAt(match.index ?? 0) });
+  }
+  // see scripts/drift-lint.ts § 16 — a diagram may embed HTML in a `foreignObject`; that text is
+  // reader-visible too, and the prose pass blanks the whole SVG, so it is read here. The body is
+  // tokenised the way a browser renders it: a block tag ends a run, `<br>` (in any spelling) or a source
+  // line break inside a run is one space, and an inline tag or a comment joins its neighbours — so
+  // `section<br>5.1` reads as `section 5.1`. Each run keeps the source offset of its first visible
+  // character, so a label in the fourth block is not reported on the element's first line.
+  for (const match of markup.matchAll(FOREIGN_OBJECT)) {
+    const body = match[1];
+    const bodyOffset = (match.index ?? 0) + (match[0].match(TAG)?.[0].length ?? 0);
+    let run = "";
+    let runStart = -1;
+    const flush = (): void => {
+      const rendered = decodeXmlEntities(run.replace(/\s+/g, " "));
+      if (rendered.trim() !== "" && runStart >= 0) segments.push({ text: rendered, line: lineAt(runStart) });
+      run = "";
+      runStart = -1;
+    };
+    for (const token of body.matchAll(TAG_OR_TEXT)) {
+      const fragment = token[0];
+      if (fragment.startsWith("<")) {
+        if (BR_TAG.test(fragment)) run += " ";
+        else if (BLOCK_TAG.test(fragment)) flush();
+        continue;
+      }
+      const lead = fragment.search(/\S/);
+      if (runStart < 0 && lead >= 0) runStart = bodyOffset + (token.index ?? 0) + lead;
+      run += fragment;
+    }
+    flush();
+  }
+  return segments;
+}
+
+export function extractSvgText(text: string): string[] {
+  return svgTextSegments(text).map((segment) => segment.text);
+}
+
+/** see scripts/drift-lint.ts § 16
+ * Guard 16 — the rule is stated once, in this file's header (item 16). A
+ * Markdown line is judged with its fenced state; an `.svg` file is judged on
+ * the text a reader sees; a `.json` file is judged value by value.
+ */
+/** see scripts/drift-lint.ts § 16 — why: a JSON value is a document of its own. Scanning the serialized wire
+ * text as one Markdown stream would let a fence opened in one field hide a
+ * probe in the next, so each string value is decoded and scanned separately,
+ * keeping the source line of its first row for the diagnostic. */
+export function jsonStringValues(text: string): Array<{ text: string; line: number }> {
+  const lineStarts: number[] = [0];
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) lineStarts.push(at + 1);
+  const lineAt = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid] <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+  const values: Array<{ text: string; line: number }> = [];
+  for (const match of text.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    // see scripts/drift-lint.ts § 16 — why: the native decoder is the only faithful one — it keeps a
+    // literal `\\n` as a backslash and an `n`, and turns a real `\n` into a line break. Character
+    // references stay as written: the Markdown scan recognises a span on the source form, so `&#96;`
+    // renders as a backtick character and never becomes a delimiter, while `&#52;` still reads as a
+    // stage number there.
+    let decoded: string;
+    try {
+      decoded = JSON.parse(`"${match[1]}"`);
+    } catch {
+      decoded = match[1];
+    }
+    values.push({ text: decoded, line: lineAt(match.index ?? 0) });
+  }
+  return values;
+}
+
+/** see scripts/drift-lint.ts § 16 — the quote prefix is markup, so the inner line is what is classified:
+ * `> Phase 2` followed by `> - 4 checks` is a new bullet. */
+const quoteless = (value: string): string => value.replace(/^\s*(?:>\s*)+/, "");
+/** see scripts/drift-lint.ts § 16 — a list marker in either spelling starts a block. */
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])(?:\s|$)/;
+/** see scripts/drift-lint.ts § 16 — a list marker with no item content opens no paragraph, so nothing joins
+ * it; a marker line carrying prose opens the item's paragraph and its continuation joins it. */
+const BARE_MARKER = /^\s*(?:[-*+]|\d+[.)])\s*$/;
+/** see scripts/drift-lint.ts § 16 — a heading or table row opens a block that is not a paragraph, so it
+ * never joins the line below it. A fence is tracked separately. */
+const PARAGRAPH_BREAKER = /^\s*(?:#{1,6}(?:\s|$)|\|)/;
+/** see scripts/drift-lint.ts § 16 — a heading, table or fence opens a block; a blockquote is judged
+ * against the previous line, since the same container's next line continues it. */
+const BLOCK_OPENER = /^\s*(?:#{1,6}(?:\s|$)|\||`{3,}|~{3,})/;
+
+/** see scripts/drift-lint.ts § 16 — Scan one prose document: fence state, quote container and the cross-line
+ * join reset per document, so one JSON value cannot inherit another's fence. */
+function scanProseRows(rows: Array<{ text: string; line: number }>, rel: string, hits: string[]): void {
+  const report = (row: number, hit: string, note = ""): void => {
+    hits.push(
+      `Guard 16 retired-stage-name: ${rel}:${row} "${hit}"${note} - the iteration delivery has no stages 4-6; name the procedure instead`,
+    );
+  };
+  // see scripts/drift-lint.ts § 16 — why: quote membership is decided by the parsed `>` prefix, not by
+  // raw whitespace, so a permitted indent does not drop a quoted fence.
+  const quoteOf = (value: string): string => (value.match(/^\s*((?:>\s*)+)/)?.[1] ?? "").trim();
+  // see scripts/drift-lint.ts § 16 — why: a fence closes only on its own delimiter character, at least
+  // as long as the opener, with nothing after it, and only inside the quote container it opened in; an
+  // unquoted fence keeps a leading `>` as literal content.
+  let fence: { char: string; len: number; quote: string } | null = null;
+  // see scripts/drift-lint.ts § 16 — why: Markdown renders adjacent prose lines as one block, so a name
+  // split across a line break is judged on the joined pair as well. What the predecessor line was decides
+  // whether the next one may join it: its quote container, and whether it was a paragraph at all.
+  let previous = "";
+  let previousQuote = "";
+  let previousIsParagraph = false;
+  for (const { text, line } of rows) {
+    const delimiter = text.match(/^\s*((?:>\s*)*)(`{3,}|~{3,})(.*)$/);
+    const quote = quoteOf(text);
+    if (fence !== null) {
+      const sameContainer = fence.quote === "" || quote === fence.quote;
+      // see scripts/drift-lint.ts § 16 — inside an unquoted fence a `>` line is literal content, even
+      // when it looks like a quoted closer.
+      const quoteLine = /^\s*>/.test(text) && fence.quote === "";
+      const closes =
+        sameContainer &&
+        !quoteLine &&
+        delimiter !== null &&
+        delimiter[2][0] === fence.char &&
+        delimiter[2].length >= fence.len &&
+        delimiter[3].trim() === "";
+      if (closes) {
+        fence = null;
+        previous = "";
+        continue;
+      }
+      if (sameContainer) {
+        previous = "";
+        for (const hit of findRetiredStageSpellings(text, true)) report(line, hit);
+        continue;
+      }
+      // see scripts/drift-lint.ts § 16 — the blockquote ended; the fence cannot continue outside it.
+      fence = null;
+    }
+    if (delimiter !== null) {
+      previous = "";
+      fence = { char: delimiter[2][0], len: delimiter[2].length, quote };
+      // see scripts/drift-lint.ts § 16 — an info string after the opening fence is prose a reader can see.
+      for (const hit of findRetiredStageSpellings(delimiter[3], false)) report(line, hit);
+      continue;
+    }
+    const lineHits = findRetiredStageSpellings(text, false);
+    for (const hit of lineHits) report(line, hit);
+    // see scripts/drift-lint.ts § 16 — the rule, stated once: a line joins its predecessor only when the
+    // predecessor is a paragraph line (not a heading, table row or fence) and the current line is not a
+    // new block opener (a list marker `-`/`*`/`+`/`1.`/`1)` at any indentation, a heading, a fence or a
+    // table row). Then it must also continue the same container: the same blockquote prefix, or — under a
+    // quoted paragraph — no prefix at all, which is a lazy continuation; an opening quote after a plain
+    // paragraph is a new block. The quote prefix is markup, so the inner line is classified: `> Phase 2`
+    // followed by `> - 4 checks` is a new bullet, and `> ## Phase` followed by `> 4 checks` is two blocks.
+    const inner = quoteless(text);
+    const startsBlock = LIST_MARKER.test(inner) || BLOCK_OPENER.test(inner);
+    const continues = quote === previousQuote || (quote === "" && previousQuote !== "");
+    const joins = previousIsParagraph && !startsBlock && continues;
+    if (previous !== "" && text.trim() !== "" && joins) {
+      // see scripts/drift-lint.ts § 16 — recognize spans on the joined SOURCE (a Markdown code span may
+      // cross one line break), with the boundary rendered as a space so a probe inside a straddling
+      // span is still stripped.
+      const MARKER = "\u0000";
+      const render = (value: string): string =>
+        decodeXmlEntities(
+          value
+            .replace(/(?<!`)(`+)([^`]*)\1(?!`)/g, (_match, _fence: string, inner: string) =>
+              inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
+            )
+            .replace(HTML_CODE, (_match, inner: string) =>
+              inner.split(MARKER).join(" ").replace(/\s+/g, " ").replace(PROBE_PATTERN, " "),
+            ),
+        );
+      const joinedRendered = render(`${quoteless(previous)}${MARKER}${quoteless(text)}`).split(MARKER).join(" ");
+      // see scripts/drift-lint.ts § 16 — a hit is split only when neither standalone line *matches* it — a
+      // substring test would hide a real `Phase 4` behind `SubPhase 4`.
+      const previousHits = findRetiredStageSpellings(render(quoteless(previous)), false, false);
+      const textHits = findRetiredStageSpellings(render(quoteless(text)), false, false);
+      for (const hit of findRetiredStageSpellings(joinedRendered, false, false)) {
+        if (lineHits.includes(hit)) continue;
+        if (previousHits.includes(hit) || textHits.includes(hit)) continue;
+        report(line, hit, " (split across the line break)");
+      }
+    }
+    previous = text.trim() === "" ? "" : text;
+    // see scripts/drift-lint.ts § 16 — a blank line ends the block, so nothing joins it; otherwise what
+    // this line was decides whether the next one may.
+    if (text.trim() === "") {
+      previousQuote = "";
+      previousIsParagraph = false;
+    } else {
+      previousQuote = quote;
+      previousIsParagraph = !BARE_MARKER.test(inner) && !PARAGRAPH_BREAKER.test(inner);
+    }
+  }
+}
+
+export function checkRetiredStageNames(files: Array<{ rel: string; text: string }>): RetiredStageResult {
+  const hits: string[] = [];
+  for (const file of files) {
+    const splitLines = (value: string): string[] => value.split(/\r\n|\n|\r/);
+    if (/\.(?:svg|html)$/.test(file.rel)) {
+      // see scripts/drift-lint.ts § 16 — diagram label text is literal text a reader sees: a backtick is a
+      // character, and a probe in a label is prose.
+      for (const segment of svgTextSegments(file.text)) {
+        for (const hit of findRetiredStageSpellings(segment.text, false, false)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel}:${segment.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
+      }
+      // see scripts/drift-lint.ts § 16 — an interactive page also carries ordinary HTML prose outside the
+      // SVG. Comments, scripts, styles and the already-scanned SVG are blanked without moving a line; a
+      // probe inside a `<code>` element is blanked the same way, across as many lines as it spans and in
+      // place, so a block still names the line its text starts on.
+      if (file.rel.endsWith(".html")) {
+        const blank = (block: string): string => block.replace(/[^\n]/g, " ");
+        const source = file.text
+          .replace(/<!--[\s\S]*?-->/g, blank)
+          .replace(/<script[\s\S]*?<\/script>/gi, blank)
+          .replace(/<style[\s\S]*?<\/style>/gi, blank)
+          .replace(/<svg[\s\S]*?<\/svg>/gi, blank)
+          .replace(HTML_CODE, (whole: string, inner: string) => {
+            // see scripts/drift-lint.ts § 16 — why: the element is rebuilt from the match bounds, not by
+            // string replacement, so a body spelled inside the opening tag is not blanked by mistake and
+            // a `$` sequence in the body cannot expand. The reader sees the body wrapped to one space per
+            // source line break, so the probe matches folded whitespace; equal-length space runs keep
+            // every later offset in place.
+            const close = whole.lastIndexOf("</");
+            const open = whole.slice(0, close - inner.length);
+            const body = inner
+              .replace(/\s*\n\s*/g, (gap: string) => " ".repeat(gap.length))
+              .replace(PROBE_PATTERN, (probe: string) => " ".repeat(probe.length));
+            return open + body + whole.slice(close);
+          })
+          // see scripts/drift-lint.ts § 16 — why: a `<br>` is a line break inside a block, which a reader
+          // sees as whitespace, not as a block boundary.
+          .replace(BR_ELEMENT, blank);
+        // see scripts/drift-lint.ts § 16 — a reader sees a rendered block, not a source line: block tags
+        // separate blocks, a line break or `<br>` between inline content renders as one space, and an
+        // inline tag is dropped without inserting one (so `Pha<b>se</b> 4` renders `Phase 4`). `<button>`
+        // is a boundary too: two buttons are separate controls, so `Open` + `Phase 4` never joins.
+        // Each block is judged whole, on the one element list `BLOCK_TAG` also reads.
+        const blockTag = BLOCK_ELEMENT;
+        // see scripts/drift-lint.ts § 16 — the first character of the rendered text, so the diagnostic
+        // names the line that text starts on rather than the line its opening tag sits on. Tag spans come
+        // from the same quote-aware matcher as the SVG pass, so a `>` inside an attribute value cannot end
+        // a tag early and leave its tail to be judged as prose on the tag's line.
+        const firstContent = (slice: string): number => {
+          let at = 0;
+          for (const tag of slice.matchAll(TAG)) {
+            const start = tag.index ?? 0;
+            for (; at < start; at += 1) if (!/\s/.test(slice[at])) return at;
+            at = start + tag[0].length;
+          }
+          for (; at < slice.length; at += 1) if (!/\s/.test(slice[at])) return at;
+          return -1;
+        };
+        let cursor = 0;
+        let line = 1;
+        // see scripts/drift-lint.ts § 16 — why: every blanking step preserves length, and a code element
+        // may swallow a line break, so the original page text is what maps an offset back to its source
+        // line.
+        const original = file.text;
+        const lineAt = (index: number): number => {
+          for (; cursor < index; cursor += 1) if (original[cursor] === "\n") line += 1;
+          return line;
+        };
+        let at = 0;
+        for (const match of source.matchAll(blockTag)) {
+          const boundary = match.index ?? 0;
+          const piece = source.slice(at, boundary);
+          const start = firstContent(piece);
+          if (start >= 0) {
+            // see scripts/drift-lint.ts § 16 — collapsed whitespace is the rendered spacing; a backtick
+            // is a character in HTML, so the block is literal text and only `<code>` exempts.
+            const rendered = decodeXmlEntities(piece.replace(TAG, "").replace(/\s+/g, " "));
+            for (const hit of findRetiredStageSpellings(rendered, false, false)) {
+              hits.push(
+                `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + start)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+              );
+            }
+          }
+          at = boundary + match[0].length;
+        }
+        const tail = source.slice(at);
+        const tailStart = firstContent(tail);
+        if (tailStart >= 0) {
+          const rendered = decodeXmlEntities(tail.replace(TAG, "").replace(/\s+/g, " "));
+          for (const hit of findRetiredStageSpellings(rendered, false, false)) {
+            hits.push(
+              `Guard 16 retired-stage-name: ${file.rel}:${lineAt(at + tailStart)} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+            );
+          }
+        }
+      }
+      continue;
+    }
+    if (file.rel.endsWith(".archify.json")) {
+      // see scripts/drift-lint.ts § 16 — a diagram source holds display strings, not Markdown: a backtick
+      // in a label is a character a reader sees, so the same string is judged literally here and in the
+      // rendered SVG, and neither can exempt a probe the other reports. Character references decode once
+      // before the literal match, like the SVG sibling.
+      for (const value of jsonStringValues(file.text)) {
+        for (const hit of findRetiredStageSpellings(decodeXmlEntities(value.text), false, false)) {
+          hits.push(
+            `Guard 16 retired-stage-name: ${file.rel}:${value.line} "${hit}" - the iteration delivery has no stages 4-6; name the procedure instead`,
+          );
+        }
+      }
+      continue;
+    }
+    const groups: Array<Array<{ text: string; line: number }>> = file.rel.endsWith(".json")
+      ? jsonStringValues(file.text).map((value) => splitLines(value.text).map((text) => ({ text, line: value.line })))
+      : [splitLines(file.text).map((text, index) => ({ text, line: index + 1 }))];
+    for (const group of groups) scanProseRows(group, file.rel, hits);
+  }
+  return { filesScanned: files.length, hits };
+}
+
+/** see scripts/drift-lint.ts § 16 — Guard 16 corpus read: tracked files under the prompt roots, intersected
+ * with the tracked set so an untracked scratch file cannot fail the scan.
+ * Guard-or-clear-error: an unreadable file becomes one named row. */
+export function readRetiredStageCorpus(
+  repoRoot: string,
+  tracked: Set<string>,
+): {
+  files: Array<{ rel: string; text: string }>;
+  readFailures: string[];
+} {
+  const files: Array<{ rel: string; text: string }> = [];
+  const readFailures: string[] = [];
+  for (const rel of tracked) {
+    const inRoot = RETIRED_STAGE_ROOTS.some((root) => rel.startsWith(root));
+    if (!inRoot && !RETIRED_STAGE_FILES.some((name) => name === rel)) continue;
+    if (!RETIRED_STAGE_EXTS.some((ext) => rel.endsWith(ext))) continue;
+    // see scripts/drift-lint.ts § 16 — the diagram face is a direct `assets/*.svg`, `assets/*.html` or
+    // `assets/*.archify.json` child (the static image, the interactive page and the source they are
+    // generated from); a nested file is not the diagram face.
+    if (rel.startsWith("assets/") && !/^assets\/[^/]+\.(?:svg|html|archify\.json)$/.test(rel)) continue;
+    if (RETIRED_STAGE_EXEMPTS.some((root) => rel.startsWith(root))) continue;
+    if (RETIRED_STAGE_OWN_PROCESS.some((root) => rel.startsWith(root))) continue;
+    try {
+      files.push({ rel, text: readFileSync(join(repoRoot, rel), "utf8") });
+    } catch (error) {
+      readFailures.push(`Guard 16 retired-stage-name corpus read: ${rel} - ${(error as Error).message}`);
+    }
+  }
+  return { files, readFailures };
+}
+
+/** see scripts/drift-lint.ts § 11 — Advisory inventory of oversized test suites; this never contributes failure rows. */
 export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
   try {
     const candidates: string[] = [];
@@ -2122,6 +2757,16 @@ if (import.meta.main) {
   }
   for (const row of references.failures) fail(row);
 
+/* see scripts/drift-lint.ts § 16 — why: Guard 16 wiring — the rule is stated once, in this file's header § 16. */
+
+  const retiredStageRan = tracked.failures.length === 0;
+  const retiredStage = retiredStageRan
+      ? readRetiredStageCorpus(root, tracked.tracked)
+      : { files: [], readFailures: [] as string[] };
+  for (const row of retiredStage.readFailures) fail(row);
+  const retiredStageHits = checkRetiredStageNames(retiredStage.files);
+  for (const row of retiredStageHits.hits) fail(row);
+
 /* ------------------------------------------------------------------ */
 /* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
 /* ------------------------------------------------------------------ */
@@ -2180,6 +2825,14 @@ if (import.meta.main) {
     referenceFailures === 0 ? "OK" : `FAIL (${referenceFailures} violation${referenceFailures === 1 ? "" : "s"})`
   }`;
 
+  const retiredStageSummary = `Guard 16 retired stage names ${
+    retiredStageRan
+      ? `${retiredStageHits.filesScanned} files scanned, ${
+          retiredStageHits.hits.length === 0 ? "OK" : `FAIL (${retiredStageHits.hits.length} hit${retiredStageHits.hits.length === 1 ? "" : "s"})`
+        }`
+      : "skipped (git ls-files failed)"
+  }`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -2187,12 +2840,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${retiredStageSummary}; ${gateSurfaceSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${retiredStageSummary}; ${gateSurfaceSummary}`,
   );
 }

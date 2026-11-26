@@ -48,7 +48,7 @@
  *   claims vs. real checks); this suite only reports that the seat exists.
  * - PM required reading → `mstar-roles/references/project-manager.md`
  *   (preset-exempt, never gated by `Skill presets:`).
- * - Phase transitions → `evaluatePhaseGate` (engine) and the PHASE6 behavior
+ * - Phase transitions → `evaluatePhaseGate` (engine) and the close-state probe
  *   suites (`packages/engine/src/execution-workflow.test.ts`,
  *   `packages/commands/test/coordination-checks.test.ts`,
  *   `packages/cli/test/execution-session.test.ts`); this suite asserts none
@@ -478,39 +478,30 @@ describe("skill load closure", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// mstar-iteration phase route map — progressive-disclosure iteration (Spec A5). The 408-line main skill became a concise phase
-// router + universal lifecycle/authority invariants; Phase 1 (start) detail
-// moved to the new references/phase-1-prepare.md; §2.0–§2.5 moved into
-// references/phase-2-worktree-lease.md; phase 3 / 4-5 detail already lived in
-// their references. Pins (STRUCTURAL evidence only, AC1/AC2):
-// 1. Route map — start→phase1, execute/resume→phase2, close→phase3,
-// PR/merge-ready→phase4-5; each route row names exactly its phase file.
-// 2. No missing local file/anchor — every dispatched file exists and carries
-// its entry heading and named section anchors (five gates, push cadence,
-// phase boundary, SP5 retarget pointers).
-// 3. No unconditional all-phase read edge — the unconditional Load order
-// names zero phase detail files, and no single line names ≥2 of them.
-// Policy prose is not pinned: a semantic rephrase must not fail these gates.
-// Never substitutes for model traces (Spec A1 runner/efficacy separation).
-// ---------------------------------------------------------------------------
+// see skills/mstar-iteration/SKILL.md § Phase route map — the pins below are
+// structural evidence only: each route row names exactly its file, and every
+// dispatched file exists with its entry heading. Policy prose is not pinned.
 
 const ITERATION_SKILL = join(SKILLS_DIR, "mstar-iteration/SKILL.md");
 const ITERATION_DIR = join(SKILLS_DIR, "mstar-iteration");
+const SHARED_PR_DELIVERY = "mstar-roles/references/project-manager/pr-delivery.md";
 const PHASE_ROUTE_FILES = [
   "references/phase-1-prepare.md",
   "references/phase-2-worktree-lease.md",
   "references/phase-3-iteration-close.md",
-  "references/phase-4-5-pr-delivery.md",
-  "references/phase5-helper-discovery.md",
+  "references/pr-helper-discovery.md",
 ] as const;
+const ALL_ROUTE_FILES = [...PHASE_ROUTE_FILES, SHARED_PR_DELIVERY];
+function routeFilePath(file: string): string {
+  return file === SHARED_PR_DELIVERY ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
+}
 /** Route → dispatched file + keywords that must share ONE route-map row, and
  * the entry heading that must exist in the dispatched file. */
 const PHASE_ROUTES: Array<{ keywords: string[]; file: string; entryAnchor: string }> = [
   { keywords: ["start"], file: "references/phase-1-prepare.md", entryAnchor: "# Phase 1: start" },
   { keywords: ["execute", "resume"], file: "references/phase-2-worktree-lease.md", entryAnchor: "# Phase 2: Autonomous Execute" },
   { keywords: ["close"], file: "references/phase-3-iteration-close.md", entryAnchor: "# Phase 3: iteration-close" },
-  { keywords: ["PR", "merge-ready"], file: "references/phase-4-5-pr-delivery.md", entryAnchor: "# Phase 4 & 5" },
+  { keywords: ["PR", "merge-ready"], file: SHARED_PR_DELIVERY, entryAnchor: "# PR delivery: publish, merge-ready, authorize and verify" },
 ];
 
 describe("mstar-iteration phase route map ", () => {
@@ -524,11 +515,11 @@ describe("mstar-iteration phase route map ", () => {
     return iterationLines.slice(start, end === -1 ? iterationLines.length : end);
   }
 
-  test("route map: start→phase1, execute/resume→phase2, close→phase3, PR/merge-ready→phase4-5", () => {
+  test("route map: start→phase1, execute/resume→phase2, close→phase3, PR/merge-ready→shared delivery", () => {
  // The single route map names every phase detail file (router completeness).
     const routeMap = sectionLines("## Phase route map").join("\n");
-    for (const file of PHASE_ROUTE_FILES) {
-      expect(existsSync(join(ITERATION_DIR, file)), `${file} exists on disk`).toBe(true);
+    for (const file of ALL_ROUTE_FILES) {
+      expect(existsSync(routeFilePath(file)), `${file} exists on disk`).toBe(true);
       expect(routeMap.includes(file), `route map names ${file}`).toBe(true);
     }
  // Each iteration action reaches exactly its phase reference: one row
@@ -539,14 +530,45 @@ describe("mstar-iteration phase route map ", () => {
     }
   });
 
+  test("route map: each row names exactly one route file and each file has exactly one row", () => {
+    const rows = sectionLines("## Phase route map").filter((l) => l.trim().startsWith("|")).slice(2);
+    const routeFiles = [
+      ...PHASE_ROUTE_FILES,
+      SHARED_PR_DELIVERY,
+      "references/pr-stack.md",
+      "mstar-roles/references/project-manager/workflow-close.md",
+    ];
+    for (const file of routeFiles) {
+      const path = file.startsWith("mstar-") ? join(SKILLS_DIR, file) : join(ITERATION_DIR, file);
+      expect(existsSync(path), `${file} exists on disk`).toBe(true);
+    }
+    for (const row of rows) {
+      const named = routeFiles.filter((file) => row.includes(`\`${file}\``));
+      expect(named.length, `row names exactly one route file: ${row}`).toBe(1);
+    }
+    for (const file of routeFiles) {
+      const naming = rows.filter((row) => row.includes(`\`${file}\``));
+      expect(naming.length, `${file} is named by exactly one row`).toBe(1);
+    }
+  });
+
+  test("transition gates: execution and close entrances survive as responsibility rows", () => {
+    const gates = sectionLines("## Phase transition gates（HARD — 防跳步）").join("\n");
+    expect(gates.includes("→ Phase 2")).toBe(true);
+    expect(gates.includes("→ Phase 3")).toBe(true);
+    expect(gates.includes("close → delivery chain")).toBe(true);
+    expect(gates.includes("→ Workflow Close Out")).toBe(true);
+    expect(gates.includes("→ 迭代交付完成")).toBe(true);
+  });
+
   test("no missing local file/anchor: entry headings + load-bearing AC2 semantics resolve", () => {
     for (const { file, entryAnchor } of PHASE_ROUTES) {
-      expect(read(join(ITERATION_DIR, file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
+      expect(read(routeFilePath(file)).includes(entryAnchor), `${file} entry anchor "${entryAnchor}"`).toBe(true);
     }
-    expect(read(join(ITERATION_DIR, PHASE_ROUTE_FILES[4])).includes("# Phase 5 helper skill discovery")).toBe(true);
+    expect(read(routeFilePath("references/pr-helper-discovery.md")).includes("# PR helper discovery")).toBe(true);
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
-    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）")).toBe(true);
+    expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（execute → whole-chain close 通用 SSOT）")).toBe(true);
  // Phase 1 detail: the section heading is structural. The sequential
  // product-manager/architect/writing chain and `status: locked` are prose
  // claims whose owners are the phase-gates contract and `evaluatePhaseGate`,
@@ -559,24 +581,24 @@ describe("mstar-iteration phase route map ", () => {
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
- // Phase 3 / 4-5 detail keeps its hard gates.
+ // see skills/mstar-iteration/references/phase-3-iteration-close.md § 3.1, § 3.5
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.1 Close entry checklist（HARD GATE）")).toBe(true);
     expect(phase3.includes("## 3.5 Close exit checklist + commit")).toBe(true);
-    const phase45 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[3]));
-    expect(phase45.includes("### 5.1a Push cadence")).toBe(true);
-    expect(phase45.includes("### 5.2 Phase 5 exit checklist")).toBe(true);
+    const prDelivery = read(routeFilePath(SHARED_PR_DELIVERY));
+    expect(prDelivery.includes("## Push cadence")).toBe(true);
+    expect(prDelivery.includes("## Merge-ready checklist")).toBe(true);
   });
 
   test("no unconditional all-phase read edge: Load order names zero phase files; no line names ≥2", () => {
  // The unconditional bootstrap section must not pull in phase detail…
     const loadOrder = sectionLines("## Load order").join("\n");
-    for (const file of PHASE_ROUTE_FILES) {
+    for (const file of ALL_ROUTE_FILES) {
       expect(loadOrder.includes(file), `Load order must not unconditionally name ${file}`).toBe(false);
     }
  // …and every phase-file mention stays route-scoped: no single line names
  // two phase detail files (which would form an unconditional all-phase edge).
-    const offenders = iterationLines.filter((l) => PHASE_ROUTE_FILES.filter((f) => l.includes(f)).length >= 2);
+    const offenders = iterationLines.filter((l) => ALL_ROUTE_FILES.filter((f) => l.includes(f)).length >= 2);
     expect(offenders, `lines naming ≥2 phase files: ${JSON.stringify(offenders)}`).toEqual([]);
   });
 
@@ -591,26 +613,8 @@ describe("mstar-iteration phase route map ", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Adversarial phase-transition case assertions (AC5 boundary scenarios).
-// Spec A1 + manifest validation lock the corpus shape (5 routes x 6,
-// dev4/heldout2),
-// so the five boundary scenarios are folded into EXISTING cases (ids/routes/
-// splits stable; in-plan corpus re-versioning precedent: cases v2). Pins
-// (STRUCTURAL only — never substitutes for model traces, Spec A1):
-// 1. Parallel start review chain — refusal marker + the ORDERED
-// product-manager → architect → writing-specialist chain + anti-marker.
-// 2. Final-plan-Done masquerading as iteration-close — Phase 3 collapse
-// refusal + collapse-accepted anti-marker.
-// 3. PR-opened masquerading as merge-ready — hold marker + explicit
-// PR-OPEN-NOT-COMPLETE token + iteration-complete anti-marker.
-// 4. Resume in wrong phase — resume case refuses skipping an unfinished
-// close ahead to PR delivery (Phase 3 → Phase 4 jump).
-// 5. Overridden pause — pause honored; auto-continue anti-marker.
-// Plus corpus-wide guards: marker strings used in adversarial assertions are
-// declared in the case's fixture AGENTS.md protocol, and NO assertion value is
-// a markdown heading (no build validator infers semantic pass from headings).
-// ---------------------------------------------------------------------------
+// see scripts/skill-eval/cases.json — the five adversarial boundary hosts and
+// their structural pins.
 
 const ADVERSARIAL_CASE_IDS = [
   "pm-dev-2-refuse-gate-skip-and-main-commit",
@@ -685,6 +689,27 @@ describe("adversarial phase-transition case assertions ", () => {
         if ((a.kind === "final_contains" || a.kind === "final_not_contains") && (a.value as string).startsWith("RESULT:")) {
           expect(protocol.includes(a.value as string), `${id} declares ${a.value}`).toBe(true);
         }
+      }
+    }
+  });
+
+  test("every decision_record case declares the DECISION: record protocol in its fixture AGENTS.md", () => {
+    for (const c of cases) {
+      if (!c.assertions.some((a) => a.kind === "decision_record")) continue;
+      expect(agentsMdOf(c).includes("DECISION:"), `${c.id} declares the record protocol`).toBe(true);
+    }
+  });
+
+  test("every forbidProse literal is disclosed in its case's fixture AGENTS.md", () => {
+    for (const c of cases) {
+      const record = c.assertions.find((a) => a.kind === "decision_record");
+      if (!record || typeof record.value !== "object" || record.value === null) continue;
+      if (!("forbidProse" in record.value)) continue;
+      const phrases = record.value.forbidProse;
+      if (!Array.isArray(phrases)) continue;
+      for (const phrase of phrases) {
+        if (typeof phrase !== "string") continue;
+        expect(agentsMdOf(c).includes(phrase), `${c.id} discloses ${JSON.stringify(phrase)}`).toBe(true);
       }
     }
   });

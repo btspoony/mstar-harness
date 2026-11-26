@@ -208,7 +208,7 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
     }, [["plan-a", "Done"], ["plan-b", "Done"]]);
   });
 
-  test("all plans Done + completed compass + full probes → phase-4-pr-delivery, exit 0", async () => {
+  test("all plans Done + completed compass + full probes → phase-3-close, exit 0", async () => {
     await withFixtures((dir, _snapshotPath, compassPath) => {
       writeFileSync(compassPath, COMPASS_COMPLETED);
       const result = runCli([
@@ -222,7 +222,7 @@ describe("mstar iteration gate — phase-transition evaluation", () => {
       ]);
       expect(result.exitCode).toBe(0);
       const resultData = data(result);
-      expect(resultData.transition).toBe("phase-4-pr-delivery");
+      expect(resultData.transition).toBe("phase-3-close");
       expect((resultData.entry as { ok?: boolean }).ok).toBe(true);
       expect((resultData.exit as { ok?: boolean }).ok).toBe(true);
     }, [["plan-a", "Done"], ["plan-b", "Done"]]);

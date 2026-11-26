@@ -1,6 +1,6 @@
 # Comment cleanup
 
-This pass is a triage of an existing comment corpus, not a new policy: every comment is read, classified, and either deleted or left in a declared shape, and the gate that judges the result is the comment gate that already ships — `comments.md` — so the pass adds no rule and changes no threshold.
+This pass is a triage of an existing comment corpus, not a new policy: every comment is read, classified, and either deleted or kept because its claim resolves at HEAD — the anchor is what justifies the survivor — and the gate that judges the result is the comment gate that already ships — `comments.md` — so the pass adds no rule and changes no threshold.
 
 ## Classes
 
@@ -19,7 +19,7 @@ The tie-break is by cause, not by wording: a comment that is both stale and lice
 
 A Decision Record is the one class that does not end in deletion by default, and all three admission conditions in `adr.md` § When a record is required must hold — a decision among real alternatives, a rationale that has no other home, and a lifetime beyond the change that produced it; a mechanical edit, a local rationale the code or tests already show, and an already recorded decision are exempt, and the record's class is one of `feature/`, `bug-fix/`, `simplification/`, `architecture/`, `process/`, `testing/` only.
 
-Every surviving comment that took no class must still take a shape declared under `comments.md` § MUST — a bounded marker, a contract pointer that resolves at HEAD, a declared prefix, `@generated`, or a ticket-opening `TODO`. A comment whose content is true but carries no declared shape is shaped — a declared prefix, or a pointer that resolves at HEAD — and kept; a comment whose content is false, stale or excusing is deleted once the class pass has cleared it, with any information that exists nowhere else at HEAD given a home first; a class match alone authorizes no deletion, and rewording it is not a fix. A `TODO`/`FIXME` that opens the comment content with a tracking reference (`// TODO(#123): …`, `# FIXME(plans/<file>): …`) is a valid declared shape and survives as a keep; only the ownerless one is an Excuse and is deleted.
+Every surviving comment must carry a machine-resolvable anchor declared under `comments.md` § MUST — a bounded marker, a contract pointer that resolves at HEAD, `@generated`, or a ticket-opening `TODO` with a tracking reference; a comment with no such anchor is a deletion target, not a keeper, and it is never kept by adding or rewriting a `note:`/`why:` prefix. The pass never adds a prefix: a corrected comment is the only case where it touches comment text, and the corrected text must itself carry a resolvable anchor. A comment whose content is false, stale or excusing is deleted once the class pass has cleared it, with any information that exists nowhere else at HEAD given a home first; a class match alone authorizes no deletion, and rewording it is not a fix. A `TODO`/`FIXME` that opens the comment content with a tracking reference (`// TODO(#123): …`, `# FIXME(plans/<file>): …`) is a valid shape and survives as a keep; only the ownerless one is an Excuse and is deleted.
 
 ## Order of operations
 
@@ -34,7 +34,7 @@ Every surviving comment that took no class must still take a shape declared unde
 
 One bounded batch per PR — one subsystem or one path — because a diff that touches the whole repository cannot be reviewed line by line and its ratchet result is unreadable; a stale corpus this size is a series of passes, not one.
 
-A batch edits the comments inside its chosen path or subsystem and needs no prior diff to start: it may begin on a clean branch, and the ratchet runs afterwards on the batch's own changed lines. Comments outside the selected scope are not swept in — the rest of the corpus is the next batch's work, not a side effect of this one.
+A batch edits the comments inside its chosen path or subsystem and needs no prior diff to start: it may begin on a clean branch, and the ratchet runs afterwards on the batch's own changed lines. Comments outside the selected scope are not swept in — the rest of the corpus is the next batch's work, not a side effect of this one. The existing natural-language corpus (`note:`, `why:`, `invariant:`, `safety:` — comments whose claim resolves nowhere) is this pass's deletion backlog, worked one batch per PR: a batch may leave the rest of it standing, but its own diff adds no prefix, and its report states the measured `unclassified comments: <n>` remaining count as progress — no separate backlog file or tracker is introduced, since issue capture already owns durable tracking.
 
 The corpus is advisory, the change is not: `mstar lint <file> --diff-base <ref>` fails every comment the change adds or modifies that carries no shape, so a new comment arrives in a declared shape or does not arrive at all — and because the ratchet reads the changed lines, no bulk rewrite is implied. A newly created code file must be visible in the diff — tracked, or intent-to-add — before a clean ratchet result is accepted; otherwise the file is skipped and the result proves nothing about it.
 

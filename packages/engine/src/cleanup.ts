@@ -1,5 +1,6 @@
 /**
  * Engine cleanup module — pure worktree/branch cleanup planner.
+ * Contract: see skills/mstar-branch-worktree/references/worktree-cleanup.md
  *
  * `planWorktreeCleanup` is the ONE planner ( — no `planBranchCleanup`, no
  * injected callback/git probe, no IO/time/env access): immutable facts in,
@@ -25,10 +26,12 @@
  *   5. non-terminal integration or non-Done plan
  *                                    → cleanup.refuse.non-terminal
  *   6. branch checked out anywhere   → cleanup.refuse.checked-out
- *   7. unmerged/missing evidence     → cleanup.refuse.unmerged
- *   8. dirty/locked worktree         → cleanup.refuse.dirty-worktree /
+ *   7. open PR base (unverified fails closed on the
+ *      probed layer refs only)       → cleanup.refuse.open-pr-base
+ *   8. unmerged/missing evidence     → cleanup.refuse.unmerged
+ *   9. dirty/locked worktree         → cleanup.refuse.dirty-worktree /
  *                                      cleanup.refuse.locked-worktree
- *   9. eligible                      → cleanup.remove.merged
+ *  10. eligible                      → cleanup.remove.merged
  *
  * Guard scoping locked by the spec: the checked-out guard applies to branch
  * deletion (local and remote candidates), never to removal of the eligible
@@ -78,6 +81,10 @@ export type CleanupFacts = {
     ancestor: boolean;
     prMerged: boolean | null;
   }[];
+  /** Open PR base refs (`gh pr list`); `null` = probe unverified, fail closed on `openPullRequestProbeRefs` only — see skills/mstar-branch-worktree/references/worktree-cleanup.md. */
+  openPullRequestBases: readonly string[] | null;
+  /** see skills/mstar-branch-worktree/references/worktree-cleanup.md — the layer-ref candidates whose presence spawned the open-PR probe; an unverified (`null`) probe refuses exactly this set, never unrelated branch candidates. */
+  openPullRequestProbeRefs: readonly string[];
 };
 
 /** Stable machine codes ( — § "Stable machine codes"; never renamed ad hoc). */
@@ -92,6 +99,7 @@ const REASON = {
   refuseUnmerged: "cleanup.refuse.unmerged",
   refuseDirtyWorktree: "cleanup.refuse.dirty-worktree",
   refuseLockedWorktree: "cleanup.refuse.locked-worktree",
+  refuseOpenPrBase: "cleanup.refuse.open-pr-base",
   removeMerged: "cleanup.remove.merged",
 } as const;
 
@@ -279,19 +287,27 @@ export function planWorktreeCleanup(snapshot: WorkflowSnapshot, facts: CleanupFa
     if (target.kind !== "worktree" && facts.worktrees.some((wt) => wt.branch !== null && wt.branch === target.branch)) {
       return decide("refuse", REASON.refuseCheckedOut);
     }
-    // 7. unmerged/missing merge evidence — branch candidates only.
-    // (Unreachable with an unresolvable owner: rule 5 already refused.)
+    // 7. open-PR-base refuse — branch candidates only; an unverified probe
+    // fails closed on the probed layer refs alone, never on unrelated
+    // candidates — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
+    if (target.kind !== "worktree" &&
+      (facts.openPullRequestBases === null ? facts.openPullRequestProbeRefs.includes(target.branch) : facts.openPullRequestBases.includes(target.branch))) {
+      return decide("refuse", REASON.refuseOpenPrBase);
+    }
+    // 8. unmerged/missing merge evidence — branch candidates only (ownerless
+    // targets already refused at rule 5) — see
+    // skills/mstar-branch-worktree/references/worktree-cleanup.md.
     if (target.kind !== "worktree" && ownerDoc !== undefined && mergedEvidenceRefuses(facts, ownerDoc, target.owner, target)) {
       return decide("refuse", REASON.refuseUnmerged);
     }
-    // 8. dirty/locked worktree — a missing probe record fails closed
-    // (cleanliness unprovable), never an empty-safe removal.
+    // 9. dirty/locked worktree — a missing probe record fails closed — see
+    // skills/mstar-branch-worktree/references/worktree-cleanup.md.
     if (target.kind === "worktree") {
       const record = facts.worktrees.find((wt) => wt.path === target.ref);
       if (!record || !record.clean) return decide("refuse", REASON.refuseDirtyWorktree);
       if (record.locked) return decide("refuse", REASON.refuseLockedWorktree);
     }
-    // 9. owned, eligible, protected-state checks passed.
+    // 10. owned, eligible, protected-state checks passed — see skills/mstar-branch-worktree/references/worktree-cleanup.md.
     return decide("remove", REASON.removeMerged);
   });
 }

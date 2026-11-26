@@ -1,8 +1,3 @@
-/**
- * note: marker.test.ts — the one correlation marker the push writes and the ingest
- * decodes: git author identity plus the local issue id, nothing that exists
- * only on one machine.
- */
 import { describe, expect, test } from "bun:test";
 import { decodeMarker, encodeMarker } from "./marker.js";
 

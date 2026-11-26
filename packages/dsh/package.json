@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/dsh",
-  "version": "4.8.3",
+  "version": "4.9.0",
   "description": "Morning Star harness dsh (DeepSeek Harness) cordis function plugin — in-process engine gates (status/dispatch/lease) with hard refusal channels.",
   "icon": "./icon.svg",
   "keywords": [
@@ -151,12 +151,12 @@
     "access": "public"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-ui-layout": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-layout": "^0.2.2-rc.5",
     "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.2-rc.3",
     "@deepseek-ai/dsh-client-ui-theme": "^0.2.2-rc.3",
     "@deepseek-ai/dsh-scope": "^0.2.2-rc.3",
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
     "@deepseek-ai/dsh-util-code-language": "0.2.2-rc.3",
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
@@ -169,7 +169,7 @@
     "bun-types": "^1.4.4",
     "clsx": "^2.0.0",
     "diff": "^9.0.0",
-    "dsh-llm-fallbacks": "0.8.8",
+    "dsh-llm-fallbacks": "0.8.9",
     "immer": "^11.2.10",
     "js-yaml": "^5.4.3",
     "katex": "^0.19.1",
@@ -188,10 +188,10 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "shiki": "^4.6.0",
-    "simple-icons": "16.37.0",
+    "simple-icons": "16.38.0",
     "typescript": "^7.0.2",
     "use-sync-external-store": "1.7.0",
-    "vitest": "^5.1.0",
+    "vitest": "^5.1.1",
     "zustand": "~5.1.0"
   }
 }

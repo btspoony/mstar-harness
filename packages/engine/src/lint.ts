@@ -436,10 +436,6 @@ export type CommentedCodeFinding = { line: number; text: string };
  * kept in a comment, reported at its first line. The run is detected on the
  * masked view, so a `//` line inside a string or template literal (a fixture
  * asserting this very check) is not a comment.
- *
- * note: C-family comment runs only. A hash-dialect file (shell, Python, Ruby)
- * returns no finding by design — this engine has no parser for those
- * languages, and comments.md § Checkable vs judgement states the limit.
  */
 export function findCommentedCode(fileText: string, dialect: SourceDialect = "c"): CommentedCodeFinding[] {
   if (dialect === "hash") return [];
@@ -571,30 +567,28 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
  * line's trimmed source text (reporting). */
 export type UnclassifiedComment = { line: number; endLine: number; text: string };
 
-/** why: a declared prefix tells a fact from a restatement, and it is anchored
- * per comment line so `// why: ...` and a block's ` * why: ...` both count. */
-const DECLARED_PREFIX_RE = /^(?:why|invariant|safety|note)\s*:/i;
+/** see skills/mstar-coding-behavior/references/comments.md § MUST — the pointer
+ * arms the linter can machine-resolve: a repo path it looks up, or an external
+ * URL a reviewer can open. Shared with `findCommentPointers` so an accepted
+ * shape is always a resolved claim, and case-sensitive so a spelling the shape
+ * accepts is exactly one the finder resolves. */
+const POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
+const POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
 
-/** why: comments.md § MUST makes one of these shapes the price of a
- * non-documentation comment, and anything else is a restatement, a stale note
- * or a changelog line. */
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: four shapes —
+ * a bounded marker, a contract pointer, @generated, or a tracked TODO. Anything
+ * else is a restatement, a stale note or a changelog line. */
 const COMMENT_SHAPES: readonly RegExp[] = [
   // why: the bounded-shortcut vocabulary (comments.md § Markers).
   /\b(?:simplify|shortcut)\s*:/i,
   /\btemporary\s*(?::|[\u2013\u2014-]\s)/i,
-  DECLARED_PREFIX_RE,
   // why: `see` must name its target - the English verb alone ("the way to see
   // a fold") cannot classify a comment as a pointer.
-  /\bsee\s+(?:https?:\/\/|ADR[-\s]?\d|#\d|(?:issue|ticket)\s+#?\d|contract\s*\u00a7|[\w.@-]+\/)/i,
+  new RegExp(`\\bsee\\s+${POINTER_URL_SOURCE}`, "i"),
   // why: the target alone is a pointer too (comments.md § MUST: "or that
   // target alone"), and a URL is the one with no in-repo path to anchor on.
-  /https?:\/\/[^\s)]+/i,
-  /\bADR[-\s]?\d+/i,
-  /#\d+/,
-  /\b(?:issue|ticket)\s+#?\d+/i,
-  /\bdocs?\/[\w./-]+/i,
-  /\bplans?\/[\w./-]+/i,
-  /\bcontract\s*\u00a7/i,
+  new RegExp(POINTER_URL_SOURCE, "i"),
+  new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`),
   /@generated\b/i,
 ];
 
@@ -779,6 +773,47 @@ export function findUnclassifiedComments(fileText: string, dialect: SourceDialec
     findings.push({ line: unit.line, endLine: unit.endLine, text: lines[unit.line - 1]!.trim() });
   }
   return findings;
+}
+
+/**
+ * A pointer read from comment text: the pointer's own line (the diagnostic),
+ * the comment unit's first and last lines (the ratchet span), and the target
+ * token. `target` is a repo-relative path under a resolvable root (`docs/`,
+ * `skills/`, `packages/`, `scripts/`); every other pointer form (a URL,
+ * `#<n>`, `issue <n>`, `contract §`, an ADR number) is not machine-resolvable
+ * here and is not returned.
+ */
+export type CommentPointer = { line: number; startLine: number; endLine: number; target: string };
+
+/** see skills/mstar-coding-behavior/references/comments.md § MUST — the finder
+ * patterns reuse the shape sources, so a shape the gate accepts is exactly one
+ * this finder reports for resolution. */
+const POINTER_PATH_RE = new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`, "g");
+const URL_SPAN_RE = new RegExp(POINTER_URL_SOURCE, "gi");
+
+/**
+ * Find path pointers in comment text (comments.md § MUST: a contract pointer,
+ * or its target alone). The shared literal mask means a path inside a string is
+ * never read as a comment claim, and an exported API doc block is exempt — the
+ * same carve-out `findUnclassifiedComments` applies.
+ */
+export function findCommentPointers(fileText: string, dialect: SourceDialect = "c"): CommentPointer[] {
+  if (fileText === "") return [];
+  const lines = fileText.split(/\r?\n/);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
+  const offsets = lineOffsets(fileText);
+  const pointers: CommentPointer[] = [];
+  for (const unit of commentUnits(fileText, scan, masked, offsets, dialect)) {
+    if (unit.doc && documentsExport(lines, unit.endLine)) continue;
+    unit.body.split("\n").forEach((text, index) => {
+      const line = unit.line + index;
+      for (const match of text.replace(URL_SPAN_RE, " ").matchAll(POINTER_PATH_RE)) {
+        pointers.push({ line, startLine: unit.line, endLine: unit.endLine, target: match[0].replace(/^\.\//, "") });
+      }
+    });
+  }
+  return pointers;
 }
 
 /**
