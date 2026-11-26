@@ -259,7 +259,6 @@ export {
   createMilestoneDraftStore,
   projectIdentity,
   projectIdentityFor,
-  type AssignableIssue,
   type AssignableIssuesRead,
   type MilestoneWriteSurface,
 };
