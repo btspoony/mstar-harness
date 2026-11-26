@@ -28,23 +28,33 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-/** An Assignment whose `Execution mode` header drives the QC seat count. */
-const ASSIGNMENT_SDD = `## Assignment
+/**
+ * An Assignment whose `execution_mode` front matter field drives the QC seat count.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const ASSIGNMENT_SDD = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+working_branch: feature/foo
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Working branch**: feature/foo
+## Assignment
 `;
 
-/** One QC Assignment carrying the three byte-identical alignment fields. */
+/**
+ * One QC Assignment carrying the three byte-identical alignment front matter keys.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function qcAssignment(planId: string, range: string): string {
-  return `## Assignment
-**Execute as**: qc-specialist
-**Task category**: logic
-**plan_id**: ${planId}
-**Review range / Diff basis**: ${range}
+  return `---
+execute_as: qc-specialist
+task_category: logic
+plan_id: ${planId}
+review_range: "${range}"
+diff_basis: "${range}"
+---
 `;
 }
 

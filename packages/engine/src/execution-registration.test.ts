@@ -46,6 +46,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogLinkInput } from "./catalog.js";
 import {
+
   abandonRemoteIntent,
   bindRemoteAuthority,
   ingestRemoteObservation,
@@ -82,6 +83,7 @@ import {
 import * as engineIndex from "./index.js";
 import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type RegisterIterationWorkflowOptions, type RegisterPlanWorkflowOptions } from "./workflow.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
 /**
@@ -192,7 +194,8 @@ async function activeFixture(label: string): Promise<Fixture> {
 function writePlanDocument(harnessDir: string, planId: string, title: string): void {
   const file = join(harnessDir, "plans", `${planId}.md`);
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `# ${title}\n\n**plan_id:** ${planId}\n`);
+  writeFileSync(file, planFrontMatter(planId, `# ${title}
+`));
 }
 
 /**

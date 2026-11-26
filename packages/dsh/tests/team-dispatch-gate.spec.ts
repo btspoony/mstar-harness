@@ -22,6 +22,8 @@
  * `PreToolDecision` value: a deny returned WITHOUT `next()` vetoes the call.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { useCleanControlRoot, bootApp, type BootResult } from './harness.ts'
 
@@ -43,23 +45,27 @@ afterEach(async () => {
  * verdict is non-empty under warn and vetoes under hard — the same fixture the
  * dispatch-gate spec uses for its `subagent` matrix.
  */
-const MISSING_EXECUTE_AS = `## Assignment
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Fully valid writable Assignment — the unchanged-pass positive control. */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
@@ -171,7 +177,7 @@ describe('team dispatch gate — task board (description carrier)', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_create')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('team_task_update with an Assignment-shaped description is gated', async () => {
@@ -183,7 +189,7 @@ describe('team dispatch gate — task board (description carrier)', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_update')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('team_task_update WITHOUT description (status-only) produces no decision', async () => {
@@ -211,6 +217,57 @@ describe('team dispatch gate — task board (description carrier)', () => {
   })
 })
 
+/**
+ * ---------------------------------- D16 legacy body-label regression ----------------------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('team dispatch gate — the retired body-label grammar refuses on the team carrier too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // text shaped like an Assignment whose fields live in the retired
+    // `**Label**` grammar must reach the legacy-format refusal, never pass
+    // as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    // Terminal on the team carrier too: the same core, the same veto.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('a team carrier naming an out-of-home pointer is denied in the default mode (same terminal refusal)', async () => {
+    // The team carriers route through the SAME core as `subagent`, so a
+    // source refusal is a veto here too — not an advisory.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const app = booted = await bootApp()
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, '---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\n---\n\n## Task\n\nDo the thing.\n')
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(`Assignment file: ${outside}`), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(decision.kind === 'deny' && decision.reason).toContain('(team_task_create)')
+    expect(advisories).toHaveLength(0)
+  })
+})
+
 /* ---------------------------------- send_message ---------------------------------- */
 
 describe('team dispatch gate — send_message (message carrier)', () => {
@@ -221,7 +278,7 @@ describe('team dispatch gate — send_message (message carrier)', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', sendMessageExec(MISSING_EXECUTE_AS), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
     expect(decision.kind === 'deny' && decision.reason).toContain('(send_message)')
     expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
@@ -305,7 +362,7 @@ describe('team dispatch gate — the team branch is TERMINAL for the names it ow
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('team_task_create')
-    expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(codesOf(advisories[0])).toContain('assignment.field.execute-as')
   })
 })
 

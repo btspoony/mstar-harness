@@ -1,98 +1,106 @@
 /**
- * The Assignment HEADER grammar every dispatch-side gate reads: the header-field
- * extractors (`assignmentHeaderValue` / `assignmentHeaderValues` with the shared
- * code-span and first-token normalization), the placeholder guard (`isNaValue`),
- * the plan-id derivation (`planIdOf`), the shape guard (`isAssignmentShaped`),
- * the ONE hard-enforcement resolution (`resolveDispatchHard`) and the typed-
- * fields → header-text normalizer (`assignmentTextFromFields`).
+ * The Assignment FRONT MATTER grammar every dispatch-side gate reads: the
+ * header-field extractor (`assignmentHeaderValue` with the shared code-span
+ * and first-token normalization), the placeholder guard (`isNaValue`), the
+ * plan-id derivation (`planIdOf`), the shape guard (`isAssignmentShaped` —
+ * front matter or the engine's ONE D16 legacy recognition), the ONE
+ * hard-enforcement resolution (`resolveDispatchHard`) and the typed-fields →
+ * front-matter-text normalizer (`assignmentTextFromFields`).
  *
  * Module boundary: one responsibility — turn Assignment TEXT (or the host's
- * typed fields) into the header values a decision is made from. It makes no
- * decision itself: the lease, worktree and dispatch cores consume these values.
- * Callers MUST pass the engine `assignmentHeaderRegion` slice; the engine owns
- * the header/body boundary and this module keeps no second grammar for it.
+ * typed fields) into the front matter values a decision is made from. It makes
+ * no decision itself: the lease, worktree and dispatch cores consume these
+ * values. Callers MUST pass the engine `assignmentHeaderRegion` slice (the
+ * fenced front matter fragment); the engine owns the front-matter/body
+ * boundary and this module keeps no second grammar for it.
  *
  * No barrel: importers name this module by explicit relative path; it
  * re-exports nothing from a sibling and imports no sibling dispatch module.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { basename } from 'node:path'
-import { assignmentHeaderRegion, parseEnforcementFlag } from '@mstar-harness/engine'
-import type { AssignmentFields } from '@mstar-harness/engine'
+import { extractFrontmatterAndBody, legacyAssignmentShape, parseDocumentFrontmatterEntries, parseEnforcementFlag, parseEnforcementFlagFromFrontmatter } from '@mstar-harness/engine'
+import type { AssignmentFields, FrontmatterEntry } from '@mstar-harness/engine'
 import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 
-/** `## Assignment` heading marker (opencode parity — shape guard only). */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
-
-/** Shape-guard match of an Assignment header field (opencode parity). */
-const ASSIGNMENT_FIELD_RE =
-  /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm
+/** Shape-guard match of one Assignment core front matter key (engine parity:
+ * the snake_case key inside the document's own fence declares the shape).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*["']?(?:execute_as|delegation|task_category)["']?\s*:/m
 
 /**
- * True when the text looks like an Assignment (opencode parity: `## Assignment`
- * heading or at least one core field line). Non-Assignment delegation prompts
- * stay silent — no false-positive warnings. Callers MUST pass the engine
- * `assignmentHeaderRegion` slice: a `## Assignment` heading or
- * field line quoted in the task body must not shape a non-assignment prompt.
- * Exported for the agent-flow ledger's shape guard — the shared
- * `DshHostAdapter.dispatchGate` core applies the SAME guard on both dispatch
- * surfaces, so the exec-less host-hook path records nothing for
- * non-Assignment text either).
+ * True when the document OPENS with a front matter fence that carries a core
+ * key (`execute_as` / `delegation` / `task_category` — the engine
+ * `composeDispatchGate` shape grammar). An unterminated fence counts, so a
+ * malformed document reaches schema validation instead of passing as an
+ * ordinary prompt. The key must live in the FENCE: a `execute_as:` line
+ * quoted in the body is prose, never shape evidence.
+ * @param assignmentText - the carrier text.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+function frontmatterCarriesCoreKey(assignmentText: string): boolean {
+  if (!assignmentText.startsWith('---\n') && !assignmentText.startsWith('---\r\n')) return false
+  const { frontmatter, fenced } = extractFrontmatterAndBody(assignmentText)
+  return ASSIGNMENT_FM_FIELD_RE.test(fenced ? frontmatter : assignmentText.slice(assignmentText.indexOf('\n') + 1))
+}
+
+/**
+ * True when the text is Assignment-shaped for the dispatch gates: front
+ * matter carrying a core key ({@link frontmatterCarriesCoreKey}), or the
+ * engine's ONE D16 legacy recognition (`legacyAssignmentShape` — the
+ * document must reach the gate's legacy-format refusal, never pass silently).
+ * A prompt with no front matter is Assignment-shaped ONLY through that
+ * legacy pattern: an `## Assignment` heading or a `**Execute as**:` line in
+ * ordinary prose (a quoted template, a task body) declares nothing, so it
+ * neither records a ledger row nor enters the field gate.
+ * @param assignmentText - the carrier text (whole document).
  */
 export function isAssignmentShaped(assignmentText: string): boolean {
-  return ASSIGNMENT_HEADING_RE.test(assignmentText) || assignmentText.match(ASSIGNMENT_FIELD_RE) !== null
+  return frontmatterCarriesCoreKey(assignmentText) || legacyAssignmentShape(assignmentText)
 }
 
 /**
  * Resolve the hard-enforcement flag for one dispatch: explicit Config override
- * wins, else the Assignment's OWN `Enforcement: hard` header flag (opencode
- * parity — header region only, a body-quoted example never hardens), else the
+ * wins, else the Assignment's OWN `enforcement: hard` front matter flag
+ * (fenced front matter only — a body-quoted example never hardens), else the
  * repo `.mstarc` `[config] enforcement`, else the iteration compass
  * frontmatter, else warn-only.
+ * @param entries - the caller's own parse of `assignmentText`
+ *   ({@link assignmentFrontmatterEntries}); supplied so the enforcement policy
+ *   and the rest of the same decision read ONE parse. `null` (unparseable
+ *   block) is a reuse too: no flag is declared, and the schema layer reports
+ *   the refusal. Omitted → this call parses the text itself.
  */
-export function resolveDispatchHard(harnessDir: string | null, config: Config, assignmentText: string): boolean {
+export function resolveDispatchHard(
+  harnessDir: string | null,
+  config: Config,
+  assignmentText: string,
+  entries?: Map<string, FrontmatterEntry> | null,
+): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
-  if (parseEnforcementFlag(assignmentHeaderRegion(assignmentText)).hard) return true
+  const assignmentHard = entries === undefined
+    ? parseEnforcementFlag(assignmentText).hard
+    : parseEnforcementFlagFromFrontmatter(entries).hard
+  if (assignmentHard) return true
   return resolveSeamHard(harnessDir, config)
 }
 
 /**
- * Parse one Assignment HEADER-REGION field value with the engine
- * `parseAssignmentFields` semantics: a `**Field**: value` (bold) or
- * `Field: value` (plain) line, optionally list-bulleted, at line start.
- * Returns the trimmed value or undefined when the field is absent/empty.
- *
- * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)` slice
- * The engine owns the header/body boundary, so
- * body-quoted field examples after a `# Task` / `# Target` / `---` marker
- * never leak into header fields — the same discipline `resolveDispatchHard`
- * already honors for the Enforcement flag. This module keeps no second
- * grammar for the boundary.
- *
- * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
- * @param label - the header field label to read (e.g. `Plan Path`).
+ * Convert the legacy display label of one Assignment field to its front
+ * matter snake_case key (`Plan Path` → `plan_path`, `SDD dir` → `sdd_dir`,
+ * `Task budget (implement / ops rounds)` → `task_budget` — the
+ * parenthesized qualifier is the label suffix, never part of the key).
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
-export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`, 'm')
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`, 'm')
-  const line = headerRegion.match(bold)?.[1] ?? headerRegion.match(plain)?.[1]
-  if (line === undefined) return undefined
-  const value = stripWrappingCodeSpan(line.trim())
-  return value === '' ? undefined : value
+function labelToFrontmatterKey(label: string): string {
+  return label.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase().replace(/\s+/g, '_')
 }
 
 /**
  * Strip ONE wrapping markdown code span from a header value.
- *
- * Assignment prose routinely writes header values as code spans —
- * ``**Plan Path**: `/x/plan.md` `` — and the extractor used to keep the
- * backticks. That failed **silently**: `planIdOf` keys off a literal `.md`
- * suffix, so `` plan.md` `` was not recognised as a plan file and the id was
- * carried into the agent-flow ledger *with* its trailing backtick, matching no
- * registered plan (and, under an iteration lease gate, producing a spurious
- * "plan is not registered" violation).
  *
  * Only a single clean pair is stripped: a value that wraps several spans
  * (`` `/a`, `/b` ``) has backticks inside and is left untouched, so no other
@@ -106,39 +114,88 @@ function stripWrappingCodeSpan(value: string): string {
   return inner.includes('`') ? value : inner.trim()
 }
 
+/**
+ * The front matter entries of one header region, parsed ONCE with the shared
+ * engine entries parser (`parseDocumentFrontmatterEntries`, fence-validated
+ * via `extractFrontmatterAndBody`): a duplicate key, a nested key under a
+ * scalar, or any other malformed line refuses the WHOLE block (null), so the
+ * gates never read fields of a document the schema refuses. The region keeps
+ * its fences (engine `assignmentHeaderRegion` contract); an unterminated
+ * fence yields no block, exactly as `assignmentHeaderRegion` declares.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntry> | null {
+  if (headerRegion === '') return null
+  const { frontmatter, fenced } = extractFrontmatterAndBody(headerRegion)
+  if (!fenced) return null
+  try {
+    return parseDocumentFrontmatterEntries(frontmatter, 'assignment')
+  } catch {
+    return null
+  }
+}
+
+/** One scalar field value of a parsed entry: strings verbatim; a bare scalar
+ * (`key:`) is present-but-empty; numbers/booleans read as their string form
+ * (the line-shaped contract never typed them — the conversion only narrows
+ * the entries API onto it). Lists, maps and block scalars are never a
+ * single scalar field.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
+  // A one-item list declares the same single value as its scalar spelling
+  // (`worktree_path: /x` vs `worktree_path: [/x]`), so it must not read as
+  // absent; two or more items are the parallel shape and stay list-only.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  if (Array.isArray(entry.value) && entry.value.length === 1 && typeof entry.value[0] === 'string') return entry.value[0]
+  if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
+  if (typeof entry.value === 'string') return entry.value
+  // A number/boolean is TYPED by the document profile; the written lexeme is
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+  // the declaration, so `main_worktree_branch: 5.0` stays `5.0` (never `5`).
+  if (typeof entry.value === 'number' || typeof entry.value === 'boolean') return entry.rawText.trim()
+  if (entry.value === null) return ''
+  return undefined
+}
+
+/**
+ * Read one Assignment field from an ALREADY-parsed entry map — the shared
+ * scalar read both the header-region and the decision-parse consumers use
+ * (one grammar, one interpretation of an empty value).
+ * @param entries - the parsed front matter (`null` = unparseable block).
+ * @param label - the field label or snake_case key to read (e.g. `Plan Path`).
+ */
+export function assignmentEntriesValue(entries: Map<string, FrontmatterEntry> | null, label: string): string | undefined {
+  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
+  const entry = entries?.get(key)
+  if (entry === undefined) return undefined
+  const scalar = scalarEntryValue(entry)
+  if (scalar === undefined) return undefined
+  const value = stripWrappingCodeSpan(scalar.trim())
+  return value === '' ? undefined : value
+}
+
+/**
+ * Parse one Assignment front matter field value by its snake_case key
+ * (`parseAssignmentFields` semantics: the fenced front matter block is the
+ * only field contract). Returns the trimmed value or undefined when the
+ * field is absent/empty.
+ *
+ * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
+ * slice, unless they hold the decision's ONE parse and use
+ * {@link assignmentEntriesValue} directly.
+ *
+ * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
+ * @param label - the field label or snake_case key to read (e.g. `Plan Path`).
+ */
+export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
+  return assignmentEntriesValue(frontmatterEntriesOf(headerRegion), label)
+}
+
 /** First whitespace-delimited token of a header value (paths in this convention never contain spaces). */
 export function firstToken(value: string): string | undefined {
   const token = value.split(/\s+/)[0]
   return token === '' ? undefined : token
-}
-
-/**
- * ALL header-region values of a repeated Assignment field label (bold or
- * plain, optionally list-bulleted — the same line grammar as the engine
- * `parseAssignmentFields`). Repeated `Worktree path` / `Working branch`
- * lines declare the L2 parallel-track context; empty values are
- * dropped (consistent with {@link assignmentHeaderValue}: an empty line is
- * an absent field, never a malformed track).
- *
- * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
- * slice: body-quoted field examples after a
- * `# Task` / `# Target` / `---` marker never leak into the track
- * declarations — the same header-region discipline the dispatch gate
- * already honors.
- * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
- * @param label - the header field label to read (e.g. `Worktree path`).
- */
-export function assignmentHeaderValues(headerRegion: string, label: string): string[] {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*[ \\t]*:[ \\t]*(.*)$`)
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`)
-  const values: string[] = []
-  for (const line of headerRegion.split(/\r?\n/)) {
-    const raw = (line.match(bold) ?? line.match(plain))?.[1]
-    const value = raw === undefined ? undefined : stripWrappingCodeSpan(raw.trim())
-    if (value !== undefined && value !== '') values.push(value)
-  }
-  return values
 }
 
 /** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. Shared with the agent-flow ledger  (one grammar, no copy-paste drift). */
@@ -147,36 +204,46 @@ export function isNaValue(value: string | undefined): value is undefined {
 }
 
 /**
- * Resolve the target plan id from the Assignment HEADER region: `Plan Path`
- * basename (`.md` stripped), else `SDD dir` basename, else a `plan_id` field.
+ * Resolve the target plan id from the Assignment front matter: `plan_path`
+ * basename (`.md` stripped), else `sdd_dir` basename, else a `plan_id` key.
  * Exported for the agent-flow ledger's dispatch derivation (the ledger
  * records the same plan identity the gate resolved — one grammar).
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)` (
- * only the header is read — a plan path quoted in the task body never
+ * only the front matter is read — a plan path quoted in the task body never
  * resolves a plan id).
  */
 export function planIdOf(headerRegion: string): string | undefined {
-  const planPath = assignmentHeaderValue(headerRegion, 'Plan Path')
+  return planIdOfEntries(frontmatterEntriesOf(headerRegion))
+}
+
+/**
+ * {@link planIdOf} over an already-parsed entry map: a caller that hoisted the
+ * decision's ONE parse (the host adapter) reads the plan id without parsing
+ * the document again.
+ * @param entries - the decision's front matter parse (`null` = unparseable).
+ */
+export function planIdOfEntries(entries: Map<string, FrontmatterEntry> | null): string | undefined {
+  const planPath = assignmentEntriesValue(entries, 'plan_path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
     return id.endsWith('.md') ? id.slice(0, -3) : id
   }
-  const sddDir = assignmentHeaderValue(headerRegion, 'SDD dir')
+  const sddDir = assignmentEntriesValue(entries, 'sdd_dir')
   if (!isNaValue(sddDir)) {
     const id = basename(firstToken(sddDir) ?? '')
     return id === '' ? undefined : id
   }
-  const planId = assignmentHeaderValue(headerRegion, 'plan_id')
+  const planId = assignmentEntriesValue(entries, 'plan_id')
   return isNaValue(planId) ? undefined : planId
 }
 
 /**
- * Rebuild the canonical Assignment HEADER text from parsed fields (the
- * engine's OWN header grammar — `parseAssignmentFields` reads exactly these
- * labels — so the engine parsers round-trip losslessly). Every typed
- * `AssignmentFields` slot is emitted under its canonical header label: the
- * implement/ops `Task budget` (capacity contract spec § A1) after
- * `Task category`, and the review-seat `Budget` / `Return shape` round
+ * Rebuild the canonical Assignment front matter text from parsed fields (the
+ * engine's OWN snake_case grammar — `parseAssignmentFields` reads exactly
+ * these keys — so the engine parsers round-trip losslessly). Every typed
+ * `AssignmentFields` slot is emitted under its canonical front matter key:
+ * the implement/ops `task_budget` (capacity contract spec § A1) after
+ * `task_category`, and the review-seat `budget` / `return_shape` round
  * bounds after the branch forms — dropping any of them would false-fire the
  * corresponding `assignment.field.*-missing` gate on a host that passed the
  * typed form. The host hook's engine-typed input is `AssignmentFields`; the
@@ -184,14 +251,15 @@ export function planIdOf(headerRegion: string): string | undefined {
  * normalized to text before gating.
  */
 export function assignmentTextFromFields(fields: AssignmentFields): string {
-  const lines = ['## Assignment', '']
-  if (fields.executeAs !== undefined) lines.push(`**Execute as**: ${fields.executeAs}`)
-  if (fields.delegation !== undefined) lines.push(`**Delegation**: ${fields.delegation}`)
-  if (fields.taskCategory !== undefined) lines.push(`**Task category**: ${fields.taskCategory}`)
-  if (fields.taskBudget !== undefined) lines.push(`**Task budget (implement / ops rounds)**: ${fields.taskBudget}`)
-  if (fields.workingBranch !== undefined) lines.push(`**Working branch**: ${fields.workingBranch}`)
-  if (fields.branchPolicy !== undefined) lines.push(`**Branch policy**: ${fields.branchPolicy}`)
-  if (fields.budget !== undefined) lines.push(`**Budget (review / QC seats)**: ${fields.budget}`)
-  if (fields.returnShape !== undefined) lines.push(`**Return shape (review / QC seats)**: ${fields.returnShape}`)
+  const lines = ['---']
+  if (fields.executeAs !== undefined) lines.push(`execute_as: ${fields.executeAs}`)
+  if (fields.delegation !== undefined) lines.push(`delegation: ${fields.delegation}`)
+  if (fields.taskCategory !== undefined) lines.push(`task_category: ${fields.taskCategory}`)
+  if (fields.taskBudget !== undefined) lines.push(`task_budget: ${fields.taskBudget}`)
+  if (fields.workingBranch !== undefined) lines.push(`working_branch: ${fields.workingBranch}`)
+  if (fields.branchPolicy !== undefined) lines.push(`branch_policy: ${fields.branchPolicy}`)
+  if (fields.budget !== undefined) lines.push(`budget: ${fields.budget}`)
+  if (fields.returnShape !== undefined) lines.push(`return_shape: ${fields.returnShape}`)
+  lines.push('---', '', '## Assignment', '')
   return lines.join('\n')
 }

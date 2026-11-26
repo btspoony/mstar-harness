@@ -620,9 +620,11 @@ describe('workflow event native acceptance and scan bound', () => {
       workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
       selectedGeneration: selectedGenerationFor(harnessDir),
-      prompt: `## Assignment
+      prompt: `---
+execute_as: @fullstack-dev
+---
 
-**Execute as**: @fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -675,7 +677,7 @@ describe('workflow event native acceptance and scan bound', () => {
       workflowId: 'wf-a',
       resolvedWorkflowDir: workflowDir,
       selectedGeneration,
-      prompt: '**Execute as**: fullstack-dev',
+      prompt: '---\nexecute_as: fullstack-dev\n---\n\n## Assignment\n',
       violations: [],
       hard: false,
     })).toBeUndefined()
@@ -699,5 +701,30 @@ describe('workflow event native acceptance and scan bound', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-events-unavailable-'))
     roots.push(root)
     expect(readAgentFlow(join(root, '.mstar', 'workflows', 'wf-1'), 'wf-1')).toBeNull()
+  })
+
+  it('a body-label Assignment records no derived fields — the retired grammar is inert in the ledger (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the dispatch
+    // gate refuses the retired `**Label**` grammar upstream, so its ledger
+    // mirror is a dispatch row with NO derived role/category/plan fields.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
+      prompt: `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+`,
+      violations: [],
+      hard: false,
+    })
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([
+      expect.objectContaining({ kind: 'dispatch', role: '', taskCategory: null, planId: null }),
+    ])
   })
 })

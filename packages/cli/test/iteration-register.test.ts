@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
@@ -108,7 +109,8 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
   for (const id of ["20260918-plan-alpha", "20260918-plan-beta", "20260918-plan-gamma"]) {
-    writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
+    writeFileSync(join(harness, "plans", `${id}.md`), planFrontMatter(id, `# Plan ${id}
+`));
   }
   // Registration proves the named document IS this iteration's reviewed
   // compass, so the fixture states one like any real registration does.

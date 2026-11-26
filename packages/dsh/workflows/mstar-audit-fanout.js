@@ -61,13 +61,15 @@ Not evidence - notes as a lead, never a finding:
 - "potentially" / "could" without the request the attacker actually sends`,
 }
 
-const seatPrompt = (category) => `## Assignment
+const seatPrompt = (category) => `---
+execute_as: code-reviewer
+delegation: forbidden
+task_category: audit
+budget: /1 round — one pass over the assigned categories
+return_shape: the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
+---
 
-Execute as: code-reviewer
-Delegation: forbidden
-Task category: audit
-**Budget (review / QC seats)**: /1 round — one pass over the assigned categories
-**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
+## Assignment
 
 Audit category: ${category}
 Repo under audit: ${a.repo}

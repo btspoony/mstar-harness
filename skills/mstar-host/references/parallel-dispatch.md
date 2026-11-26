@@ -16,8 +16,8 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 ## Mandatory order (dispatch turn)
 
 1. Finalize all `N` Assignment payloads (after any prerequisite turn). **Build each invoke entry envelope-first**: set the role-binding field (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`) + `name` *before* writing the long Assignment body.
-2. Count distinct `Execute as` sessions (`N`).
-3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type` (JSON field shape → `cursor.md` § Task invoke schema); Kimi: **N `Agent`** calls (each prompt carries **Act as** + skill load; `subagent_type` ∈ {`coder`,`explore`,`plan`} only — see `kimi.md` C5/C5b); omp: **one `task` call with N `tasks[]`** (or N `task` calls) with `agent` = live-schema role id matching `Execute as` when listed (else generic built-in) + **Act as** / skill load (see `omp.md` C5/C5b); each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
+2. Count distinct `execute_as` sessions (`N`).
+3. Issue **`N` host invocations first** — OpenCode: **N `task` tool** calls with **subagent**; Cursor: **N `Task`** with `subagent_type` (JSON field shape → `cursor.md` § Task invoke schema); Kimi: **N `Agent`** calls (each prompt carries **Act as** + skill load; `subagent_type` ∈ {`coder`,`explore`,`plan`} only — see `kimi.md` C5/C5b); omp: **one `task` call with N `tasks[]`** (or N `task` calls) with `agent` = live-schema role id matching `execute_as` when listed (else generic built-in) + **Act as** / skill load (see `omp.md` C5/C5b); each with one Assignment body. For parallel work, **all `N` tool calls in one assistant message** when the host allows.
 4. Optionally post a short **Status Update** after invocations (audit trail only — does not replace step 3).
 
 ## Hard rules
@@ -26,11 +26,11 @@ Printing `## Assignment` in the main thread **without** matching host invocation
 - Do not end the dispatch turn until **`N` invocations emitted**, or mark `Blocked` / `dispatch incomplete`.
 - Dual-track implement: **`N = 2` ⇒ two invocations in one message** when parallel is required.
 - Status Update on dispatch turns: **`Subagent invokes issued: N`** (must match Assignment count). If Assignments were written but `N = 0` → **`dispatch failed — paste-only`**; fix next message.
-- **Per-item field completeness (same severity as paste-only)**: every invocation must carry the role-binding field set to **`Execute as`** — omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**. A missing field (e.g. omp omitting `agent` ⇒ silent generic `task` fallback) = **dispatch incomplete** even though count = N passes. Sequential **N=1** Review-&-Edit turns are not exempt — re-set the field on **every** dispatch.
+- **Per-item field completeness (same severity as paste-only)**: every invocation must carry the role-binding field set to **`execute_as`** — omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**. A missing field (e.g. omp omitting `agent` ⇒ silent generic `task` fallback) = **dispatch incomplete** even though count = N passes. Sequential **N=1** Review-&-Edit turns are not exempt — re-set the field on **every** dispatch.
 
 ## QC default (initial wave)
 
-- **`Execution mode: sdd`**: **N=3** tri-review + branch review-package path → `{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated.
+- **`execution_mode: sdd`**: **N=3** tri-review + branch review-package path → `{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated.
 - **`inline` / override**: **N=1** → `{SDD_DIR}/review/qc.md`.
 
 ## QC iteration / SDD (same rule)
@@ -39,7 +39,7 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 
 ## QC full tri-review（非 SDD 但显式 tri）
 
-当 plan 为 **`Execution mode: inline`** 或单轨，但 Assignment 仍写 **`QC mode: full tri-review`** 时：
+当 plan 为 **`execution_mode: inline`** 或单轨，但 Assignment 仍写 **`qc_mode: full tri-review`** 时：
 
 - Launch `qc-specialist`, `qc-specialist-2`, `qc-specialist-3` in **one** dispatch turn (**N=3**).
 - Post-dispatch: verify three distinct agent IDs; on mismatch → invalid dispatch.
@@ -63,6 +63,6 @@ Formal iteration Phase 2 uses the same SDD + tri rule — not a separate carve-o
 1. Required assignments this turn? (`N`)
 2. Prerequisite-only message? → **zero** batch dispatches unless `N = 1`.
 3. Dispatch message contains **exactly `N`** invocation calls?
-4. **Each** invocation carries its role-binding field set to **`Execute as`** (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`)? A bare `task`/prompt item with no role field = **incomplete**, even at **N=1**.
-5. QC initial: **`Execution mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
+4. **Each** invocation carries its role-binding field set to **`execute_as`** (omp `agent` / Cursor `subagent_type` / OpenCode `subagent` / Kimi·ZCode `subagent_type`)? A bare `task`/prompt item with no role field = **incomplete**, even at **N=1**.
+5. QC initial: **`execution_mode: sdd`** → **N=3**? **`inline`** → **N=1**? Targeted re-review → **N** = Assignment reviewer count?
 6. SDD implement → independent ready tasks isolated and concurrent? Sticky resume limited to one sequential owner track?

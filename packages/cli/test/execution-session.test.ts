@@ -51,6 +51,7 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 /** Injected current runtime for a `node` consumer: at/above the declared floor. */
 const atOrAboveRuntime = (() => {
@@ -63,6 +64,7 @@ const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
 const WORKFLOW_ID = "wf-exec-session";
 const PLAN_ID = "20260921-execution-session-plan";
+
 const COORDINATOR_ID = "coord-exec-session";
 const SUCCESSOR_ID = "coord-exec-session-2";
 const WIRE_PREFIX = "exec-session-v1:";
@@ -175,7 +177,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
   // A REAL checkout on the branch prepare records: prepare validates the actual
   // checkout and branch, not merely that a directory exists.
@@ -199,7 +201,7 @@ async function legacyFixture(label: string): Promise<Fixture> {
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
   writeJson(join(harnessDir, "status.json"), { version: 2, updated_at: "2026-09-21", workflows: [] });
   mkdirSync(worktreePath, { recursive: true });
@@ -1374,7 +1376,7 @@ describe("workflow.register — catalog plan paths", () => {
     expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
     const storedPlanFile = join(fixture.harnessDir, "plans", entity.relativePath);
     expect(storedPlanFile).toBe(fixture.planMarkdown);
-    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`plan_id: ${PLAN_ID}`);
 
     const tokens = await tokensOf(fixture);
     const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
@@ -1395,7 +1397,7 @@ describe("workflow.register — catalog plan paths", () => {
     const fixture = await activeFixture("mstar-register-configured-plans-root");
     writeText(join(fixture.harnessDir, ".mstarc"), "[config]\nplan_dir=custom-plans\n");
     fixture.planMarkdown = join(fixture.harnessDir, "custom-plans", `${PLAN_ID}.md`);
-    writeText(fixture.planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(fixture.planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
 
     const identity = coordinatorIdentity();
     const initial = await readExecutionAuthority(fixture.context);
@@ -1405,7 +1407,7 @@ describe("workflow.register — catalog plan paths", () => {
     expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
     const storedPlanFile = join(fixture.harnessDir, "custom-plans", entity.relativePath);
     expect(storedPlanFile).toBe(fixture.planMarkdown);
-    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`plan_id: ${PLAN_ID}`);
 
     const tokens = await tokensOf(fixture);
     const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
@@ -1526,7 +1528,7 @@ async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
 
   const qcReport = join(sddDir, "review", "qc1.md");
@@ -2110,7 +2112,8 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
 
   const plans: ContinuationPlan[] = [];
   for (const [index, planId] of [CONTINUATION_PLAN_A, CONTINUATION_PLAN_B].entries()) {
-    writeText(join(harnessDir, "plans", `${planId}.md`), `# Continuation plan ${index + 1}\n\n**plan_id:** ${planId}\n`);
+    writeText(join(harnessDir, "plans", `${planId}.md`), planFrontMatter(planId, `# Continuation plan ${index + 1}
+`));
     const worktree = join(root, `wt-${planId}`);
     const branch = `feature/${planId}`;
     execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: root });

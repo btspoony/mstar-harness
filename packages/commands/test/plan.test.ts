@@ -6,6 +6,7 @@ import * as nodeOs from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+
   createExecutionWorkflow,
   executionContextFor,
   getIssue,
@@ -19,6 +20,7 @@ import {
 } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { getPlanCommandDefinitions } from "../src/families/plan.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -50,7 +52,7 @@ function fixture() {
   const workflowDir = path.join(harness, "workflows", workflow);
   mkdirSync(workflowDir, { recursive: true });
   mkdirSync(path.join(harness, "plans"), { recursive: true });
-  writeFileSync(path.join(harness, "plans", `${plan}.md`), `# Plan A\n\n**plan_id:** ${plan}\n`);
+  writeFileSync(path.join(harness, "plans", `${plan}.md`), planFrontMatter(plan, "# Plan A\n"));
   writeFileSync(path.join(harness, "status.json"), JSON.stringify({
     version: 2,
     updated_at: "2026-09-26T00:00:00Z",
@@ -336,7 +338,7 @@ async function residualFixture(
   mkdirSync(path.join(harness, "plans"), { recursive: true });
   const workflow = "wf-plan";
   const plan = "plan-a";
-  writeFileSync(path.join(harness, "plans", `${plan}.md`), `# Plan A\n\n**plan_id:** ${plan}\n`);
+  writeFileSync(path.join(harness, "plans", `${plan}.md`), planFrontMatter(plan, "# Plan A\n"));
   const storeContext = { harnessDir: harness };
   (await initializeStore(storeContext)).close();
   if ((options.collaboration ?? "active") === "active") {

@@ -268,14 +268,14 @@ function makeDefinition(
     ...(id === "workflow.register" ? {
       requirements: [
         { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "planId", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planId", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document front matter (canonical form: plan_id: <id> inside the front matter fence)" },
         { name: "planTitle", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "cli" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
         { name: "expect", ownership: "caller" as const, route: "cli" as const, required: false, tokenKind: "root" as const, constraint: "optional checked constraint on the current root execution token" },
         { name: "operation", ownership: "caller" as const, route: "cli" as const, required: false, constraint: "optional pinned replay id" },
         { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
-        { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document front matter (canonical form: plan_id: <id> inside the front matter fence)" },
         { name: "planTitle", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },

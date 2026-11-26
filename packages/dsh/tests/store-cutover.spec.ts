@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
+
   StoreError,
   assertStoreRuntimeSupported,
   createFsStore,
@@ -39,13 +40,12 @@ import {
   registerShippedCatalogExecution,
   setArtifactStore,
 } from '@mstar-harness/engine'
-import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
-import { bootApp, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, planFrontMatter, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -133,36 +133,6 @@ function cleanupSnapshotJson(planId: string, mode: 'zero-residual' | 'allow-resi
   return JSON.stringify(cleanupSnapshot(planId, mode))
 }
 
-/** One pending tool call in the registry pipeline shape (dsh-tools ToolExecution). */
-let execSeq = 0
-function toolExec(name: string, args: unknown): ToolExecution {
-  return {
-    callId: `c${++execSeq}`,
-    name,
-    arguments: args,
-    signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
-  } as unknown as ToolExecution
-}
-
-/** The Assignment-shaped dispatch call the `tools/pre-execute` gate sees. */
-function dispatchExec(): ToolExecution {
-  return toolExec('subagent', {
-    description: 'writable implement round',
-    prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
-  })
-}
-
-/** A shape-valid `workflow` fan-out call (no Assignment prompt — `meta.name` only). */
-function workflowExec(metaName = 'probe'): ToolExecution {
-  return toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } })
-}
-
-/** A shape-valid `ralph` fan-out call (no Assignment prompt — `objective` only). */
-function ralphExec(objective = 'probe the codebase'): ToolExecution {
-  return toolExec('ralph', { objective })
-}
-
 /**
  * The pre-step payload the agent loop dispatches: a session id keys the catalog
  * cache, and the session cwd is the identity the emission is persisted under
@@ -218,7 +188,7 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   await mkdir(join(harnessDir, 'plans'), { recursive: true })
-  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
+  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), planFrontMatter("plan-a", "# Store cutover plan\n"))
   setArtifactStore(createFsStore(harnessDir))
   await expect(
     registerShippedCatalogExecution(

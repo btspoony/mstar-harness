@@ -15,7 +15,11 @@ import {
   classifySkillLint,
   activeLifecyclePlanId,
   completenessLevel,
+  declaredAssignmentBranches,
+  DocumentFrontmatterError,
   executionModeToN,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatterEntries,
   validateIntegrationMergeLease,
   workflowEntryPreDispatchCheck,
   findSimplifyMarkers,
@@ -33,6 +37,8 @@ import {
   hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   readMainWorktree,
   probeCheckoutRoot,
   resolveHarnessDir,
@@ -52,13 +58,16 @@ import {
   scopeGuard,
   SddScriptError,
   stripFrontmatter,
+  readAssignmentSource,
   validateAssignmentFields,
   validateControlWriteAssignment,
   validateDesignTokenFrontmatter,
+  validateDocumentFrontmatter,
   validateFindingDoc,
   validateQcReport,
   validateRoleMapping,
   validateSchemaYaml,
+  type AssignmentSourceResult,
   type GateResult,
   type ActiveLifecycleBranch,
   type QcAlignmentAssignment,
@@ -95,13 +104,7 @@ type Input = {
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
 type Violation = GateResult["violations"][number];
-function assignmentExecutionMode(text: string): string {
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^\*\*\s*Execution mode\s*\*\*\s*:\s*(.*)$/) ?? line.match(/^Execution mode\s*:\s*(.*)$/);
-    if (match) return match[1]!.trim();
-  }
-  return "";
-}
+
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
@@ -245,7 +248,7 @@ const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
 const typeExtensions: Partial<Record<LintType, Record<string, true>>> = { code: codeExtensions, provenance: provenanceExtensions };
 /** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's, and a narrower prune would only add that noise. Other entries are build output no walk reads. The provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
-type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr";
+type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr" | "acceptance";
 function lintType(file: string): LintType | null {
   const base = path.basename(file);
   if (base === "STRATEGY.md") return "strategy";
@@ -304,15 +307,107 @@ function collectTargets(dir: string, accept: (file: string) => boolean = (file) 
   visit(dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`);
   return targets;
 }
-function parseHeaderField(text: string, label: string): string {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*\\s*:\\s*(.*)$`);
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}\\s*:\\s*(.*)$`);
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(bold) ?? line.match(plain);
-    if (match) return match[1]!.trim();
+/** One refused front-matter read: the code the verb refuses with, a message
+ * naming the RESOLVED source (a pointer's target, not the pointer file) and
+ * its line, and the supported correction.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md */
+type FrontMatterFailure = { ok: false; code: string; message: string; fix: string };
+
+/** why: D16 — the QC alignment fields are Assignment front matter keys, so
+ * this reads the fenced block ONLY; a `**Label**: value` body line is never a
+ * declaration and never satisfies the alignment check. One parse for the
+ * three keys. A refusal is NOT three missing fields: a duplicate key, a
+ * malformed line and an unterminated fence each come back as their own
+ * diagnostic naming `source` and the line, while genuinely absent keys still
+ * produce the missing rows.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+function frontMatterScalars(text: string, source: string): { ok: true; planId: string; reviewRange: string; diffBasis: string } | FrontMatterFailure {
+  const { frontmatter, fenced } = extractFrontmatterAndBody(text);
+  // An opening fence that never closes declares an INVALID surface, not an
+  // absent one — the same distinction the plan reader draws.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  if (!fenced && (text.startsWith("---\n") || text.startsWith("---\r\n"))) {
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}:1: front matter fence is never closed \u2014 the declaration is invalid, not absent`,
+      fix: 'close the front matter with a second "---" line',
+    };
   }
-  return "";
+  const empty = { ok: true as const, planId: "", reviewRange: "", diffBasis: "" };
+  if (frontmatter === "") return empty;
+  let entries: ReturnType<typeof parseDocumentFrontmatterEntries>;
+  try {
+    entries = parseDocumentFrontmatterEntries(frontmatter, source);
+  } catch (error) {
+    if (error instanceof DocumentFrontmatterError) {
+      const duplicate = error.message.includes("duplicate key");
+      return {
+        ok: false,
+        code: duplicate ? "qc.alignment.field.duplicate" : "qc.alignment.field.malformed",
+        message: duplicate
+          ? `duplicate front matter key blocks the QC alignment read: ${error.message}`
+          : `front matter does not parse: ${error.message}`,
+        fix: error.fix,
+      };
+    }
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}: front matter does not parse: ${(error as Error).message}`,
+      fix: "rewrite the reported line as a supported `key: value` front matter line",
+    };
+  }
+  // A present-but-non-scalar key is an invalid DECLARATION, not an absent
+  // one: the plan reader refuses the same shapes, so aligning on a block
+  // scalar's text would pass a pack dispatch then refuses. A bare `key:` is
+  // the exception — its empty container is the parser's tentative shape and
+  // carries no declaration, so it reads as missing exactly as the absent key.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  for (const key of ["plan_id", "review_range", "diff_basis"] as const) {
+    const entry = entries.get(key);
+    if (entry === undefined || entry.kind === "scalar") continue;
+    const value = entry.value;
+    const emptyContainer = entry.rawText === "" && typeof value === "object" && value !== null &&
+      (Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0);
+    if (emptyContainer) continue;
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}:${entry.line}: invalid ${key} \u2014 accepted value: a single scalar on the key line, not a ${entry.kind}`,
+      fix: `rewrite the declaration as ${key}: <value> on one line`,
+    };
+  }
+  // The RAW lexeme is the declaration, exactly as the plan reader reads it: a
+  // numeric-looking plan id keeps its written spelling instead of the typed
+  // scalar, and one surrounding quote pair still strips. `null` / `~` / a bare
+  // key carry no declaration, so they read as absent.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const scalar = (key: string): string => {
+    const raw = entries.get(key)?.rawText ?? "";
+    if (raw === "" || raw === "null" || raw === "~") return "";
+    const text = raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
+      ? raw.slice(1, -1)
+      : raw;
+    return text.trim();
+  };
+  return { ok: true, planId: scalar("plan_id"), reviewRange: scalar("review_range"), diffBasis: scalar("diff_basis") };
+}
+/**
+ * why: every validation verb that reads a named assignment file goes through
+ * the ONE source resolver (compass D14) instead of a bare `readFileSync`. The
+ * CLI's input is already a file, so its content is the resolver's inline input
+ * and a pointer line inside it follows the same containment rules every
+ * dispatch gate uses — a pointer-form assignment answers the same question on
+ * the CLI as it does at a gate. A refusal is terminal for the verb: validating
+ * a text that is not the named assignment would report fields on the wrong
+ * body.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+function resolveAssignmentFile(file: string, context: InvocationContext): AssignmentSourceResult {
+  const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
+  return readAssignmentSource(readFileSync(file, "utf8"), { harnessDir });
 }
 /** why: the count line sums these markers, so the wording lives here once. */
 const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
@@ -422,6 +517,15 @@ function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, 
       for (const marker of temporary.markers) markers.push(`temporary marker @${marker.line}: ${marker.text} (${marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`})`);
       violations.push(...temporary.violations); break;
     }
+    case "acceptance":
+      // why: the PM acceptance gate fields are one document schema, so the
+      // lint type reports it under its own namespace instead of a second
+      // validator.
+      // see docs/knowledge/conventions/brief-acceptance-declarations.md
+      for (const schemaViolation of validateDocumentFrontmatter("pm-acceptance", text, "pm-acceptance").violations) {
+        violations.push({ ...schemaViolation, code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.acceptance.frontmatter.") });
+      }
+      break;
     case "finding": violations.push(...validateFindingDoc(text, prVariant ? { prVariant: true } : {}).violations); break;
     case "provenance":
       for (const citation of findProvenanceCitations(text)) violations.push({ ok: false, severity: "medium", code: `lint.provenance.${citation.kind}`, message: `provenance ${citation.kind} citation at line ${citation.line}: "${citation.match}" — tracked content must not disclose local plan/iteration ids or dated harness deep paths`, fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>) or a synthetic example slug (any -example- segment)` });
@@ -440,10 +544,40 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       case "dispatch.validate": {
         const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-        const text = readFileSync(file, "utf8");
+        // why: the read goes through the ONE source resolver (compass D14) —
+        // the CLI's input is already a file, so its content is inline input
+        // to the resolver and a pointer line inside it follows the same
+        // containment rules every gate shares. The resolver's refusal is
+        // terminal for this command: validating a text that is not the
+        // assignment source would report field violations on the wrong body.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const source = resolveAssignmentFile(file, context);
+        if (!source.ok) {
+          return rejected(
+            id,
+            { ok: false, violations: [{ ok: false, severity: "critical", code: source.code, message: source.message, fix: source.fix }] },
+            source.code,
+          );
+        }
+        const text = source.text;
+        const violations: Violation[] = [];
+        // why: D16 — the retired `**Label**` body-line format is refused with
+        // the front matter recovery UP FRONT instead of the schema's generic
+        // absent-fence row, so every gate the caller consults answers the same
+        // code. Shape detection and the refusal text are the engine's ONE
+        // copies; a fenced document keeps the schema verdict.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const legacy = legacyAssignmentShape(text);
+        if (legacy) violations.push(legacyFormatViolation());
         const fields = parseAssignmentFields(text);
         const readOnly = isReadOnlyAssignmentRole(fields.executeAs ?? "");
-        const violations: Violation[] = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
+        violations.push(...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations.filter(
+          // why: the legacy refusal supersedes the schema's absent-fence row
+          // for Assignment-shaped input — one defect, one message. Any other
+          // document keeps the schema row as its whole verdict.
+          // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+          (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
+        ));
         if (!readOnly) {
           const forms = parseAssignmentBranchForms(text);
           const declaredBranch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
@@ -456,9 +590,17 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             });
           }
           if (fields.writeDomain !== "control") {
-            if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+            // EVERY declared branch is gated (a `working_branch` list is the
+            // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+            // parallel shape), so a second track on `main` is caught too.
+            const declared = declaredAssignmentBranches(fields, forms);
+            const branches = declared.length > 0 ? declared : branch?.trim() ? [branch] : [];
+            const directOnBranch = parseBranchPolicyDirectOnBranch(text);
+            for (const target of branches) {
+              violations.push(...assertDefaultBranchProtected(target, { directOnException: directOnBranch === target.trim() }).violations);
+            }
           } else {
-            violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(file) }));
+            violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(source.path ?? file) }));
           }
         }
         const gate = { ok: violations.length === 0, violations };
@@ -604,20 +746,64 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           });
         }
         // Each assignment is a FILE the caller named: `launchDirectoryPaths`
-        // already refused every relative one on an unnamed workspace.
-        const assignments: QcAlignmentAssignment[] = files.map((named) => {
+        // already refused every relative one on an unnamed workspace. The
+        // alignment fields are front matter keys — plan_id, review_range and
+        // diff_basis — never body labels, and the file resolves through the
+        // shared source resolver (a pointer-form assignment aligns on the
+        // document it names).
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const rows: { file: string; assignment: QcAlignmentAssignment }[] = [];
+        // A refusal is per FILE and every file's refusal is reported: the verb
+        // checks a QC tri pack, so keeping only the first malformed document
+        // would hide the rest of the same round's defects. The source label is
+        // the RESOLVED path — an `Assignment file:` pointer's target, which is
+        // the document that actually failed to parse.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const failures: FrontMatterFailure[] = [];
+        for (const named of files) {
           const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-          const text = readFileSync(file, "utf8");
-          const combined = parseHeaderField(text, "Review range / Diff basis");
-          return { planId: parseHeaderField(text, "plan_id"), reviewRange: parseHeaderField(text, "Review range") || combined, diffBasis: parseHeaderField(text, "Diff basis") || combined };
-        });
+          const source = resolveAssignmentFile(file, context);
+          if (!source.ok) {
+            return rejected(
+              id,
+              { ok: false, violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }] },
+              source.code,
+            );
+          }
+          const resolved = source.path ?? file;
+          const scalars = frontMatterScalars(source.text, resolved);
+          if (!scalars.ok) {
+            failures.push(scalars);
+            continue;
+          }
+          rows.push({
+            file: resolved,
+            assignment: { planId: scalars.planId, reviewRange: scalars.reviewRange, diffBasis: scalars.diffBasis },
+          });
+        }
+        const assignments = rows.map(({ assignment }) => assignment);
+        // A malformed block blocks validation itself, so naming three absent
+        // fields would send the caller after the wrong defect.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        if (failures.length) {
+          const [first] = failures;
+          return refusal(
+            id,
+            first!.code,
+            failures.length === 1
+              ? first!.message
+              : `${failures.length} assignment files declare unreadable front matter \u2014 ${first!.message}`,
+            { failures: failures.map(({ code, message }) => ({ code, message })), assignments },
+            "Fix the front matter of the named assignment file (a `---`-fenced block with plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file> <assignment-file> with one path per seat so the pack is compared as a whole.",
+          );
+        }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
-          { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "Review range" }, { key: "diffBasis", label: "Diff basis" },
+          { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "review_range" }, { key: "diffBasis", label: "diff_basis" },
         ];
-        for (const assignment of assignments) {
+        for (const { file, assignment } of rows) {
           const missing = fields.filter(({ key }) => assignment[key] === "");
-          if (missing.length) return refusal(id, "qc.alignment.field.missing", `missing "${missing[0]!.label}" header field`, { fields: missing.map(({ label }) => label), assignments }, "Add the missing Assignment header fields listed in the details, then rerun mstar worktree qc-alignment <assignment-file>.");
+          if (missing.length) return refusal(id, "qc.alignment.field.missing", `${file}: missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), file, assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file> <assignment-file> with one path per seat.");
         }
         const gate = assertQcAlignment(assignments);
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");
@@ -628,8 +814,19 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // shared rule already required to be absolute on an unnamed workspace.
         const file = absolute(context.cwd, named);
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-        const text = readFileSync(file, "utf8");
-        const mode = input.mode ?? assignmentExecutionMode(text);
+        // why: the seat count is read from the caller's assignment through the
+        // ONE source resolver — `dispatch validate` and this verb must answer
+        // the same for one assignment file, including its pointer form.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const source = resolveAssignmentFile(file, context);
+        if (!source.ok) {
+          return rejected(
+            id,
+            { ok: false, violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }] },
+            source.code,
+          );
+        }
+        const mode = input.mode ?? parseAssignmentFields(source.text).executionMode ?? "";
         const reviewers = input.reviewers ?? [];
         const result = executionModeToN(mode, { seats: reviewers });
         if (!result.ok) return rejected(id, result, "review.seats.invalid");
@@ -642,15 +839,31 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       case "lint": {
         const target = required(input.target, "usage: lint <target> (file or dir)");
         const forced = input.type?.trim().toLowerCase();
-        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance", "specs", "adr"];
+        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance", "specs", "adr", "acceptance"];
         if (forced !== undefined && !known.includes(forced)) throw new SddScriptError(`usage: lint --type must be one of ${known.join(" | ")}, got ${JSON.stringify(input.type)}`, 2);
         const abs = absolute(context.cwd, target);
         if (!existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
         const isDir = statSync(abs).isDirectory();
+        if (forced === "acceptance" && isDir) {
+          // One report, one check: an acceptance sweep has no selector (no
+          // extension or tree check applies), so a directory would either
+          // report success over nothing or check unrelated auto-detected
+          // files against the acceptance schema. Name the file instead.
+          // see docs/knowledge/conventions/brief-acceptance-declarations.md
+          throw new SddScriptError(`usage: lint <report.md> --type acceptance — the acceptance type validates one PM acceptance report and does not walk a directory; name the report file`, 2);
+        }
+        // why: the recovery must rerun the SAME check, and `acceptance` is the
+        // one type whose filename inference never reproduces it, so that arm
+        // names its flag verbatim. Both arms stay literal: the refusal prover
+        // evaluates recovery text statically and cannot read `--type ${forced}`.
+        // see docs/knowledge/conventions/brief-acceptance-declarations.md
+        const rerun = forced === "acceptance"
+          ? "Resolve each reported lint violation, then rerun mstar lint <target> --type acceptance."
+          : "Resolve each reported lint violation, then rerun mstar lint <target>, repeating the same --type value if you supplied one.";
         if (forced === "specs" || forced === "adr") {
           // Document layers: a directory is the tree check, a file is one document.
           const results = [{ file: abs, violations: lintDocLayer(forced, abs, isDir), markers: [] as string[] }];
-          return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
+          return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
         }
         const extensions = forced === undefined ? undefined : typeExtensions[forced as LintType];
         const targets = !isDir
@@ -679,7 +892,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const unresolved = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNRESOLVED_POINTER_MARKER_PREFIX)).length, 0);
           if (unresolved > 0) context.effects.writeStderr?.(`unresolved comment pointers: ${unresolved}`);
         }
-        return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
+        return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
       }
       case "design-md.validate": {
         const dir = absolute(context.cwd, required(input.dir, "usage: design-md validate <dir>"));
@@ -925,11 +1138,11 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
 }
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
-  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, one branch form, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
+  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate an Assignment's front matter fields and branch protection. Fields live ONLY in the document's `---`-fenced YAML front matter (snake_case keys: execute_as, delegation, task_category, working_branch / branch_policy, write_domain, worktree_path, control_write_paths, execution_mode, budget, return_shape, task_budget); a retired `**Label**` body-line document refuses `dispatch.assignment.legacy-format` with the front matter recovery. The file's own content may be an `Assignment file: <abs>` pointer instead, resolved under an accepted assignment home. Write domain: control requires `worktree_path`, one branch form, and a `control_write_paths` list; paths are concrete, absolute or relative to `worktree_path`, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "controlClean", flags: "--control-clean" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts, the L1/L2 worktree pre-dispatch gate, or the control root tracked-change gate (--control-clean: refuses while the Git main worktree carries committable changes; a repository without .mstar/ or .mstarc has no control-root contract and skips)." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
-  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
+  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr | acceptance). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. `--type acceptance` validates ONE PM acceptance report's front matter (plan_id, gate, verdict, generated_at) against the shared `pm-acceptance` document schema and refuses a directory target, naming the report file. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
   "design-md.validate": { path: ["design-md", "validate"], args: [{ key: "dir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate DESIGN.md token frontmatter, parity and completeness." },
   "compound.validate": { path: ["compound", "validate"], args: [{ key: "docPath", required: true, variadic: false }], options: [{ key: "knowledgeDir", flags: "--knowledge-dir <dir>" }], effects: ["read", "validate"], description: "Validate a knowledge document and optional index scope." },
   "skill.lint": { path: ["skill", "lint"], args: [{ key: "skillDir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Lint a skill directory." },
@@ -945,7 +1158,7 @@ function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unkn
   const assignmentHeaderRequirement = {
     name: "assignmentFile",
     ownership: "caller" as const,
-    constraint: "the file must use a `## Assignment` header; assignment metadata is read only before the next `##` section, thematic `---`, or top-level `#` heading, so put Execute as, Delegation, and other assignment fields in that header",
+    constraint: "the file's fields live ONLY in a `---`-fenced YAML front matter block of snake_case keys (execute_as, delegation, task_category, working_branch / branch_policy, and so on); body `**Label**` lines are prose and declare nothing. The file may instead hold a single `Assignment file: <abs>` pointer line, which is resolved under an accepted assignment home",
   };
   return {
     id,

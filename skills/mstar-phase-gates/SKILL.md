@@ -52,7 +52,7 @@ Playbook 与 Hotfix 完整对照 → **`references/playbook-vs-hotfix.md`**。
 ## 角色职责
 
 - `@project-manager`
-  - 负责门禁判定与 Assignment 中的 `Phase Gate Checklist`。
+  - 负责门禁判定与 Assignment front matter 中的 `phase_gate_checklist`。
   - 在 `Status Update` 汇报当前 gate 状态。
 - 开发角色（`@frontend-dev` / `@fullstack-dev` / `@fullstack-dev-2`）
   - 仅在 Execute gate 放行后开始实现。
@@ -85,7 +85,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development pl
 5. 若 plan 涉及 UI 工作：`DESIGN.md` 是否存在且满足声明的 completeness level（见 `mstar-design-md`）？
 6. 若分批/暂缓/临时绕行，Durable Roadmap Gate 是否落在可追踪载体——plan、CreatePlan mirror、store issue、PM Task Board 或含关联证据的 milestone——而不是只在对话里？
 7. `tasks` 是否完成？
-8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
+8. Assignment front matter 是否含 **`task_category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
 10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
 11. 每个任务是否满足容量判据：声明 Effort band、单轮闭合其 Files 与验证门、写明 split point（Task shape / session fit → `mstar-artifacts/references/plan-quality-bar.md` item 7）？
@@ -112,6 +112,6 @@ Prepare（specify→clarify→plan，意图/clarify/Roadmap/Recall）→ lock �
 ## References
 
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
-- 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
+- 多 task 默认 `execution_mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**
 - Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**：选 Spec-Driven playbook 还是 Hotfix 例外路径、或读 Execute 阶段补充时打开

@@ -92,9 +92,11 @@ const UNMAPPED_ROLE = 'scout'
 
 /** One mstar-style Assignment prompt: the header region the engine parses. */
 const ASSIGNMENT_PROMPT = [
-  `**Execute as**: ${EXECUTE_AS}`,
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  `execute_as: ${EXECUTE_AS}`,
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   'Implement the assigned work.',
 ].join('\n')
@@ -588,6 +590,27 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     // Boundary cast: the resolved service carries no declared symbol index.
     const afterDispose = (await readSubagents(app.ctx)) as Record<symbol, unknown>
     expect(afterDispose[ROLE_PERSONA_WRAPPER_BRAND]).toBeUndefined()
+  })
+
+  it('(legacy) the retired body-label Assignment grammar refuses at the native start (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the terminal
+    // legacy-format refusal fires ahead of every exemption (preset, canonical,
+    // non-harness, unknown provider), so no provider start ever happens.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const LEGACY_BODY_LABEL_PROMPT = [
+      '## Assignment',
+      '',
+      '**Execute as**: fullstack-dev',
+      '**Delegation**: forbidden',
+      '**Task category**: logic',
+      '',
+      'Implement the assigned work.',
+    ].join('\n')
+
+    await expect(startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(LEGACY_BODY_LABEL_PROMPT))))
+      .rejects.toThrow(/legacy-format/)
+    expect(provider.starts).toHaveLength(0)
   })
 })
 

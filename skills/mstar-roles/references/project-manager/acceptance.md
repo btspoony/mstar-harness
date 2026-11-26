@@ -43,7 +43,16 @@ Keep acceptance scoped to the required ACs and directly affected interfaces. A b
 
 Write `{SDD_DIR}/review/pm-acceptance.md` by default, or an explicitly chosen same-directory basename. The report is named after its gate, not a reviewing seat: acceptance is the primary project-manager's duty. No named output path is not an exemption: acceptance is never conversation-only. Retain the raw report while the gate is active. Before Done, preserve per-AC evidence/result, applicability, coverage/gaps, reused versus new checks, issue dispositions and the exact report pointer in the main plan's `## PM Acceptance Summary` (`mstar-artifacts/references/plan-files-and-reports.md`). Reuse that summary, not a second archive or manifest.
 
+The report opens with its front matter, and `mstar lint <report> --type acceptance` validates those four keys against the `pm-acceptance` document schema before the report is cited as evidence.
+
 ```markdown
+---
+plan_id: <plan-id>
+gate: pm-acceptance
+verdict: <Approve | Approve with residuals | Request Changes | Needs Discussion>
+generated_at: <ISO-8601 date-time, e.g. 2026-11-26T08:00:00Z>
+---
+
 # PM Acceptance Report
 
 ## Scope

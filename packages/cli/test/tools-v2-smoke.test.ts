@@ -368,14 +368,14 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
 
   /** The issue #156 repro: minimal valid Phase-1 Review-&-Edit Assignment. */
   const VALID_HARD_ASSIGNMENT = [
-    "## Assignment",
-    "",
-    "**Enforcement**: hard",
-    "**Execute as**: product-manager",
-    "**Delegation**: forbidden",
-    "**Task category**: docs",
-    "**Task budget (implement / ops rounds)**: S — one focused implementer round",
-    "**Branch policy**: direct on main — docs-only plan review",
+    "---",
+    "enforcement: hard",
+    "execute_as: product-manager",
+    "delegation: forbidden",
+    "task_category: docs",
+    "task_budget: S — one focused implementer round",
+    "branch_policy: direct on main — docs-only plan review",
+    "---",
     "",
     "# Task",
     "",
@@ -383,11 +383,11 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     "",
   ].join("\n");
 
-  const MISSING_DELEGATION_HARD = VALID_HARD_ASSIGNMENT.replace("**Delegation**: forbidden\n", "");
-  const MISSING_DELEGATION_SOFT = MISSING_DELEGATION_HARD.replace("**Enforcement**: hard\n", "");
-  const VALID_SOFT_ASSIGNMENT = VALID_HARD_ASSIGNMENT.replace("**Enforcement**: hard\n", "");
+  const MISSING_DELEGATION_HARD = VALID_HARD_ASSIGNMENT.replace("delegation: forbidden\n", "");
+  const MISSING_DELEGATION_SOFT = MISSING_DELEGATION_HARD.replace("enforcement: hard\n", "");
+  const VALID_SOFT_ASSIGNMENT = VALID_HARD_ASSIGNMENT.replace("enforcement: hard\n", "");
 
-  test("C5-compliant dispatch (entry agent == Execute as) under header hard → NOT blocked, no warnings", async () => {
+  test("C5-compliant dispatch (entry agent == Execute as) under declared hard → NOT blocked, no warnings", async () => {
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
     const res = await withRepoCwd(repo!.root, () =>
@@ -422,7 +422,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     });
     const blocked = res as { block: boolean; reason: string } | undefined;
     expect(blocked?.block).toBe(true);
-    expect(blocked?.reason).toContain("assignment.field.missing-delegation");
+    expect(blocked?.reason).toContain("assignment.field.delegation");
   });
 
   test("soft mode + violations → warn-logged, never blocked (the pre-#156 silent drop, closed)", async () => {
@@ -436,7 +436,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
       }),
     );
     expect(res).toBeUndefined();
-    expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.delegation"))).toBe(true);
   });
 
   test("repo-level hard compass hardens a flag-less dispatch (Gate 1 / dsh resolveDispatchHard parity)", async () => {
@@ -450,7 +450,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     );
     const blocked = res as { block: boolean; reason: string } | undefined;
     expect(blocked?.block).toBe(true);
-    expect(blocked?.reason).toContain("assignment.field.missing-delegation");
+    expect(blocked?.reason).toContain("assignment.field.delegation");
   });
 
   test("repo-level hard compass + compliant flag-less dispatch → NOT blocked", async () => {

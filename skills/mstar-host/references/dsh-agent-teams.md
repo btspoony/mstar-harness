@@ -67,7 +67,7 @@ task, created **before** the creation call so the first prompt can cite its task
 | Team task field | Plan-row content | Constraint |
 |---|---|---|
 | `subject` | `<planId> / Task <n> — <role>` | concise title, 200 characters |
-| `description` | a coordination summary — task id, plan row, files in scope, acceptance criteria | complete details, 16384 characters. **Never the `## Assignment` header region** (see below) |
+| `description` | a coordination summary — task id, plan row, files in scope, acceptance criteria | complete details, 16384 characters. **Never the Assignment document itself** (see below) |
 | `blockedBy` | task ids mirroring the plan rows this row depends on | ids must exist and not be deleted; a blocked task cannot be claimed or reassigned |
 | `writeScopes` | the repository-relative prefixes this row may modify (never the checkout path) | workspace-relative only; absolute paths, `..` segments and empty segments are refused (`TEAM_INVALID_WRITE_SCOPE`). A checkout inside the workspace records its prefixes; a checkout entirely outside it (a sibling `…/{repo}.worktrees/<track>`) omits the field — the prompt is the whole address (§ Worktree hand-off and write isolation) |
 | `owner` | the teammate executing the row (name path, else its session id) | set by `claim` (self-only) or Lead-only `reassign` |
@@ -79,15 +79,8 @@ Three calls are Team dispatch carriers — `team_task_create.description`,
 `prompt` (`subagent` / `subagent_fork`) is the fourth carrier, gated by the ordinary
 delegation branch. Both failure directions are real:
 
-- **Two carriers** for one piece of work: the board `description` repeats the
-  Assignment header, so the creation settles with its child while the board row never
-  settles — a permanently unresolved duplicate that inflates dispatch counts and the
-  panel graph.
-- **No carrier** for a later task: a teammate reused on a track is steered with a
-  header-free message, no new creation happens, and the task's Assignment reaches no
-  carrier — so `gateAssignmentText` never runs its field, lease and worktree checks,
-  and the ledger records nothing. A silently ungated writable dispatch is worse than
-  a duplicate.
+- **Two carriers** for one piece of work: the board `description` repeats the Assignment, so the creation settles with its child while the board row never settles — a permanently unresolved duplicate that inflates dispatch counts and the panel graph.
+- **No carrier** for a later task: a teammate reused on a track is steered with a field-free message, no new creation happens, and the task's Assignment reaches no carrier — so `gateAssignmentText` never runs its field, lease and worktree checks, and the ledger records nothing. A silently ungated writable dispatch is worse than a duplicate.
 
 **Each task gets exactly one carrier, chosen by its position on the track:**
 
@@ -97,9 +90,7 @@ delegation branch. Both failure directions are real:
 | every LATER task on that track | `send_message.message` (the steer IS the dispatch) |
 | never | `team_task_create.description` / `team_task_update.description` — the board row is the coordination record, always non-Assignment text (ids, scope, acceptance) |
 
-A later task on a track carries its full `## Assignment` header in the `send_message`
-that starts it; that is the only way its gates run, and a short "continue with task 3"
-message is not a delegation.
+A later task on a track carries its full Assignment document in the `send_message` that starts it; that is the only way its gates run, and a short "continue with task 3" message is not a delegation.
 
 - **Task ids are Team-local generated values** (`task-1`, `task-2`, …). The plan id
   and task number live in `subject`, never in the opaque id.
@@ -171,9 +162,7 @@ files, not replies:
   excess into the artifact and point at it.
 - **A settlement notice is a signal, not a deliverable channel.** `send_message` / a
   settle event says that work finished (status + where); it never carries the work.
-- **The same bound governs the task board.** A task `description` is coordination
-  text (ids, scope, acceptance, result, artifact path — never the `## Assignment`
-  header region, which rides the task's own carrier); an outcome states the path.
+- **The same bound governs the task board.** A task `description` is coordination text (ids, scope, acceptance, result, artifact path — never the Assignment document, which rides the task's own carrier); an outcome states the path.
 
 ## Capacity
 

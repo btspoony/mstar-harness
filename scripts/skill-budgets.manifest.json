@@ -111,7 +111,7 @@
   { "file": "skills/mstar-roles/references/ops-engineer.md", "maxLines": 80 },
   { "file": "skills/mstar-roles/references/product-manager.md", "maxLines": 110 },
   { "file": "skills/mstar-roles/references/project-manager.md", "maxLines": 330 },
-  { "file": "skills/mstar-roles/references/project-manager/dispatch-and-assignment.md", "maxLines": 240 },
+  { "file": "skills/mstar-roles/references/project-manager/dispatch-and-assignment.md", "maxLines": 310 },
   { "file": "skills/mstar-roles/references/project-manager/plan-management.md", "maxLines": 90 },
   { "file": "skills/mstar-roles/references/project-manager/acceptance.md", "maxLines": 100 },
   { "file": "skills/mstar-roles/references/project-manager/pr-delivery.md", "maxLines": 185 },

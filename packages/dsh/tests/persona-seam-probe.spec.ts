@@ -67,9 +67,11 @@ const PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt sent as the start request's task text. */
 const ASSIGNMENT_PROMPT = [
-  '**Execute as**: fullstack-dev',
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  'execute_as: fullstack-dev',
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   'Implement the assigned work.',
 ].join('\n')
@@ -285,5 +287,30 @@ describe('persona seam probe — real composition (bootApp, fake subagents servi
     } finally {
       restore()
     }
+  })
+
+  it('(f11) the retired body-label Assignment grammar refuses at the native start (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the terminal
+    // legacy-format refusal fires ahead of every exemption, so the start is
+    // refused and the provider never sees it.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { app, provider } = await bootWithProvider()
+    const LEGACY_BODY_LABEL_PROMPT = [
+      '## Assignment',
+      '',
+      '**Execute as**: fullstack-dev',
+      '**Delegation**: forbidden',
+      '**Task category**: logic',
+      '',
+      'Implement the assigned work.',
+    ].join('\n')
+
+    const error = await startActivationViaNativeChannel(app, startSpec(LEGACY_BODY_LABEL_PROMPT))
+      .then(() => undefined, (thrown: unknown) => thrown)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('legacy-format')
+    expect((error as Error).message).toContain('terminal')
+    expect(provider.starts).toHaveLength(0)
   })
 })

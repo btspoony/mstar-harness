@@ -1062,9 +1062,9 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
 
 describe('catalog TTL invalidation — ledger change refreshes within the TTL ', () => {
   /** A minimal Assignment for the ledger record (role derives to `fullstack-dev`). */
-  const ASSIGNMENT = `## Assignment
-
-**Execute as**: fullstack-dev
+  const ASSIGNMENT = `---
+execute_as: fullstack-dev
+---
 
 ## Task 2
 
@@ -1116,6 +1116,34 @@ Implement the invalidation.
     // names the step the model actually saw a row in.
     expect(flowRolesOf(emissionOf(harnessDir, SESSION_ID, root))).toEqual(['fullstack-dev'])
     expect(emissionRow(harnessDir, SESSION_ID, root).turn).toBe(1)
+  })
+
+  it('a body-label Assignment record derives no role — the retired grammar is inert in the ledger (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the dispatch
+    // gate refuses the retired `**Label**` grammar upstream, so its ledger
+    // mirror is a dispatch row with NO derived role.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-legacy-'))
+    const harnessDir = await seedActiveTree(root)
+    plugin.recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'),
+      selectedGeneration: selectedGenerationFor(harnessDir),
+      prompt: `## Assignment
+
+**Execute as**: fullstack-dev
+
+## Task 2
+
+Implement the invalidation.
+`,
+      violations: [],
+      hard: false,
+    })
+    expect(plugin.readAgentFlow(join(harnessDir, 'workflows/wf-1'), 'wf-1')?.events).toEqual([
+      expect.objectContaining({ kind: 'dispatch', role: '', taskCategory: null, planId: null }),
+    ])
   })
 
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
@@ -1362,9 +1390,9 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
 })
 
 describe('D4 session-scoped catalog selection', () => {
-  const ASSIGNMENT = `## Assignment
-
-**Execute as**: fullstack-dev
+  const ASSIGNMENT = `---
+execute_as: fullstack-dev
+---
 
 ## Task
 

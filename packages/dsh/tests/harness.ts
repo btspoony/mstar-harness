@@ -285,6 +285,25 @@ export interface FakeTeamMember {
   childId: string
 }
 
+/** Render a plan markdown whose declarations live in the front matter fence.
+ * The one shared plan-fixture renderer for dsh tests. */
+export function planFrontMatter(planId: string, body: string, fields: Record<string, string> = {}): string {
+  return [
+    "---",
+    `plan_id: ${planId}`,
+    ...(fields.title === undefined ? [] : [`title: ${fields.title}`]),
+    `execution: ${fields.execution ?? "sdd"}`,
+    `working_branch: ${fields.working_branch ?? "main"}`,
+    `main_worktree_branch: ${fields.main_worktree_branch ?? "main"}`,
+    `delivery_kind: ${fields.delivery_kind ?? "development"}`,
+    `status: ${fields.status ?? "InProgress"}`,
+    "---",
+    "",
+    body,
+  ].join("\n");
+}
+
+
 /**
  * The two OPTIONAL rc.3 services the Agent Teams ledger reads, mounted by hand
  * on a bare `Context` or a booted app root (`ctx.provide` after apply works:
@@ -1393,8 +1412,13 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
     // note: Identity is committable fixture state: a clean control root
     // (worktree.main.tracked-changes) requires it committed after gitInit.
+    // The repository ignores its control harness (`/.mstar/`), and a dispatch
+    // gates the checkout its session runs in — so the fixture ignores it too.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const gitignore = join(root, '.gitignore')
+    if (!existsSync(gitignore)) writeFileSync(gitignore, '.mstar/\n')
     gitInit(root)
-    execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+    execFileSync('git', ['add', '.mstarc', '.gitignore'], { cwd: root, stdio: 'ignore' })
     execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
   }
   // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)

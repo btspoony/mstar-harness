@@ -25,6 +25,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { join } from "node:path";
+import { legacyAssignmentShape, parseAssignmentFields } from "@mstar-harness/engine";
 
 const SCRIPT = join(import.meta.dir, "..", "packages", "dsh", "workflows", "mstar-audit-fanout.js");
 
@@ -143,4 +144,99 @@ describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-in
       }
     }
   });
+});
+
+/**
+ * The four shipped scripts are Assignment PRODUCERS: every prompt they emit
+ * reaches a child through the dispatch/role gate, where front matter is the
+ * only field contract. Each script is executed here with recording doubles,
+ * so the assertion reads the prompt bytes the host would send — not the
+ * template source. `legacyAssignmentShape` is the engine's own recognition,
+ * so a reintroduced body-label prompt fails the gate's own predicate.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+const SEAT_SCRIPTS = [
+  {
+    name: "mstar-qc-tri",
+    args: {
+      planId: "20260101-example",
+      planPath: "/tmp/control/.mstar/plans/20260101-example.md",
+      range: "aaaa..bbbb",
+      reviewCwd: "/tmp/feature-worktree",
+      branch: "feature/example",
+      sddDir: "/tmp/control/.mstar/sdd/20260101-example",
+    },
+    roles: ["qc-specialist", "qc-specialist-2", "qc-specialist-3"],
+  },
+  {
+    name: "mstar-audit-fanout",
+    args: {
+      repo: "/tmp/repo-under-audit",
+      auditRef: "/tmp/mstar-audit-references",
+      recon: "languages: ts",
+      // One category keeps the seat count comparable; the all-nine default is covered above.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+      categories: ["bug"],
+    },
+    roles: ["code-reviewer"],
+  },
+  {
+    name: "mstar-pr-seats",
+    args: {
+      worktree: "/tmp/feature-worktree",
+      target: "example#1",
+      diffBase: "aaaa..bbbb",
+      auditRef: "/tmp/mstar-audit-references",
+      budgetLine: "deep — 30 min cap",
+      domains: ["correctness", "maintainability"],
+      security: false,
+    },
+    roles: ["code-reviewer", "code-reviewer"],
+  },
+  {
+    name: "mstar-review-single",
+    args: {
+      planId: "20260101-example",
+      taskId: "1",
+      reviewCwd: "/tmp/feature-worktree",
+      branch: "feature/example",
+      briefPath: "/tmp/brief.md",
+      implementerReport: "/tmp/report.md",
+      diffFile: "/tmp/diff.txt",
+      diffBase: "aaaa",
+      diffHead: "bbbb",
+      globalConstraints: "constraints",
+    },
+    roles: ["code-reviewer"],
+  },
+] as const;
+
+describe("dsh workflow scripts emit Assignments in front matter", () => {
+  for (const target of SEAT_SCRIPTS) {
+    it(`${target.name} seat prompts are front-matter documents`, async () => {
+      const prompts: string[] = [];
+      const runBody = (body: string) =>
+        new vm.Script(
+          `(function (agent, parallel, phase, log, args) {\n"use strict";\nreturn (async () => {\n${body}\n})();\n})`,
+          { filename: `dsh-workflow-seat-prompts:${target.name}` },
+        ).runInNewContext(Object.create(null)) as (...globals: unknown[]) => Promise<unknown>;
+      const agent = (prompt: string) => {
+        prompts.push(prompt);
+        return Promise.resolve({ category: "bug", findings: [] });
+      };
+      const parallel = (thunks: Array<() => unknown>) => Promise.all(thunks.map((thunk) => Promise.resolve().then(thunk)));
+      const run = runBody(readFileSync(join(import.meta.dir, "..", "packages", "dsh", "workflows", `${target.name}.js`), "utf8"));
+      await run(agent, parallel, () => {}, () => {}, target.args);
+
+      expect(prompts.length).toBe(target.roles.length);
+      for (const [index, prompt] of prompts.entries()) {
+        // The gate's own retired-format recognizer must not fire.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        expect(legacyAssignmentShape(prompt)).toBe(false);
+        // ... and the front matter must bind the seat role the script targets.
+        // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+        expect(parseAssignmentFields(prompt).executeAs).toBe(target.roles[index]);
+      }
+    });
+  }
 });

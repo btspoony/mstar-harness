@@ -43,83 +43,95 @@ const WORKTREE = '/srv/worktrees/mstar-dsh-package'
 const BRANCH = 'feature/dsh-package-core'
 
 /** Fully valid SDD writable Assignment (all fields the row-scope gate needs). */
-const SDD_ASSIGNMENT = `## Assignment
+const SDD_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
 /** Writable Assignment with NO `Execution mode` — plan-status trigger only. */
-const INLINE_ASSIGNMENT = `## Assignment
+const INLINE_ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment resolving the plan id through the `SDD dir` fallback only. */
-const SDD_VIA_SDD_DIR = `## Assignment
+const SDD_VIA_SDD_DIR = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+execution_mode: sdd
+sdd_dir: /srv/mstar/sdd/${PLAN_ID}
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Execution mode**: sdd
-**SDD dir**: /srv/mstar/sdd/${PLAN_ID}
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment that declares no Worktree path at all. */
-const SDD_NO_WORKTREE = `## Assignment
+const SDD_NO_WORKTREE = `---
+execute_as: fullstack-dev
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** SDD assignment with `Enforcement: hard` + an unrecorded row scope (violation to harden on). */
-const SDD_HARD = `## Assignment
+const SDD_HARD = `---
+execute_as: fullstack-dev
+execution_mode: sdd
+enforcement: hard
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+working_branch: ${BRANCH}
+---
 
-**Execute as**: fullstack-dev
-**Execution mode**: sdd
-**Enforcement**: hard
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
-**Working branch**: ${BRANCH}
+## Assignment
 
 Do the thing.
 `
 
 /** Read-only orientation role — the row-scope gate must not block read-only dispatch. */
-const SCOUT_ASSIGNMENT = `## Assignment
+const SCOUT_ASSIGNMENT = `---
+execute_as: scout
+delegation: forbidden
+task_category: deep
+task_budget: S — read-only orientation
+execution_mode: sdd
+plan_path: /srv/plans/${PLAN_ID}.md
+worktree_path: ${WORKTREE}
+---
 
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: S — read-only orientation
-**Execution mode**: sdd
-**Plan Path**: /srv/plans/${PLAN_ID}.md
-**Worktree path**: ${WORKTREE}
+## Assignment
 
 Read only.
 `
@@ -220,6 +232,45 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
+/**
+ * ------------------------------ D16 legacy body-label regression ------------------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('dispatch gate — the retired body-label grammar refuses at the lease surface too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // whose fields live in the retired `**Label**` grammar must reach the
+    // legacy-format refusal on the lease-gate surface exactly as on every
+    // other gate, never pass as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan path**: /srv/plans/${PLAN_ID}.md
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+Do the thing.
+`
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    // Terminal: the retired format declares nothing a gate could verify, so
+    // the default (soft) mode vetoes it — no advisory is emitted.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
+  })
+})
+
 /* ---------------------------------- scope matrix ---------------------------------- */
 
 describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
@@ -270,6 +321,21 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     expect(violationCodes(advisories[0])).toContain('lease.dispatch.worktree-mismatch')
   })
 
+  it('a one-item worktree_path list behaves like the scalar it declares', async () => {
+    // A one-item list is the same single declaration as the scalar spelling,
+    // so it must not read as absent (which was a worktree-mismatch advisory).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+
+    const oneItem = SDD_ASSIGNMENT.replace(`worktree_path: ${WORKTREE}`, `worktree_path:\n- ${WORKTREE}`)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(oneItem), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+
   it('Assignment Working branch differs from the row scope → advisory lease.dispatch.branch-mismatch', async () => {
     const app = booted = await bootApp()
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
@@ -287,10 +353,10 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
-    const createForm = SDD_ASSIGNMENT.replace(`**Working branch**: ${BRANCH}`, `**Working branch**: create ${BRANCH} from main`)
+    const createForm = SDD_ASSIGNMENT.replace(`working_branch: ${BRANCH}`, `working_branch: create ${BRANCH} from main`)
     const directOn = SDD_ASSIGNMENT.replace(
-      `**Working branch**: ${BRANCH}`,
-      `**Branch policy**: direct on ${BRANCH} — approved`,
+      `working_branch: ${BRANCH}`,
+      `branch_policy: direct on ${BRANCH} — approved`,
     )
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(createForm), defaultAllow)
@@ -363,7 +429,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
 
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      subagentExec(SDD_ASSIGNMENT.replace(/^\*\*Plan Path\*\*:.*\n/m, '')),
+      subagentExec(SDD_ASSIGNMENT.replace(/^plan_path:.*\n/m, '')),
       defaultAllow,
     )
 
@@ -424,5 +490,70 @@ Do the thing. Quoted example must not trigger the gate:
     // The header fields match the row scope; the body-quoted mismatches must not be read.
     expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.worktree-mismatch')
     expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.branch-mismatch')
+  })
+})
+
+/* ===========================================================================
+ * Malformed front matter at the lease gate (the shared entries API)
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ * ========================================================================= */
+
+describe('dispatch gate — lease isolation shapes', () => {
+  it('an indented nested plan_path never reads as the root plan identity — the lease check does not fire', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    // A `plan_path` line indented under a parent key is a NESTED map entry,
+    // never the root field: the local line reader treated it as a root key,
+    // so the lease resolved a plan id the document never declared (here a
+    // DIFFERENT plan — pre-fix it surfaced lease.dispatch.plan-not-found).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const nested = SDD_ASSIGNMENT.replace(
+      `plan_path: /srv/plans/${PLAN_ID}.md`,
+      'phase_gate_checklist:\n  plan_path: /srv/plans/nested-other-plan.md',
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(nested), defaultAllow)
+
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.plan-not-found')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('lease.dispatch.'))).toEqual([])
+  })
+
+  it('duplicate plan_path keys refuse as document.frontmatter.invalid instead of silently pairing the first', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    const duplicated = SDD_ASSIGNMENT.replace(
+      `plan_path: /srv/plans/${PLAN_ID}.md`,
+      `plan_path: /srv/plans/${PLAN_ID}.md\nplan_path: /srv/plans/another-plan.md`,
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(duplicated), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
+    // The whole block is refused: the lease never re-verifies a malformed document.
+    // The retired duplicate grammar read the FIRST key — the row's own — so pre-fix
+    // this dispatch verified clean and emitted NO advisory at all (silent pass).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(advisories).toHaveLength(1)
+  })
+
+  it('an unterminated fence declares nothing at the lease gate — schema refusal only', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+    // The opening fence never closes (the closing --- line is dropped): every
+    // field line below is inert, so the lease must not re-verify anything.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const unterminated = SDD_ASSIGNMENT.replace(/\n---\n\n## Assignment/, '\n\n## Assignment')
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(unterminated), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('lease.dispatch.'))).toEqual([])
   })
 })

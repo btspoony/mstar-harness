@@ -53,6 +53,8 @@ import { join } from "node:path";
 import {
   BUDGET_LABELS,
   RETURN_SHAPE_LABELS,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentFields,
   validateAssignmentFields,
 } from "../packages/engine/src/index.ts";
@@ -78,7 +80,21 @@ const BLANK = /^\s*$/;
 const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
 /** A fence line: three or more backticks or tildes, plus its info string. */
 const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
-const EXECUTE_AS = /Execute as/i;
+/**
+ * The front matter seat declaration key (snake_case — the only field contract).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const EXECUTE_AS_KEY = /^[ \t]*execute_as[ \t]*:/;
+/**
+ * The retired body-label role line, located only to point a refusal at it.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+const EXECUTE_AS_LABEL = /^[ \t]*(?:\*\*[ \t]*)?Execute as/i;
+/**
+ * A front matter fence line (an empty `---` line, at either end of the block).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const FRONT_MATTER_FENCE = /^[ \t]*---[ \t]*$/;
 
 export type Doc = { rel: string; text: string };
 
@@ -155,11 +171,15 @@ export function checkFenceParity(docs: readonly Doc[]): string[] {
 }
 
 /**
- * Check 1 — seat bounding. Each `## Assignment` segment inside a fence runs to
- * the next `## Assignment` or the fence end and is handed whole to the engine's
- * `validateAssignmentFields`; its bounding rows become one named row each.
- * Header extent, review-seat membership and the `audit` trigger are therefore
- * the engine's, never re-derived here.
+ * Check 1 — seat bounding. A seat prompt declares its seat in FRONT MATTER
+ * (compass D15/D16): the scanned segment is the fenced front-matter document
+ * that declares `execute_as`, and it runs to the next such document or the
+ * fence end. Each segment is handed whole to the engine's
+ * `validateAssignmentFields`; its bounding rows become one named row each, and
+ * a segment still written with the retired `**Label**` body grammar is named by
+ * the engine's own `dispatch.assignment.legacy-format` refusal instead of
+ * passing as an unscanned prompt. Header extent, review-seat membership and the
+ * `audit` trigger are therefore the engine's, never re-derived here.
  */
 export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; blocks: number } {
   const rows: string[] = [];
@@ -168,20 +188,25 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
   for (const doc of docs) {
     const before = blocks;
     for (const block of fencedBlocks(doc.text)) {
-      block.lines.forEach((line, index) => {
-        if (!ASSIGNMENT_HEADING.test(line)) return;
+      for (const segment of seatSegments(block.lines)) {
         blocks++;
-        // The segment ends at the next Assignment marker or the fence end; the
-        // engine's own header-region rule (body markers) decides what it reads.
-        let end = index + 1;
-        while (end < block.lines.length && !ASSIGNMENT_HEADING.test(block.lines[end]!)) end++;
-        const segment = block.lines.slice(index, end);
-        const text = segment.join("\n");
-        const executeAs = parseAssignmentFields(text).executeAs?.trim();
-        // Point at the role line when there is one, else at the marker itself.
-        const roleOffset = segment.findIndex((segLine) => EXECUTE_AS.test(segLine));
-        const at = block.line + index + (roleOffset === -1 ? 0 : roleOffset);
+        const text = segment.lines.join("\n");
+        const fields = parseAssignmentFields(text);
+        const executeAs = fields.executeAs?.trim();
+        // Point at the declaration line when there is one, else at the segment start.
+        // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+        const declOffset = segment.lines.findIndex((line) => EXECUTE_AS_KEY.test(line) || EXECUTE_AS_LABEL.test(line));
+        const at = block.line + segment.start + (declOffset === -1 ? 0 : declOffset);
         const subject = `Assignment (Execute as: ${executeAs === undefined || executeAs === "" ? "(absent)" : executeAs})`;
+        // A seat still written with the retired body-label grammar declares
+        // nothing the gate can read; the engine's own D16 refusal names it
+        // instead of letting it pass as an unbounded-but-clean segment.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        if (legacyAssignmentShape(text)) {
+          const refusal = legacyFormatViolation();
+          rows.push(`${doc.rel}:${at} ${subject} ${refusal.message} - ${refusal.fix} (dispatch reports ${refusal.code})`);
+          continue;
+        }
         for (const violation of validateAssignmentFields(text, { writable: false }).violations) {
           const bounding = BOUNDING_CODES[violation.code];
           if (bounding === undefined) continue;
@@ -190,23 +215,23 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
               + `add one of ${bounding.labels.map((label) => `"${label}"`).join(" / ")} (dispatch reports ${violation.code})`,
           );
         }
-      });
+      }
     }
-    // Coverage floor, per document: every marker in the text must have become a
-    // scanned segment. Comparing the two catches a PARTIAL loss too (one fence
-    // pair dropped while other templates still scan), which a "zero segments
-    // from this document" test cannot see. A marker is the segmentation pattern
-    // itself, so a mid-line prose mention (which does not end with the marker)
-    // is not counted; a 4-space indent is.
+    // Coverage floor, per document: every seat declaration in the text must have
+    // become a scanned segment. Comparing the two catches a PARTIAL loss too (one
+    // fence pair dropped while other templates still scan), which a "zero segments
+    // from this document" test cannot see. The marker is the declaration key
+    // itself, so a mid-line prose mention is not counted; a 4-space indent is.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const scanned = blocks - before;
     perDoc.set(doc.rel, scanned);
     const markers = doc.text
       .split(/\r?\n/)
-      .flatMap((line, index) => (ASSIGNMENT_HEADING.test(line) ? [index + 1] : []));
+      .flatMap((line, index) => (EXECUTE_AS_KEY.test(line) || ASSIGNMENT_HEADING.test(line) ? [index + 1] : []));
     if (markers.length > scanned) {
       rows.push(
-        `${doc.rel}:${markers[0]} ${markers.length} \`## Assignment\` marker line(s) in the text but ${scanned} fenced segment(s) scanned - `
-          + "the marker sits outside a scanned fence (de-fenced, 4-space indented, or a renamed fence), so those seats are unchecked",
+        `${doc.rel}:${markers[0]} ${markers.length} seat declaration line(s) in the text but ${scanned} fenced segment(s) scanned - `
+          + "the declaration sits outside a scanned fence (de-fenced, 4-space indented, or a renamed fence), so those seats are unchecked",
       );
     }
   }
@@ -216,19 +241,44 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
   const seenTemplate = docs.find((doc) => doc.rel === SEAT_TEMPLATE_DOC);
   if (seenTemplate !== undefined && (perDoc.get(SEAT_TEMPLATE_DOC) ?? 0) === 0) {
     rows.push(
-      `${SEAT_TEMPLATE_DOC}:1 the seat-template document yielded no fenced \`## Assignment\` segment - `
-        + "its Assignment prompt templates are the corpus check 1 exists to read; a renamed or removed marker there disables the gate",
+      `${SEAT_TEMPLATE_DOC}:1 the seat-template document yielded no fenced seat declaration - `
+        + "its Assignment prompt templates are the corpus check 1 exists to read; a renamed or removed declaration there disables the gate",
     );
   }
   if (blocks === 0) {
     // Run-level: nothing at all was scanned, which is indistinguishable from a
     // gate that has been switched off by its own inputs.
     rows.push(
-      "seat bounding: no fenced `## Assignment` segment was found in any gated document - "
+      "seat bounding: no fenced seat declaration (Assignment front matter, or the retired `## Assignment` header) was found in any gated document - "
         + "the seat-bounding gate scanned nothing (expected the host docs' Assignment prompt templates)",
     );
   }
   return { rows, blocks };
+}
+
+/**
+ * The seat segments of one fenced block: each starts at a front-matter fence
+ * whose block declares `execute_as`, or at a `## Assignment` header (the
+ * retired shape, reported as the D16 refusal), and runs to the next start or
+ * the fence end. A front-matter fence that declares no seat is skipped whole, so
+ * its keys can never re-anchor a segment.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+function seatSegments(lines: readonly string[]): Array<{ start: number; lines: string[] }> {
+  const starts: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (FRONT_MATTER_FENCE.test(line)) {
+      const close = lines.findIndex((candidate, index) => index > i && FRONT_MATTER_FENCE.test(candidate));
+      if (close !== -1) {
+        if (lines.slice(i + 1, close).some((inner) => EXECUTE_AS_KEY.test(inner))) starts.push(i);
+        i = close;
+      }
+      continue;
+    }
+    if (ASSIGNMENT_HEADING.test(line)) starts.push(i);
+  }
+  return starts.map((start, index) => ({ start, lines: lines.slice(start, starts[index + 1] ?? lines.length) }));
 }
 
 /* ------------------------------------------------------------------ */

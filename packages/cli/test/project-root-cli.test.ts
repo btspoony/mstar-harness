@@ -91,14 +91,16 @@ describe("project-root path resolution — relative dev-command args (audit-002)
 
 describe("project-root path resolution — converted dev commands with relative args (audit-002 F-S2)", () => {
   /** Minimal well-formed writable assignment (same shape as the engine fixture). */
-  const ASSIGNMENT_GOOD = `## Assignment
+  const ASSIGNMENT_GOOD = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+task_budget: S — one focused implementer round
+plan_path: .mstar/plans/20260808-example.md
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Plan Path**: .mstar/plans/20260808-example.md
+## Assignment
 `;
 
   const AUDIT_FINDINGS = [

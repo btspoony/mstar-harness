@@ -239,7 +239,7 @@ function toolExec(name: string, args: unknown): ToolExecution {
 function dispatchExec(): ToolExecution {
   return toolExec('subagent', {
     description: 'writable implement round',
-    prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
+    prompt: ['---', 'execute_as: fullstack-dev', 'task_category: logic', 'execution_mode: sdd', '---', '', '## Assignment', '', 'Implement the thing.'].join('\n'),
   })
 }
 
@@ -248,14 +248,15 @@ function dispatchExec(): ToolExecution {
  * gate on) and `Execution mode: sdd` makes it the write-path re-verify. */
 function retiredPlanAssignment(planId: string, worktreePath: string): string {
   return [
-    '## Assignment',
-    '**Execute as**: fullstack-dev',
-    '**Task category**: logic',
-    '**Execution mode**: sdd',
-    `**Plan Path**: plans/${planId}.md`,
-    `**Worktree path**: ${worktreePath}`,
-    '**Working branch**: feature/assignment-branch',
-    '**Enforcement**: hard',
+    '---',
+    'execute_as: fullstack-dev',
+    'task_category: logic',
+    'execution_mode: sdd',
+    `plan_path: plans/${planId}.md`,
+    `worktree_path: ${worktreePath}`,
+    'working_branch: feature/assignment-branch',
+    'enforcement: hard',
+    '---',
     '',
     'Implement the thing.',
   ].join('\n')
