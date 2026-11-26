@@ -57,12 +57,6 @@ export type IngestEntry = {
 export type IngestReport = {
   /** note: Associated and converged: the ledger now knows this remote issue. */
   associated: IngestEntry[];
-  /**
-   * note: Needs the operator. Three cases, all "nothing was rewritten here": the remote
-   * content no longer matches what mstar confirmed, two remote issues claim one
-   * local issue, or the ledger row cannot take an association (a released/failed
-   * create). The cause names the recovery.
-   */
   drift: IngestEntry[];
   /** note: Another git author's push of a local id in this same repository. */
   foreign: IngestEntry[];
@@ -116,31 +110,10 @@ function localIssueExists(db: StoreDb, localId: string): boolean {
   return db.prepare("select id from issues where id = ?").get(localId) !== undefined;
 }
 
-/**
- * note: Is the local issue the marker names part of THIS binding's project?
- *
- * Existence alone is not enough: issue ids are store-wide, so a marker from
- * another project of the same store would otherwise be associated under the
- * project this run was asked to mirror.
- */
 function localIssueInProject(db: StoreDb, projectId: string, localId: string): boolean {
   return db.prepare("select id from issues where id = ? and project_id = ?").get(localId, projectId) !== undefined;
 }
 
-/**
- * note: Record the association on the push row: the remote identity when the row has
- * none, and the remote revision watermark always.
- *
- * A row that never existed is opened first, because the ledger has no way to
- * record an identity without a cycle — the row ends `applied`, so the next
- * `pending` plans an update of the existing remote issue instead of creating a
- * second one.
- *
- * Re-ingesting the same record is a NO-OP, not a rewrite: the row already says
- * exactly this, and writing again would reuse a claim receipt with a different
- * request (the ledger refuses that as an operation conflict). The caller owns
- * the state check (a row that cannot take an association never reaches here).
- */
 function associate(db: StoreDb, context: IngestContext, localId: string, record: ProviderItem): void {
   const key = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId };
   const ledger = readItem(db, key);

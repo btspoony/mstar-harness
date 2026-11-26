@@ -15,9 +15,9 @@ Entry spelling differs per host; the **active `mstar-host` reference** owns it (
 |------|-----|
 | Host ships a **`/pm`** command or exposes this **`pm`** skill | → **`project-manager`** for the session (general PM orchestration: single-plan, hotfix, QC waves, dispatch) |
 | Host with no command entry | Same route: **`project-manager`** via `mstar-roles` → `mstar-roles/references/project-manager.md` |
-| Formal iteration (host **`commands/`** where shipped) | Phase 1–5 sequencing by the host commands — **without** an iteration the shim still serves ordinary per-plan PM |
+| Formal iteration (host **`commands/`** where shipped) | iteration lifecycle and delivery-chain sequencing by the host commands — **without** an iteration the shim still serves ordinary per-plan PM |
 
-**Iteration lifecycle** (optional): host `commands/` may sequence Phase 1–5; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
+**Iteration lifecycle** (optional): host `commands/` may sequence the iteration lifecycle and its delivery chain; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
 
 **Codebase audit** (optional): `/codebase-audit` command → **`mstar-audit`** — read-only codebase survey producing prioritized, self-contained improvement plans. Output feeds iteration-start §1 Research or normal Prepare → Execute. Dispatched by PM under `Task category: audit`.
 

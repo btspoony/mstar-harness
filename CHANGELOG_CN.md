@@ -6,6 +6,54 @@
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-11-25
+
+### Breaking
+
+- **迭代终态关闭现证明其交付链。** `verifyDeliveryEvidence` 按路线分派：development plan 保留其合并证明、report-only plan 保留其已注册完成策略，迭代则证明 `branch.integration` 的 tip 是解析后 `branch.target` 的祖先，否则以 `PHASE6_DELIVERY_MERGE_UNPROVEN` 拒绝。该证明先读工作流记录的 integration checkout，再回落到 plan 行 worktree，因此交付确已落地的关闭不再被常规的 plan checkout 清理卡住；standalone plan 路线仍只读 plan 行 worktree。
+- **phase gate 现只返回两个 transition。** `evaluatePhaseGate` 不再报告 close 之后的 PR 阶段：注册 plan 未全部 Done 时返回 `phase-2-execute`，全部 Done 后返回 `phase-3-close`；`ok` 报告 gate 是否还有未过项（`phase-3-close` 下 `ok: false` 表示 close 工作待办；`phase-2-execute` 下 `ok` 同样为 `true`——close gate 不运行，因此调用方仍需 transition 名来分辨所处窗口）。第三段（PR 阶段）成员已从 `PhaseTransition` 与 dsh 的 `IterationGateView.transition` 中移除；所有按该值分支的消费者须以 `transition` 读窗口、以 `ok` 读窗口内的 gate 通过状态，且该退役拼写现与散文一样在代码段中被 drift guard 拒绝。
+- **worktree cleanup 认识 layer ref 并拒绝 open PR base。** 引擎定义的 `iteration-stack/<workflow-id>/sNN` 命名空间归属其 workflow、不带 `planId`，并以 `branch.target` 评估合并证据；其他 ref 仍只按记录行归属。当 layer ref 成为清理候选时，执行一次 `gh pr list --repo <origin host/owner/name> --state open` 探测，锚定为 `git remote get-url origin` 解析出的仓库——含 origin 的 host，GitHub Enterprise origin 不会探测 github.com——任何作为其他 open PR base 的分支候选都以 `cleanup.refuse.open-pr-base` 拒绝；探测无法执行、解析、定位仓库或在自身上限内完成时同样 fail closed，但只作用于被探测的 layer ref；无 layer-ref 候选时不发起任何探测。
+- **两条恢复路径替代两条不可能的路径。** 确实无法证明的迭代关闭现以 `mstar workflow lifecycle --status stopped --reason <why>` 如实记录，而不再被困在其无法到达的状态之后，拒绝文案也点名该路径；已落地的 layer ref 成为可按 `branch.target` 清理的证据，而不再被视为外来 ref，`cleanup.refuse.open-pr-base` 则点明操作者必须先解决的唯一条件——以该 ref 为 base 的 PR。
+- **迭代以堆叠 PR 交付**：迭代现以执行期间开启的堆叠 PR 链交付，自下而上逐层合并：首个 open layer 以 `branch.target`（在已合并前缀之后）为 base，其后每个 open layer 以其实时前驱为 base；对 stack 而言，`branch.integration` 从不作 layer PR 的 head，已有一个聚合 PR 的迭代照旧收尾；仅在有非空 close delta 时才开最后的 close-delta layer。
+- **两条路线共用一条交付程序**：从发布到 merge 授权、以及合并后的关闭，都是共享的项目经理参考文件，由迭代的堆叠规则扩展，而非迭代专属路径。
+- **close 之后不再使用阶段名**：prompt 面不再命名 iteration-close 之后的编号阶段；合并后的程序称 Workflow Close Out，`delivered` 投影（compass 标记、roadmap 行、milestone 汇总）只在整链证明之后写入。
+
+### Added
+
+- **`mstar pr-review post` 经由具名 publisher 适配器执行**：新增 `--provider <id>` 选项（默认 `github`）选择注册的 forge publisher 来解析 PR、取 head 固定的 diff 并发帖；未注册的 id 以 `pr-review.post.unsupported-provider` 拒绝并列出已注册 id，无适配器服务的 forge 按 `pr-delivery.md` 中的项目工具路径发帖，否则 STOP——绝不手工发帖。引擎的 URL 解析现在接受任意 forge host（`<scheme>://<host>/{owner}/{repo}/pull/{n}`），`ReviewPostPlan` 携带 host。
+- 新增 **`decision_record` case spec 字段 `forbidProse`**：由 case 作者逐条列出的字面短语，用来捕捉散文里的禁止决定。机器可读记录正确、但正文仍写“迭代已交付”的回复现在判 `fail`；缺记录仍是 `unverified`。匹配是字面、大小写不敏感的短语检查，仅归一化空白——不做邻近窗口、不调用 judge。
+- 对四个已带 decision record 的 close case 应用 `forbidProse`，短语取自该 case 自身声明的禁止决定。列表为双语（语料 prompt 是中文），且每个 fixture 现在会公开自己的字面短语：回复即使为了否认也不得复述，避免复述即通过、复述即失败，全程不涉及否定启发式。
+- `readDecisionRecord` 现在拒绝非扁平、非纯字符串值的记录，以及重复键的记录（`JSON.parse` 只保留最后一个值）：这类记录判 `unverified`，绝不 `pass`。空记录（`DECISION: {}`）不被拒绝：它是“已记录但未带任何字段”的决定，因此判 `fail`，每个声明字段各记一条缺失，而不会被当作缺失证据掩盖。`scripts/skill-eval/runner.test.ts` 已纳入 CI 门禁，这些断言因此会真正执行。
+
+### Changed
+
+- **PR review 层级阶梯写明 `too-large` 绕过情形**：对 `mstar pr-review size` 判为 `too-large` 的 PR 运行 `default` 层级，等于绕过了推理阶梯——它引用的是 `PR_REVIEW_TIER_BUDGETS` 的 `default` 行，而非阶梯对该 head 的答案——因此应以 `deep` 层级的判定为准。预算常量未改；把 `default` 拉长只会掩盖这次层级绕过。
+- **共享 PR 交付与工作流关闭**：PR 交付与工作流关闭现由两个共享的项目经理参考文件 `skills/mstar-roles/references/project-manager/pr-delivery.md` 与 `skills/mstar-roles/references/project-manager/workflow-close.md` 承载，独立开发计划与迭代共同使用。
+- 指向原迭代专属文件的引用已同步更新，迭代 skill 与其命令中的打印标记和阶段名已改为职责名；顺序与门禁未变。
+- **打印标记**：随迁移重命名了阶段标记 —— `## PR delivery`、`## Merge-ready checklist` 与 `## Workflow Close Out` —— 两个共享参考文件不再命名阶段，关闭阶段的会话 todo 由三个并为两个：`delivery-chain` 与 `workflow-close`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.9.0**。
+
+## [4.8.5] - 2026-11-23
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.5**。
+
+## [4.8.4] - 2026-11-22
+
+### Breaking
+
+- 注释门不再接受自然语言声明前缀（`why:`、`invariant:`、`safety:`、`note:`）：声明前缀不构成可机器验证的声明，不再算作形状。保留的形状为有界标记、契约指针、`@generated` 与带跟踪引用的 `TODO`。
+- 注释只有在其声明能在 HEAD 上解析到可机器验证的外部证据时才保留：唯一保留的指针形式是可解析的仓库路径（`docs/`、`skills/`、`packages/`、`scripts/`；ADR 记录按其 `docs/adr/...` 路径引用）或 URL——`plans/`、`#<n>`、`issue <n>`、`contract §` 与数字编号 `ADR-<n>` 因 linter 无法解析，不再是形状——其余为带边界的标记、`@generated` 与带跟踪引用的 `TODO`；证明注释合理的是锚点本身，而不是那段散文。
+- 既有 `note:` 注释（含单行 `/** note: */` 块）一律删除或改挂可解析指针（issue-sync 模块头注释现指向 `docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`）；值得保留的自然语言理由移入 ADR 或 docs 页面，注释只保留 `see` 指针。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.4**。
+
 ## [4.8.3] - 2026-11-22
 
 ### Added

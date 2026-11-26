@@ -113,16 +113,6 @@ const TERMINAL_STATUS_CACHE_MAX = 64
 const terminalStatusCache = new Map<string, { mtimeMs: number; terminal: boolean }>()
 
 /**
- * Test-only observability hook :
- * whether a snapshot path is still cached. Production code never calls
- * this — the eviction contract (delete → key gone) is asserted by the
- * workflow-selection spec.
- */
-export function _terminalStatusCacheHas(snapshotPath: string): boolean {
-  return terminalStatusCache.has(snapshotPath)
-}
-
-/**
  * One snapshot's terminal-status verdict, mtime-first :
  * stat the file, reuse the cached verdict when the mtime is unchanged,
  * else parse `status` and cache the verdict for the new mtime. Unreadable

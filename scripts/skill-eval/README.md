@@ -117,8 +117,57 @@ Provenance: cases adapted from
 `.cursor/skills/mstar-routing-eval/assets/routing-evals.json` (v27) cite the
 seed case id; new cases carry an explicit note. Assertions use mechanical
 kinds (`final_contains`, `final_not_contains`, `tool_read_contains`,
-`tool_read_not_contains`, `diff_paths_within`, `thread_reused`); semantic
+`tool_read_not_contains`, `diff_paths_within`, `thread_reused`,
+`grouped_facts_final`, `decision_record`); semantic
 grades still require reviewer rationale at grading time (Task 2+, Spec A1).
+
+**`decision_record` — the deterministic decision oracle.**
+Substring assertions cannot see a contradiction: a reply can print the
+reserved refusal marker and state the forbidden decision in prose, and
+`final_contains` / `final_not_contains` still pass. The runner's zero-model-call
+contract (header above) rules out a judge, so a case that forbids a decision
+demands one machine-readable record instead:
+
+- Framing: **exactly one** line in the final message that starts with
+  `DECISION:` followed by a single-line JSON object whose values are strings
+  (record shape below), e.g.
+  `DECISION: {"phase":"3-close","close":"unfinished","delivery":"blocked"}`. Two
+  record lines, zero record lines, invalid JSON, or a non-object payload are
+  malformed.
+- Spec: `{"fields": {<field>: [<allowed value>, …]}, "forbidProse": [<literal phrase>, …]}`.
+  Every listed field must be present with one of its allowed values.
+- `forbidProse` (optional) closes the remaining prose gap: a reply can carry a
+  correct record and still *state* the forbidden decision in its sentence
+  ("The iteration is delivered"). Each entry is a **literal phrase authored per
+  case** — never a proximity window, never a semantic/Judge call — matched
+  case-insensitively against the final message with whitespace runs normalised
+  to one space. Any listed phrase present → **fail**, even when every field is right.
+  The scan covers the whole final message — the `DECISION:` line included, so a
+  forbidden literal hidden in an extra record field fails the same way it does
+  in prose.
+  The list is **per-case and bilingual**: corpus prompts are Chinese and models
+  answer in the prompt's language, so every adopting case lists its English
+  literals *and* the Chinese equivalents of the same forbidden decision.
+  Because the match is literal, a refusal that *quotes* a forbidden literal
+  ("I cannot say the iteration is delivered") also fails — by design. Each
+  adopting fixture therefore **discloses its literals** in the decision-record
+  protocol line, with the rule that the reply must not reproduce them, not even
+  to deny them; a compliant refusal says the decision is refused without
+  echoing the phrase.
+- Record shape: the payload is a **flat object of string values only**. A nested
+  or non-string value, or a key repeated inside the object (`JSON.parse` would
+  keep only the last), is malformed — it may never be read as the surviving
+  last value. An empty object is *not* malformed: `DECISION: {}` is a recorded
+  decision that carries no field, so it grades **fail** with one missing-field
+  violation per declared field.
+- Grades: **fail** when a recorded field is missing or outside its allowed set
+  (the contradiction), or when a `forbidProse` phrase appears in the final;
+  **unverified** — never pass — when the record is absent or malformed,
+  **pass** only when the record satisfies the spec and no forbidden phrase
+  appears. This is the same honesty rule `grouped_facts_final` applies.
+- A case that adopts it must require the record in its fixture AGENTS.md
+  protocol line, as the close cases that forbid a decision do, and disclose the
+  `forbidProse` literals there.
 
 **Corpus v2 assertion contract.**
 Corpus v1's `final_contains` literals were English prose while every prompt is

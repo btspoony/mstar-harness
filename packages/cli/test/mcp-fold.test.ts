@@ -50,8 +50,12 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * exchange widened the `issue move` contract further (the `input`/`out` payload pair of the
  * staged move), so the surface measures 34_103 against the same unchanged fold source. The growth
  * is the shipped command contract, not a publication-rule change.
+ *
+ * Re-taken after merging main into 5.0: main's named provider adapters publish `--provider` on
+ * `pr.merge-gate` and `pr-review.post`, and that option text merges in here; the fold source is
+ * still unchanged, so the surface measures 34_161 and the growth is the shipped command contract.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 34_103;
+const PUBLISHED_SURFACE_CEILING_CHARS = 34_161;
 
 type PublishedTool = Readonly<{
   name: string;

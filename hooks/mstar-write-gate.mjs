@@ -13760,6 +13760,18 @@ var TODO_NON_OWNER_WORDS = new Set([
   "tbd",
   "soon"
 ]);
+var POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
+var POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
+var COMMENT_SHAPES = [
+  /\b(?:simplify|shortcut)\s*:/i,
+  /\btemporary\s*(?::|[\u2013\u2014-]\s)/i,
+  new RegExp(`\\bsee\\s+${POINTER_URL_SOURCE}`, "i"),
+  new RegExp(POINTER_URL_SOURCE, "i"),
+  new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`),
+  /@generated\b/i
+];
+var POINTER_PATH_RE = new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`, "g");
+var URL_SPAN_RE = new RegExp(POINTER_URL_SOURCE, "gi");
 var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
 init_path();
@@ -13806,7 +13818,6 @@ init_coordination_write();
 init_path();
 init_coordination();
 init_coordination_write();
-init_path();
 init_coordination();
 init_store_db();
 init_store_db();

@@ -8,6 +8,54 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-11-25
+
+### Breaking
+
+- **An iteration's terminal close proves its delivery chain.** `verifyDeliveryEvidence` now dispatches by route: a development plan keeps its merge proof, a report-only plan keeps its registered completion policy, and an iteration proves that its `branch.integration` tip is an ancestor of the resolved `branch.target`, refusing with `PHASE6_DELIVERY_MERGE_UNPROVEN` otherwise. The proof reads the workflow's recorded integration checkout first and falls back to plan-row worktrees, so routine post-Done cleanup of the plan checkouts no longer refuses a close whose chain did land; the standalone plan route still reads only plan-row worktrees.
+- **The phase gate returns two transitions.** `evaluatePhaseGate` no longer reports a PR stage after close: it returns `phase-2-execute` while a registered plan is not Done and `phase-3-close` once every plan is Done, and `ok` reports whether the gate has anything left to check (`ok: false` under `phase-3-close` is close work pending; `ok` is also `true` under `phase-2-execute`, when the close gate does not run, so a caller still needs the transition name to know which window it is in). The third, PR-stage member is removed from `PhaseTransition` and from dsh's `IterationGateView.transition`; every consumer switching on that value reads `transition` for the window and `ok` for the gate's pass inside it, and the retired name it carried now fails the drift guard in a code span as it does in prose.
+- **Worktree cleanup knows layer refs and refuses an open PR base.** The engine-defined `iteration-stack/<workflow-id>/sNN` namespace attributes to its owning workflow, carries no `planId`, and evaluates merged evidence against `branch.target`; every other ref is still attributed only from recorded rows. While a layer ref is a cleanup candidate, one `gh pr list --repo <origin host/owner/name> --state open` probe lists every open PR against the repository `git remote get-url origin` resolves to — the origin's host included, so a GitHub Enterprise origin never probes github.com — and any branch candidate that is another open PR's base refuses with `cleanup.refuse.open-pr-base`; a probe that cannot run, parse, resolve or complete under its own cap fails closed on the same refusal scoped to the probed layer refs, while a run with no layer-ref candidate spawns no probe.
+- **Two recovery paths replace two impossible ones.** A genuinely unprovable iteration close is now recorded honestly with `mstar workflow lifecycle --status stopped --reason <why>` instead of being stranded behind a state it cannot reach, and the refusal text names it; a landed layer ref becomes cleanable evidence against `branch.target` instead of a foreign ref, with the open-PR-base refusal naming the one condition — the PR using that ref as base — that the operator must resolve before the ref is removed.
+- **Iterations deliver as a stack:** an iteration is now delivered as a chain of stacked PRs opened during execution and merged bottom-up: the first open layer targets `branch.target` after any merged prefix, and every later open layer targets its live predecessor; for a stack, `branch.integration` is never a layer PR's head, and an iteration that already has one aggregate PR finishes it as before; the final close-delta layer opens only for a nonempty close delta.
+- **One delivery procedure for both callers:** PR publication through merge authorization, and the post-merge closure, are shared project-manager references extended by the iteration stack rules rather than an iteration-only path.
+- **No stage names after close:** the prompt surface no longer names numbered stages after iteration-close; the post-merge procedure is called Workflow Close Out, and the delivered projection (the compass marker, the roadmap row and the milestone rollup) is written only after whole-chain proof.
+
+### Added
+
+- **`mstar pr-review post` routes through a named publisher adapter:** the new `--provider <id>` option (default `github`) selects the registered forge publisher that resolves the PR, fetches the head-pinned diff and posts the review; an unregistered id refuses with `pr-review.post.unsupported-provider` naming the registered ids, and a forge no adapter serves follows the documented project-tooling path in `pr-delivery.md` or STOPs — never a hand-post. The engine URL parser now accepts any forge host (`<scheme>://<host>/{owner}/{repo}/pull/{n}`) and `ReviewPostPlan` carries the host.
+- Added the **`decision_record` case spec field `forbidProse`**: a case-authored list of literal phrases that state the forbidden decision in prose. A reply whose machine-readable record is correct but whose sentence still says "The iteration is delivered" now grades `fail`; a missing record still grades `unverified`. Matching is a literal, case-insensitive phrase check on normalised whitespace — no proximity window and no judge call.
+- Applied `forbidProse` to the four close cases that carry a decision record, with phrases drawn from each case's own forbidden decision. Each list is bilingual (the corpus prompts are Chinese) and each fixture now discloses its literals, so a reply must not reproduce them even to deny them — a refusal that avoids them passes, one that quotes them fails, and no negation heuristic is involved.
+- `readDecisionRecord` now rejects a record that is not a flat object of string values, or that repeats a key (`JSON.parse` keeps only the last): such a record grades `unverified`, never `pass`. An empty record (`DECISION: {}`) is not rejected — it is a recorded decision carrying no field, so it grades `fail` with one missing-field violation per declared field rather than being masked as missing evidence. `scripts/skill-eval/runner.test.ts` is gated in CI so these assertions run.
+
+### Changed
+
+- **PR review tier ladder states the `too-large` bypass:** a `default`-tier run on a PR that `mstar pr-review size` calls `too-large` bypassed the inference ladder — the budget it quotes is the `default` row of `PR_REVIEW_TIER_BUDGETS`, not the ladder's answer for that head — so the `deep`-tier run's verdict is the one to read. No budget constant changed; lengthening `default` would have papered over the tier bypass.
+- **Shared PR delivery and workflow close:** PR delivery and workflow close now live in two shared project-manager references, `skills/mstar-roles/references/project-manager/pr-delivery.md` and `skills/mstar-roles/references/project-manager/workflow-close.md`, used by both standalone-development plans and iterations.
+- References to the previous iteration-owned files were updated, and the printed markers and stage names in the iteration skill and its commands were renamed to the responsibilities; the sequence and the gates did not change.
+- **Printed markers:** the stage markers were renamed with the move — `## PR delivery`, `## Merge-ready checklist` and `## Workflow Close Out` — the two shared references no longer name stages, and the three close-out session todos become two, `delivery-chain` and `workflow-close`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.9.0**.
+
+## [4.8.5] - 2026-11-23
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.5**.
+
+## [4.8.4] - 2026-11-22
+
+### Breaking
+
+- The comment gate no longer accepts natural-language declared prefixes (`why:`, `invariant:`, `safety:`, `note:`): a declared prefix states no machine-resolvable claim and is not a shape. The surviving shapes are the bounded marker, the contract pointer, `@generated`, and the tracked `TODO`.
+- A comment survives only when its claim resolves at HEAD against machine-resolvable external evidence: the only retained pointer forms are a resolvable repo path (`docs/`, `skills/`, `packages/`, `scripts/`; an ADR record is cited by its `docs/adr/...` path) or a URL — `plans/…`, `#<n>`, `issue <n>`, `contract §` and a numeric `ADR-<n>` id are no longer shapes because the linter cannot resolve them — beside a bounded marker with its bound, `@generated`, and a tracked `TODO`; the anchor is what justifies the comment, not the prose.
+- Existing `note:` comments, including single-line `/** note: */` blocks, were removed or repointed (the issue-sync module headers now point at `docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`); a natural-language reason worth keeping moves to an ADR or docs page, and the comment keeps only the `see` pointer.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.4**.
+
 ## [4.8.3] - 2026-11-22
 
 ### Added

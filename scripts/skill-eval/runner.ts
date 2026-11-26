@@ -51,6 +51,7 @@ import {
   canonicalJson,
   canonicalRunId,
   computeConfigHash,
+  DECISION_RECORD_PREFIX,
   disposableRootContainmentErrors,
   deriveDisposableRepoRoot,
   REPEATS_ALLOWED,
@@ -60,6 +61,7 @@ import {
   VARIANT_IDS,
   type AssertionKind,
   type CaseSplit,
+  type DecisionRecordSpec,
   type EvalManifest,
   type GroupedFactsSpec,
   type Io,
@@ -1748,6 +1750,115 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
   };
 }
 
+const JSON_STRING = String.raw`"(?:[^"\\]|\\.)*"`;
+/** Flat `{"key":"value",…}` — string values only, so `JSON.parse` cannot hide a
+ * nested extra. An empty object is admitted on purpose: it is a recorded
+ * decision missing every declared field, so it grades `fail`, not `malformed`.
+ * See scripts/skill-eval/README.md § decision_record. */
+const DECISION_RECORD_SHAPE = new RegExp(
+  String.raw`^\{\s*(?:${JSON_STRING}\s*:\s*${JSON_STRING}\s*(?:,\s*${JSON_STRING}\s*:\s*${JSON_STRING}\s*)*)?\}$`,
+);
+/** see scripts/skill-eval/README.md § decision_record — `JSON.parse` keeps only the
+ * last value of a repeated key, so a key count above the parsed key count is a repeat.
+ * Whole pairs are matched so a colon inside a key or a value is not a separator. */
+function countRecordKeys(body: string): number {
+  return [...body.matchAll(new RegExp(`${JSON_STRING}\\s*:\\s*${JSON_STRING}`, "g"))].length;
+}
+
+/** see scripts/skill-eval/README.md § decision_record */
+function readDecisionRecord(content: string): Record<string, unknown> | "malformed" {
+  const lines = content.split(/\r?\n/).filter((line) => line.trimStart().startsWith(DECISION_RECORD_PREFIX));
+  if (lines.length !== 1) return "malformed";
+  const body = lines[0]!.trimStart().slice(DECISION_RECORD_PREFIX.length).trim();
+  if (!DECISION_RECORD_SHAPE.test(body)) return "malformed";
+  try {
+    const record = JSON.parse(body) as Record<string, string>;
+    return countRecordKeys(body) === Object.keys(record).length ? record : "malformed";
+  } catch {
+    return "malformed";
+  }
+}
+
+/** see scripts/skill-eval/README.md § decision_record — the grading rule and
+ * the honesty floor this oracle shares with `grouped_facts_final`. */
+function gradeDecisionRecord(ctx: GradingContext, assertionId: string, spec: DecisionRecordSpec): AssertionGrade {
+  const turn = lastCompletedTurn(ctx.unit);
+  const kind = "decision_record" as const;
+  if (!turn) {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: { detail: "no completed turn produced a final message; decision record stays unverified until evidence adjudicated" },
+    };
+  }
+  let content: string | null = null;
+  try {
+    content = ctx.io.readText(turn.artifacts.final);
+  } catch {
+    content = null;
+  }
+  if (content === null) {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "final.md missing; decision record unverified until evidence adjudicated" },
+    };
+  }
+  const record = readDecisionRecord(content);
+  if (record === "malformed") {
+    return {
+      assertionId,
+      kind,
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `no single parseable \`${DECISION_RECORD_PREFIX}\` JSON record line; the decision oracle cannot be evaluated`,
+      },
+    };
+  }
+  const violations: string[] = [];
+  for (const [field, allowed] of Object.entries(spec.fields)) {
+    const actual = record[field];
+    if (actual === undefined) violations.push(`${field} is missing (allowed: ${allowed.join("|")})`);
+    else if (typeof actual !== "string" || !allowed.includes(actual)) {
+      violations.push(`${field}=${JSON.stringify(actual)} (allowed: ${allowed.join("|")})`);
+    }
+  }
+  // see scripts/skill-eval/README.md § decision_record — forbidProse is the
+  // literal-phrase arm; a correct record does not exempt the prose.
+  const normalised = content.toLowerCase().replace(/\s+/g, " ");
+  for (const phrase of spec.forbidProse ?? []) {
+    if (normalised.includes(phrase.toLowerCase().replace(/\s+/g, " "))) {
+      violations.push(`forbidden prose phrase ${JSON.stringify(phrase)} appears in the final message`);
+    }
+  }
+  if (violations.length > 0) {
+    return {
+      assertionId,
+      kind,
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `decision record violates the case spec: ${violations.join("; ")}`,
+      },
+    };
+  }
+  return {
+    assertionId,
+    kind,
+    grade: "pass",
+    evidence: {
+      turn: turn.turn,
+      file: turn.artifacts.final,
+      detail: `decision record satisfies [${Object.keys(spec.fields).join(", ")}]`,
+    },
+  };
+}
+
 function gradeDiffAssertion(ctx: GradingContext, assertionId: string, allowed: string[]): AssertionGrade {
   const { diff } = ctx;
   const violations = [...diff.deleted, ...diff.created.filter((p) => !allowed.includes(p)), ...diff.modified.filter((p) => !allowed.includes(p))];
@@ -1833,6 +1944,9 @@ function gradeUnit(ctx: GradingContext): UnitGrading {
         break;
       case "grouped_facts_final":
         assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as GroupedFactsSpec));
+        break;
+      case "decision_record":
+        assertions.push(gradeDecisionRecord(ctx, assertion.id, assertion.value as DecisionRecordSpec));
         break;
       case "thread_reused":
         assertions.push(gradeThreadReused(ctx, assertion.id));

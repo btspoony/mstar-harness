@@ -1,11 +1,3 @@
-/**
- * note: The remote record shapes the sync ledger consumes: what an agent's external
- * issue tools hand back, normalized. mstar has no provider interface and no
- * transport here — the host supplies the tool results, and this module only
- * names the fields the engine reads from them. Nothing in these types carries a
- * credential, a token field, or a machine path.
- */
-
 /** Narrow internal issue record pinned by the frozen contract. */
 export type ProviderItem = {
   externalId: string;

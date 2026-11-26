@@ -92,7 +92,7 @@ A delivery loop spent many CI rounds on gates that could never be green, or that
 
 ## Source
 
-Phase-5 (PR merge-ready) loop of the execution-authority cutover iteration, 2026-09-23/24: the CI frontier advanced one step per push across ~13 rounds before these rules were applied; the two genuine defects it surfaced are recorded separately (the ledger identity check and the environment-derived artifact).
+The PR merge-ready loop of the execution-authority cutover iteration, 2026-09-23/24: the CI frontier advanced one step per push across ~13 rounds before these rules were applied; the two genuine defects it surfaced are recorded separately (the ledger identity check and the environment-derived artifact).
 
 Added 2026-10-15 from the `Release prep` repair: guidance item 9 and its example come from a release pipeline that had been unable to typecheck since the CLI began importing the commands package, because only CI's copy of the prerequisite chain was updated.
 

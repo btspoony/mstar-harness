@@ -58,7 +58,7 @@ Topic skills, grouped by what they own:
 | `mstar-roles` | Role prompts and load selection |
 | `mstar-host` | Host adapters and per-host entry details |
 | `mstar-phase-gates` | Prepare/Execute gates, clarify loop, hotfix route |
-| `mstar-iteration` | Iteration lifecycle, phases 1–6 |
+| `mstar-iteration` | Iteration lifecycle, phases 1–3, then the shared delivery and close-out references |
 | `mstar-dispatch-gates` | Dispatch, delegation boundaries, anti-recursion |
 | `mstar-sdd` | Subagent-driven per-task implementation and review |
 | `mstar-branch-worktree` | Branches, worktrees, QC / PM Acceptance checkout alignment |
@@ -73,7 +73,7 @@ Topic skills, grouped by what they own:
 | `mstar-skill-authoring` | Skill authoring gate |
 | `mstar-prose` | Prose judged against HEAD: leaked-session narration, keep rules, and where durable rationale goes instead |
 | `mstar-audit` | Read-only audit variants: codebase, tests, PR review |
-| `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; also the local iteration Phase 5 review path under a recorded `reviewed-auto` (never under `reviewed-bot`) |
+| `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; also the local iteration merge-ready review path under a recorded `reviewed-auto` (never under `reviewed-bot`) |
 | `mstar-e2e` | Explicit E2E, browser, device, and installed-deployment verification |
 | `mstar-use-cli` | CLI reference: families, flags, exit and refusal codes |
 | `mstar-engine-legacy` | Engine-absent safety archive; conditional contract fallback |

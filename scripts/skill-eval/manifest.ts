@@ -84,8 +84,17 @@ export const ASSERTION_KINDS = [
   "calls_within",
   "mutation_withheld",
   "grouped_facts_final",
+  "decision_record",
 ] as const;
 export type AssertionKind = (typeof ASSERTION_KINDS)[number];
+
+/**
+ * Framing of the machine-readable decision record a `decision_record` case
+ * requires in `turn.artifacts.final`: exactly one line that starts with this
+ * prefix, followed by a single-line JSON object whose values are strings.
+ * Exactly one such line is required — zero lines or more than one is malformed.
+ */
+export const DECISION_RECORD_PREFIX = "DECISION:";
 
 /** Declared bootstrap context for bounded-resolution accounting (never inferred). */
 export const RESOLUTION_CONTEXTS = ["warm", "cold"] as const;
@@ -105,6 +114,24 @@ export interface GroupedFactsSpec {
   requestCues: string[];
   /** Optional marker token echoed by the case; stripped before the echo guard. */
   marker?: string;
+}
+
+/**
+ * Machine-readable decision record the runner parses out of the final message.
+ * The case fixture protocol requires exactly one line beginning with
+ * `DECISION:` followed by a single-line JSON object (see README). Grading is
+ * deterministic — no judge model — so a reply that prints a refusal marker and
+ * records a contradictory decision in prose still fails.
+ */
+export interface DecisionRecordSpec {
+  /** see scripts/skill-eval/README.md § decision_record */
+  fields: Record<string, string[]>;
+  /**
+   * see scripts/skill-eval/README.md § decision_record — literal phrases that
+   * state the forbidden decision in prose; any one present in the final fails
+   * the assertion. A case-authored list, never a proximity or semantic check.
+   */
+  forbidProse?: string[];
 }
 
 export interface BoundedResolutionContext {
@@ -154,8 +181,7 @@ export interface FixtureDef {
 export interface CaseAssertion {
   id: string;
   kind: AssertionKind;
- /** string for *_contains kinds, string[] for diff_paths_within, true for thread_reused and mutation_withheld, positive integer for calls_within, GroupedFactsSpec for grouped_facts_final. */
-  value: string | string[] | true | number | GroupedFactsSpec;
+  value: string | string[] | true | number | GroupedFactsSpec | DecisionRecordSpec;
   note?: string;
 }
 
@@ -716,6 +742,29 @@ export function validateCases(
             const marker = grouped.marker;
             if (marker !== undefined && (typeof marker !== "string" || marker.trim() === "")) {
               errors.push(`${alabel}.value.marker must be a non-empty string when present`);
+            }
+          }
+        } else if (kind === "decision_record") {
+          const spec = rec.value;
+          if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+            errors.push(`${alabel}.value must be a decision-record specification object`);
+          } else {
+            const fields = (spec as Record<string, unknown>).fields;
+            if (fields === null || typeof fields !== "object" || Array.isArray(fields) || Object.keys(fields as object).length === 0) {
+              errors.push(`${alabel}.value.fields must be a non-empty object of field name -> allowed values`);
+            } else {
+              for (const [name, allowed] of Object.entries(fields as Record<string, unknown>)) {
+                if (!Array.isArray(allowed) || allowed.length === 0 || allowed.some((v) => typeof v !== "string" || v.trim() === "")) {
+                  errors.push(`${alabel}.value.fields.${name} must be a non-empty array of non-empty allowed-value strings`);
+                }
+              }
+            }
+            const forbidProse = (spec as Record<string, unknown>).forbidProse;
+            if (
+              forbidProse !== undefined &&
+              (!Array.isArray(forbidProse) || forbidProse.length === 0 || forbidProse.some((p) => typeof p !== "string" || p.trim() === ""))
+            ) {
+              errors.push(`${alabel}.value.forbidProse must be a non-empty array of non-empty literal phrase strings when present`);
             }
           }
         } else if (typeof rec.value !== "string" || rec.value === "") {

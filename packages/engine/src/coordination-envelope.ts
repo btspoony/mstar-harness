@@ -9,18 +9,19 @@
  * not-yet-cut issue-domain authorization surface (`issue.ts`). Nothing here is
  * authority: a file that parses as an envelope authorizes nothing.
  *
- * It imports only `node:*`, `./coordination-write.js` and `./path.js` (all
+ * It imports only `node:*` and `./coordination-write.js` (all
  * leaves) so it closes no ESM cycle back through `store.ts`.
+ *
+ * see docs/knowledge/architecture-patterns/host-engine-identity-association.md
  */
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   CoordinationError,
   assertExactKeys,
   isNonEmptyString,
   isPlainObject,
 } from "./coordination-write.js";
-import { resolveWorkflowDir } from "./path.js";
 
 /** The workflow-wide coordinator envelope persisted by the engine. */
 export type CoordinationSession = {
@@ -31,23 +32,7 @@ export type CoordinationSession = {
   harness_root: string;
 };
 
-const SESSION_DIR = "sessions";
 const ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "harness_root"] as const;
-
-/** Canonical workflow coordinator envelope path. */
-export function sessionFilePath(
-  harnessRoot: string,
-  workflowId: string,
-  role: CoordinationSession["role"],
-  sessionId: string,
-): string {
-  return join(
-    resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }),
-    workflowId,
-    SESSION_DIR,
-    `${role}-${sessionId}.json`,
-  );
-}
 
 /** Read and validate a session envelope (throws `coordination.session-*`). */
 export function readSessionEnvelope(sessionPath: string): CoordinationSession {

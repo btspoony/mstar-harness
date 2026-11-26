@@ -6,6 +6,28 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-11-25
+
+- Version alignment with harness **4.9.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.9.0**.
+
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Unused judgment devDependency.** Dropped the unused `@mstar-harness/judgment` devDependency from the CLI package; the CLI source never imports it and its judgment smoke test loads the built package by relative path.
+
+- Version alignment with harness **4.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
+## [4.8.4] - 2026-11-22
+
+- Version alignment with harness **4.8.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.4**.
+
 ## [4.8.3] - 2026-11-22
 
 - Version alignment with harness **4.8.3**.

@@ -25,7 +25,7 @@ tags:
 
 ## Context
 
-Before v3.0.0 the skill corpus carried ~11k lines with heavy duplication: machine-contract prose (field tables, lease protocols, per-host restatements, checklists) that the TS engine already enforces at runtime. Model capability growth made thin judgment-only skills viable (compass ruling 6: thinning via a conditional `mstar-engine-legacy` sink; the final product goal is thin judgment skills + machine-enforced lifecycle state). The retirement inventory (`workflow-lifecycle-local-survey.md` §5.1) became the SSOT: every row lands as exactly one of retire / rewrite / keep.
+Before v3.0.0 the skill corpus carried ~11k lines with heavy duplication: machine-contract prose (field tables, lease protocols, per-host restatements, checklists) that the TS engine already enforces at runtime. Model capability growth made thin judgment-only skills viable (compass ruling 6: thinning via a conditional `mstar-engine-legacy` sink; the final product goal is thin judgment skills + machine-enforced lifecycle state). The retirement inventory (`workflow-lifecycle-local-survey.md`, its retirement-inventory section) became the SSOT: every row lands as exactly one of retire / rewrite / keep.
 
 ## Guidance
 

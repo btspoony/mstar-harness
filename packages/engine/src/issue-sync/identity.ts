@@ -1,17 +1,3 @@
-/**
- * note: identity.ts — who this checkout is, for the correlation marker.
- *
- * Two facts, read from git and nowhere else:
- * - `repo` — the normalized `origin` remote (`owner/name`), or the explicit
- *   `[linear] repo=` override for a checkout that has no origin;
- * - `author` — `user.name` + `user.email` as `"Name <email>"`.
- *
- * A refusal here is a real answer, not a block: the marker cannot be written
- * without both, and each refusal names the command or the key that fixes it.
- *
- * The git invocation mirrors `git-probe.ts` (locale pinned, one shared timeout)
- * so a probe never hangs and never classifies by localized text.
- */
 import { execFileSync } from "node:child_process";
 import { gitProbeTimeoutMs } from "../git-probe.js";
 

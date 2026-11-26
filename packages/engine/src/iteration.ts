@@ -2,45 +2,13 @@
  * Engine iteration module — compass frontmatter schema, phase-transition
  * gate evaluation, push-cadence probe, catalog completeness.
  *
- * Spec sources (each export cites the skill/reference section it enforces):
- * - Compass template + frontmatter fields (iteration_id / start_date /
- *   status / iteration_base_branch / target_branch / plans; `end_date` only
- *   at close): `mstar-iteration` SKILL.md §1.3 +
- *   `mstar-iteration/references/iteration-compass-template.md` Fields guide
- *   — `end_date` No (Phase 3 §3.4 only), `status`
- *   `active` | `locked` | `completed`.
- * - Phase transition gates (all compass-registered plans `Done` → Phase 3
- *   required; §3.5 exit checklist all `[x]` + frontmatter `completed` +
- *   `end_date` → Phase 4): `mstar-iteration` SKILL.md Phase transition
- *   gates table.
- * - §3.1 close entry checklist (checkable subset — plans all Done, compass
- *   frontmatter complete): `mstar-iteration/references/
- *   phase-3-iteration-close.md` §3.1. The residual item relocated to the
- *   project-layer `findingsCleanupGate(register, planId)` in the v3 cutover
- *   (the workflow snapshot carries no residuals; residual close is a
- *   project-register state change).
- *   Un-checkable items (Acceptance Criteria waiver reasoning,
- *   `## Plans` table prose sync) stay judgment and are NOT asserted here.
- * - §3.5 close exit checklist (checkable subset — frontmatter `status:
- *   completed` + `end_date`, current branch is `spec_integration_branch`,
- *   PR base = `target_branch`): phase-3-iteration-close.md §3.5. The
- *   compound / roadmap / quality-summary items are prose artifacts and stay
- *   judgment.
- * - Push cadence probe (never push while CI is queued/in_progress or an AI
- *   review wave is running): `mstar-iteration` SKILL.md §5.1a +
- *   `mstar-iteration/references/phase-4-5-pr-delivery.md` §5.1a push gate 1
- *   + 2.
- * - Catalog completeness (every discovered iteration/plan/project/document
- *   store has a `store.db` catalog row; the Markdown index tables are not
- *   registers): state-projection contract §4. Legacy flat
- *   `<id>-delivery-compass.md` files are read-compatible only (§1.3) and are
- *   not indexed by this check.
- * - Phase 6 post-merge close local-state gate (valid terminal snapshot
- *   shape + no leftover lease + root status.json entry unregistered;
- *   invalid/unreadable root is NOT proof of root absence):
- *   `mstar-iteration/references/phase-6-post-merge-close.md` §6.4 +
- *   Evidence. Pure and additive over the Phase 2–5 `evaluatePhaseGate`
- *   contract.
+ * Spec pointers (each export cites the skill section it enforces):
+ * - skills/mstar-iteration/SKILL.md — §1.3 fields, phase transition gates, §2.6
+ * - skills/mstar-iteration/references/iteration-compass-template.md — Fields guide
+ * - skills/mstar-iteration/references/phase-3-iteration-close.md — §3.1, §3.5
+ * - the project-manager `pr-delivery.md`「Push cadence」push gate 1 + 2
+ * - the project-manager `workflow-close.md`「Cleanup handoff」+「Evidence」
+ * - state-projection contract §4 — catalog completeness
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -99,7 +67,7 @@ export type CompassDoc = {
 };
 
 /** Where the iteration stands per the Phase transition gates table. */
-export type PhaseTransition = "phase-2-execute" | "phase-3-close" | "phase-4-pr-delivery";
+export type PhaseTransition = "phase-2-execute" | "phase-3-close";
 
 /**
  * Git probe inputs for the §3.5 exit checklist. The engine never shells out
@@ -119,15 +87,22 @@ export type PhaseGateOptions = {
  * checkable subsets of the §3.1 / §3.5 checklists; `ok`/`violations` are the
  * gate verdict over the triggered transition:
  * - not all plans Done → `phase-2-execute` (keep executing; gate passes).
- * - all plans Done with missing checklist items → `phase-3-close` (Phase 3
- *   required; missing items listed in `violations`).
- * - all plans Done and both checklists clean → `phase-4-pr-delivery`.
+ * - all plans Done → `phase-3-close` (Phase 3 required; missing checklist
+ *   items listed in `violations`).
+ *
+ * `phase-3-close` is the transition from the moment every plan is Done.
+ * `transition` names the window; `ok` is the gate's pass signal inside the
+ * `phase-3-close` window — it becomes `true` only after the close write
+ * (`status: completed` + `end_date`) already landed, and it is also `true`
+ * under `phase-2-execute`, when the gate has nothing to check — so `ok` is a
+ * close-complete signal, never a precondition waited on before starting the
+ * close work that produces it.
  *
  * Note : during the Phase-3 window `ok` is false because the
  * §3.4 close items (`status: completed` + `end_date`) are only written at
- * the END of close — the exit checklist gates Phase 4, not the Phase-3
- * entry, so callers (e.g. the CLI, which exits 1) must treat that as "close
- * work pending", not "don't enter Phase 3".
+ * the END of close — the exit checklist gates the delivery chain, not the
+ * Phase-3 entry, so callers (e.g. the CLI, which exits 1) must treat that as
+ * "close work pending", not "don't enter Phase 3".
  */
 export type PhaseGateResult = {
   transition: PhaseTransition;
@@ -490,10 +465,7 @@ export function evaluatePhaseGate(
     });
   const entry: GateResult = { ok: entryViolations.length === 0, violations: entryViolations };
   const exit: GateResult = { ok: exitViolations.length === 0, violations: exitViolations };
-  let transition: PhaseTransition;
-  if (!allPlansDone) transition = "phase-2-execute";
-  else if (entry.ok && exit.ok) transition = "phase-4-pr-delivery";
-  else transition = "phase-3-close";
+  const transition: PhaseTransition = allPlansDone ? "phase-3-close" : "phase-2-execute";
   const gateBlocking = allPlansDone ? [...entryViolations, ...exitViolations] : [];
   return {
     transition,

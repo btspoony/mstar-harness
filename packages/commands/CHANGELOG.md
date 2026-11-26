@@ -6,6 +6,46 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-11-25
+
+### Breaking
+
+- **An iteration's terminal close proves its delivery chain.** `verifyDeliveryEvidence` now dispatches by route: a development plan keeps its merge proof, a report-only plan keeps its registered completion policy, and an iteration proves that its `branch.integration` tip is an ancestor of the resolved `branch.target`, refusing with `PHASE6_DELIVERY_MERGE_UNPROVEN` otherwise. The proof reads the workflow's recorded integration checkout first and falls back to plan-row worktrees, so routine post-Done cleanup of the plan checkouts no longer refuses a close whose chain did land; the standalone plan route still reads only plan-row worktrees.
+- **The phase gate returns two transitions.** `evaluatePhaseGate` no longer reports a PR stage after close: it returns `phase-2-execute` while a registered plan is not Done and `phase-3-close` once every plan is Done, and `ok` reports whether the gate has anything left to check (`ok: false` under `phase-3-close` is close work pending; `ok` is also `true` under `phase-2-execute`, when the close gate does not run, so a caller still needs the transition name to know which window it is in). The third, PR-stage member is removed from `PhaseTransition` and from dsh's `IterationGateView.transition`; every consumer switching on that value reads `transition` for the window and `ok` for the gate's pass inside it, and the retired name it carried now fails the drift guard in a code span as it does in prose.
+- **Worktree cleanup knows layer refs and refuses an open PR base.** The engine-defined `iteration-stack/<workflow-id>/sNN` namespace attributes to its owning workflow, carries no `planId`, and evaluates merged evidence against `branch.target`; every other ref is still attributed only from recorded rows. While a layer ref is a cleanup candidate, one `gh pr list --repo <origin host/owner/name> --state open` probe lists every open PR against the repository `git remote get-url origin` resolves to — the origin's host included, so a GitHub Enterprise origin never probes github.com — and any branch candidate that is another open PR's base refuses with `cleanup.refuse.open-pr-base`; a probe that cannot run, parse, resolve or complete under its own cap fails closed on the same refusal scoped to the probed layer refs, while a run with no layer-ref candidate spawns no probe.
+- **Two recovery paths replace two impossible ones.** A genuinely unprovable iteration close is now recorded honestly with `mstar workflow lifecycle --status stopped --reason <why>` instead of being stranded behind a state it cannot reach, and the refusal text names it; a landed layer ref becomes cleanable evidence against `branch.target` instead of a foreign ref, with the open-PR-base refusal naming the one condition — the PR using that ref as base — that the operator must resolve before the ref is removed.
+
+### Added
+
+- **`mstar pr merge-gate` routes through a named provider adapter:** the new `--provider <id>` option (default `github`) selects the registered forge adapter that resolves the PR and enumerates its review threads; an unregistered id refuses with the registered ids, and a forge no adapter serves follows the documented project-tooling path in `pr-delivery.md` or STOPs.
+- **`mstar pr-review post` routes through a named publisher adapter:** the new `--provider <id>` option (default `github`) selects the registered forge publisher that resolves the PR, fetches the head-pinned diff and posts the review; an unregistered id refuses with `pr-review.post.unsupported-provider` naming the registered ids, and a forge no adapter serves follows the documented project-tooling path in `pr-delivery.md` or STOPs — never a hand-post. The engine URL parser now accepts any forge host (`<scheme>://<host>/{owner}/{repo}/pull/{n}`) and `ReviewPostPlan` carries the host.
+
+- Version alignment with harness **4.9.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.9.0**.
+
+## [4.8.5] - 2026-11-23
+
+### Removed
+
+- **Orphaned plan evidence schema export.** Removed the `PLAN_COMPLETION_EVIDENCE_SCHEMA` export from the private commands package; no package imports it and `plan complete` keeps publishing the same evidence schema.
+
+- Version alignment with harness **4.8.5**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.5**.
+
+## [4.8.4] - 2026-11-22
+
+### Breaking
+
+- The comment gate no longer accepts natural-language declared prefixes (`why:`, `invariant:`, `safety:`, `note:`): a declared prefix states no machine-resolvable claim and is not a shape. The surviving shapes are the bounded marker, the contract pointer, `@generated`, and the tracked `TODO`.
+- A comment survives only when its claim resolves at HEAD against machine-resolvable external evidence: the only retained pointer forms are a resolvable repo path (`docs/`, `skills/`, `packages/`, `scripts/`; an ADR record is cited by its `docs/adr/...` path) or a URL — `plans/…`, `#<n>`, `issue <n>`, `contract §` and a numeric `ADR-<n>` id are no longer shapes because the linter cannot resolve them — beside a bounded marker with its bound, `@generated`, and a tracked `TODO`; the anchor is what justifies the comment, not the prose.
+- Existing `note:` comments, including single-line `/** note: */` blocks, were removed or repointed (the issue-sync module headers now point at `docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`); a natural-language reason worth keeping moves to an ADR or docs page, and the comment keeps only the `see` pointer.
+
+- Version alignment with harness **4.8.4**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.4**.
+
 ## [4.8.3] - 2026-11-22
 
 - Version alignment with harness **4.8.3**.

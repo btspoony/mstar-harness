@@ -1,45 +1,4 @@
-/**
- * note: issue-sync/push.ts — the one-way push direction over the sync ledger.
- *
- * mstar performs no external call here. An agent holding the host's Linear tools
- * does the writing; this module owns the local half of the run:
- *
- * - CANDIDATES are the bound project's local issues ('provider = local').
- *   Each is normalized through the shared field mapping into one payload and
- *   hashed. The hash is the SKIP RULE — equal hash means the remote content is
- *   already what local says, so nothing is due. It is NOT an exactly-once proof:
- *   the hash is computed from local content, and only a confirmed result (or an
- *   operator '--adopt') ever records an external id.
- * - PLANNING records intent. 'planItem' claims the create BEFORE the caller's
- *   tool call, so an unconfirmed result leaves a 'pending' residue a later run
- *   reconciles instead of creating twice.
- * - A CONFIRMED result is the only thing that writes 'external_id'.
- *   'ambiguous' leaves a create 'pending' with no id: the caller must reconcile.
- * - AMBIGUOUS CREATE RECOVERY is marker equality, never prose. Every payload
- *   description ends with the marker 'marker.ts' encodes — this repository's
- *   'owner/name', the local issue id, and the pushing checkout's git author — so
- *   another clone of the same repository never adopts this store's rows by
- *   accident, and a unique title+description match proves nothing about
- *   ownership and is never adopted.
- *
- * THE RUN LEASE IS NOT CONCURRENCY. One lease per binding ('sync_runs') is held
- * by the pending/apply pair, and every ledger write carries the run token, so a
- * run that a '--take-run' predecessor replaced has its later writes refused
- * ('sync.run-taken') instead of applied. What that buys is bounded, and the
- * bound is the honest claim:
- * - No RUNNING run's create can be in flight beside this one's, because only one
- *   run holds the direction.
- * - A tool call already ISSUED by a holder that died mid-call may still land at
- *   the remote after the successor has planned. Nothing here can recall it,
- *   which is why reconcile-by-correlation-marker remains the FIRST recovery and
- *   why a 'pending' residue is never created over.
- * - Taking the run over from a LIVE holder is unsafe: the takeover cannot stop
- *   the predecessor's in-flight call, only its later ledger writes. '--take-run'
- *   is for a holder the operator confirmed is dead.
- *
- * Credential-free by construction: no transport, no token, and no machine path
- * reaches this module.
- */
+/** see docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md */
 import { createHash } from "node:crypto";
 import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
@@ -67,18 +26,9 @@ export const PUSH_DIRECTION = "push" as const;
 
 /** Everything one item plan needs that is not local content. */
 export type PushContext = {
-  /** note: '"linear:<project_id>"', the ledger's binding key. */
   bindingId: string;
-  /** note: This checkout's repository identity and git author, stamped into the marker. */
   identity: { repo: string; author: string };
   mapping?: LinearFacetMapping;
-  /**
-   * note: The run lease this run holds ('RunLease.runId'). Every ledger write this
-   * run performs carries it, so a run that '--take-run' replaced mid-flight has
-   * its later writes REFUSED ('sync.run-taken') instead of applied — the lease
-   * check at acquisition cannot cover a write the predecessor had not made yet.
-   * Omitted by a caller with no lease, which is the same path import takes.
-   */
   runId?: string;
 };
 
@@ -99,11 +49,9 @@ export type PushCandidate = {
  */
 export type PushPlan = {
   localId: string;
-  /** note: 'create' when the ledger holds no identity for this item yet. */
   operation: "create" | "update";
   externalId: string | null;
   payload: ProviderWritePayload;
-  /** note: The marker the description ends with, reported so a caller can check it. */
   marker: string;
   requestHash: string;
 };
@@ -125,9 +73,7 @@ export type PushResult = {
   outcome: "confirmed" | "refused" | "ambiguous";
   externalId?: string | null;
   url?: string | null;
-  /** note: ISO-8601 instant the remote reports for the written issue. */
   remoteUpdatedAt?: string | null;
-  /** note: The tool's own cause text, for 'refused' and 'ambiguous'. */
   cause?: string | null;
 };
 
@@ -162,7 +108,6 @@ export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandid
     .all(projectId) as PushCandidate[];
 }
 
-/** note: The content of one local issue, for the ledger write that names it. */
 function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   return (
     (db
@@ -171,7 +116,6 @@ function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   );
 }
 
-/** note: '"<provider>:<project_id>"' → the store project id ('sync.invalid-input' otherwise). */
 function projectIdOf(bindingId: string): string {
   const prefix = "linear:";
   if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {
@@ -199,18 +143,6 @@ export function requestHash(payload: ProviderWritePayload): string {
     .digest("hex");
 }
 
-/**
- * note: The send-right key for one create: binding, item and content hash.
- *
- * Deliberately NOT keyed on the ledger revision, which every refusal, failure
- * and apply advances. Revision keying existed only to discriminate attempts by
- * making a bypass mint a different key — and it could not cover the window where
- * the predecessor's own claim advanced it, which is the wedge three review rounds
- * found. The run lease is what separates RUNNING attempts now, so
- * the key is a stable per-residue identity: a re-plan of the same item can never
- * mint a new key mid-attempt, and 'claimItem' re-opens the cycle under this same
- * key when the previous attempt ended.
- */
 function createClaimId(bindingId: string, localId: string, hash: string): string {
   return "linear-push:" + bindingId + ":" + localId + ":create:" + hash;
 }
@@ -220,14 +152,6 @@ function descriptionFor(candidate: PushCandidate, marker: string): string {
   return "## Impact\n\n" + candidate.impact + "\n\n## Acceptance\n\n" + candidate.acceptance + "\n\n" + marker;
 }
 
-/**
- * note: The payload, marker, hash and kind label of one candidate.
- *
- * An existing identity makes the update replace EXACTLY the labels this tool may
- * own: an unconfirmed earlier update can leave more than one of them on the
- * remote, so every recorded label except the desired one is removed (removing an
- * absent label is a no-op). Unknown ownership (none recorded) only adds.
- */
 function planOf(
   context: PushContext,
   candidate: PushCandidate,
@@ -514,24 +438,6 @@ function openedByThisRun(db: StoreDb, context: PushContext, ledger: SyncItem): b
   return !isOlderInstant(ledger.updatedAt, run.startedAt);
 }
 
-/**
- * note: Record a refusal on the item.
- *
- * Best-effort by design: the run's report is the record of what happened, and a
- * ledger refusal here must not mask the cause that produced it. Only a genuine
- * ledger conflict reaches the catch now that every state takes a legal verb.
- *
- * A row that already holds an identity or a settled state ('applied', 'failed',
- * 'skipped') must NOT take the 'failed' edge: 'applied → failed' is not in the
- * contract, and the row's identity, hash and ownership are facts an earlier
- * confirmed write proved. A refused UPDATE therefore leaves the row 'applied'
- * WITH its cause recorded, and the changed hash still makes the next run retry
- * the write. 'recordRefusal' is that error-only verb.
- *
- * A 'pending' row with no id never reaches here: 'planItem''s residue guard
- * answers first, because 'failed' is invisible to reconciliation and downgrading
- * the residue would let a later run create a duplicate nobody can adopt.
- */
 function failed(
   db: StoreDb,
   context: PushContext,
@@ -598,21 +504,6 @@ export type ReconcileReport = {
 const RELEASE_REASON =
   "released by the operator after reconciliation found no remote issue carrying this item's correlation marker; the next plan may create";
 
-/**
- * note: A 'pending' row with no id can be released only by the operator, and only
- * from the listing that proved absence: 'failed' is the ledger's retryable edge,
- * so the next plan claims the create again. The revision joins the operation id
- * so a later ambiguity for the same item is a new release, not a replay.
- *
- * What the release CANNOT do is see a tool call another holder already issued:
- * this run holds the binding's only lease, so no RUNNING create for that residue
- * can be inside a remote call beside it — but a call issued by a holder that
- * died mid-flight may still land after this listing. That is why
- * reconcile-by-marker is the first recovery and why releasing over a listing
- * that found nothing is the operator's judgement, recorded as such. The write
- * carries this run's token, so a run a takeover replaced cannot release
- * anything at all.
- */
 function releasePendingCreate(db: StoreDb, context: PushContext, localId: string): void {
   const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
   markFailed(db, {
