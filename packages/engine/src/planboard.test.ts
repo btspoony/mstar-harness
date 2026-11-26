@@ -4,7 +4,7 @@
  *
  * Fixture boards cover each finding and every malformed variant the closed
  * grammar names; the store-backed cases run against a real collaboration lane
- * in a temporary home, never a mock.
+ * (local and remote) in a temporary home, never a mock.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,17 +14,17 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
 import {
-  initializeCollaborationStore,
-  writeCollaborationBinding,
-} from "./collaboration-store.js";
+  completeSnapshot,
+  createRemoteScope,
+  positiveCheck,
+  REMOTE_IDS,
+  submission,
+} from "./remote-scope.fixture.js";
 import { captureIssue, closeIssue, type CaptureInput, type MutationContext } from "./issue.js";
-import {
-  PLANBOARD_FILE,
-  checkPlanboard,
-  parsePlanboard,
-  type PlanboardFinding,
-} from "./planboard.js";
+import { PLANBOARD_FILE, checkPlanboard, parsePlanboard, type PlanboardFinding } from "./planboard.js";
 import type { StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-planboard-test-"));
@@ -51,107 +51,167 @@ function codes(findings: readonly PlanboardFinding[]): string[] {
   return findings.map((finding) => finding.code);
 }
 
+function pairs(findings: readonly PlanboardFinding[]): Array<{ code: string; line: number | null }> {
+  return findings.map(({ code, line }) => ({ code, line }));
+}
+
+function parse(linesOfText: readonly string[]) {
+  return parsePlanboard(linesOfText.join("\n"));
+}
+
 describe("planboard grammar", () => {
   test("a well-formed board parses into its pointers", () => {
-    const parsed = parsePlanboard(
-      [
-        "review_after: 2026-12-10",
-        "",
-        "## Captured",
-        "",
-        "- I-000001 \u2014 unblocks the cutover",
-        "- I-000002 \u2014 ordering reason",
-        "",
-        "## Candidates",
-        "",
-        "- ? planboard gate \u2014 docs/adr/implemented/architecture/2026-11-26-retire-project-roadmap.md",
-        "- ? another candidate \u2014 I-000004",
-        "",
-      ].join("\n"),
-    );
+    const parsed = parse([
+      "review_after: 2026-12-10",
+      "",
+      "## Captured",
+      "",
+      "- I-000001 — unblocks the cutover",
+      "- I-000002 — ordering reason",
+      "",
+      "## Candidates",
+      "",
+      "- ? planboard gate — docs/adr/implemented/architecture/2026-11-26-retire-project-roadmap.md",
+      "- ? another candidate — I-000004",
+      "",
+    ]);
     expect(parsed.findings).toEqual([]);
     expect(parsed.reviewAfter).toBe("2026-12-10");
     expect(parsed.issues).toEqual([
-      { line: 5, id: "I-000001" },
-      { line: 6, id: "I-000002" },
+      { line: 5, id: "I-000001", reason: "unblocks the cutover" },
+      { line: 6, id: "I-000002", reason: "ordering reason" },
     ]);
     expect(parsed.candidates.map((entry) => entry.line)).toEqual([10, 11]);
   });
 
+  test("a stable issue reference is a legal pointer id", () => {
+    const parsed = parse([
+      "review_after: 2026-12-10",
+      "## Captured",
+      `- ${REMOTE_IDS.issueRef} — adopted finding`,
+    ]);
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.issues[0]!.id).toBe(REMOTE_IDS.issueRef);
+  });
+
   test("a checkbox line is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## Captured", "- [ ] I-000001 \u2014 todo"].join("\n"));
-    expect(codes(parsed.findings)).toEqual(["malformed"]);
-    expect(parsed.findings[0]!.line).toBe(3);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- [ ] I-000001 — todo"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("a second issue id on one line is malformed", () => {
-    const parsed = parsePlanboard(
-      ["review_after: 2026-12-10", "## Captured", "- I-000001 \u2014 unblocks I-000002"].join("\n"),
-    );
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- I-000001 — unblocks I-000002"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("a candidate without evidence is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## Candidates", "- ? unnamed candidate"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? unnamed candidate"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("an empty candidate evidence is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## Candidates", "- ? unnamed \u2014 "].join("\n"));
-    expect(codes(parsed.findings)).toEqual(["malformed"]);
+    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ? unnamed — "]).findings)).toEqual(["malformed"]);
+  });
+
+  test("a candidate naming prose instead of evidence is malformed", () => {
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? a candidate — not evidence"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
+  });
+
+  test("a candidate with whitespace-only text is malformed", () => {
+    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ?    — docs/specs/example.md"]).findings)).toEqual([
+      "malformed",
+    ]);
+  });
+
+  test("a candidate line carrying a second issue id is malformed", () => {
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? I-000001 — I-000002"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
+  });
+
+  test("a candidate may name an ADR record and a bare issue id as evidence", () => {
+    expect(
+      parse([
+        "review_after: 2026-12-10",
+        "## Candidates",
+        "- ? first — 2026-11-26-retire-project-roadmap",
+        "- ? second — I-000004",
+      ]).findings,
+    ).toEqual([]);
   });
 
   test("a 21st entry in a section is malformed and the first twenty are kept", () => {
-    const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} \u2014 order ${index}`);
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## Captured", ...entries].join("\n"));
+    const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} — order ${index}`);
+    const parsed = parse(["review_after: 2026-12-10", "## Captured", ...entries]);
     expect(parsed.issues).toHaveLength(20);
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 23 }]);
+    expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 23 }]);
   });
 
-  test("an unknown heading is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## History"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 2 }]);
+  test("an unknown heading is malformed and closes the open section", () => {
+    const parsed = parse(["review_after: 2026-12-10", "## Captured", "## History", "- I-000001 — mislaid pointer"]);
+    expect(pairs(parsed.findings)).toEqual([
+      { code: "malformed", line: 3 },
+      { code: "malformed", line: 4 },
+    ]);
+    // invariant: The pointer under the unknown heading is never looked up.
+    expect(parsed.issues).toEqual([]);
   });
 
   test("a repeated section is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "## Captured", "## Captured"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "## Captured"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("an issue line under `## Candidates` is malformed", () => {
-    const parsed = parsePlanboard(
-      ["review_after: 2026-12-10", "## Candidates", "- I-000001 \u2014 wrong section"].join("\n"),
-    );
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- I-000001 — wrong section"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("a candidate line under `## Captured` is malformed", () => {
-    const parsed = parsePlanboard(
-      ["review_after: 2026-12-10", "## Captured", "- ? candidate \u2014 evidence"].join("\n"),
-    );
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- ? candidate — docs/specs/example.md"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("a status or history line is malformed", () => {
-    const parsed = parsePlanboard(
-      ["review_after: 2026-12-10", "## Captured", "status: delivered on 2026-11-01"].join("\n"),
-    );
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "status: delivered on 2026-11-01"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
+    ]);
   });
 
   test("a missing `review_after` is one file-level malformed finding", () => {
-    const parsed = parsePlanboard(["## Captured", "- I-000001 \u2014 order"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: null }]);
+    expect(pairs(parse(["## Captured", "- I-000001 — order"]).findings)).toEqual([{ code: "malformed", line: null }]);
   });
 
   test("an unparsable `review_after` is one file-level malformed finding", () => {
-    const parsed = parsePlanboard(["review_after: 2026-13-40", "## Candidates", "- ? c \u2014 e"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: null }]);
+    expect(pairs(parse(["review_after: 2026-13-40", "## Candidates", "- ? c — docs/specs/example.md"]).findings)).toEqual([
+      { code: "malformed", line: null },
+    ]);
   });
 
-  test("a second `review_after` line is malformed", () => {
-    const parsed = parsePlanboard(["review_after: 2026-12-10", "review_after: 2026-12-11"].join("\n"));
-    expect(parsed.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 2 }]);
+  test("a second `review_after` invalidates the date", () => {
+    const parsed = parse([
+      "review_after: 2026-01-01",
+      "review_after: 2026-12-11",
+      "## Candidates",
+      "- ? a candidate — docs/specs/example.md",
+    ]);
+    expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: null }]);
+    // invariant: No valid date, so nothing is overdue.
+    expect(parsed.reviewAfter).toBeNull();
+  });
+
+  test("a `review_after` after a heading invalidates the date", () => {
+    const parsed = parse(["## Captured", "review_after: 2026-01-01"]);
+    expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: null }]);
+    expect(parsed.reviewAfter).toBeNull();
   });
 });
 
@@ -159,16 +219,43 @@ describe("planboard findings against a store", () => {
   test("an absent file is a clean board", async () => {
     const harnessDir = join(ROOT, "absent", ".mstar");
     mkdirSync(harnessDir, { recursive: true });
-    expect(await checkPlanboard({ harnessDir })).toEqual({ path: null, reviewAfter: null, findings: [] });
+    expect(await checkPlanboard({ harnessDir })).toEqual({
+      path: null,
+      reviewAfter: null,
+      captured: [],
+      candidates: [],
+      findings: [],
+    });
   });
 
-  test("a board with no pointer line is clean", async () => {
+  test("a board with no pointer line is clean and reports no finding", async () => {
     const context = board(join(ROOT, "empty", ".mstar"), "review_after: 2099-01-01\n");
     expect(await checkPlanboard(context)).toEqual({
       path: join(context.harnessDir, PLANBOARD_FILE),
       reviewAfter: "2099-01-01",
+      captured: [],
+      candidates: [],
       findings: [],
     });
+  });
+
+  test("a clean board still reports its pointers, which the check never hides", async () => {
+    const context = await liveStore("pointers");
+    const open = await captureIssue(context, captureInput("pointers-open"), mutation("capture-pointing"));
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        `- ${open.issueId} — the order the PM intends`,
+        "## Candidates",
+        "- ? a later candidate — docs/specs/example.md",
+      ].join("\n"),
+    );
+    const result = await checkPlanboard(context, { today: "2026-06-01" });
+    expect(result.findings).toEqual([]);
+    expect(result.captured).toEqual([{ line: 3, issueId: open.issueId, reason: "the order the PM intends" }]);
+    expect(result.candidates).toEqual([{ line: 5, candidate: "a later candidate", evidence: "docs/specs/example.md" }]);
   });
 
   test("a malformed line is not looked up, and a refused store leaves it unread", async () => {
@@ -176,18 +263,17 @@ describe("planboard findings against a store", () => {
     const context = board(join(ROOT, "malformed", ".mstar"), [
       "review_after: 2099-01-01",
       "## Captured",
-      "- [ ] I-000001 \u2014 todo",
+      "- [ ] I-000001 — todo",
     ].join("\n"));
-    const result = await checkPlanboard(context);
-    expect(result.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: 3 }]);
+    expect(pairs((await checkPlanboard(context)).findings)).toEqual([{ code: "malformed", line: 3 }]);
   });
 
   test("a refused store yields `unverified` for every issue line with the store code", async () => {
     const context = board(join(ROOT, "refused", ".mstar"), [
       "review_after: 2099-01-01",
       "## Captured",
-      "- I-000001 \u2014 first",
-      "- I-000002 \u2014 second",
+      "- I-000001 — first",
+      "- I-000002 — second",
     ].join("\n"));
     const result = await checkPlanboard(context);
     expect(codes(result.findings)).toEqual(["unverified", "unverified"]);
@@ -213,16 +299,16 @@ describe("planboard findings against a store", () => {
         "review_after: 2026-01-01",
         "",
         "## Captured",
-        `- ${open.issueId} \u2014 still open`,
-        `- ${closed.issueId} \u2014 already closed`,
-        "- I-999999 \u2014 never captured",
+        `- ${open.issueId} — still open`,
+        `- ${closed.issueId} — already closed`,
+        "- I-999999 — never captured",
         "",
         "## Candidates",
-        "- ? an overdue candidate \u2014 docs/specs/example.md",
+        "- ? an overdue candidate — docs/specs/example.md",
       ].join("\n"),
     );
     const result = await checkPlanboard(context, { today: "2026-06-01" });
-    expect(result.findings.map(({ code, line }) => ({ code, line }))).toEqual([
+    expect(pairs(result.findings)).toEqual([
       { code: "stale", line: 5 },
       { code: "missing", line: 6 },
       { code: "overdue", line: 9 },
@@ -233,19 +319,74 @@ describe("planboard findings against a store", () => {
     const context = board(join(ROOT, "future", ".mstar"), [
       "review_after: 2099-01-01",
       "## Candidates",
-      "- ? a candidate \u2014 docs/specs/example.md",
+      "- ? a candidate — docs/specs/example.md",
     ].join("\n"));
     expect((await checkPlanboard(context, { today: "2026-06-01" })).findings).toEqual([]);
   });
 
-  test("a bad `review_after` decides no overdue finding", async () => {
-    const context = board(join(ROOT, "baddate", ".mstar"), [
-      "review_after: not-a-date",
-      "## Candidates",
-      "- ? a candidate \u2014 docs/specs/example.md",
-    ].join("\n"));
-    const result = await checkPlanboard(context, { today: "2026-06-01" });
-    expect(result.findings.map(({ code, line }) => ({ code, line }))).toEqual([{ code: "malformed", line: null }]);
+  test("invalid date declarations decide no overdue finding", async () => {
+    const boards: Array<[string, readonly string[]]> = [
+      ["baddate", ["review_after: not-a-date", "## Candidates", "- ? a candidate \u2014 docs/specs/example.md"]],
+      [
+        "duplicate",
+        ["review_after: 2020-01-01", "review_after: 2020-01-02", "## Candidates", "- ? a candidate \u2014 docs/specs/example.md"],
+      ],
+      ["misplaced", ["## Candidates", "review_after: 2020-01-01", "- ? a candidate \u2014 docs/specs/example.md"]],
+    ];
+    for (const [name, text] of boards) {
+      const context = board(join(ROOT, name, ".mstar"), text.join("\n"));
+      const result = await checkPlanboard(context, { today: "2026-06-01" });
+      expect(codes(result.findings)).toEqual(["malformed"]);
+      expect(result.reviewAfter).toBeNull();
+    }
+  });
+
+  test("a remote board line reports stale, missing and open from the admitted snapshot", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        `- ${REMOTE_IDS.issueRef} — open in the admitted snapshot`,
+      ].join("\n"),
+    );
+    // The admitted issue is open, so the line reports nothing — not `unverified`.
+    expect((await checkPlanboard(context)).findings).toEqual([]);
+
+    // A reference the snapshot does not carry is a completed answer: missing.
+    board(
+      context.harnessDir,
+      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} — absent from this snapshot`].join("\n"),
+    );
+    expect(pairs((await checkPlanboard(context)).findings)).toEqual([{ code: "missing", line: 3 }]);
+  });
+
+  test("a remote line whose admitted issue is no longer open is stale", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-refixture");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    const base = completeSnapshot(check);
+    const closed = base.issues.map((issue) =>
+      issue.mstar === null ? issue : { ...issue, mstar: { ...issue.mstar, fields: { ...issue.mstar.fields, disposition: "resolved" } } },
+    );
+    await ingestRemoteObservation(context, submission(commit, check, { ...base, issues: closed }, 0));
+
+    board(
+      context.harnessDir,
+      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.issueRef} — delivered already`].join("\n"),
+    );
+    const findings = (await checkPlanboard(context)).findings;
+    expect(pairs(findings)).toEqual([{ code: "stale", line: 3 }]);
+    expect(findings[0]!.issueId).toBe(REMOTE_IDS.issueRef);
   });
 });
 
@@ -281,11 +422,9 @@ async function liveStore(name: string): Promise<StoreContext> {
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
     cwd: checkoutRoot,
   });
-  execFileSync(
-    "git",
-    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
-    { cwd: checkoutRoot },
-  );
+  execFileSync("git", ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`], {
+    cwd: checkoutRoot,
+  });
   writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   const context: StoreContext = { harnessDir: join(checkoutRoot, ".mstar") };
   mkdirSync(context.harnessDir, { recursive: true });

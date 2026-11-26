@@ -13,7 +13,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getIssue } from "./issue.js";
+import { showIssue } from "./issue.js";
 import type { StoreContext } from "./store-db.js";
 
 export const PLANBOARD_FILE = "planboard.md";
@@ -40,17 +40,36 @@ export type PlanboardFindings = {
   /** The board file that was read; `null` when it does not exist. */
   path: string | null;
   reviewAfter: string | null;
+  /**
+   * The board's clean pointers, in file order: the ordering reason of each
+   * well-formed captured line and the candidate text of each well-formed
+   * candidate line. The findings are drift; this is what the board says.
+   */
+  captured: Array<{ line: number; issueId: string; reason: string }>;
+  candidates: Array<{ line: number; candidate: string; evidence: string }>;
   findings: PlanboardFinding[];
 };
 
-const ISSUE_LINE = /^- (I-[0-9]{6}) \u2014 (.+)$/;
+/**
+ * An issue pointer names either the local display id or the stable portable
+ * reference. The display id is local vocabulary; a remote selection addresses
+ * its admitted snapshot by the reference, so a board read there must carry it.
+ */
+const POINTER = "mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const ISSUE_LINE = new RegExp(`^- ((?:I-[0-9]{6})|(?:${POINTER})) \u2014 (.+)$`);
 const CANDIDATE_LINE = /^- \? (.+?) \u2014 (.+)$/;
-const ISSUE_ID = /I-[0-9]{6}/g;
 const FIRST_ISSUE_ID = /I-[0-9]{6}/;
+const ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`, "g");
 const REVIEW_AFTER = /^review_after: ([0-9]{4}-[0-9]{2}-[0-9]{2})$/;
+/** An ADR record name, as the ADR tree spells it. */
+const ADR_NAME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*(\.md)?$/;
+/** A repository path, relative or absolute. */
+const EVIDENCE_PATH = /^[\w./-]+$/;
+/** note: The stable portable issue reference, the only address a remote snapshot resolves. */
+const ISSUE_REF = /^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-type IssueRef = { line: number; id: string };
-type CandidateRef = { line: number; candidate: string };
+type IssueRef = { line: number; id: string; reason: string };
+type CandidateRef = { line: number; candidate: string; evidence: string };
 
 type Parsed = {
   reviewAfter: string | null;
@@ -70,6 +89,18 @@ function isCalendarDate(value: string): boolean {
 }
 
 /**
+ * The evidence forms a candidate may name: a repository path, an ADR record
+ * name, or an issue id. `not evidence` and a bare word are prose, and the
+ * board is not prose.
+ */
+function isEvidence(text: string): boolean {
+  const value = text.trim();
+  if (value === "") return false;
+  if (FIRST_ISSUE_ID.test(value) || ISSUE_REF.test(value)) return true;
+  return ADR_NAME.test(value) || (EVIDENCE_PATH.test(value) && (value.includes("/") || /\.[a-z0-9]+$/i.test(value)));
+}
+
+/**
  * Parse the closed grammar. Every deviation becomes a `malformed` finding with
  * its line, and a malformed line is never looked up in the issue store: the
  * parse is the only thing that decides what an issue line IS.
@@ -80,7 +111,8 @@ export function parsePlanboard(text: string): Parsed {
   const candidates: CandidateRef[] = [];
   let reviewAfter: string | null = null;
   let reviewAfterLines = 0;
-  let section: "preamble" | "captured" | "candidates" = "preamble";
+  let dateReported = false;
+  let section: "preamble" | "captured" | "candidates" | "unknown" = "preamble";
   let seenCaptured = false;
   let seenCandidates = false;
   let capturedEntries = 0;
@@ -89,60 +121,55 @@ export function parsePlanboard(text: string): Parsed {
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = index + 1;
-    const raw = lines[index]!;
-    const trimmed = raw.trim();
+    const trimmed = lines[index]!.trim();
     if (trimmed === "") continue;
 
     if (trimmed.startsWith("#")) {
       if (trimmed === "## Captured") {
-        if (seenCaptured) {
-          findings.push(malformed(line, "`## Captured` appears more than once; keep one section"));
-        }
+        if (seenCaptured) findings.push(malformed(line, "`## Captured` appears more than once; keep one section"));
         seenCaptured = true;
         section = "captured";
         continue;
       }
       if (trimmed === "## Candidates") {
-        if (seenCandidates) {
-          findings.push(malformed(line, "`## Candidates` appears more than once; keep one section"));
-        }
+        if (seenCandidates) findings.push(malformed(line, "`## Candidates` appears more than once; keep one section"));
         seenCandidates = true;
         section = "candidates";
         continue;
       }
       findings.push(malformed(line, `unknown heading \`${trimmed}\`; the board has only \`## Captured\` and \`## Candidates\``));
+      // invariant: An unknown heading closes the open section. A pointer below it
+      // is not under a legal heading, so it is malformed and never looked up.
+      section = "unknown";
       continue;
     }
 
     if (trimmed.startsWith("review_after:")) {
       reviewAfterLines += 1;
-      if (section !== "preamble") {
-        findings.push(malformed(line, "`review_after:` belongs before the first heading"));
-        continue;
-      }
-      if (reviewAfterLines > 1) {
-        findings.push(malformed(line, "`review_after:` appears more than once; keep one date"));
-        continue;
-      }
+      // invariant: Exactly one valid preamble date decides `overdue`. A second
+      // declaration, a misplaced one, or an unparsable one invalidates the date
+      // entirely, so nothing is reported overdue from a half-read header.
       const date = REVIEW_AFTER.exec(trimmed);
-      if (date === null || !isCalendarDate(date[1]!)) {
-        // invariant: An unparsable date is ONE file-level finding: it is the
-        // board's date line, not an unknown line, and overdue is then undecided.
-        findings.push(malformed(null, "`review_after:` must be one `yyyy-mm-dd` calendar date"));
+      const valid = section === "preamble" && reviewAfterLines === 1 && date !== null && isCalendarDate(date[1]!);
+      if (!valid) {
+        // invariant: One file-level finding covers the whole header, however many
+        // ways it is wrong: two declarations are one broken date, not two.
+        if (!dateReported) findings.push(malformed(null, "the board declares exactly one valid `review_after: yyyy-mm-dd` before the first heading"));
+        dateReported = true;
+        reviewAfter = null;
         continue;
       }
       reviewAfter = date[1]!;
       continue;
     }
 
-    const isIssue = trimmed.startsWith("- ") && !trimmed.startsWith("- ? ") && FIRST_ISSUE_ID.test(trimmed);
-
+    const isIssue = trimmed.startsWith("- ") && !trimmed.startsWith("- ? ") && new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`).test(trimmed);
     if (isIssue) {
+      const ids = trimmed.match(ISSUE_POINTER) ?? [];
       if (section !== "captured") {
         findings.push(malformed(line, "an issue line belongs under `## Captured`"));
         continue;
       }
-      const ids = trimmed.match(ISSUE_ID) ?? [];
       if (ids.length > 1) {
         findings.push(malformed(line, "an issue line names exactly one issue id", { issueId: ids[0] }));
         continue;
@@ -152,31 +179,47 @@ export function parsePlanboard(text: string): Parsed {
         findings.push(malformed(line, "an issue line is `- I-xxxxxx \u2014 <ordering reason>`", { issueId: ids[0] }));
         continue;
       }
+      const reason = match[2]!.trim();
+      if (reason === "") {
+        findings.push(malformed(line, "an issue line names its ordering reason", { issueId: match[1]! }));
+        continue;
+      }
       capturedEntries += 1;
       if (capturedEntries > PLANBOARD_SECTION_CAP) {
         findings.push(malformed(line, `\`## Captured\` holds at most ${PLANBOARD_SECTION_CAP} entries`, { issueId: match[1]! }));
         continue;
       }
-      issues.push({ line, id: match[1]! });
+      issues.push({ line, id: match[1]!, reason });
       continue;
     }
 
     if (trimmed.startsWith("- ?")) {
+      const ids = trimmed.match(ISSUE_POINTER) ?? [];
       if (section !== "candidates") {
         findings.push(malformed(line, "a candidate line belongs under `## Candidates`"));
         continue;
       }
       const match = CANDIDATE_LINE.exec(trimmed);
-      if (match === null) {
-        findings.push(malformed(line, "a candidate line is `- ? <candidate> \u2014 <evidence>` with non-empty evidence"));
+      // invariant: A candidate obeys the same one-id rule as a captured line, and
+      // its evidence names a path, an ADR record or an issue — never prose.
+      if (ids.length > 1) {
+        findings.push(malformed(line, "a candidate line names at most one issue id", { issueId: ids[0] }));
+        continue;
+      }
+      if (match === null || match[1]!.trim() === "") {
+        findings.push(malformed(line, "a candidate line is `- ? <candidate> \u2014 <evidence>` with non-empty candidate text"));
+        continue;
+      }
+      if (!isEvidence(match[2]!)) {
+        findings.push(malformed(line, "candidate evidence is a path, an ADR name or an issue id", { candidate: match[1]!.trim() }));
         continue;
       }
       candidateEntries += 1;
       if (candidateEntries > PLANBOARD_SECTION_CAP) {
-        findings.push(malformed(line, `\`## Candidates\` holds at most ${PLANBOARD_SECTION_CAP} entries`, { candidate: match[1]! }));
+        findings.push(malformed(line, `\`## Candidates\` holds at most ${PLANBOARD_SECTION_CAP} entries`, { candidate: match[1]!.trim() }));
         continue;
       }
-      candidates.push({ line, candidate: match[1]! });
+      candidates.push({ line, candidate: match[1]!.trim(), evidence: match[2]!.trim() });
       continue;
     }
 
@@ -192,35 +235,18 @@ export function parsePlanboard(text: string): Parsed {
   return { reviewAfter, issues, candidates, findings };
 }
 
-/**
- * The finding for one issue line against a completed store answer. A refused or
- * incomplete answer is `unverified` and carries the store's own code — a read
- * that did not answer is never taken as "open".
- */
-export function issueFinding(line: number, id: string, answer: { disposition: string } | { refusal: string }): PlanboardFinding | null {
-  if ("refusal" in answer) {
-    return {
-      code: "unverified",
-      line,
-      issueId: id,
-      storeCode: answer.refusal,
-      message: `the issue store did not answer for ${id} (${answer.refusal})`,
-    };
-  }
-  if (answer.disposition === "open") return null;
-  return {
-    code: "stale",
-    line,
-    issueId: id,
-    message: `${id} is ${answer.disposition}, so the board line is stale; remove it`,
-  };
-}
-
 /** One issue line's answer: its disposition, `missing`, or the store's refusal code. */
 async function answerFor(context: StoreContext | null, id: string): Promise<{ disposition: string } | { refusal: string }> {
   if (context === null) return { refusal: "store.unreadable" };
   try {
-    const issue = await getIssue(context, id);
+    // invariant: `showIssue` is the one read that resolves an issue on either
+    // authority — a display id in local mode, the stable reference in remote
+    // mode. `getIssue` refuses display ids there, which would make every remote
+    // board line look unreadable.
+    const issue = await showIssue(context, id);
+    // note: A provider-only answer is no MStar subject, so the line names an
+    // issue this store does not hold.
+    if (!("disposition" in issue)) return { disposition: "absent" };
     return { disposition: issue.disposition };
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
@@ -232,7 +258,7 @@ async function answerFor(context: StoreContext | null, id: string): Promise<{ di
 
 /**
  * Read the board and report its drift. An absent file is a clean board; a
- * missing or unparsable `review_after` is one file-level `malformed` and
+ * missing or invalid `review_after` is one file-level `malformed` and
  * `overdue` is then not decided.
  */
 export async function checkPlanboard(
@@ -244,7 +270,9 @@ export async function checkPlanboard(
   try {
     text = readFileSync(path, "utf8");
   } catch (error) {
-    if ((error as { code?: unknown } | null)?.code === "ENOENT") return { path: null, reviewAfter: null, findings: [] };
+    if ((error as { code?: unknown } | null)?.code === "ENOENT") {
+      return { path: null, reviewAfter: null, captured: [], candidates: [], findings: [] };
+    }
     throw error;
   }
 
@@ -253,17 +281,33 @@ export async function checkPlanboard(
 
   for (const entry of parsed.issues) {
     const answer = await answerFor(context, entry.id);
-    if ("disposition" in answer && answer.disposition === "absent") {
-      findings.push({
-        code: "missing",
-        line: entry.line,
-        issueId: entry.id,
-        message: `${entry.id} is not in the issue store; capture it or remove the line`,
-      });
+    if ("disposition" in answer) {
+      if (answer.disposition === "absent") {
+        findings.push({
+          code: "missing",
+          line: entry.line,
+          issueId: entry.id,
+          message: `${entry.id} is not in the issue store; capture it or remove the line`,
+        });
+        continue;
+      }
+      if (answer.disposition !== "open") {
+        findings.push({
+          code: "stale",
+          line: entry.line,
+          issueId: entry.id,
+          message: `${entry.id} is ${answer.disposition}, so the board line is stale; remove it`,
+        });
+      }
       continue;
     }
-    const finding = issueFinding(entry.line, entry.id, answer);
-    if (finding !== null) findings.push(finding);
+    findings.push({
+      code: "unverified",
+      line: entry.line,
+      issueId: entry.id,
+      storeCode: answer.refusal,
+      message: `the issue store did not answer for ${entry.id} (${answer.refusal})`,
+    });
   }
 
   if (parsed.reviewAfter !== null) {
@@ -281,5 +325,11 @@ export async function checkPlanboard(
   }
 
   findings.sort((left, right) => (left.line ?? 0) - (right.line ?? 0));
-  return { path, reviewAfter: parsed.reviewAfter, findings };
+  return {
+    path,
+    reviewAfter: parsed.reviewAfter,
+    captured: parsed.issues.map(({ line, id, reason }) => ({ line, issueId: id, reason })),
+    candidates: parsed.candidates,
+    findings,
+  };
 }
