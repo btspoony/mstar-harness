@@ -251,6 +251,25 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     }
   })
 
+  it('(c2) fallbacks mounted → the delegated prompt carries the Execute-as bridge line', async () => {
+    // dsh-llm-fallbacks resolves a role from a body-label header only, and its
+    // header region ends at the first `---`; a front-matter document alone
+    // would leave its role (chain, persona, notice) unbound.
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+
+    const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
+    // One header line BEFORE the opening fence — the only shape the fallbacks
+    // reader sees (its region ends at that fence).
+    expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
+    // Additive: the Assignment document it bridges is byte-identical.
+    expect(prompt.slice(1)).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
   it('(d) provider without the agentPreset capability → no selection + ONE debug, the start proceeds', async () => {
     // Selecting a preset the runtime would reject is never acceptable, so the
     // gate skips instead of letting the start fail loud.

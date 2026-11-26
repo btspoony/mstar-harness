@@ -135,6 +135,7 @@ import {
   type LiveConfigRef,
 } from './_shared.ts'
 import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
+import { fallbacksMounted } from './fallbacks-probe.ts'
 import { legacyAssignmentShape } from '@mstar-harness/engine'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
@@ -1291,6 +1292,32 @@ function takeResolvedCarrier(): AssignmentSourceResult | undefined {
 }
 
 /**
+ * The `dsh-llm-fallbacks` dispatch-role bridge. That plugin resolves a
+ * child's role from a bold/plain `**Execute as**: <id>` line in the prompt's
+ * leading header region — never from front matter — and its header region
+ * ends at the first `---` line. A front-matter document therefore resolves no
+ * role there, so the role's fallback chain, persona and notice row are
+ * skipped. When the fallbacks capability is mounted, prepend ONE header line
+ * its reader sees BEFORE the opening fence; the document below is untouched,
+ * so this channel and the dispatch gate keep reading the front matter.
+ *
+ * shortcut: the fallbacks reader only understands the body-label header, so
+ * the bridge adds a second declaration to the RUNTIME prompt (never to a
+ * stored document). Remove it once dsh-llm-fallbacks reads `execute_as`.
+ *
+ * @param roleId - the canonical role id (already normalized).
+ */
+function fallbacksRoleBridge(roleId: string): PromptBlockView {
+  return { type: 'text', text: `**Execute as**: ${roleId}\n` }
+}
+
+/** The canonical role id a prompt declares (`inherit` declares none), or `undefined`. */
+function bridgedRoleIdOf(prompt: string): string | undefined {
+  const value = parseAssignmentFields(prompt).executeAs
+  return value === undefined ? undefined : normalizeRoleFieldValue(value)
+}
+
+/**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
  * prototype-delegating object whose OWN `startActivation` merges the role's
@@ -1395,6 +1422,14 @@ function wrapSubagentsService(
       // Contained like the gate's degrade path: the merge aborts, the
       // ORIGINAL spec reaches the service — the start is never affected.
       log('warn', `role preset merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
+    }
+    // The optional fallbacks plugin reads its role from the body-label header,
+    // not from front matter — bridge the declaration it cannot see (see
+    // {@link fallbacksRoleBridge}). The role comes from the RESOLVED spec, so
+    // a repaired or pointer-carried declaration is the one delivered.
+    if (fallbacksMounted(ctx)) {
+      const roleId = decision.kind === 'repair' ? decision.roleId : bridgedRoleIdOf(promptText(merged))
+      if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }
     }
     return service.startActivation(merged)
   }
