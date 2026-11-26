@@ -32,7 +32,7 @@ import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
-import { planIdOf, resolveDispatchHard } from '../src/gates/dispatch-assignment.ts'
+import { planIdOf, resolveDispatchHard, assignmentEntriesValue } from '../src/gates/dispatch-assignment.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { dispatchCallerOf } from '../src/gates/dispatch-core.ts'
 import { preExecuteListener } from '../src/gates/dispatch-listener.ts'
@@ -251,6 +251,23 @@ task_budget: XS — one orientation round
 The task body quotes example header lines:
 **Working branch**: main
 **Execute as**: fullstack-dev
+`
+
+/** A two-track parallel list whose SECOND branch is `main` — the folded form
+ * keeps only `feature/a`, so only a gate reading every track refuses it. */
+const TWO_TRACKS_SECOND_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+working_branch:
+- feature/a
+- main
+---
+
+## Assignment
+
+Two parallel writable tracks.
 `
 
 /** Not an Assignment at all — must stay silent (no false positives). */
@@ -876,6 +893,24 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
     } finally {
       delete process.env.MSTAR_WORKING_BRANCH
     }
+  })
+
+  it('a parallel list whose SECOND track is main still trips the default-branch gate', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(TWO_TRACKS_SECOND_MAIN), defaultAllow)
+
+    // The gate reads every declared track, not just the one the folded branch
+    // form keeps — otherwise a second track on `main` ships unprotected.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(violationCodes(advisories[0])).toContain('dispatch.default-branch.protected')
+  })
+
+  it('a numeric-looking main_worktree_branch keeps its written lexeme (5.0, never 5)', () => {
+    const entries = assignmentFrontmatterEntries('---\nexecute_as: fullstack-dev\nmain_worktree_branch: 5.0\n---\n')
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    expect(assignmentEntriesValue(entries, 'main_worktree_branch')).toBe('5.0')
   })
 })
 

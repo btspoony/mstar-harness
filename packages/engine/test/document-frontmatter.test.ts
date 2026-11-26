@@ -377,6 +377,24 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("name")).toEqual({ value: "locked", rawText: "'locked'", line: 8, kind: "scalar" });
   });
 
+  test("a one-sided or mismatched boundary quote is literal text, never a stripped pair", () => {
+    // Only a matching PAIR is syntax: stripping one side would decode
+    // `enforcement: hard'` to `hard` and activate hard enforcement on a typo.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const entries = parseDocumentFrontmatterEntries(
+      [`a: hard'`, `b: 'hard`, `c: "hard'`, `d: 'hard"`, `e: '"hard'`].join("\n"),
+      "spec-source",
+      "flat",
+    );
+    expect(entries.get("a")!.value).toBe("hard'");
+    expect(entries.get("b")!.value).toBe("'hard");
+    expect(entries.get("c")!.value).toBe(`"hard'`);
+    expect(entries.get("d")!.value).toBe(`'hard"`);
+    // A mismatched pair whose outer quotes still match is stripped: the inner
+    // quote is the value's own text.
+    expect(entries.get("e")!.value).toBe(`"hard`);
+  });
+
   test("a nested map refuses in the flat profile with source, line and line text", () => {
     let error: DocumentFrontmatterError | null = null;
     try {

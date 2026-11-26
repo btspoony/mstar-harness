@@ -1147,6 +1147,16 @@ enforcement: hard
     expect(parseAssignmentFieldsFromFrontmatter("execution_mode: targeted\n").executionMode).toBe("targeted");
   });
 
+  test("a numeric-looking value keeps its written lexeme, never the typed number", () => {
+    // The parser types `5.0` as the number `5`; the declaration is the text it
+    // spells, so the branch reaching Git is `5.0`.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const fields = parseAssignmentFields(`---\nworking_branch: 5.0\nworktree_path: 2.50\ntask_budget: true\n---\n`);
+    expect(fields.workingBranch).toBe("5.0");
+    expect(fields.worktreePath).toBe("2.50");
+    expect(fields.taskBudget).toBe("true");
+  });
+
   test("unrelated prose and unfenced body text produce no fields", () => {
     expect(parseAssignmentFields("This is not an assignment.\nNo fields here.")).toEqual({});
     expect(parseAssignmentFields("")).toEqual({});
@@ -1417,6 +1427,17 @@ enforcement: hard
       expect(parseEnforcementFlagFromFrontmatter(`enforcement: ${value}\n`, "flat")).toEqual({ hard: true, source: "compass" });
     }
     expect(parseEnforcementFlagFromFrontmatter('enforcement: "soft"\n', "flat")).toEqual({ hard: false, source: "compass" });
+  });
+
+  test("a one-sided or mismatched quote spelling never activates hard enforcement", () => {
+    // `enforcement: hard'` is the literal text `hard'`, not `hard`: a typo
+    // must not harden a dispatch. The flat compass profile and the document
+    // profile agree on the pair rule.
+    for (const value of ["hard'", "'hard", `"hard'`, `'hard"`]) {
+      for (const profile of ["flat", "document"] as const) {
+        expect(parseEnforcementFlagFromFrontmatter(`enforcement: ${value}\n`, profile)).toEqual({ hard: false, source: "compass" });
+      }
+    }
   });
 
   test("compass present but not hard (soft / true / empty) → source compass, hard false", () => {
@@ -2082,6 +2103,25 @@ task_budget: S
       expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
       expect(result.violations.filter((v) => v.code.startsWith("assignment.field.branch"))).toEqual([]);
       expect(result.hardBlocked).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("every declared track is default-branch protected, not only the first", () => {
+    // `branchFormsFromFields` folds the list to its FIRST entry; the gate must
+    // still refuse a second track on `main`.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const cwd = gateFixture({ prefix: "dispatch-parallel-main-", harness: true });
+    try {
+      const text = assignment({ working_branch: ["feature/a", "main"], task_budget: "S" });
+      const result = composeDispatchGate(text, { cwd });
+      const protectedBranch = result.violations.filter((v) => v.code === "dispatch.default-branch.protected");
+      expect(protectedBranch).toHaveLength(1);
+      expect(protectedBranch[0]!.message).toContain("main");
+
+      const clean = composeDispatchGate(assignment({ working_branch: ["feature/a", "feature/b"], task_budget: "S" }), { cwd });
+      expect(clean.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(false);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

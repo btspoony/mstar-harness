@@ -380,6 +380,7 @@ export {
   assignmentFrontmatterParse,
   classifyReviewOrAuditRound,
   composeDispatchGate,
+  declaredAssignmentBranches,
   executionModeToN,
   isReadOnlyAssignmentRole,
   legacyAssignmentShape,

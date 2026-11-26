@@ -145,7 +145,9 @@ function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntr
 function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
   if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
   if (typeof entry.value === 'string') return entry.value
-  if (typeof entry.value === 'number' || typeof entry.value === 'boolean') return String(entry.value)
+  // A number/boolean is TYPED by the document profile; the written lexeme is
+  // the declaration, so `main_worktree_branch: 5.0` stays `5.0` (never `5`).
+  if (typeof entry.value === 'number' || typeof entry.value === 'boolean') return entry.rawText.trim()
   if (entry.value === null) return ''
   return undefined
 }

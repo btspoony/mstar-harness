@@ -312,9 +312,14 @@ function safeEntries(yaml: string, profile: FrontmatterProfile = "document"): Ma
  * Scalar content of one entry as the field string; non-scalars yield undefined.
  * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  */
-function scalarOf(value: unknown): string | undefined {
+function scalarOf(entry: FrontmatterEntry): string | undefined {
+  const value = entry.value;
   if (typeof value === "string") return value.trim();
-  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  // A number/boolean was TYPED by the document profile; the written lexeme is
+  // the declaration — `main_worktree_branch: 5.0` is the branch "5.0", never
+  // the typed `5`.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  if (typeof value === "number" || typeof value === "boolean") return entry.rawText.trim();
   return undefined;
 }
 
@@ -358,7 +363,7 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
   const scalar = (key: string): string | undefined => {
     const entry = entries.get(key);
     if (entry === undefined) return undefined;
-    const value = scalarOf(entry.value);
+    const value = scalarOf(entry);
     if (value !== undefined) return value;
     // A bare `key:` / blank scalar is present-but-empty.
     // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
@@ -378,7 +383,7 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
     if (Array.isArray(writePaths.value)) {
       fields.controlWritePaths = writePaths.value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
     } else {
-      const single = scalarOf(writePaths.value);
+      const single = scalarOf(writePaths);
       if (single !== undefined) fields.controlWritePaths = single === "" ? [] : [single];
     }
   }
@@ -503,7 +508,7 @@ export function parseEnforcementFlagFromFrontmatter(frontmatter: string | Map<st
   if (entries === null) return { hard: false, source: "none" };
   const entry = entries.get("enforcement");
   if (entry === undefined) return { hard: false, source: "none" };
-  const value = scalarOf(entry.value) ?? "";
+  const value = scalarOf(entry) ?? "";
   // The parsed entries are the single source of the source attribution:
   // invalid YAML already returned above, so a key presence check is exactly
   // the `ASSIGNMENT_FIELD_RE` line match without a second regex pass.
@@ -621,6 +626,28 @@ function branchFormsFromFields(fields: AssignmentFields): AssignmentBranchForms 
     }
   }
   return forms;
+}
+
+/**
+ * EVERY branch a writable Assignment declares, through the one form grammar:
+ * the scalar value or every entry of the `working_branch` parallel list. The
+ * default-branch gate reads this instead of the folded `forms` value —
+ * {@link branchFormsFromFields} keeps only the FIRST list entry, which would
+ * leave a second track on `main` unexamined.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+export function declaredAssignmentBranches(fields: AssignmentFields, forms: AssignmentBranchForms): string[] {
+  const values = fields.workingBranches ?? (fields.workingBranch !== undefined ? [fields.workingBranch] : []);
+  const branches: string[] = [];
+  for (const value of values) {
+    const parsed = parseWorkingBranchValue(value);
+    const branch = parsed.createForm?.name ?? parsed.workingBranch;
+    if (branch !== undefined && branch.trim() !== "") branches.push(branch);
+  }
+  if (branches.length === 0 && forms.directOn !== undefined && forms.directOn.branch.trim() !== "") {
+    branches.push(forms.directOn.branch);
+  }
+  return branches;
 }
 
 /**
@@ -1358,9 +1385,15 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     if (writable && fields.writeDomain === "control") {
       violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd, assignmentDir: opts.assignmentDir, fields, forms }));
     } else if (writable) {
-      const branch =
-        forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
-      if (branch !== undefined && branch.trim() !== "") {
+      // EVERY declared branch is gated, not just the one `forms` folds to its
+      // first entry: a `working_branch` list is the parallel shape, and track
+      // two on `main` is exactly what this gate exists to catch.
+      const declared = declaredAssignmentBranches(fields, forms);
+      const branches =
+        declared.length > 0
+          ? declared
+          : [process.env.MSTAR_WORKING_BRANCH].filter((branch): branch is string => branch !== undefined && branch.trim() !== "");
+      for (const branch of branches) {
         const directOnException = forms.directOn !== undefined && forms.directOn.reason !== "" && forms.directOn.branch === branch.trim();
         violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
       }

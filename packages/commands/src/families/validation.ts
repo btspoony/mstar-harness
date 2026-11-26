@@ -15,6 +15,7 @@ import {
   classifySkillLint,
   activeLifecyclePlanId,
   completenessLevel,
+  declaredAssignmentBranches,
   executionModeToN,
   extractFrontmatterAndBody,
   parseDocumentFrontmatterEntries,
@@ -517,7 +518,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             });
           }
           if (fields.writeDomain !== "control") {
-            if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+            // EVERY declared branch is gated (a `working_branch` list is the
+            // parallel shape), so a second track on `main` is caught too.
+            const declared = declaredAssignmentBranches(fields, forms);
+            const branches = declared.length > 0 ? declared : branch?.trim() ? [branch] : [];
+            const directOnBranch = parseBranchPolicyDirectOnBranch(text);
+            for (const target of branches) {
+              violations.push(...assertDefaultBranchProtected(target, { directOnException: directOnBranch === target.trim() }).violations);
+            }
           } else {
             violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(source.path ?? file) }));
           }

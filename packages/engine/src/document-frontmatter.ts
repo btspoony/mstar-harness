@@ -128,7 +128,10 @@ function decodeFlatScalar(raw: string): string {
       ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
     );
   }
-  return raw.replace(/^["']|["']$/g, "");
+  // Only a matching boundary PAIR is syntax. A one-sided or mismatched quote
+  // (`hard'`, `'hard`, `"hard'`) is literal text: stripping it would decode
+  // `enforcement: hard'` to `hard` and activate hard enforcement on a typo.
+  return unquote(raw);
 }
 
 /**
