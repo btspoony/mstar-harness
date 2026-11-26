@@ -14,7 +14,7 @@ omp session plans, composer todos, and plan-mode UI text are **session UX only**
 
 Bootstrap before treating a plan as ready for Execute (read `mstar-conventions` + `mstar-artifacts`; ensure `{HARNESS_DIR}` / `{PLAN_DIR}` exist with process-artifact gitignore entries; mirror the active omp plan into the SSOT main plan path; register store-backed workflow/plan rows through `mstar workflow register` when required by Prepare gates) → core.
 
-**Never** use only the omp session plan / UI todo list as **Plan Path**.
+**Never** use only the omp session plan / UI todo list as the Assignment front matter `plan_path`.
 
 ## `mstar-iteration` Phase 1 in Plan mode
 

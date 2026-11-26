@@ -81,14 +81,14 @@ Role-binding contract + Assignment template → **`_shared/host-role-binding-cor
 ```text
 Agent(
   subagent_type: "coder",
-  prompt: "<full Assignment body including Act as + skill load>"
+  prompt: "<full Assignment document (front matter + Act as + skill load)>"
 )
 ```
 
 For **`explore`** orientation:
 
 ```text
-Agent(subagent_type: "explore", prompt: "... Act as explore-only orientation; Execute as: n/a ...")
+Agent(subagent_type: "explore", prompt: "... Act as explore-only orientation; execute_as: n/a ...")
 ```
 
 For Prepare plan-only when plan subagent is appropriate:
@@ -103,20 +103,20 @@ Harness **dispatch** on Kimi = **one or more `Agent` tool calls** with correct *
 
 | Harness | Kimi |
 |---------|------|
-| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **Agent** prompt (C5b) |
+| `execute_as: <role-id>` | Role id in the Assignment front matter + **Act as** + skill load in **Agent** prompt (C5b) |
 | `subagent_type` for invoke | `coder` \| `explore` \| `plan` only (see mapping) |
 | Parallel batch **N** | **N `Agent`** calls in **one assistant message** when roles may differ; **`AgentSwarm`** only when same role/profile |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all `subagent_type: "coder"` (N rules → `parallel-dispatch.md`).
+- **`execution_mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all `subagent_type: "coder"` (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** with **Act as `code-reviewer`** (Kimi L2 review; not qc-specialist*), always via generic fallback `subagent_type: "coder"` per C5 — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
+- **`execution_mode: sdd`**: one implementer **`Agent`** per task id; task reviewer = new **`Agent`** with **Act as `code-reviewer`** (Kimi L2 review; not qc-specialist*), always via generic fallback `subagent_type: "coder"` per C5 — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
 - Independent ready implementers use isolated parallel tracks; never share a writable worktree or session.
 
 ## Clarify
@@ -142,7 +142,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ## Git and final evidence
 
-- Git work follows `mstar-branch-worktree` and Assignment **Working branch** / **Branch policy**.
+- Git work follows `mstar-branch-worktree` and the Assignment front matter `working_branch` / `branch_policy`.
 - Completion reports cite concrete commands, artifacts, and commit lines when required.
 
 ## Gotchas

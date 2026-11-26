@@ -72,7 +72,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 Each implement task's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 - [ ] <task-id-1>: <description>
-  - Done when: git commit on Working branch + checkbox [x] in SSOT plan + evidence below
+  - Done when: git commit on the front matter `working_branch` + checkbox [x] in SSOT plan + evidence below
 - [ ] <task-id-2>: ...
 
 ## Working branch
@@ -97,7 +97,7 @@ Before switching from Plan to Agent for implementation (or declaring Plan phase 
 - [ ] Bootstrap todos `harness-init`, `spec-register`, `mirror-plan` are **done**
 - [ ] CreatePlan implement todos reference **task ids** traceable to SSOT plan checkboxes
 - [ ] If staged/partial/temporary, CreatePlan and SSOT plan both contain `Roadmap / deferred scope`
-- [ ] **Plan Path** for any Assignment uses the SSOT path, not the Cursor plan URI
+- [ ] **`plan_path`** for any Assignment uses the SSOT path, not the Cursor plan URI
 
 If any item fails → **Blocked**; finish harness sync before implement.
 

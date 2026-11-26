@@ -1,16 +1,16 @@
 # Implementer continuation prompt (sticky session)
 
-Use when PM continues **`SDD implementer session: sticky`** for Task N>1. Host: **resume** same agent when supported (`sticky-implementer-session.md`).
+Use when PM continues **`sdd_implementer_session: sticky`** for Task N>1. Host: **resume** same agent when supported (`sticky-implementer-session.md`).
 
 ```
 Dispatch:
   Resume: [HOST_AGENT_ID from implementer-session.json]
   Name: <CamelCaseId>                 # omp/Cursor name
-  Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from THIS plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate, and a previous task's budget is not inherited as authorization for this task
+  Assignment front matter: canonical keys (`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)) — MUST include **`task_budget`**: <budget copied from THIS plan task>; front matter is the only field contract, a body-only budget declares nothing, and a previous task's budget is not inherited as authorization for this task
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer continuing a sticky SDD session.</SUBAGENT-STOP>
 
-    Continue as the same implementer on plan <plan-id>, Working branch: <branch>.
+    Continue as the same implementer on plan <plan-id>, front matter `working_branch`: <branch>.
 
     ## Completed (do not redo)
 
@@ -43,14 +43,14 @@ Dispatch:
 
     Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
 
-    **Task budget / overrun**: the resumed Assignment header declares **`Task budget (implement / ops rounds)`** for THIS task — one implementer round closing its Files and verification gates (value copied from the plan task; a previous task's budget is not inherited as authorization for this task — a continuation is not an automatic budget extension). The value is validated in the header region only, so a `Task budget` string inside this body section cannot satisfy the engine header gate. If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
+    **Task budget / overrun**: the resumed Assignment front matter declares **`task_budget`** for THIS task — one implementer round closing its Files and verification gates (value copied from the plan task; a previous task's budget is not inherited as authorization for this task — a continuation is not an automatic budget extension). If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
 
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
     2. Before creating or keeping tests, apply the `mstar-coding-behavior` § Evidence keep/delete rule: keep product-behaviour assertions and fails-first regression defences, delete incidental / source-shape / wiring / environment-constant assertions, and report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion".
     3. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Optional retained output, retain unaffected prior evidence, and cite any retained log path in the report
-    4. Commit on Working branch
+    4. Commit on the Assignment front matter `working_branch`
        Use the configured identity for this task's commit; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
     5. Write report file with actual evidence; return short summary only
 
