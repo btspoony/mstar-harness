@@ -2512,7 +2512,6 @@ const COLLABORATION_HELD_TABLES: readonly string[] = [
   "sync_cursor",
   "sync_runs",
   "project_bindings",
-  "project_roadmaps",
   "project_milestones",
   "catalog_entities",
   "catalog_links",

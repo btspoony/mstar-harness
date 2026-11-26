@@ -87,7 +87,6 @@ const DOCUMENT_KINDS: Record<CatalogDocumentKind, true> = {
   guide: true,
   compass: true,
   plan: true,
-  roadmap: true,
   review: true,
   other: true,
 };

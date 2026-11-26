@@ -175,7 +175,6 @@ const COLLABORATION_TABLES = [
   "occurrences",
   "project_bindings",
   "project_milestones",
-  "project_roadmaps",
   "provenance",
   "relations",
   "remote_bindings",
@@ -1499,6 +1498,27 @@ function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** note: A real v6 lane: every immutable migration before v7, with its ledger row. */
+function writeV6Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV1Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    for (const migration of COLLABORATION_MIGRATIONS.slice(1, 6)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "2026-11-21T00:00:00.000Z",
+      );
+    }
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: The v3 lane as a REMOTE cache: `remote` lanes are only ever written by the reviewed bind. */
 function writeV3RemoteLane(location: CollaborationLocation): void {
   writeV3Lane(location);
@@ -1992,6 +2012,108 @@ describe("collaboration remote schema ladder", () => {
     expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
   });
 
+  test("a v6 lane's roadmap row is reclassified to other and stays registered", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-reclassify.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV6Lane(location, (db) => {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, " +
+          "updated_at) values " +
+          "('project', 'p-one', 'Project One', 'projects', 'p-one', NULL, 3, '2026-09-01T00:00:00.000Z', " +
+          "'2026-11-21T00:00:00.000Z'), " +
+          "('document', 'doc-r', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 7, " +
+          "'2026-09-02T00:00:00.000Z', '2026-11-22T00:00:00.000Z');" +
+          "insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at) " +
+          "values ('p-one', '# Roadmap', 'hash', 2, '2026-11-22T00:00:00.000Z');" +
+          "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id) " +
+          "values ('project', 'p-one', 'documents', 'document', 'doc-r');",
+      );
+    });
+    activate(location.dbPath);
+    expect(tableNames(location.dbPath)).toContain("project_roadmaps");
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // invariant: No table remains and no row was deleted: the roadmap row keeps its id, revision and
+    // registration and reads back as `other`, with its link intact.
+    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(
+        db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get(),
+      ).toEqual({ document_kind: "other", revision: 7, registered_at: "2026-09-02T00:00:00.000Z" });
+      expect(db.prepare("select count(*) as n from catalog_links").get()).toEqual({ n: 1 });
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // invariant: The CHECK that admitted the value is gone, so the retired value is refused.
+      expect(() =>
+        db.prepare(
+          "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, registered_at, updated_at) " +
+            "values ('document', 'doc-x', 'X', 'specs', 'x.md', 'roadmap', '2026-11-23T00:00:00.000Z', " +
+            "'2026-11-23T00:00:00.000Z')",
+        ).run(),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
+  });
+
+  test("a snapshot of the uncommitted v7 rebuild reopens at v6 intact and replays to completion", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
+    const location = locationAt(repo);
+    writeV6Lane(location, (db) => {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
+          "values ('project', 'p-one', 'Project One', 'projects', 'p-one', '2026-09-01T00:00:00.000Z', " +
+          "'2026-09-01T00:00:00.000Z')",
+      );
+    });
+    activate(location.dbPath);
+    const v6Tables = tableNames(location.dbPath);
+    const v6Ledger = ledgerRows(location.dbPath);
+
+    // note: The crash snapshot: the DDL ran inside a transaction that never committed, so the file
+    // holds the predecessor's bytes.
+    const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
+    mkdirSync(snapshotDir, { recursive: true });
+    const snapshot = join(snapshotDir, "collaboration.db");
+    copyFileSync(location.dbPath, snapshot);
+    for (const sidecar of ["-wal", "-shm"]) {
+      if (existsSync(`${location.dbPath}${sidecar}`)) copyFileSync(`${location.dbPath}${sidecar}`, `${snapshot}${sidecar}`);
+    }
+    chmodSync(snapshot, 0o600);
+    expect(tableNames(snapshot)).toEqual(v6Tables);
+    expect(ledgerRows(snapshot)).toEqual(v6Ledger);
+
+    // note: Reopening that snapshot and replaying the same verb completes the upgrade: the
+    // predecessor's bytes are the whole input, so the replay needs nothing else.
+    copyFileSync(snapshot, location.dbPath);
+    chmodSync(location.dbPath, 0o600);
+    const receipt = await upgradeCollaborationStore(contextAt(repo), "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
+    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+  });
+
+  test("an interrupted v7 rebuild without its ledger row refuses instead of accepting a half-applied schema", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-ledger.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    // note: The crash window: the v7 DDL committed, its ledger row did not.
+    writeV6Lane(location, (db) => db.exec(COLLABORATION_MIGRATIONS[6]!.sql));
+    activate(location.dbPath);
+    const before = ledgerRows(location.dbPath);
+
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerRows(location.dbPath)).toEqual(before);
+    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
+  });
+
   test("a v3 outbox whose nullable columns drifted refuses the upgrade and its settlement admission", async () => {
     // note: `execution_key_json` is the ONE outbox column no key-layout check names (it is nullable
     // and no index covers it), so this drift is admitted by the columns check alone. That is exactly
@@ -2177,7 +2299,7 @@ function positiveCheck(overrides: Partial<ScopeCheck> = {}): ScopeCheck {
   };
 }
 
-/** note: A complete fixture scope: project binding, milestones, roadmap, portable catalog and history. */
+/** note: A complete fixture scope: project binding, milestones, portable catalog and history. */
 function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
   const at = "2026-11-20T00:00:00.000Z";
   return {
@@ -2199,7 +2321,6 @@ function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
           updatedAt: at,
         },
       ],
-      roadmap: { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: at },
       catalogEntities: [
         {
           kind: "project",
@@ -4508,7 +4629,6 @@ function completeProjectSubject(): Record<string, unknown> {
   return {
     projectId: project.projectId,
     milestones: project.milestones,
-    roadmap: project.roadmap,
     catalogEntities: project.catalogEntities,
     catalogLinks: project.catalogLinks,
   };
@@ -5355,16 +5475,15 @@ describe("remote outbox lifecycle", () => {
         },
       });
 
-    // invariant: ONE refusal answers every project-member defect together — a milestone field, the
-    // roadmap revision and the catalog-link relation — and the row that FAILED to parse never stands
-    // in for an identity, so it cannot fabricate the duplicate its own diagnostic would hide.
+    // invariant: ONE refusal answers every project-member defect together — a milestone field and the
+    // catalog-link relation — and the row that FAILED to parse never stands in for an identity, so it
+    // cannot fabricate the duplicate its own diagnostic would hide.
     await expect(
       recordRemoteReceipt(
         cache.context,
         receiptOf({
           ...project,
           milestones: [{ ...milestones[0]!, name: 7 }, { ...milestones[0] }],
-          roadmap: { contentMarkdown: "# Roadmap\n", revision: 0, updatedAt: "2026-11-20T00:00:00.000Z" },
           catalogLinks: [
             { fromKind: "plan", fromId: "plan-1", relation: "not-a-relation", toKind: "plan", toId: "plan-2", ordinal: 0 },
           ],
@@ -5373,7 +5492,7 @@ describe("remote outbox lifecycle", () => {
     ).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringMatching(
-        /change\.project\.milestones\[0\]\.name[\s\S]*change\.project\.roadmap\.revision[\s\S]*change\.project\.catalogLinks\[0\]\.relation/,
+        /change\.project\.milestones\[0\]\.name[\s\S]*change\.project\.catalogLinks\[0\]\.relation/,
       ),
     });
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "unconfirmed" });
@@ -9774,6 +9893,17 @@ function downgradeToV3(location: CollaborationLocation): void {
   }
 }
 
+/** note: The roadmap table a pre-v7 lane carried: a rewound lane must hold it for the predecessor proof. */
+const ROADMAP_TABLE_DDL = `create table project_roadmaps(
+  project_id text primary key,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  content_markdown text not null,
+  content_hash text not null,
+  revision integer not null check (revision > 0),
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);`;
+
 /**
  * note: Rewind the live cache's version ledger to v5, keeping every table row - outbox, receipts,
  * bindings and the move ledger - exactly as the v6 writers left it. The replacement decision reads
@@ -9784,7 +9914,8 @@ function downgradeToV5(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
     db.exec("begin immediate");
-    db.prepare("delete from schema_version where version = ?").run(6);
+    db.prepare("delete from schema_version where version in (?, ?)").run(6, 7);
+    db.exec(ROADMAP_TABLE_DDL);
     db.exec("commit");
   } finally {
     db.close();
@@ -9801,8 +9932,9 @@ function downgradeToV4(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
     db.exec("begin immediate");
-    db.prepare("delete from schema_version where version in (?, ?)").run(5, 6);
+    db.prepare("delete from schema_version where version in (?, ?, ?)").run(5, 6, 7);
     db.exec("alter table issue_moves drop column route");
+    db.exec(ROADMAP_TABLE_DDL);
     db.exec("commit");
   } finally {
     db.close();

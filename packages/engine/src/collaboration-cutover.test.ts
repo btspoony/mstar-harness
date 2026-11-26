@@ -191,8 +191,6 @@ insert into catalog_links(from_kind, from_id, relation, to_kind, to_id)
 values ('plan', 'plan-one', 'documents', 'document', 'doc-one');
 insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at)
 values ('m-one', 'p-one', 'Milestone One', 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
-insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
-values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)
 values ('I-000001', 'p-one', 'First finding', 'bug', 'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-one', 'm-one');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
@@ -359,7 +357,6 @@ async function stagedRows(location: CollaborationLocation): Promise<StagedRows> 
       "relations",
       "project_bindings",
       "project_milestones",
-      "project_roadmaps",
     ]) {
       rows[table] = db.prepare(`select * from ${table}`).all() as Array<Record<string, unknown>>;
     }

@@ -813,7 +813,69 @@ const COLLABORATION_MILESTONE_EFFORT_SCHEMA: Migration = {
   sql: COLLABORATION_MILESTONE_EFFORT_V6_SQL,
 };
 
-/** note: The lane's ordered migrations: v1 is immutable; v2, the v3 outbox, the v4 move ledger, the v5 route and v6 are appended. */
+/**
+ * invariant: v7 `collaboration-roadmap-removal` - the roadmap domain leaves the lane. `project_roadmaps`
+ * is dropped and `catalog_entities` is rebuilt without `'roadmap'` in its `document_kind` CHECK, because
+ * SQLite cannot alter a CHECK in place. The rebuild copies every row; a `document_kind = 'roadmap'` row
+ * is reclassified to `other` and keeps its id, revision and registration - a catalog row is never
+ * deleted to satisfy an enum.
+ *
+ * `catalog_links` and `project_milestones` reference `catalog_entities`, and `issues` references
+ * `project_milestones`, so the rebuild uses the same FK-safe staging the v2 issue rebuild uses:
+ * the children are staged out, the parent rebuilt, the children restored, and `defer_foreign_keys`
+ * lets the grandchildren be proven at commit against the restored rows.
+ */
+/** note: The table v7 retires. Every generation before it carried the lane's roadmap body. */
+const COLLABORATION_ROADMAP_TABLE = "project_roadmaps";
+
+const COLLABORATION_ROADMAP_REMOVAL_SQL = `
+pragma defer_foreign_keys = ON;
+drop table project_roadmaps;
+create table catalog_links_roadmap_stage as select * from catalog_links;
+create table project_milestones_roadmap_stage as select * from project_milestones;
+delete from catalog_links;
+delete from project_milestones;
+create table catalog_entities_roadmap_stage(
+  kind text not null check (kind in ('project','iteration','plan','document')),
+  id text not null,
+  title text not null,
+  description text,
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  document_kind text check (document_kind in ('spec','knowledge','guide','compass','plan','review','other')),
+  lifecycle text not null default 'active' check (lifecycle in ('active','archived','superseded')),
+  revision integer not null default 1 check (revision > 0),
+  registered_at text not null,
+  updated_at text not null,
+  source_hash text,
+  primary key (kind, id),
+  check (document_kind is null or kind = 'document')
+);
+insert into catalog_entities_roadmap_stage(
+  kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at,
+  updated_at, source_hash
+)
+select kind, id, title, description, root_kind, relative_path,
+       case when document_kind = 'roadmap' then 'other' else document_kind end,
+       lifecycle, revision, registered_at, updated_at, source_hash
+from catalog_entities;
+drop table catalog_entities;
+alter table catalog_entities_roadmap_stage rename to catalog_entities;
+create unique index catalog_entities_location on catalog_entities(kind, root_kind, relative_path);
+create index catalog_entities_document_kind on catalog_entities(document_kind) where document_kind is not null;
+insert into catalog_links select * from catalog_links_roadmap_stage;
+insert into project_milestones select * from project_milestones_roadmap_stage;
+drop table catalog_links_roadmap_stage;
+drop table project_milestones_roadmap_stage;
+`;
+
+const COLLABORATION_ROADMAP_REMOVAL_SCHEMA: Migration = {
+  version: 7,
+  name: "collaboration-roadmap-removal",
+  sql: COLLABORATION_ROADMAP_REMOVAL_SQL,
+};
+
+/** note: The lane's ordered migrations: v1 is immutable; v2, the v3 outbox, the v4 move ledger, the v5 route, v6 and v7 are appended. */
 export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_SCHEMA,
   COLLABORATION_REMOTE_SCHEMA,
@@ -821,6 +883,7 @@ export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_MOVE_SCHEMA,
   COLLABORATION_MOVE_ROUTE_SCHEMA,
   COLLABORATION_MILESTONE_EFFORT_SCHEMA,
+  COLLABORATION_ROADMAP_REMOVAL_SCHEMA,
 ];
 
 /** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
@@ -873,7 +936,6 @@ const COLLABORATION_TABLES: readonly string[] = [
   "occurrences",
   "project_bindings",
   "project_milestones",
-  "project_roadmaps",
   "provenance",
   "relations",
   "remote_bindings",
@@ -1025,14 +1087,23 @@ const COLLABORATION_V5_ROUTE_COLUMNS: Readonly<Record<string, readonly string[]>
   ...COLLABORATION_ROUTE_COLUMNS,
 };
 
-/** note: The exact current inventory: the backup image verifier checks the same shape admission does. */
-export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+/**
+ * note: The v6 inventory: the v5 generation plus the effort column, and the roadmap table the lane
+ * still carried before v7. A lane at v6 proves this shape before the v7 DDL.
+ */
+const COLLABORATION_V6_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V5_ROUTE_COLUMNS,
   project_milestones: [
     "milestone_id", "project_id", "project_kind", "name", "effort_sessions", "status", "ordinal", "revision",
     "created_at", "updated_at",
   ],
+  project_roadmaps: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"],
 };
+
+/** note: The exact current inventory: the v6 generation without the retired roadmap table. */
+export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(COLLABORATION_V6_COLUMNS).filter(([table]) => table !== COLLABORATION_ROADMAP_TABLE),
+);
 
 /**
  * invariant: The declared layout's enforced keys: the columns that must reject null, the
@@ -1217,7 +1288,10 @@ const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
 /** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
 const COLLABORATION_MOVE_TABLES: readonly string[] = ["issue_moves"];
 
-const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+/** note: The v6 inventory: the current lane plus the roadmap table v7 drops. */
+const COLLABORATION_V6_TABLES: readonly string[] = [...COLLABORATION_TABLES, COLLABORATION_ROADMAP_TABLE];
+
+const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_V6_TABLES.filter(
   (table) => !COLLABORATION_MOVE_TABLES.includes(table),
 );
 
@@ -1227,7 +1301,7 @@ const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_V3_TABLES.filte
 );
 
 /** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
-const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_TABLES.filter(
+const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_V6_TABLES.filter(
   (table) =>
     !COLLABORATION_REMOTE_TABLES.includes(table) &&
     !COLLABORATION_OUTBOX_TABLES.includes(table) &&
@@ -1246,7 +1320,6 @@ export const COLLABORATION_CUTOVER_TABLES: readonly string[] = [
   "catalog_entities",
   "catalog_links",
   "project_milestones",
-  "project_roadmaps",
   "issues",
   "occurrences",
   "relations",
@@ -1615,7 +1688,7 @@ function assertOutboxSchema(db: StoreDb, dbPath: string): void {
 
 /** note: The exact v4 shape an upgrade from v4 proves before the v5 route column: a partial v5 refuses. */
 function assertMoveSchema(db: StoreDb, dbPath: string): void {
-  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_V4_COLUMNS, true);
+  assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V4_COLUMNS, true);
   assertKeyLayout(db, dbPath, [...COLLABORATION_KEY_LAYOUT, ...COLLABORATION_KEY_LAYOUT_MOVE]);
 }
 
@@ -1626,7 +1699,13 @@ function assertLegacySchema(db: StoreDb, dbPath: string): void {
 
 /** note: The exact v5 shape an upgrade from v5 proves before the v6 delta: a partial v6 refuses. */
 function assertMoveRouteSchema(db: StoreDb, dbPath: string): void {
-  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_V5_ROUTE_COLUMNS, true);
+  assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V5_ROUTE_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
+}
+
+/** note: The exact v6 shape an upgrade from v6 proves before the v7 roadmaps drop: a partial v7 refuses. */
+function assertMilestoneEffortSchema(db: StoreDb, dbPath: string): void {
+  assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V6_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
@@ -1639,6 +1718,7 @@ function assertMoveRouteSchema(db: StoreDb, dbPath: string): void {
 function assertVersionInventory(db: StoreDb, dbPath: string, version: number): void {
   const inventory = collaborationInventoryOf(version);
   if (inventory === COLLABORATION_CURRENT_COLUMNS) assertCurrentSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V6_COLUMNS) assertMilestoneEffortSchema(db, dbPath);
   else if (inventory === COLLABORATION_V5_ROUTE_COLUMNS) assertMoveRouteSchema(db, dbPath);
   else if (inventory === COLLABORATION_V4_COLUMNS) assertMoveSchema(db, dbPath);
   else if (inventory === COLLABORATION_V3_COLUMNS) assertOutboxSchema(db, dbPath);
@@ -3097,6 +3177,7 @@ export function collaborationInventoryOf(version: number): Readonly<Record<strin
   if (version < COLLABORATION_MOVE_SCHEMA.version) return COLLABORATION_V3_COLUMNS;
   if (version < COLLABORATION_MOVE_ROUTE_SCHEMA.version) return COLLABORATION_V4_COLUMNS;
   if (version < COLLABORATION_MILESTONE_EFFORT_SCHEMA.version) return COLLABORATION_V5_ROUTE_COLUMNS;
+  if (version < COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version) return COLLABORATION_V6_COLUMNS;
   return COLLABORATION_CURRENT_COLUMNS;
 }
 
@@ -3275,6 +3356,19 @@ export function applyCollaborationLadder(
       COLLABORATION_MILESTONE_EFFORT_SCHEMA.version,
       COLLABORATION_MILESTONE_EFFORT_SCHEMA.name,
       migrationChecksum(COLLABORATION_MILESTONE_EFFORT_SCHEMA),
+      nowRfc3339(),
+    );
+  }
+  // invariant: The exact v6 shape is proven before the v7 rebuild: a `catalog_entities` that already lost
+  // `roadmap` (or a lane that already dropped `project_roadmaps`) without its ledger row is a partial
+  // apply, and is refused instead of being re-copied.
+  if (appliedMax < COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version) {
+    assertMilestoneEffortSchema(db, dbPath);
+    db.exec(COLLABORATION_ROADMAP_REMOVAL_SCHEMA.sql);
+    db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+      COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version,
+      COLLABORATION_ROADMAP_REMOVAL_SCHEMA.name,
+      migrationChecksum(COLLABORATION_ROADMAP_REMOVAL_SCHEMA),
       nowRfc3339(),
     );
   }
