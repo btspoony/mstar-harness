@@ -347,7 +347,9 @@ export function canonicalizeNearestExisting(path: string): string {
 
 /** why: The `sdd` base (before the per-plan join) — the `.mstarc` `sdd_dir`
  * declaration or `{HARNESS_DIR}/sdd`. Shared by `resolveSddDir` and
- * `assignmentSourceHomes`. */
+ * `assignmentSourceHomes`.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 function sddBaseDir(harnessDir: string): string {
   const base = resolve(harnessDir);
   const declared = mstarcDirOverride(base, "sddDir");
@@ -604,6 +606,7 @@ export function resolveAssignmentDir(opts: {
     // why: the harness dir is a caller-held fact — pass it as the verbatim
     // `harnessDir` override so no redundant Git probe runs; `.mstarc`
     // discovery is unchanged (the harness dir is the discovery start).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     dir = join(resolveWorkflowDir(opts.harnessDir, { harnessDir: opts.harnessDir }), opts.workflowId, "assignments");
   }
   if (dir === null) return null;
@@ -623,6 +626,7 @@ export function resolveAssignmentDir(opts: {
  * `{HARNESS_DIR}/<fallback>` default. A containment decision that loaded the
  * config once cannot mix declarations from two snapshots, and a configured
  * checkout pays one config read per decision instead of one per base.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function assignmentWriteBases(harnessDir: string): Array<{ name: AssignmentSourceHome["name"]; root: string }> {
   const base = resolve(harnessDir);

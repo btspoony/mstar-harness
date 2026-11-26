@@ -204,13 +204,17 @@ describe('team dispatch gate — name-keyed before tool resolution, so absence i
   })
 })
 
-/* ------------------- D16 legacy body-label regression ------------------- */
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('team dispatch gate — the retired body-label grammar refuses on the board carrier too', () => {
   it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
     // D16 regression — the ONE body-label fixture of this spec: a board
     // carrier shaped like an Assignment whose fields live in the retired
     // `**Label**` grammar reaches the terminal legacy-format refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev

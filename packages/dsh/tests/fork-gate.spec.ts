@@ -220,13 +220,17 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
   })
 })
 
-/* ------------------- D16 legacy body-label regression ------------------- */
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('fork gate — the retired body-label grammar refuses on the fork carrier too', () => {
   it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
     // D16 regression — the ONE body-label fixture of this spec: a fork
     // carrier whose fields live in the retired `**Label**` grammar reaches
     // the terminal legacy-format refusal exactly like the subagent carrier.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -245,7 +249,9 @@ Do the thing.
 
     const decision = await app.ctx.waterfall('tools/pre-execute', forkExec(LEGACY_BODY_LABEL), defaultAllow)
 
-    expect(secondRan).toBe(false) // the veto short-circuits the waterfall
+    // the veto short-circuits the waterfall
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(secondRan).toBe(false)
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
   })

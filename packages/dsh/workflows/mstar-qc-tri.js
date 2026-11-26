@@ -48,6 +48,7 @@ phase('qc-tri')
 // Seat prompts carry the Assignment FRONT MATTER; the body is narrative only
 // (a body `**Label**:` line would declare nothing and shape the document as
 // the retired format, `dispatch.assignment.legacy-format`).
+// see docs/knowledge/architecture-patterns/assignment-file-carrier.md
 const seatPrompt = (seat, index, reportPath, focus, ordinal, lensNote) => `---
 execute_as: ${seat}
 delegation: forbidden

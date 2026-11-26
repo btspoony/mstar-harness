@@ -596,6 +596,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     // D16 regression — the ONE body-label fixture of this spec: the terminal
     // legacy-format refusal fires ahead of every exemption (preset, canonical,
     // non-harness, unknown provider), so no provider start ever happens.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { app, provider } = await bootWithProvider('fake-spawn')
     const LEGACY_BODY_LABEL_PROMPT = [
       '## Assignment',

@@ -29,7 +29,9 @@ import { expectUsageDiagnostic } from "./support/cli-assertions";
 const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
 /** Sample plan mirroring the engine fixture: fenced fake headings + real ones.
- * A `plan_id` front matter fence is required — a brief without one is refused. */
+ * A `plan_id` front matter fence is required — a brief without one is refused.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 const SAMPLE_PLAN = `---
 plan_id: 20260907-sdd-brief-fixture
 ---
@@ -415,6 +417,7 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
   // A declared plan_id is required: taskBrief refuses a plan without one.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
   writeFileSync(planFile, `---\nplan_id: ${PLAN_ID}\n---\n\n# Plan\n\n## Task 1\n\n- implement\n`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });

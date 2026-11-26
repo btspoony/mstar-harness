@@ -23,7 +23,7 @@
  * the cap may only tighten the default: `mstar-harness-core` SKILL.md
  * § "定向执行与验证边界" + `mstar-review-qc` SKILL.md § "席位预算与截断（PM）".
  * - Task budget (implement / ops rounds) — the exact complement of the
- * review/audit rounds (implement/ops, including non-audit docs/Prepare and
+ * review/audit rounds (implement/ops, including non-audit docs Prepare and
  * orientation roles) must carry a non-empty `task_budget` value that is not
  * `N/A` (presence-only; adequacy stays in PM's Prepare check): capacity
  * contract spec § A1–A3.
@@ -42,6 +42,8 @@
  * role binding (`subagent_type` / `agent` / `subagent`) equals its own
  * `execute_as` (NEVER red line): `mstar-dispatch-gates` SKILL.md
  * § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
+ *
+ * see skills/mstar-dispatch-gates/SKILL.md
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -73,7 +75,10 @@ import { validateDocumentFrontmatter } from "../src/document-schema.js";
 import { parseDocumentFrontmatterEntries, DocumentFrontmatterError } from "../src/document-frontmatter.js";
 import { resolveAssignmentDir } from "../src/path.js";
 
-/** snake_case keys the fixture builder emits; arrays become YAML block lists. */
+/**
+ * snake_case keys the fixture builder emits; arrays become YAML block lists.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 type FixtureValue = string | string[] | undefined;
 
 /** Minimal well-formed writable assignment (all required fields + one branch form). */
@@ -89,7 +94,10 @@ task_budget: S — one implementer round closing the declared Files and gates
 ## Assignment
 `;
 
-/** Override keys may use the snake_case front matter spelling directly. */
+/**
+ * Override keys may use the snake_case front matter spelling directly.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function assignment(overrides: Record<string, FixtureValue>): string {
   const base: Record<string, FixtureValue> = {
     execute_as: "fullstack-dev",
@@ -335,6 +343,7 @@ describe("validateAssignmentFields — branch-form matrix (writable)", () => {
  // Implement/ops rounds must carry the task_budget capacity field (spec § A1)
  // — every otherwise-valid fixture here gains it so the branch-form cases
  // stay the only thing under test.
+ // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   const TASK_BUDGET = { task_budget: "S — one focused implementer round" };
 
   test("working_branch: <existing> is a valid single form", () => {
@@ -503,6 +512,7 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
     expect(violation!.message).toContain("the field is absent");
  // The fix must name the front matter key and the tighten-only rule — a PM
  // reading only the violation can repair the Assignment.
+ // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(violation!.fix).toContain("budget:");
     expect(violation!.fix).toContain("never loosen it");
   });
@@ -656,10 +666,11 @@ working_branch: feature/foo
 });
 describe("Task budget assignment gate", () => {
  // Capacity contract spec § A1–A3: the exact complement of the review/audit
- // branch — implement/ops rounds (including non-audit docs/Prepare and
+ // branch — implement/ops rounds (including non-audit docs Prepare and
  // orientation roles) must declare `task_budget`, presence-only. Same
  // normalized `role` / `auditRound` values; `writable: false` is NOT a
  // capacity exemption; adequacy stays in PM's Prepare check.
+ // see skills/mstar-dispatch-gates/SKILL.md
   const BUDGET = "S — one implementer round closing the declared Files and gates";
   const taskBudgetViolations = (text: string, opts: Parameters<typeof validateAssignmentFields>[1] = {}) =>
     validateAssignmentFields(text, opts).violations.filter((v) => v.code === "assignment.field.task-budget-missing");
@@ -1160,11 +1171,13 @@ enforcement: hard
 ## Assignment
 `;
     // A caller that split the fence itself (`extractFrontmatterAndBody`).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const block = text.slice(4, text.indexOf("\n---"));
     expect(parseAssignmentFieldsFromFrontmatter(block)).toEqual(parseAssignmentFields(text));
     expect(parseEnforcementFlagFromFrontmatter(block)).toEqual({ hard: true, source: "assignment" });
     // The header-region boundary re-feeds a fenced fragment, so the public
     // document path stays fence-scoped for its host consumers.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
   });
 
@@ -1235,6 +1248,7 @@ describe("validateDocumentFrontmatter — unknown-field rule (compass D15)", () 
  // Every field of the canonical PM template is a known optional field,
  // plan_id / iteration_id / workflow_id included; `unknown` fires only for
  // a key outside the documentSchema("assignment") table.
+ // see docs/knowledge/conventions/plan-frontmatter-declarations.md
   const BASE = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nworking_branch: feature/x\ntask_budget: S — one round";
 
   test("canonical template keys including plan_id / iteration_id / workflow_id are all known", () => {
@@ -1316,6 +1330,7 @@ delegation: forbidden
     // schema layer's own reparse of the same block: the document is parsed
     // ONCE per decision either way, and a host that keeps the diagnostic
     // (dsh dispatch gates) skips the schema layer's extra read entirely.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const carried = composeDispatchGate(malformed, { entries: null, parseError: parsed.parseError });
     const reparsed = composeDispatchGate(malformed);
     const invalidRows = (gate: { violations: { code: string; message: string; fix?: string }[] }) =>
@@ -1345,6 +1360,7 @@ describe("parseEnforcementFlag — enforcement: hard flag (Slice 5, roadmap §8.
  // Assignment/compass via the lowercase YAML key `enforcement: hard` in the
  // front matter; the flag is never global; rollback = unset flag; flag
  // inert when the engine is absent.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   test("Assignment front matter enforcement: hard → hard, source assignment", () => {
     expect(parseEnforcementFlag(`---
 execute_as: fullstack-dev
@@ -1383,6 +1399,7 @@ enforcement: hard
     // The strict document profile refuses the trailing flow-list separator,
     // so the flag vanishes; the flat profile the compass was validated with
     // keeps it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(parseEnforcementFlagFromFrontmatter(block)).toEqual({ hard: false, source: "none" });
     expect(parseEnforcementFlagFromFrontmatter(block, "flat")).toEqual({ hard: true, source: "compass" });
   });
@@ -1477,6 +1494,7 @@ describe("assignmentHeaderRegion — fenced front matter fragment (task boundary
  // document's front matter as a self-contained FENCED fragment (never any
  // body text), so a host that re-feeds it to the front matter parsers keeps
  // the same fence-scoped read the public document path enforces.
+ // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   test("fenced document → the front matter block with its fences, no body", () => {
     const text = `---
 execute_as: fullstack-dev
@@ -1546,6 +1564,7 @@ task_budget: S — one focused implementer round
  // The omp/opencode/cursor binding field carries the spawn TARGET, which
  // equals `execute_as` on every compliant dispatch (mstar-host omp.md C5).
  // Without a caller binding the precheck must not run at all.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const result = composeDispatchGate(VALID_ASSIGNMENT, { cwd });
     expect(result.ok).toBe(true);
     expect(result.violations.some((v) => v.code.startsWith("dispatch.anti-recursion."))).toBe(false);
@@ -1680,7 +1699,9 @@ An example Assignment front matter line: enforcement: hard
     const result = composeDispatchGate(text, { cwd });
     expect(result.enforcement.hard).toBe(false);
     expect(result.hardBlocked).toBe(false);
-    expect(result.ok).toBe(false); // missing execute_as still a real violation
+    // missing execute_as still a real violation
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    expect(result.ok).toBe(false);
   });
 
   test("valid assignment + enforcement: hard → ok, hardBlocked false", () => {
@@ -1720,6 +1741,7 @@ Example: working_branch: feature/body-only
     // The FRONT MATTER form (`main`) is the branch the gate checks; had the
     // body example been read, the gate would have checked `feature/body-only`
     // and silently allowed work on the default branch.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
   });
 
@@ -1745,10 +1767,16 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-source-")));
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-  /** The control harness root of this fixture; the four homes resolve under it. */
+  /**
+   * The control harness root of this fixture; the four homes resolve under it.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   const harnessDir = join(root, ".mstar");
 
-  /** The assignment front matter body every pointer target below carries. */
+  /**
+   * The assignment front matter body every pointer target below carries.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
   const FILE_ASSIGNMENT = VALID_ASSIGNMENT.replace("feature/foo", "feature/from-file");
 
   function writeHomeFile(home: string[]): string {
@@ -1761,6 +1789,7 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
 
   // The three write homes (`<base>/<one segment>/assignments`) plus the
   // read-only flat harness home `{HARNESS_DIR}/assignments`.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   const homeCases: Array<{ name: string; segments: string[] }> = [
     { name: "sdd write home", segments: [".mstar", "sdd", "plan-1", "assignments"] },
     { name: "iteration write home", segments: [".mstar", "iterations", "iter-1", "assignments"] },
@@ -1867,6 +1896,7 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
     // regression is proven by containment PASSING — the refusal must be
     // the read step ("cannot be read"), never "resolves outside every
     // accepted assignment home".
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const fsRootHarness = join(root, "rooted");
     mkdirSync(fsRootHarness, { recursive: true });
     writeFileSync(join(fsRootHarness, ".mstarc"), "[config]\nsdd_dir = /\n");
@@ -1879,6 +1909,7 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
     expect(result.message).toContain("cannot be read");
     expect(result.message).not.toContain("outside every accepted assignment home");
     // A file at the base root with no <segment>/assignments shape still refuses.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const loose = readAssignmentSource("Assignment file: /loose-root-x.md\n", { harnessDir });
     expect(loose.ok).toBe(false);
     if (loose.ok) throw new Error("unreachable");
@@ -1950,6 +1981,7 @@ describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recogniz
     expect(v.fix).toContain("rewritten");
     // No verified declaration exists in the retired format, so the refusal is
     // a veto independent of enforcement (soft never downgrades it).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(v.terminal).toBe(true);
   });
 
@@ -1963,6 +1995,7 @@ describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recogniz
       expect(result.violations.find((v) => v.code === "dispatch.assignment.legacy-format")?.terminal).toBe(true);
       // Soft enforcement keeps the violations as the verdict; it never turns
       // the terminal refusal into an allow decision by itself.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       expect(result.enforcement).toEqual({ hard: false, source: "none" });
     } finally {
       rmSync(cwd, { recursive: true, force: true });
@@ -2003,6 +2036,7 @@ task_budget: S
     const messages = validateDocumentFrontmatter("assignment", text, "assignment").violations.map((v) => v.message);
     expect(messages.some((m) => m.includes("invalid working_branch"))).toBe(true);
     // One defect, one row: the blank item must not also read as "no declaration".
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(messages.some((m) => m.includes("carries one non-empty declaration"))).toBe(false);
   });
 
@@ -2027,6 +2061,7 @@ task_budget: S
     try {
       // A GENUINE two-track declaration: a paired `worktree_path` list with one
       // `working_branch` per track, under the document's own hard enforcement.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const text = assignment({
         working_branch: ["feature/a", "feature/b"],
         worktree_path: ["/srv/track-a", "/srv/track-b"],
@@ -2046,6 +2081,7 @@ task_budget: S
     // `validateControlWriteAssignment` compares ONE declared checkout with the
     // Git-derived control root; a list leaves that checkout (and every
     // relative target) unverified, so the shape itself is refused, terminally.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const list = validateAssignmentFields(assignment({
       write_domain: "control",
       worktree_path: ["/srv/ctl-a", "/srv/ctl-b"],
@@ -2058,6 +2094,7 @@ task_budget: S
 
     // An EMPTY list is the same shape: it declares no checkout either, so its
     // contents cannot make the scalar requirement satisfiable.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const emptyList = validateAssignmentFields(assignment({
       write_domain: "control",
       worktree_path: [],
@@ -2068,6 +2105,7 @@ task_budget: S
     expect(empty?.terminal).toBe(true);
 
     // The serial control norm stays untouched.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const scalar = validateAssignmentFields(assignment({
       write_domain: "control",
       worktree_path: "/srv/ctl",
@@ -2084,10 +2122,12 @@ describe("control-domain write checks — checkout anchor and relative base stay
     try {
       // `<cwd>/.mstar/assignments/../..` IS the checkout: the file-relative
       // base proves the pointed file's own directory is carried into the check.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const text = assignment({ write_domain: "control", worktree_path: "../..", working_branch: "feature/ctl" });
       const fromFile = validateControlWriteAssignment(text, { cwd, assignmentDir: join(cwd, ".mstar", "assignments") });
       expect(fromFile.some((v) => v.code === "dispatch.control-write.worktree-not-control")).toBe(false);
       // The same text read from the checkout base names the parent directory.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const fromCheckout = validateControlWriteAssignment(text, { cwd });
       expect(fromCheckout.some((v) => v.code === "dispatch.control-write.worktree-not-control")).toBe(true);
     } finally {
@@ -2101,6 +2141,7 @@ describe("one parse per decision", () => {
     // The document carries NO branch form; the supplied entries do. Reuse
     // wins (no branch-missing), proving the validator consumed the caller's
     // parse instead of reparsing the text.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const text = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -2160,6 +2201,7 @@ describe("readAssignmentSource — provenance, terminal refusals, file-type guar
     // `assertSafePathComponent` accepts `..draft` (not the exact `..`
     // segment), so the writer's own output must round-trip through the
     // reader: resolve the write home, place the file there, read the pointer.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const planned = resolveAssignmentDir({ harnessDir, planId: "..draft" })!;
     mkdirSync(planned, { recursive: true });
     const file = join(planned, "assignment.md");
@@ -2193,6 +2235,7 @@ describe("readAssignmentSource — provenance, terminal refusals, file-type guar
 
   test("a directory target refuses as a non-regular file instead of being read", () => {
     // Three segments deep so containment passes; the leaf is a directory.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const dir = join(root, ".mstar", "sdd", "plan-dir", "assignments", "leaf.md");
     mkdirSync(dir, { recursive: true });
     const result = readAssignmentSource(`Assignment file: ${dir}\n`, { harnessDir });
@@ -2210,9 +2253,12 @@ describe("readAssignmentSource — provenance, terminal refusals, file-type guar
     try {
       execFileSync("mkfifo", [fifo]);
     } catch {
-      return; // no mkfifo on this host — the directory case above covers the guard
+      // no mkfifo on this host — the directory case above covers the guard
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+      return;
     }
     // A blocking open would hang here forever; the O_NONBLOCK guard refuses.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const result = readAssignmentSource(`Assignment file: ${fifo}\n`, { harnessDir });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");

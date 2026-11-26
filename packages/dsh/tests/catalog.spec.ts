@@ -1123,6 +1123,7 @@ Implement the invalidation.
     // D16 regression — the ONE body-label fixture of this spec: the dispatch
     // gate refuses the retired `**Label**` grammar upstream, so its ledger
     // mirror is a dispatch row with NO derived role.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-legacy-'))
     const harnessDir = await seedActiveTree(root)
     plugin.recordDispatch({

@@ -124,7 +124,9 @@ function gitFixture(root: string): { base: string; head: string } {
 }
 
 /** A written brief split by the shared reader: the parsed header values and
- * the body below the fence. */
+ * the body below the fence.
+ * see docs/knowledge/conventions/brief-acceptance-declarations.md
+ */
 function splitBrief(content: string): { header: Map<string, unknown>; body: string } {
   const { frontmatter, body } = extractFrontmatterAndBody(content);
   const header = new Map<string, unknown>();
@@ -557,7 +559,9 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
 
 describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CLI)", () => {
   /** The fixture plan body behind a valid front matter fence (a brief without
-   * `plan_id` is refused, so every extraction case needs one). */
+   * `plan_id` is refused, so every extraction case needs one).
+   * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+   */
   function samplePlan(dir: string): string {
     const plan = join(dir, "sample-plan.md");
     writeFileSync(plan, planFrontMatter("sample-plan", readFileSync(SAMPLE_PLAN, "utf8")));
@@ -576,6 +580,7 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
       expect(header.get("task")).toBe(2);
       // The body is the Task 2 section: it opens at that heading and the
       // fenced Task 2 example inside it is slice content, not a boundary.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(body.slice(0, body.indexOf("\n"))).toBe("### Task 2: second task");
       expect(body).not.toContain("Task 1: first task");
       expect(body).not.toContain("hidden behind a fence");
@@ -689,6 +694,7 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
       // A described entry (`- Modify: `src/a.ts` (only `taskBrief`)`) yields the
       // path alone; a fenced example is not an entry; another task's file and
       // an unrecognized label are not this task's files.
+      // see docs/knowledge/conventions/brief-acceptance-declarations.md
       expect(header.get("plan_id")).toBe("plan-brief-fixture");
       expect(header.get("task")).toBe(2);
       expect(header.get("files")).toEqual(["src/b.ts", "src/a.ts"]);
@@ -706,6 +712,7 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
       const { body } = splitBrief(readFileSync(file, "utf8"));
       // Fence and heading boundaries: the section opens at its own heading,
       // keeps the fenced example inside it, and ends before Task 3.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(body.startsWith("### Task 2: second\n")).toBe(true);
       expect(body).toContain("Body of task two.");
       expect(body).toContain("```text");
@@ -1694,6 +1701,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", async () => {
     // Recorded plan front matter (the fixture plan declares
     // main_worktree_branch: main in its front matter) — resolves.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const root1 = tmpRoot("sdd-ctx-mainbranch-");
     try {
       const f = executionFixture(root1);
@@ -1736,6 +1744,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     // genuinely absent record), the resolver must propagate the parser's
     // file:line diagnostic instead of silently substituting the fallback —
     // a corrupted plan can never admit dispatch against the wrong branch.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const root = tmpRoot("sdd-ctx-mainbranch-malformed-");
     try {
       const f = executionFixture(root);
@@ -1760,6 +1769,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     // non-scalar declaration. The snapshot fallback applies only when the key
     // is genuinely absent, so even a populated `branch.base` must not admit
     // the dispatch.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     for (const [name, lines] of [
       ["list", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", "", "# Plan", ""]],
       ["unterminated fence", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: other", "# no closing fence"]],
@@ -1784,12 +1794,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     // spelling resolves against the raw-text declaration. The snapshot
     // branch.base deliberately spells the typed scalar (`5`) — resolution
     // succeeds only when the declaration surface, not the fallback, wins.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const root = tmpRoot("sdd-ctx-mainbranch-numeric-");
     try {
       const f = executionFixture(root);
       // The main worktree really is on a branch spelled `5.0` — the resolution
       // succeeds only when the raw-text declaration, not the typed scalar `5`,
       // reaches the residency comparison.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
       git(["branch", "-m", "main", "5.0"], f.primary);
       writeFileSync(
         f.planFile,

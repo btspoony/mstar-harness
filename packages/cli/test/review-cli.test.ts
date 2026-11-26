@@ -40,7 +40,10 @@ function withAssignment(assignmentText: string, fn: (file: string) => void): voi
   }
 }
 
-/** Assignment carrying an `execution_mode` front matter field. */
+/**
+ * Assignment carrying an `execution_mode` front matter field.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function assignmentWithMode(mode: string): string {
   return `---
 execute_as: fullstack-dev

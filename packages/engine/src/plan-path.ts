@@ -34,6 +34,7 @@
  * through the shared document-frontmatter reader — the body is never scanned.
  * The refusal is a typed `PlanPathError` carrying a `plan-path.*` code, so a
  * caller reports or maps that code itself.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, sep } from "node:path";
@@ -74,6 +75,7 @@ export type RegisteredPlanFile = { planPath: string; planDir: string; declaredPl
  * front-matter keys `plan_id`, `main_worktree_branch` and `working_branch`.
  * The body is never scanned: a `**plan_id:**` line outside the front matter is
  * body content, not a declaration.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
 const PLAN_CONSULTED_KEYS: Record<string, string> = {
   "main worktree branch": "main_worktree_branch",
@@ -99,7 +101,9 @@ export function planDeclaredHeaders(planPath: string): Map<string, string> {
 
 /** An opening front-matter fence with no closing one: the shared reader reports
  * that as an unfenced document, but a plan whose first line is `---` declared
- * an invalid surface rather than no declarations at all. */
+ * an invalid surface rather than no declarations at all.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 function isUnterminatedFence(content: string, extraction: FrontmatterAndBody): boolean {
   return (
     !extraction.fenced &&
@@ -108,7 +112,10 @@ function isUnterminatedFence(content: string, extraction: FrontmatterAndBody): b
   );
 }
 
-/** The one refusal for an unterminated plan front matter: invalid, not absent. */
+/**
+ * The one refusal for an unterminated plan front matter: invalid, not absent.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 function unterminatedFenceRefusal(planPath: string): PlanPathError {
   return new PlanPathError(
     "plan-path.identity-mismatch",
@@ -144,6 +151,7 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
     // numeric-looking plan id keeps its written form. One surrounding pair of
     // matching quotes still strips (the quotes are the spelling's syntax, not
     // the branch's text).
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     if (entry.kind === "scalar") {
       // A bare `key:` with a scalar raw lexeme is impossible here — the bare
       // key reads as the map kind — so an empty raw lexeme can only arrive
@@ -151,6 +159,7 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
       // are absent exactly as the snapshot fallback reads them. Any other
       // scalar uses its raw text verbatim: `5.0` stays `5.0`, never the
       // typed scalar `5` or the literal `null`.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
       if (entry.rawText === "" || entry.rawText === "null" || entry.rawText === "~") continue;
       const raw = entry.rawText;
       const value =
@@ -164,6 +173,7 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
     // is the parser's empty tentative container, so it is absent exactly as
     // a missing key is. Explicit empty `[]`/`{}` shapes keep their non-empty
     // raw lexeme and never reach this exemption.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     if (
       entry.rawText === "" &&
       typeof entry.value === "object" &&
@@ -177,6 +187,7 @@ export function planDeclaredHeadersFromContent(content: string, planPath: string
     // key is exactly what the consumer's snapshot fallback reads. An explicit
     // empty `[]` or `{}` is present all the same and refuses exactly like a
     // populated one.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     throw new PlanPathError(
       "plan-path.identity-mismatch",
       `plan markdown ${planPath}:${entry.line} declares an invalid ${key} \u2014 accepted value: a single scalar, not a ${entry.kind}; rewrite the declaration as ${key}: <branch>`,
@@ -360,6 +371,7 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
     }
     // The shared front-matter reader's diagnostic is the caller's contract:
     // propagate it unchanged so the caller keeps the file:line it names.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     if (error instanceof DocumentFrontmatterError) {
       throw error;
     }

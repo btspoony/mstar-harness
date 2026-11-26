@@ -38,6 +38,7 @@
  * `ctx.waterfall(...)` dispatches the real dsh loop/registry perform.
  * Branch probes run REAL `git -C <path> branch --show-current` against
  * fixture worktrees (engine parity — the engine probes are subprocess-based).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
@@ -173,7 +174,10 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
-/** A writable Assignment front matter with the core fields (track declarations are appended). */
+/**
+ * A writable Assignment front matter with the core fields (track declarations are appended).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const TRACK_ASSIGNMENT_HEADER = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -181,12 +185,18 @@ task_category: logic
 task_budget: S — one focused implementer round
 `
 
-/** Build an Assignment whose front matter appends the given YAML lines (track declarations). */
+/**
+ * Build an Assignment whose front matter appends the given YAML lines (track declarations).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function trackAssignment(extraLines: string[]): string {
   return `${TRACK_ASSIGNMENT_HEADER}${extraLines.join('\n')}\n---\n\nDo the thing, evidence-first.\n`
 }
 
-/** One front-matter block list — the schema's parallel-track shape per track. */
+/**
+ * One front-matter block list — the schema's parallel-track shape per track.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function yamlList(key: string, values: readonly string[]): string[] {
   return [`${key}:`, ...values.map((value) => `  - ${value}`)]
 }
@@ -259,6 +269,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     })
     // The cached view reuses the catalog tool result shape (transition /
     // all_plans_done / ok / entry / exit / violations).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(payload.iteration!.gate).toMatchObject({
       transition: 'phase-2-execute',
       all_plans_done: false,
@@ -805,6 +816,7 @@ describe('dispatch gate — worktree hostile inputs + front-matter scoping', () 
     // Two valid front-matter tracks + a relative track quoted in the task
     // body — the quoted lines are prose; if they were read, the relative
     // path would add a third track and trip the L2 checklist.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const prompt = `${trackAssignment([
       ...yamlList('worktree_path', [wts.get('feature/a')!, wts.get('feature/b')!]),
       ...yamlList('working_branch', ['feature/a', 'feature/b']),
@@ -838,6 +850,7 @@ working_branch: feature/c
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
 
     // The malformed entry is a schema refusal — it never becomes a track.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(decision).toEqual({ kind: 'allow' })
     expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
     expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])

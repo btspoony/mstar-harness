@@ -626,6 +626,7 @@ execute_as: fullstack-dev
     // before recording; the ledger surface asserts the mirror of that refusal:
     // the retired `**Label**` lines carry NO front matter, so nothing is ever
     // derived from them.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     recordDispatch({
       harnessDir,

@@ -47,6 +47,7 @@ export type ValidationResult = {
    * can refuse an action MUST refuse without consulting `applyEnforcement`
    * or any hard/soft setting. Emitted by `readAssignmentSource` for its
    * source-resolution refusals.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   terminal?: boolean;
 };

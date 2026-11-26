@@ -43,6 +43,7 @@
  * {@link ComposeDispatchGateOptions.caller}.
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
  * never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
@@ -68,15 +69,22 @@ export type AssignmentFields = {
   executeAs?: string;
   delegation?: string;
   taskCategory?: string;
-  /** `execution_mode` — sdd / inline / targeted (presence captured here; the N mapping is {@link executionModeToN}). */
+  /**
+   * `execution_mode` — sdd / inline / targeted (presence captured here; the N mapping is {@link executionModeToN}).
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   /**
    * Parallel `working_branch` declarations (dsh parallel tracks): a string
    * list accepted alongside the scalar form. The scalar `workingBranch`
    * keeps the single value; when the key is a list the scalar is undefined
    * and every branch lives here. Never set for scalar input.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
    */
   workingBranches?: string[];
-  /** Parallel `worktree_path` declarations — same shape rule as {@link AssignmentFields.workingBranches}. */
+  /**
+   * Parallel `worktree_path` declarations — same shape rule as {@link AssignmentFields.workingBranches}.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   worktreePaths?: string[];
   executionMode?: string;
   workingBranch?: string;
@@ -123,6 +131,7 @@ export type ValidateAssignmentFieldsOptions = {
    * D14 pointer): an explicit pointer commits to the Assignment contract, so
    * validation must run even when the document carries no recognizable core
    * key — a silent non-Assignment pass is reserved for inline prompts.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   fileCarrier?: boolean;
   /**
@@ -130,6 +139,7 @@ export type ValidateAssignmentFieldsOptions = {
    * `parseDocumentFrontmatterEntries`; `null` for invalid YAML): reuse one
    * parse per decision instead of reparsing. Public text-API behavior is
    * unchanged when omitted.
+   * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
    */
   entries?: Map<string, FrontmatterEntry> | null;
   /**
@@ -140,6 +150,7 @@ export type ValidateAssignmentFieldsOptions = {
    * re-parsing the rejected block. `null` (a non-structured failure) falls
    * back to the schema layer's own parse. Omitted → the schema layer
    * re-parses a rejected block, as before.
+   * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
    */
   parseError?: DocumentFrontmatterError | null;
 };
@@ -233,8 +244,8 @@ export function classifyReviewOrAuditRound(rawRole: string, rawCategory: string)
  * (`budget` / `return_shape` / `task_budget`) only — these label constants
  * no longer feed any parse, but the export shape is kept for the host
  * packages Task 5 migrates; they must not be widened or re-parsed.
- * shortcut: dead vocabulary kept for export-shape parity, removed with
- * the host migration in Task 5.
+ * shortcut: dead vocabulary kept for export-shape parity,
+ * upgrade: the host packages finish the Task 5 migration.
  */
 export const BUDGET_LABELS: readonly string[] = ["Budget (review / QC seats)", "Budget"];
 
@@ -261,7 +272,9 @@ function describeAbsence(value: string | undefined): string | undefined {
  * `**Execute as**: x` template line is NEVER a declaration. Shape
  * detection ONLY: field parsing/semantics live in `parseAssignmentFields` /
  * `validateAssignmentFields`. Declared before its first use because both the
- * shape guard and the extracted-block enforcement read share it. */
+ * shape guard and the extracted-block enforcement read share it.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m;
 
 /**
@@ -274,6 +287,7 @@ const ASSIGNMENT_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/
  * refuses it (`document.frontmatter.absent`) instead of an ordinary prompt
  * silently passing as a non-Assignment. Callers holding a block that was
  * split elsewhere use the explicit `*FromFrontmatter` functions instead.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 function assignmentFrontmatter(text: string): { yaml: string; unterminated: boolean } {
   const extraction = extractFrontmatterAndBody(text);
@@ -282,7 +296,10 @@ function assignmentFrontmatter(text: string): { yaml: string; unterminated: bool
   return { yaml: text.slice(text.indexOf("\n") + 1), unterminated: true };
 }
 
-/** Parse front matter entries, never throwing: invalid YAML yields no entries. */
+/**
+ * Parse front matter entries, never throwing: invalid YAML yields no entries.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function safeEntries(yaml: string, profile: FrontmatterProfile = "document"): Map<string, FrontmatterEntry> | null {
   try {
     return parseDocumentFrontmatterEntries(yaml, "assignment", profile);
@@ -291,7 +308,10 @@ function safeEntries(yaml: string, profile: FrontmatterProfile = "document"): Ma
   }
 }
 
-/** Scalar content of one entry as the field string; non-scalars yield undefined. */
+/**
+ * Scalar content of one entry as the field string; non-scalars yield undefined.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 function scalarOf(value: unknown): string | undefined {
   if (typeof value === "string") return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
@@ -341,6 +361,7 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
     const value = scalarOf(entry.value);
     if (value !== undefined) return value;
     // A bare `key:` / blank scalar is present-but-empty.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     if (entry.value === null || (typeof entry.value === "object" && entry.value !== null && !Array.isArray(entry.value) && Object.keys(entry.value as object).length === 0)) return "";
     return undefined;
   };
@@ -368,6 +389,7 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
   // string list (flow array or `- item` block list) is the schema-owned
   // parallel shape — the scalar field stays for the single value, the flat
   // string list is projected here. Non-string items drop out.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const branchesEntry = entries.get("working_branch");
   if (Array.isArray(branchesEntry?.value)) {
     fields.workingBranches = branchesEntry.value.filter((item): item is string => typeof item === "string");
@@ -485,6 +507,7 @@ export function parseEnforcementFlagFromFrontmatter(frontmatter: string | Map<st
   // The parsed entries are the single source of the source attribution:
   // invalid YAML already returned above, so a key presence check is exactly
   // the `ASSIGNMENT_FIELD_RE` line match without a second regex pass.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const source: EnforcementSource =
     entries.has("execute_as") || entries.has("delegation") || entries.has("task_category") ? "assignment" : "compass";
   return { hard: value.toLowerCase() === "hard", source };
@@ -573,6 +596,7 @@ export function parseWorkingBranchValue(
  * Branch forms derived from ALREADY-PARSED assignment fields — the shared
  * grammar behind {@link parseAssignmentBranchForms} and every composed
  * decision (one parse per decision: no text re-scan here).
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  */
 function branchFormsFromFields(fields: AssignmentFields): AssignmentBranchForms {
   const forms: AssignmentBranchForms = {};
@@ -580,6 +604,7 @@ function branchFormsFromFields(fields: AssignmentFields): AssignmentBranchForms 
   // the first list entry feeds the create-form/direct-on shape checks while
   // presence validation reads `workingBranches` directly (the list is the
   // schema-owned parallel shape, never a branch-multiple violation).
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const branchValue = fields.workingBranch ?? (fields.workingBranches !== undefined && fields.workingBranches.length > 0 ? fields.workingBranches[0] : undefined);
   if (branchValue !== undefined && branchValue !== "") {
     const parsed = parseWorkingBranchValue(branchValue);
@@ -672,6 +697,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // Assignment with the front matter recovery, never a silent non-Assignment
   // pass and never a pile of field violations against a document that
   // declared no field at all.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (opts.fileCarrier === true && !isAssignmentShaped(assignmentText)) {
     return {
       ok: false,
@@ -695,6 +721,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // One parse per decision: when the caller passes already-parsed entries
   // the schema layer reuses them (no second front-matter parse); invalid
   // YAML (entries `null`) re-runs the schema parse so the refusal reports.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const extraction = extractFrontmatterAndBody(assignmentText);
   violations.push(
     ...validateDocumentFrontmatterExtraction("assignment", extraction, "assignment", opts.entries === undefined && opts.parseError === undefined ? {} : { entries: opts.entries, parseError: opts.parseError }).violations.filter(
@@ -720,6 +747,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     // document at all (soft enforcement must not admit the write). List
     // PRESENCE is the shape: an empty list declares no checkout either, so its
     // contents cannot decide the question.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     if (fields.worktreePaths !== undefined || fields.workingBranches !== undefined) {
       violations.push({
         ...violation("high", "assignment.field.control-write-parallel-tracks",
@@ -817,6 +845,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     // The schema-owned parallel shape: `working_branch` as a string list —
     // presence comes from the projected list while the scalar stays the
     // single value; the list is never a second branch form.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const listPresent = fields.workingBranches !== undefined && fields.workingBranches.some((branch) => branch.trim() !== "");
     const workingPresent = (fields.workingBranch !== undefined && fields.workingBranch !== "") || listPresent;
     const policyPresent = fields.branchPolicy !== undefined && fields.branchPolicy !== "";
@@ -1071,6 +1100,7 @@ export function assertTriIdentity(reviewerRoles: readonly string[]): GateResult 
  * opening fence that never closes counts as evidence too, so the malformed
  * document reaches schema validation (`document.frontmatter.absent`)
  * instead of passing for an ordinary prompt.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function isAssignmentShaped(assignmentText: string): boolean {
   const { yaml } = assignmentFrontmatter(assignmentText);
@@ -1086,6 +1116,7 @@ function isAssignmentShaped(assignmentText: string): boolean {
  * it never reads a field value. The ONE engine-owned copy of the retired
  * grammar (compass D16); hosts and the CLI call this instead of keeping
  * their own regex copies.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function legacyLabelKey(line: string): string | undefined {
   const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
@@ -1174,6 +1205,7 @@ export type ComposeDispatchGateOptions = {
    * unrelated file content validates as an invalid Assignment with the
    * front matter recovery; the silent non-Assignment pass is reserved for
    * genuinely unshaped inline prompts.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   fileCarrier?: boolean;
   /**
@@ -1185,6 +1217,7 @@ export type ComposeDispatchGateOptions = {
    * reports its own line-numbered refusal; with the parse's structured
    * diagnostic handed over the schema layer reuses it and does not re-parse.
    * Omitted → the composition parses.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   entries?: Map<string, FrontmatterEntry> | null;
   /**
@@ -1195,6 +1228,7 @@ export type ComposeDispatchGateOptions = {
    * the rejected block. `null` (a non-structured failure) falls back to the
    * schema layer's own parse. Omitted (hosts that do not thread it) → the
    * schema layer re-parses a rejected block, as before.
+   * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
    */
   parseError?: DocumentFrontmatterError | null;
   /**
@@ -1203,6 +1237,7 @@ export type ComposeDispatchGateOptions = {
    * separate from {@link cwd}: `cwd` still anchors Git control discovery, so
    * an assignment home outside the repository never changes which checkout
    * the gate inspects.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   assignmentDir?: string;
 };
@@ -1215,9 +1250,13 @@ export type ComposeDispatchGateResult = GateResult & {
  /**
   * Assignment shape was recognized: front matter carrying a core key, or the
   * retired body-label grammar (which the composition then refuses).
+  * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   */
   shaped: boolean;
- /** Enforcement parsed from the Assignment front matter only (never the body). */
+ /**
+  * Enforcement parsed from the Assignment front matter only (never the body).
+  * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  */
   enforcement: EnforcementFlag;
 };
 
@@ -1265,10 +1304,12 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // terminal (no verified declaration exists) and soft enforcement never
     // downgrades it. Its `document.frontmatter.absent` sibling below
     // describes the same defect, so that row is superseded.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const legacy = legacyAssignmentShape(text);
     // Shape: Assignment front matter carrying a core key, OR the retired
     // body-label grammar — the latter must reach its refusal, never pass as
     // an ordinary prompt.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const shaped = legacy || isAssignmentShaped(text);
     if (!shaped && !fileCarrier) return silent;
 
@@ -1279,6 +1320,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // the caller when it hands its own parse in (`entries`), else here — and
     // the entries are reused by schema validation, field parsing, the
     // enforcement read and every gate below, never reparsed per leg.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { yaml } = assignmentFrontmatter(text);
     const entries = opts.entries !== undefined ? opts.entries : safeEntries(yaml);
     const fields = parseAssignmentFieldsFromFrontmatter(entries);
@@ -1292,6 +1334,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // task body can neither satisfy nor disable a gate. `fileCarrier` marks
     // a resolved `Assignment file:` carrier: its content must validate as an
     // Assignment even when no core key is recognized.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     violations.push(
       ...validateAssignmentFields(text, { writable, fileCarrier, entries, parseError: opts.parseError }).violations.filter(
         (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
@@ -1339,6 +1382,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
  // (5) Front matter only: an example `enforcement: hard` key quoted in the
      // task body must not harden the dispatch. The enforcement read reuses
      // the decision's single parse (entries) instead of reparsing the text.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const enforcement = parseEnforcementFlagFromFrontmatter(entries);
     const gate: GateResult = { ok: violations.length === 0, violations };
     return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped, enforcement };
@@ -1410,10 +1454,14 @@ export type AssignmentSourceResult =
  * A pointer INVOKES the file-source semantics only as the input's first
  * non-blank line — any later occurrence is a mention (prose, a quoted block,
  * a fenced example) inside an inline document, so it carries no semantics.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 const ASSIGNMENT_POINTER_RE = /^[ \t]*Assignment file:[ \t]*(\S[^\r\n]*?)[ \t]*$/;
 
-/** Shared recovery text of the two refusals: home placement OR the inline form. */
+/**
+ * Shared recovery text of the two refusals: home placement OR the inline form.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const ASSIGNMENT_SOURCE_RECOVERY =
   "move the assignment file under an accepted assignment home (`<base>/<identity>/assignments` of the sdd, iteration or workflow base, or `{HARNESS_DIR}/assignments`), or pass the assignment inline as a front-matter document instead of a pointer";
 
@@ -1422,6 +1470,7 @@ function assignmentSourceRefusal(code: string, message: string, fix: string): As
   // verified assignment to dispatch on, so it is a veto for every caller
   // independent of enforcement settings — no enforcement hardening step is
   // needed and none may soften it.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   return { ok: false, severity: "critical", code, message, fix, terminal: true };
 }
 
@@ -1435,6 +1484,7 @@ function assignmentSourceRefusal(code: string, message: string, fix: string): As
  * base, so the file must additionally sit under `<base>/<one
  * segment>/assignments` — a file directly in the base (or in a stray
  * sibling tree) is not an assignment source.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function assignmentHomeContains(file: string, home: { root: string; write: boolean }): boolean {
   const root = canonicalizeNearestExisting(home.root);
@@ -1444,6 +1494,7 @@ function assignmentHomeContains(file: string, home: { root: string; write: boole
   // beginning with two dots (`..draft`) as long as it is not the exact `..`
   // segment, so the reader rejects only `..` itself or `..` followed by the
   // platform separator — never an ordinary leading-dot child name.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return false;
   if (!home.write) return true;
   const segments = relativePath.split(sep);
@@ -1469,11 +1520,13 @@ function assignmentHomeContains(file: string, home: { root: string; write: boole
 export function readAssignmentSource(text: string, opts: { harnessDir: string | null }): AssignmentSourceResult {
   // The pointer form is the input's FIRST non-blank line; a pointer line
   // further down is a mention inside an inline document and stays inert.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const lines = text.split("\n");
   const first = lines.findIndex((line) => line.trim() !== "");
   const pointerMatch = first === -1 ? null : ASSIGNMENT_POINTER_RE.exec(lines[first]!);
   if (pointerMatch === null) return { ok: true, text };
   // Pointer plus anything else is two sources in one dispatch: refuse.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (lines.slice(first + 1).some((line) => line.trim() !== "")) {
     return assignmentSourceRefusal(
       "dispatch.assignment.ambiguous",
@@ -1510,6 +1563,7 @@ export function readAssignmentSource(text: string, opts: { harnessDir: string | 
   // swap would escape the check. fstat the OPEN descriptor (the same inode
   // the bytes come from): a non-regular target refuses with the path
   // recovery; the descriptor is closed on every outcome.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   let content: string;
   let fd: number | undefined;
   try {
@@ -1517,6 +1571,7 @@ export function readAssignmentSource(text: string, opts: { harnessDir: string | 
     // FIFO blocks waiting for a writer, so the type check would never run.
     // O_NOFOLLOW is POSIX-only; on Windows the canonical path already
     // resolved every link, and non-regular targets still fail fstat.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
     fd = openSync(file, flags);
     if (!fstatSync(fd).isFile()) {

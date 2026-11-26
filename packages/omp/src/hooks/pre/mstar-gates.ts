@@ -338,7 +338,9 @@ type ReadAssignmentSourceFn = (
 
 /** The engine exports Gate 2 calls: one composition and one resolver (D16
  * recognition and its refusal are the composition's — hosts keep no local
- * copy of the retired grammar). */
+ * copy of the retired grammar).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 type DispatchEngineGates = {
   gate: DispatchGateFn;
   readSource: ReadAssignmentSourceFn;
@@ -441,6 +443,7 @@ function validateDispatchEntry(
 // / ambiguous pointer): there is no verified assignment to dispatch on,
 // so it is hard independently of document or repo enforcement — the
 // call fails closed on every compass setting.
+// see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const source = engine.readSource(entry.task, { harnessDir });
   if (!source.ok) {
     return {
@@ -459,9 +462,11 @@ function validateDispatchEntry(
   // File provenance (compass D14): a resolved `Assignment file:` pointer
   // commits to the Assignment contract, so its bytes validate as one even
   // without a recognized core key. Inline prompts keep the silent path.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const carrier = source.path;
   // One parse per decision: the role read and the composition share this
   // parse (the composition also owns the D16 refusal).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
   const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
@@ -473,6 +478,7 @@ function validateDispatchEntry(
     // directory (CLI parity); Git discovery stays on the checkout (`cwd`
     // unset), so an out-of-repo assignment home never changes the inspected
     // repository.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     assignmentDir: carrier === undefined ? undefined : dirname(carrier),
   });
   return {
@@ -480,6 +486,7 @@ function validateDispatchEntry(
     // The composition's own enforcement flag, plus TERMINAL violations (a
     // source refusal or the retired-format one): a terminal verdict blocks
     // on every compass setting — soft mode never downgrades it.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     hard: composed.enforcement.hard || composed.violations.some((violation) => violation.terminal === true),
   };
 }
@@ -498,6 +505,7 @@ function validateDispatchEntry(
  * recognizer (predating those exports) or the engine import itself fails,
  * Gate 2 is SKIPPED entirely — no blocking, no violations — with a one-time
  * warning; Gate 1 (status) keeps working (engine-version compatibility).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 async function gateTaskDispatch(
   eventInput: unknown,
@@ -512,6 +520,7 @@ async function gateTaskDispatch(
   const harnessDir = resolveHarnessDir();
   const repoHard = harnessDir !== null && resolveRepoEnforcement(harnessDir).hard;
   // Allocated on the first blocked entry: the clean path allocates nothing.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   let blocked: string[] | undefined;
   for (const entry of taskDispatchEntries(eventInput)) {
     const { violations, hard } = validateDispatchEntry(entry, load, harnessDir);

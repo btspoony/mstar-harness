@@ -1207,6 +1207,7 @@ export function planQualityBar(planText: string): PlanQualityResult {
   // The front-matter boundary is discovered exactly once, here: the schema
   // check validates the extracted block and the body scan starts after it —
   // an unterminated fence never triggers a second walk of the document.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const extraction = extractFrontmatterAndBody(planText);
   // Plan schema check (document-schema.ts PLAN_SCHEMA): missing, unknown and
   // invalid plan front-matter fields are reported first under the lint
@@ -1214,6 +1215,7 @@ export function planQualityBar(planText: string): PlanQualityResult {
   // unclosed fence is scanned as body exactly as before, and line numbers
   // stay the file's own (the body's start line is the newline count before
   // it, never a second fence search).
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
   for (const schemaViolation of validateDocumentFrontmatterExtraction("plan", extraction, "plan").violations) {
     violations.push({
       ...schemaViolation,
@@ -1368,7 +1370,9 @@ const DESCRIPTION_MAX_WORDS = 120;
  * through, numbers and booleans coerce, null/undefined land as "" (missing),
  * and a list or nested map counts as missing too — it is structurally
  * invalid content, and `String(...)` on it would either pass coerced junk or
- * throw on a non-callable `toString`. */
+ * throw on a non-callable `toString`.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function scalarAsString(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -1401,6 +1405,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     // indented description continuation among them) at the strict gate \u2014
     // the file carries no usable frontmatter, so the missing-contract
     // violation names the offending document line.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     violations.push(
       violation(
         "medium",
@@ -1418,6 +1423,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
   // nested-map value is not a string scalar at all: coercing it would either
   // smuggle structurally invalid metadata past the gate or crash on a
   // non-callable `toString`, so it counts as missing too.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const name = scalarAsString(fm!.name);
   if (name === "") {
     violations.push(
@@ -1514,6 +1520,7 @@ export function parseFrontmatter(text: string): JsonObject | null {
   // Leading blank lines are stripped before the reader, so a refusal line is
   // short by the count of removed newlines; the count is added back so the
   // diagnostic names the document's real line.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const stripped = bomStripped.slice(0, bomStripped.length - body.length);
   const removedLines = (stripped.match(/\n/g) ?? []).length;
   const { frontmatter, fenced } = extractFrontmatterAndBody(body);

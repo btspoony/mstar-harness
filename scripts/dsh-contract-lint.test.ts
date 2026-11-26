@@ -48,12 +48,18 @@ function carrierMap(): Record<string, string> {
   return parsed.map;
 }
 
-/** A fenced seat prompt: its front matter fence plus an optional body. */
+/**
+ * A fenced seat prompt: its front matter fence plus an optional body.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function payload(frontMatter: readonly string[], body = "Operator: keep this body."): string {
   return ["# Example", "", "```markdown", "---", ...frontMatter, "---", "", body, "```", ""].join("\n");
 }
 
-/** A fence carrying the RETIRED body-label seat shape (the D16 refusal case). */
+/**
+ * A fence carrying the RETIRED body-label seat shape (the D16 refusal case).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function legacyPayload(header: readonly string[], body = "Operator: keep this body."): string {
   return ["# Example", "", "```markdown", "## Assignment", "", ...header, "", body, "```", ""].join("\n");
 }
@@ -85,6 +91,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
   test("F1: the front matter block is one region, so a blank line between keys does not skip the gate", () => {
     // Would pass silently under a "declaration ends at the first blank line"
     // reading, yet the dispatch gate reads the whole block.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const text = payload(["delegation: forbidden", "", `execute_as: ${seat}`, "task_category: audit"]);
     expect(parseAssignmentFields(["---", "delegation: forbidden", "", `execute_as: ${seat}`, "---"].join("\n")).executeAs).toBe(seat);
     const { rows } = checkSeatBounding([{ rel: "fixture.md", text }]);
@@ -102,6 +109,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
       "return_shape: verdict and findings",
     ]);
     // Guard the assumption: the engine parser is what decides, not this test.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const fields = parseAssignmentFields(
       ["---", `execute_as: ${seat}`, "budget: x", "return_shape: y", "---"].join("\n"),
     );
@@ -122,6 +130,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
     const rows = checkSeatBounding([{ rel: "fixture.md", text: audit }]).rows;
     expect(rows).toHaveLength(2);
     // ... while the same role on a normal round needs no bounding fields.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const normal = payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]);
     expect(checkSeatBounding([{ rel: "fixture.md", text: normal }]).rows).toEqual([]);
   });
@@ -155,6 +164,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
   test("F-1: a declaration that owns a line but is not fenced yields the per-document coverage row", () => {
     // Both shapes the review named: the fence removed, and the declaration
     // re-indented into a 4-space code block (which is not a fence at all).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     for (const lines of [
       ["# Example", "", "---", `execute_as: ${seat}`, "delegation: forbidden", "task_category: audit", "---", ""],
       ["# Example", "", "    ---", `    execute_as: ${seat}`, "    delegation: forbidden", "    task_category: audit", "    ---", ""],
@@ -174,6 +184,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
   test("F-1a: a PARTIAL loss (one fence pair dropped, other templates still scan) is a row", () => {
     // The round-2 survivor: two bare declarations plus one still-fenced template.
     // The old floor compared "zero segments from this document" and stayed green.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const text = [
       "# Doc",
       "",
@@ -210,6 +221,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
   test("F-1b: the seat-template document yielding no segment is its own row", () => {
     // A declaration rename confined to that file drops declarations AND segments
     // together, so the per-document comparison alone cannot see it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const docs: Doc[] = [
       { rel: SEAT_TEMPLATE_DOC, text: "# Templates\n\n## Brief\n\nno seat declared here\n" },
       { rel: "other.md", text: payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]) },
@@ -238,6 +250,7 @@ describe("checkSeatBounding — seat front matter carries the bounding fields", 
   test("F-1: an inline declaration mention is prose, not a coverage hole", () => {
     // The doc mentions the key mid-line and carries no segment; a sibling doc
     // does, so neither the per-document nor the run-level floor may fire.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const docs: Doc[] = [
       { rel: "inline.md", text: "# Doc\n\nThe `execute_as` key names the seat.\n" },
       { rel: "real.md", text: payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]) },

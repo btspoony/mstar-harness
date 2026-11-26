@@ -107,7 +107,9 @@ Do the thing, evidence-first.
 
 /** Missing `Execute as` — the subagent field-gate's first advisory case. The
  * remaining core KEYS stay in the front matter: the shape guard reads keys,
- * so a fence without one would not even read as Assignment-shaped. */
+ * so a fence without one would not even read as Assignment-shaped.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const MISSING_EXECUTE_AS = `---
 delegation: forbidden
 task_category: logic
@@ -393,6 +395,7 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     expect(advisories[0]!.tool).toBe('subagent')
     expect(violationCodes(advisories[0])).toContain('assignment.field.execute-as')
     // The retired Slice-2 alias survives on the same violation row.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.execute-as')?.aliases)
       .toContain('assignment.presence.missing-execute-as')
   })
@@ -428,7 +431,10 @@ describe('workflow gate — non-workflow tools unaffected', () => {
   })
 })
 
-/* ------------------- D16 legacy body-label regression ------------------- */
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('workflow gate — the retired body-label grammar refuses at the subagent surface too', () => {
   it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
@@ -436,6 +442,7 @@ describe('workflow gate — the retired body-label grammar refuses at the subage
     // whose fields live in the retired `**Label**` grammar must reach the
     // legacy-format refusal on the subagent surface exactly as on every
     // other gate, never pass as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -451,6 +458,7 @@ Do the thing.
     // why: The control-root cleanliness gate reads the process main worktree:
     // run the dispatch from the fixture's clean harness repo, never the
     // ambient checkout the suite runs in.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const prev = process.cwd()
     process.chdir(app.root)
     let decision
@@ -462,6 +470,7 @@ Do the thing.
 
     // Terminal: the retired format declares nothing a gate could verify, so
     // the default (soft) mode vetoes it — no advisory is emitted.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(advisories).toHaveLength(0)

@@ -49,7 +49,9 @@ export type DocumentSchema = {
 /** The plan table is a FUNCTION: its `delivery_kind` enum reads
  * `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`, which imports back into this
  * module (`workflow` → `status` → `dispatch` → here), so building it at
- * module eval hits the const TDZ when `workflow.ts` is the cycle's entry. */
+ * module eval hits the const TDZ when `workflow.ts` is the cycle's entry.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function planSchema(): DocumentSchema {
   return {
     kind: "plan",
@@ -68,7 +70,9 @@ function planSchema(): DocumentSchema {
 /** Review/audit trigger: the dispatch-owned final round-bounding decision
  * ({@link classifyReviewOrAuditRound} `roundBounded`) — the role
  * normalization, both component checks and the final decision each have
- * exactly one copy; the schema keeps only its field table. */
+ * exactly one copy; the schema keeps only its field table.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
   return classifyReviewOrAuditRound(
     typeof values.execute_as === "string" ? values.execute_as : "",
@@ -162,7 +166,9 @@ const ACCEPTANCE_SCHEMA: DocumentSchema = {
  * `delivery_kind` enum reads `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`,
  * and that module imports back into this one (`workflow` → `status` →
  * `dispatch` → here), so a module-eval table hits the const TDZ whenever
- * `workflow.ts` is the entry module of the cycle. */
+ * `workflow.ts` is the entry module of the cycle.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 let schemas: Record<DocumentKind, DocumentSchema> | undefined;
 
 /** The field table for one document kind: required and optional rows with
@@ -184,7 +190,9 @@ function violation(severity: ValidationResult["severity"], code: string, message
 /** Strict ISO-8601 date-time shape: `YYYY-MM-DDTHH:mm:ss` with an optional
  * fractional-seconds part (`.fff…`) before the required `Z` or a `+HH:mm` /
  * `-HH:mm` offset. No normalization — the calendar day, the time ranges and
- * the offset range are validated against a real calendar. */
+ * the offset range are validated against a real calendar.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 function isIsoDateTime(value: string): boolean {
@@ -247,6 +255,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
   // reported WITHOUT re-parsing the rejected block; only a caller that kept
   // neither (`entries` omitted, `parseError` null) makes the schema parse its
   // own line-numbered refusal.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   let entries: Map<string, FrontmatterEntry>;
   try {
     if (opts.parseError !== undefined && opts.parseError !== null) throw opts.parseError;
@@ -254,6 +263,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     // diagnostic handed over) like an absent reuse: the schema's own parse
     // then refuses with the precise line-numbered diagnostic — one parse
     // per decision, no skipped refusal.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     entries = opts.entries ?? parseDocumentFrontmatterEntries(frontmatter, source);
   } catch (error) {
     if (error instanceof DocumentFrontmatterError) {
@@ -289,6 +299,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     // (`budget` / `return_shape` / `task_budget`) carry dispatch's
     // presence-only absence rule: `N/A` counts as missing exactly as
     // dispatch classifies it.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const required = field.requiredWhen !== undefined ? field.requiredWhen(values) : true;
     if (!required) continue;
     if (!entries.has(field.name)) {
@@ -302,6 +313,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     // Enum-typed fields refuse the same shape through the enum check below
     // (one violation per failure, naming the accepted values) — the
     // scalar-content refusal applies to plain textual fields only.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     if (field.enum === undefined && Array.isArray(value) && value.length > 0) {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}:${requiredEntry.line}: invalid ${field.name} \u2014 accepted values: a non-blank scalar, not a list`,
@@ -323,6 +335,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     } else {
       // `null` counts as missing; a non-empty map is present-but-invalid
       // shape (handled above), never missing.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       blankOrEmpty = value === null || Object.keys(value as object).length === 0;
     }
     if (!blankOrEmpty && (field.name === "task_budget" || field.name === "budget" || field.name === "return_shape")
@@ -338,6 +351,7 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
 
   // A required field already reported missing/invalid above is not re-fired
   // as a second invalid violation — one violation per field failure.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   const alreadyReported = new Set(
     violations.map((v) => v.message.match(/(?:missing required field|invalid) ([A-Za-z_]+)/)?.[1]).filter(Boolean),
   );
@@ -376,10 +390,12 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     // `- item` block list). A non-empty string list is a valid branch
     // declaration; mixed-content lists are invalid. `dispatch_mode` is NOT
     // a schema key — the list shape is the only parallel representation.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const branchList = Array.isArray(branchEntry?.value) ? branchEntry!.value as unknown[] : null;
     const hasBranchList = branchList !== null && branchList.length > 0 && branchList.every((item) => typeof item === "string" && item.trim() !== "");
     // A present list is a declaration even when its content is refused below —
     // one defect, one violation (no second "carries one declaration" row).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const hasBranch = branchEntry !== undefined && (typeof branchEntry.value === "string" ? branchEntry.value.trim() !== "" : branchList !== null);
     const hasPolicy = policyEntry !== undefined && typeof policyEntry.value === "string" && policyEntry.value.trim() !== "";
     if (branchList !== null && !hasBranchList) {

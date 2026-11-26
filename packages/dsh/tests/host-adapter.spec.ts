@@ -143,7 +143,10 @@ const MAIN_FIELDS = {
   workingBranch: 'main',
 } satisfies AssignmentFields
 
-/** The canonical text form of MAIN_FIELDS (engine front matter grammar). */
+/**
+ * The canonical text form of MAIN_FIELDS (engine front matter grammar).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const MAIN_FIELDS_TEXT = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -156,7 +159,9 @@ working_branch: main
 
 /** A parsed-fields Assignment missing the `Execute as` core field — the
  * shape guard reads core KEYS, so the bare-fields-only shape of the retired
- * grammar was carried as the two-key form the conversion itself asserts. */
+ * grammar was carried as the two-key form the conversion itself asserts.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const BARE_FIELDS = { delegation: 'forbidden', taskCategory: 'logic', workingBranch: 'feature/x' } satisfies AssignmentFields
 
 /** The canonical text form of BARE_FIELDS. */
@@ -180,7 +185,10 @@ const IMPLEMENT_FIELDS_WITH_BUDGET = {
   taskBudget: 'S — one focused implementer round',
 } satisfies AssignmentFields
 
-/** The canonical text form of IMPLEMENT_FIELDS_WITH_BUDGET (engine front matter grammar). */
+/**
+ * The canonical text form of IMPLEMENT_FIELDS_WITH_BUDGET (engine front matter grammar).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const IMPLEMENT_FIELDS_WITH_BUDGET_TEXT = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -441,6 +449,7 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
 
     // No enforcement is configured: an ordinary violation would be advisory,
     // but a source refusal has no verified document to be advisory about.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(result.ok).toBe(false)
     expect(result.hardBlocked).toBe(true)
     expect(result.violations.map((v) => v.code)).toContain('dispatch.assignment.path')
@@ -466,6 +475,7 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
       ]),
     )
     // The retired Slice-2 alias survives on the same violation row.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(bare.violations.find((v) => v.code === 'assignment.field.execute-as')?.aliases)
       .toContain('assignment.presence.missing-execute-as')
   })
@@ -474,6 +484,7 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     // D16 regression — the ONE body-label fixture of this spec: a carrier
     // whose fields live in the retired `**Label**` grammar must reach the
     // legacy-format refusal on the exec-less hook exactly as the gate does.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -677,10 +688,14 @@ describe('dispatchGate — D4 session hint derivation', () => {
  * gate chain is microtask-only, so the provable swap lands BETWEEN the
  * first resolution and the decision via `dispatchGate`'s single-resolution
  * input — exactly what the `tools/pre-execute` listener threads in.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  * ========================================================================== */
 
 describe('dispatchGate — ONE resolution per dispatch (swap and first-refusal regressions)', () => {
-  /** An agent carrying the durable identity the binding store is keyed by. */
+  /**
+   * An agent carrying the durable identity the binding store is keyed by.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   const sessionAgent = (sessionId: string, cwd: string): unknown =>
     ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
 
@@ -688,7 +703,9 @@ describe('dispatchGate — ONE resolution per dispatch (swap and first-refusal r
    * standalone `Assignment file:` line inside a fenced example, so any stage
    * re-RESOLVING the resolved document (instead of consuming it verbatim)
    * refuses it `dispatch.assignment.ambiguous`: the regression proves the
-   * resolution RESULT is what flows downstream, never the raw text. */
+   * resolution RESULT is what flows downstream, never the raw text.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
   const SWAP_V1 = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -715,6 +732,7 @@ Assignment file: /home/example/assignments/example.md
     // document that can only violate (role swapped AND branch form dropped)
     // — lands AFTER the resolution, BEFORE the dispatch decides: any stage
     // re-reading the source would see v2.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     mkdirSync(join(app.harnessDir, 'assignments'), { recursive: true })
     const file = join(app.harnessDir, 'assignments', 'swap-after-resolution.md')
     writeFileSync(file, SWAP_V1)
@@ -732,11 +750,13 @@ Assignment file: /home/example/assignments/example.md
 
     // The decision is v1's: clean, zero violations — a re-read downstream
     // would carry v2's missing branch form into the verdict.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(result.violations).toEqual([])
     expect(result.ok).toBe(true)
 
     // The ledger record agrees with the decision: ONE dispatch row, v1's
     // role, v1's clean verdict — a re-read would carry the swapped role.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
     const dispatches = events.filter((event) => event.kind === 'dispatch')
     expect(dispatches).toHaveLength(1)
@@ -752,6 +772,7 @@ Assignment file: /home/example/assignments/example.md
     // a perfectly VALID assignment BEFORE the dispatch decides — a re-read
     // downstream would succeed and split the verdict, recording a row the
     // first read refused.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     mkdirSync(join(app.harnessDir, 'assignments'), { recursive: true })
     const file = join(app.harnessDir, 'assignments', 'fixed-after-refusal.md')
     const firstResolution = readAssignmentSource(`Assignment file: ${file}`, { harnessDir: app.harnessDir })
@@ -771,10 +792,12 @@ Assignment file: /home/example/assignments/example.md
     // The verdict is the FIRST refusal alone: the one
     // `dispatch.assignment.path` violation, nothing else — a re-read would
     // gate the now-valid file instead.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(result.ok).toBe(false)
     expect(result.violations.map((violation) => violation.code)).toEqual(['dispatch.assignment.path'])
 
     // Nothing records for an unresolved input: no ledger row in any workflow.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
     expect(events.filter((event) => event.kind === 'dispatch')).toHaveLength(0)
   })

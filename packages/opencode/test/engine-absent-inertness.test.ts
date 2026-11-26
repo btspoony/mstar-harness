@@ -150,16 +150,21 @@ describe("engine-absent inertness (subprocess fixture)", () => {
  * The V1 loaders are module-private, so the probes drive the real plugin
  * source in a subprocess against a fixture package layout whose engine shim
  * re-exports the real src with call recording on the two reader exports.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 /** Absolute path of the real engine source: the shim re-exports it so the
- * copied plugin and the probe resolve one reader implementation. */
+ * copied plugin and the probe resolve one reader implementation.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const engineIndexPath = join(import.meta.dir, "../../engine/src/index.ts");
 
 /** T4-R2 instrumentation: the shim forwards `parseSimpleFrontmatter` and
  * `extractFrontmatterAndBody` to the real implementation while recording
  * every call and its input, so the probe can prove the real loader — not a
  * local parser in the plugin — read the fixture bytes. Explicit exports
- * shadow the same names in the `export *` re-export. */
+ * shadow the same names in the `export *` re-export.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const ENGINE_SHIM = `export * from ${JSON.stringify(engineIndexPath)};
 import {
   parseSimpleFrontmatter as realParseSimpleFrontmatter,
@@ -179,7 +184,9 @@ export function extractFrontmatterAndBody(input) {
 
 /** The fixture package layout every parity probe shares: instrumented engine
  * shim, the ACTUAL plugin source and the MCP stub. Fixture markdown is the
- * caller's own. */
+ * caller's own.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const scaffoldPluginProject = (project: string): void => {
   const engineDir = join(project, "node_modules", "@mstar-harness", "engine");
   mkdirSync(engineDir, { recursive: true });
@@ -202,7 +209,9 @@ const scaffoldPluginProject = (project: string): void => {
 /** Probe: load the real plugin source, drive the config hook, compare the
  * loaded objects against an independent parse through the real implementation
  * (imported by absolute path, never through the instrumented shim), and prove
- * the loader invoked the shared reader on the exact fixture bytes. */
+ * the loader invoked the shared reader on the exact fixture bytes.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const PARITY_PROBE = `
 import { MorningStarHarnessPlugin } from "./src/mstar.ts";
 import { __readerCalls } from "@mstar-harness/engine";
@@ -270,7 +279,9 @@ console.log("PROBE_OK");
  * unsupported line. The loaders whitelist scalar keys, so the loader's
  * dependence on the shared reader's nested-map parsing is observable only
  * through the refusal propagating out of the config hook — attributed by the
- * loader's file-path source label, the document line and the recovery fix. */
+ * loader's file-path source label, the document line and the recovery fix.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const REFUSAL_PROBE = `
 import { MorningStarHarnessPlugin } from "./src/mstar.ts";
 import { join } from "node:path";
@@ -310,10 +321,12 @@ describe("host loader parity with nested front matter maps", () => {
       // The ACTUAL plugin source against an engine shim that re-exports the
       // real parser src — parity demands the same reader implementation on
       // both sides of the comparison, and the shim records the loader's calls.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       scaffoldPluginProject(project);
 
       // The fixture package layout the plugin loads agents and commands from
       // (`harness-agents/`, `harness-commands/` one level above src/).
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       mkdirSync(join(project, "harness-agents"));
 
       writeFileSync(
@@ -353,6 +366,7 @@ describe("host loader parity with nested front matter maps", () => {
       // An unsupported line INSIDE the nested map makes the loader's
       // dependence on the shared reader observable: only a loader that hands
       // the whole frontmatter to parseSimpleFrontmatter surfaces this refusal.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       mkdirSync(join(project, "harness-commands"));
       writeFileSync(
         join(project, "harness-commands", "nested-command.md"),

@@ -237,7 +237,9 @@ Inline: \`...\` stays exempt.
  * renderer; the renderer's final newline is cut so body concatenation lands on
  * the exact lines the planQualityBar assertions number, and prepended to inputs
  * whose assertions expect zero violations or violation-only shape so the schema
- * check does not add `lint.plan.frontmatter.absent` to their result. */
+ * check does not add `lint.plan.frontmatter.absent` to their result.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 const VALID_PLAN_FENCE = planFrontMatter("20991231-example-plan", "", { execution: "inline" }).slice(0, -1);
 
 const PLAN_PLACEHOLDER_MIXED_CASE = `# Plan
@@ -1474,6 +1476,7 @@ describe("planQualityBar verification-set", () => {
 // planQualityBar — plan front-matter schema check (document-schema.ts
 // PLAN_SCHEMA, reported under the lint.plan.frontmatter.* namespace)
 // ---------------------------------------------------------------------------
+// see docs/knowledge/conventions/plan-frontmatter-declarations.md
 
 describe("planQualityBar plan front-matter schema", () => {
   test("a plan with complete front matter carries no schema violation", () => {
@@ -1488,6 +1491,7 @@ describe("planQualityBar plan front-matter schema", () => {
     expect(result.violations[0]!.message).toContain("working_branch");
     // Diagnostic detail at the consumer boundary: the field is named and the
     // violation carries the document location line the schema reported.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(result.violations[0]!.message).toMatch(/^plan:1: missing required field working_branch/);
   });
 
@@ -1518,6 +1522,7 @@ describe("planQualityBar plan front-matter schema", () => {
 // parseFrontmatter — delegated to the shared document-frontmatter reader:
 // no continuation join, no bare unfenced body, BOM still stripped
 // ---------------------------------------------------------------------------
+// see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
 
 describe("parseFrontmatter (delegated reader)", () => {
   test("a skill front matter with the same shape parses through the delegated reader", () => {
@@ -1549,6 +1554,7 @@ describe("parseFrontmatter (delegated reader)", () => {
       const failure = error as DocumentFrontmatterError;
       // The continuation sits on document line 6; the two stripped blank
       // lines must not leave the reader-relative line 4 reported.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(failure.line).toBe(6);
       expect(failure.lineText).toBe("  continuation text joins nothing");
       expect(failure.message).toContain("SKILL.md:6");

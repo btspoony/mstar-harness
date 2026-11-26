@@ -232,7 +232,10 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
-/* ------------------------------ D16 legacy body-label regression ------------------------------ */
+/**
+ * ------------------------------ D16 legacy body-label regression ------------------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('dispatch gate — the retired body-label grammar refuses at the lease surface too', () => {
   it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
@@ -240,6 +243,7 @@ describe('dispatch gate — the retired body-label grammar refuses at the lease 
     // whose fields live in the retired `**Label**` grammar must reach the
     // legacy-format refusal on the lease-gate surface exactly as on every
     // other gate, never pass as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -260,6 +264,7 @@ Do the thing.
 
     // Terminal: the retired format declares nothing a gate could verify, so
     // the default (soft) mode vetoes it — no advisory is emitted.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(advisories).toHaveLength(0)
@@ -475,6 +480,7 @@ Do the thing. Quoted example must not trigger the gate:
 
 /* ===========================================================================
  * Malformed front matter at the lease gate (the shared entries API)
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  * ========================================================================= */
 
 describe('dispatch gate — lease isolation shapes', () => {
@@ -486,6 +492,7 @@ describe('dispatch gate — lease isolation shapes', () => {
     // never the root field: the local line reader treated it as a root key,
     // so the lease resolved a plan id the document never declared (here a
     // DIFFERENT plan — pre-fix it surfaced lease.dispatch.plan-not-found).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const nested = SDD_ASSIGNMENT.replace(
       `plan_path: /srv/plans/${PLAN_ID}.md`,
       'phase_gate_checklist:\n  plan_path: /srv/plans/nested-other-plan.md',
@@ -515,6 +522,7 @@ describe('dispatch gate — lease isolation shapes', () => {
     // The whole block is refused: the lease never re-verifies a malformed document.
     // The retired duplicate grammar read the FIRST key — the row's own — so pre-fix
     // this dispatch verified clean and emitted NO advisory at all (silent pass).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(advisories).toHaveLength(1)
   })
 
@@ -524,6 +532,7 @@ describe('dispatch gate — lease isolation shapes', () => {
     const advisories = captureAdvisories(app.ctx)
     // The opening fence never closes (the closing --- line is dropped): every
     // field line below is inert, so the lease must not re-verify anything.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const unterminated = SDD_ASSIGNMENT.replace(/\n---\n\n## Assignment/, '\n\n## Assignment')
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(unterminated), defaultAllow)

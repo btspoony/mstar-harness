@@ -275,6 +275,7 @@ Body.
     // matter carries nested `tools:`/`permission:` block maps must come out
     // of the loaders as the exact object an independent parse of the same
     // bytes produces — key spellings, nesting depth and scalars intact.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const COMMAND_SEAT = `---
 name: iteration-drive
 description: Drive the iteration.
@@ -299,6 +300,7 @@ Drive the iteration.
     const parsedCommand = parseSimpleFrontmatter(extractFrontmatterAndBody(COMMAND_SEAT).frontmatter);
     // The command loader forwards the whitelisted scalars verbatim from the
     // same parse; a nested permission map in the file must not disturb them.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(loadedCommand.description).toBe(parsedCommand.description);
     expect(loadedCommand.agent).toBe(parsedCommand.agent);
     expect(loadedCommand.template).toBe("Drive the iteration.");
@@ -313,6 +315,7 @@ Drive the iteration.
     // asset — path, 1-based document line of the offending line and the
     // reader's recovery fix ("*" alias at line 7: fence 1, name 2,
     // description 3, agent 4, permission 5, edit 6, the offending line 7).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const BAD_COMMAND_SEAT = `---
 name: iteration-drive
 description: Drive the iteration.

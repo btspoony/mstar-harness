@@ -117,7 +117,9 @@ Ship the module.
 `;
 
 /** Assignment-shaped (core key present but empty) — the remaining core
- * fields are missing, the working branch keeps the branch-form gates quiet. */
+ * fields are missing, the working branch keeps the branch-form gates quiet.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const missingAllFields = `---
 execute_as:
 working_branch: feature/example
@@ -199,7 +201,11 @@ working_branch: create feature/x
 Create the branch.
 `;
 
-/** Dangling create form — trailing `from`, no base */const createDanglingFrom = `---
+/**
+ * Dangling create form — trailing `from`, no base
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
+const createDanglingFrom = `---
 execute_as: fullstack-dev
 delegation: forbidden
 task_category: logic
@@ -211,7 +217,11 @@ working_branch: create feature/x from
 Create the branch.
 `;
 
-/** Read-only orientation assignment — no branch form is legitimate */const scoutAssignment = `---
+/**
+ * Read-only orientation assignment — no branch form is legitimate
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
+const scoutAssignment = `---
 execute_as: scout
 delegation: forbidden
 task_category: deep
@@ -265,7 +275,9 @@ Do the thing, evidence-first.
 /** Explicit non-hard value — warn-only, never blocks (rollback = unset flag).
  * `soft` is not an accepted `enforcement` enum value (hard-only contract), so
  * the soft case is modeled by an unenforceable stray key pair — the engine
- * reads the flag as present-but-non-hard and the schema rows stay advisory. */
+ * reads the flag as present-but-non-hard and the schema rows stay advisory.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const softEnforcementAssignment = `---
 enforcement: soft
 execute_as: fullstack-dev
@@ -344,6 +356,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
  // Every core-field violation carries its legacy presence alias: select
  // the three actual field codes (not the retired `missing-` infix), find
  // each violation, and assert all three were checked.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const checked: string[] = [];
     for (const [fieldCode, presenceCode] of [
       ["assignment.field.execute-as", "assignment.presence.missing-execute-as"],
@@ -396,6 +409,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
  // An unterminated fence counts as Assignment evidence (fail-closed shape
  // guard): the schema absent-fence row and the missing-field rows warn;
  // unfenced key: value body text (the retired grammar) is D16 instead.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment("---\nexecute_as: fullstack-dev\ntask_budget: XS — one implementer round\n", { log });
     expect(result!.ok).toBe(false);
@@ -406,6 +420,7 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
  // Unfenced `execute_as: x` body prose declares nothing (front matter is the
  // only field contract); a single label is not legacy-shaped either — the
  // prompt passes silently.
+ // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const { warnings, log } = captureWarnings();
     const result = validateDispatchAssignment("execute_as: fullstack-dev\n", { log });
     expect(result!.ok).toBe(true);
@@ -924,7 +939,9 @@ working_branch: feature/example
 });
 
 /** The retired body-label format of the complete assignment — same fields as
- * `**Label**` body lines (the format front matter replaced). */
+ * `**Label**` body lines (the format front matter replaced).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -963,6 +980,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     writeFileSync(outside, completeAssignment);
  // Critical source-resolution refusal: hard independent of document/repo
  // enforcement (the fixture tree is soft) — error-level lines, no warn lines.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const result = validateDispatchAssignment(`Assignment file: ${outside}`, { log });
     expect(result!.ok).toBe(false);
     expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
@@ -975,6 +993,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
  // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
  // answer a root, so the pointer can never be containment-checked. Fail-closed
  // hard enforcement applies independently of any document or repo flag.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const bare = mkdtempSync(join(tmpdir(), "mstar-null-root-"));
     writeFileSync(join(bare, "a.md"), completeAssignment);
     process.chdir(bare);
@@ -1023,6 +1042,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
   test("a pointed document that declares hard enforcement hardens like the inline form", () => {
     // Missing every declaration but `execute_as`: the same front matter in
     // either form must produce the same hard refusal.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
     const inline = validateDispatchAssignment(unshapedHard, { log: () => undefined });
     expect(inline!.ok).toBe(false);
@@ -1048,9 +1068,11 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(legacy!.fix).toContain("front-matter document");
     expect(legacy!.fix).toContain("Assignment file:");
     // The schema's generic absent-fence row is superseded — one defect, one message.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(result!.violations.some((v) => v.code === "document.frontmatter.absent")).toBe(false);
     // No refusal channel on this host (`I-001258`): the terminal refusal is
     // surfaced through `hardBlocked` (the error log), never a warn-only line.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(result!.hardBlocked).toBe(true);
     expect(warnings.some((w) => w.includes("dispatch.assignment.legacy-format"))).toBe(false);
   });

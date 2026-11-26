@@ -282,6 +282,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * schema layer reports the line-numbered cause WITHOUT re-parsing the
    * rejected block. Omitted with a caller-supplied `null` → the schema layer
    * re-parses, as a host that kept no diagnostic always has.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult, preEntries?: Map<string, FrontmatterEntry> | null, preParseError?: DocumentFrontmatterError | null): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
@@ -305,6 +306,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // shared source must be resolved WITH, not ahead of: several active
     // lifecycles with no discriminating cwd is the ordinary
     // parallel-worktree case, not an unverifiable dispatch.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
     const text = assignmentSource.ok ? assignmentSource.text : prompt
     // ONE parse per dispatch: the caller's (the listener parses before it
@@ -313,6 +315,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // worktree checks, the read-only-role read and every composition leg
     // downstream; a failed parse keeps ITS diagnostic (`parseError`) instead
     // of a second read of the rejected block.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const parse = preEntries === undefined ? assignmentFrontmatterParse(text) : { entries: preEntries, parseError: preParseError ?? null }
     const entries = parse.entries
     const planId = assignmentSource.ok ? planIdOfEntries(entries) : undefined
@@ -349,6 +352,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // undeclared block would attribute the row to fields no document
     // declared (QC3-08). The verdict is the evidence; the ledger re-reads
     // nothing.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)
       && !violations.some((violation) => violation.code === 'document.frontmatter.absent')) {
       const source = activeSource
@@ -363,6 +367,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             // ledger reads the decision's map — entries `null` (malformed
             // YAML) stays final and the gate's schema layer keeps carrying
             // the structured diagnostic.
+            // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
             entries,
             planId,
             violations,
@@ -474,6 +479,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // declares its own enforcement flag) and is shared by the record block
     // (via dispatchGate) and this enforcement decision — no duplicate compass
     // read per dispatch, and the same parse feeds both.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const hookSource = readAssignmentSource(prompt, { harnessDir })
     const hookText = hookSource.ok ? hookSource.text : prompt
     const hookParse = assignmentFrontmatterParse(hookText)
@@ -482,6 +488,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const applied = applyEnforcement(gate, { hard })
     // A terminal source refusal is a veto, not an advisory: no enforcement
     // setting can soften the absence of a verified document.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     return hasTerminalRefusal(applied.violations) ? { ...applied, hardBlocked: true } : applied
   }
 

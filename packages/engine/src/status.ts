@@ -756,6 +756,7 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     // Front matter only, read by the shared parser: the fence boundary comes
     // from the one extractor and both declarations from the one reader, so a
     // YAML comment or a quoted value never hides them.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const extraction = extractFrontmatterAndBody(content);
     if (!extraction.fenced) continue;
     let status: unknown;
@@ -764,12 +765,14 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     } catch {
       // A front matter line outside the accepted subset steers nothing
       // (fail-soft: the compass is unreadable, not silently non-hard).
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       continue;
     }
     // Sticky-hard guard : only `status: active` /
     // `status: locked` compasses count toward hardening. Completed and
     // status-less compasses are skipped — fail-soft (an archive must never
     // keep the repo hardened).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     if (status !== "active" && status !== "locked") continue;
     const flag = parseEnforcementFlagFromFrontmatter(extraction.frontmatter, "flat");
     if (flag.hard) return flag;

@@ -653,7 +653,9 @@ test("degraded Git refuses a linked checkout marker before local harness discove
 // ---------------------------------------------------------------------------
 
 /** One QC Assignment fixture with the three alignment front matter keys — the
- * canonical PM template shape; real QC/QA packs use it. */
+ * canonical PM template shape; real QC/QA packs use it.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function qcAssignmentFixture(planId: string, range: string): string {
   return `---
 execute_as: qc-specialist

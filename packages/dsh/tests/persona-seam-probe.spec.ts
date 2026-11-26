@@ -293,6 +293,7 @@ describe('persona seam probe — real composition (bootApp, fake subagents servi
     // D16 regression — the ONE body-label fixture of this spec: the terminal
     // legacy-format refusal fires ahead of every exemption, so the start is
     // refused and the provider never sees it.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { app, provider } = await bootWithProvider()
     const LEGACY_BODY_LABEL_PROMPT = [
       '## Assignment',

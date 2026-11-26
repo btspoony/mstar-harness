@@ -22,6 +22,7 @@ function writePlanFile(content: string): { harnessRoot: string; planPath: string
 // The shared renderer carries the valid-plan shape; this wrapper only names
 // the branch values these tests assert on — the fence layout itself is never
 // re-rendered locally.
+// see docs/knowledge/conventions/plan-frontmatter-declarations.md
 function frontMatterPlan(bodyLines: string[] = []): string {
   return planFrontMatter(PLAN_ID, bodyLines.join("\n"), {
     main_worktree_branch: "feature/main-wt",
@@ -50,6 +51,7 @@ describe("planDeclaredHeadersFromContent", () => {
   test("the raw lexeme is the declaration \u2014 `main_worktree_branch: 5.0` keeps its written spelling", () => {
     // CF-01 regression: the typed scalar `5` must never replace the branch
     // spelling `5.0`; a numeric-looking value keeps exactly what the file says.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: 5.0", "working_branch: 2.0", "---", ""].join("\n");
     const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
     expect(headers.get("main worktree branch")).toBe("5.0");
@@ -59,6 +61,7 @@ describe("planDeclaredHeadersFromContent", () => {
   test("a non-scalar consulted declaration refuses identity-mismatch naming the invalid key", () => {
     // CF-02 regression: `main_worktree_branch: [other]` is present-but-invalid,
     // never dropped to the absent-key fallback.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", ""].join("\n");
     let error: unknown;
     try {
@@ -74,6 +77,7 @@ describe("planDeclaredHeadersFromContent", () => {
     // CF-02 regression: the explicit empty shapes declare a structural value
     // all the same — they are present-but-invalid, never the absent key the
     // snapshot fallback reads.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     for (const declaration of ["main_worktree_branch: []", "main_worktree_branch: {}"]) {
       const content = ["---", `plan_id: ${PLAN_ID}`, declaration, "---", ""].join("\n");
       let error: unknown;
@@ -92,6 +96,7 @@ describe("planDeclaredHeadersFromContent", () => {
     // CF-02 regression: the empty null-like scalars carry no declaration —
     // the key reads as absent exactly like a missing one, so the snapshot
     // fallback applies unchanged.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     for (const declaration of ["main_worktree_branch: null", "main_worktree_branch: ~", "main_worktree_branch:"]) {
       const content = ["---", `plan_id: ${PLAN_ID}`, declaration, "---", ""].join("\n");
       const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
@@ -102,6 +107,7 @@ describe("planDeclaredHeadersFromContent", () => {
   test("a numeric-looking `5.0` scalar is never read as the literal null or the typed number", () => {
     // CF-02 regression companion of the CF-01 verbatim rule: `5.0` survives
     // as the exact written branch spelling.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: 5.0", "---", ""].join("\n");
     const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
     expect(headers.get("main worktree branch")).toBe("5.0");
@@ -111,6 +117,7 @@ describe("planDeclaredHeadersFromContent", () => {
     // CF-02 regression: the bare key declares nothing — no raw lexeme, no
     // children — so it is absent exactly like a missing key, and the snapshot
     // fallback applies unchanged.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch:", "---", ""].join("\n");
     const headers = planDeclaredHeadersFromContent(content, "diagnostic-label");
     expect(headers.get("main worktree branch")).toBeUndefined();
@@ -120,6 +127,7 @@ describe("planDeclaredHeadersFromContent", () => {
     // CF-02 regression: the indented children make the key a map or a list —
     // a present-but-invalid shape that must never drop to the absent-key
     // fallback, even though the raw lexeme after the colon is empty.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     for (const child of ["  child: x", "  - x"]) {
       const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch:", child, "---", ""].join("\n");
       let error: unknown;
@@ -138,6 +146,7 @@ describe("planDeclaredHeadersFromContent", () => {
   test("an unterminated front matter fence refuses identity-mismatch, never absent declarations", () => {
     // CF-02 regression: an opening fence without a closing one is invalid —
     // the declarations it swallows can never read as genuinely absent.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const content = ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: main", "# no closing fence"].join("\n");
     let error: unknown;
     try {

@@ -291,6 +291,7 @@ describe("validateRoadmap — frontmatter schema ()", () => {
       // A quoted empty item reaches the semantic layer (a bare `- ` is a
       // structural list-item refusal before the milestone rules run), so the
       // non-empty-item rule is exercised through the reachable shape.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const emptyItem = writeRoadmap(
         root,
         "empty-item-milestones.md",

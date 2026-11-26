@@ -230,6 +230,7 @@ describe("validateDocumentFrontmatter — unknown fields", () => {
       "assignment",
     );
     // task_budget_ok is NOT a canonical template field, so exactly one unknown violation appears.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(gate.ok).toBe(false);
     const v = onlyViolation(gate);
     expect(v.code).toBe("document.frontmatter.unknown");
@@ -714,6 +715,7 @@ describe("validateDocumentFrontmatter — usable required content", () => {
   test("a numeric-looking branch scalar stays valid — the raw scalar is the carrier", () => {
     // `main_worktree_branch: 5.0` types as a number; usable-content is read
     // off the scalar itself, not its YAML-like typing, so no refusal fires.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     expect(validateDocumentFrontmatter("plan", doc(PLAN_FM), "plan").ok).toBe(true);
   });
 
@@ -741,6 +743,7 @@ describe("validateDocumentFrontmatter — usable required content", () => {
     expect(v.message).toContain("not a list");
     // The correction tells the caller to replace the value in place —
     // duplicating the key would be refused as a duplicate.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(v.fix).toContain("single scalar");
   });
 
@@ -753,6 +756,7 @@ describe("validateDocumentFrontmatter — usable required content", () => {
     const shapeGate = validateDocumentFrontmatter("assignment", doc(shapeNa), "assignment");
     expect(shapeGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("return_shape"))).toBe(true);
     // A usable review-budget declaration still passes the content check.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const okGate = validateDocumentFrontmatter("assignment", doc(base), "assignment");
     expect(okGate.ok).toBe(true);
   });

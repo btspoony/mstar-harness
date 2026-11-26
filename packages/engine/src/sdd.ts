@@ -404,6 +404,7 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
  // line; each printed record is emitted with a trailing newline. The scan
  // reads the BODY of the one snapshot read above: a task-shaped line inside
  // the front matter declares nothing.
+ // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const { body } = extractFrontmatterAndBody(content);
   const records = body.endsWith("\n") ? body.split("\n").slice(0, -1) : body.split("\n");
   const headingRe = /^#+[ \t]+Task[ \t]+[0-9]+/;
@@ -425,6 +426,7 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
 // The entry scan walks the slice's own fence state, so a fenced example line
 // is not an entry; the match anchors on the first backtick-delimited path
 // after a recognized label and tolerates trailing prose.
+// see docs/knowledge/conventions/plan-frontmatter-declarations.md
   const planId = planDeclaredHeadersFromContent(content, planFile).get("plan_id");
   if (planId === undefined || planId.trim() === "") {
     throw new SddScriptError(
@@ -452,6 +454,7 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   ].join("\n");
   // The header is a document, so it must satisfy the schema its consumers
   // apply — refuse before any mkdir/write rather than emit an unreadable one.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const gate = validateDocumentFrontmatter("sdd-brief", `${brief}\n`, out);
   if (!gate.ok) {
     throw new SddScriptError(
@@ -1032,6 +1035,7 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
     // an invalid declaration is never read as an absent one, so a corrupted
     // plan can never silently fall back to `branch.base`. Values are the raw
     // written scalars, so a numeric-looking branch keeps its spelling.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const expectedMainBranch = planDeclaredHeaders(input.planFile).get("main worktree branch") ?? snapshotBase;
     const l1 = l1PreDispatchCheck({
       workflowType: state.type === "iteration" ? "iteration" : "plan",

@@ -62,12 +62,14 @@ export function worktreeL2Violations(entries: Map<string, FrontmatterEntry> | nu
   // norm). Read from the parsed fields — the one projection the field gate,
   // the branch gate and this check share — never a second decode of the
   // entries, so no shape this check accepts can be one the schema rejects.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const fields = parseAssignmentFieldsFromFrontmatter(entries)
   const worktreePaths = fields.worktreePaths ?? (fields.worktreePath?.trim() ? [fields.worktreePath] : [])
   const workingBranches = fields.workingBranches ?? (fields.workingBranch?.trim() ? [fields.workingBranch] : [])
   // ≥2 declared tracks is the parallel declaration; a single Worktree path is
   // the serial norm and never triggers the L2 checklist (no track list to
   // verify against).
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   if (worktreePaths.length < 2) return []
 
   const violations: ValidationResult[] = []

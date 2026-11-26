@@ -46,7 +46,9 @@ function writePlan(dir: string, fileName: string, content: string): string {
 
 /** A plan markdown whose declarations live in the front matter fence —
  * rendered by the one shared fixture renderer; only the test-specific body
- * is local. */
+ * is local.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
 function planMarkdown(planId: string, body = ""): string {
   return planFrontMatter(planId, `# Plan body\n${body}`);
 }

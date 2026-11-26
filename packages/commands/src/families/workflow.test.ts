@@ -220,12 +220,14 @@ describe("workflow family advisories", () => {
   test("a front-matter plan registers; a body-label plan refuses and names the front matter recovery", async () => {
     // The helper renders the front matter form; registration consumes the
     // declared plan_id through resolveRegisteredPlanFile.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const harnessDir = await harness();
     const passed = await register(harnessDir, { base: "main", work: "feature/plan-anchor", target: "main" });
     expect(passed).toMatchObject({ status: "ok", code: "workflow.register.ok" });
 
     // The same call against a body-label plan: `**plan_id:**` outside the fence
     // declares nothing, so the identity proof refuses and names the recovery.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const bodyHarness = await harness();
     writeFileSync(join(bodyHarness, "plans", "plan-anchor.md"), "# Anchor plan\n\n**plan_id:** plan-anchor\n");
     const refused = await register(bodyHarness, { base: "main", work: "feature/plan-anchor", target: "main" });

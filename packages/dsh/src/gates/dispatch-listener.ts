@@ -66,6 +66,7 @@ async function gateAssignmentText(
   // the source resolution verdict — success OR refusal — is always gated.
   // The D16 legacy body-label shape is assignment-shaped too: the document
   // must reach the gate's legacy-format refusal, never pass silently.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (!isAssignmentShaped(prompt) && !/^[ \t]*Assignment file:[ \t]*\S/m.test(prompt)) return undefined
   // compass D14 — the ONE source resolution, BEFORE enforcement and the
   // advisory role are derived: an `Assignment file: <abs>` pointer resolves
@@ -77,6 +78,7 @@ async function gateAssignmentText(
   // a terminal source refusal stays terminal — the one refusal verdict,
   // never a second read, never a field-violation read of the pointer line,
   // and never a ledger row for the unresolved input.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const source = readAssignmentSource(prompt, { harnessDir })
   const text = source.ok ? source.text : prompt
   // ONE parse per dispatch, made HERE so every stage of this decision reads the
@@ -85,6 +87,7 @@ async function gateAssignmentText(
   // ONCE to `entries: null` and its structured refusal (`parseError`) is
   // carried into the schema layer, which reports the exact line-numbered
   // cause — no stage ever re-parses the rejected block.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const parse = assignmentFrontmatterParse(text)
   const entries = parse.entries
   // The adapter owns the shared dispatch-gate core; the exec context is
@@ -93,6 +96,7 @@ async function gateAssignmentText(
   // `hard` resolves ONCE per dispatch: the adapter's record block and this
   // gate decision share the single resolution instead of each re-reading
   // the compass.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const hard = resolveDispatchHard(harnessDir, config, text, entries)
   const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source, entries, parse.parseError)
   const verdict = applyEnforcement(result, { hard })
@@ -100,6 +104,7 @@ async function gateAssignmentText(
   // advisory role and the preset channel: the resolver proved there is no
   // document to dispatch on, so no `hard`/`soft` setting may soften it
   // (ordinary violations of a resolved document keep their soft behavior).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const terminal = hasTerminalRefusal(verdict.violations)
   if (terminal || verdict.hardBlocked) {
     const cause = terminal ? 'a terminal assignment-source refusal' : 'Enforcement: hard'
@@ -119,6 +124,7 @@ async function gateAssignmentText(
   // seam for THIS call (keyed by the tool call id, scoped by the
   // `tools/execute` wrapper), so the child executes the version the gate
   // decided on instead of reading the file a second time.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (source.ok) handOffResolvedCarrier(exec, source)
   return undefined
 }

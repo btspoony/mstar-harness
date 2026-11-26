@@ -265,6 +265,7 @@ describe("mstar issue CLI bundle", () => {
   // The budget covers ~11 bundle spawns; the default 5s bound kills the case
   // on a loaded CI shard (reproduced at 5.08s under CPU contention) — same
   // reason the reopen case above declares 30s.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   test("obsolete closes a removed subject end to end: show, list, export, reopen", { timeout: 30_000 }, async () => {
     const { root, harness } = await makeHarness();
     const captureFile = join(root, "obsolete-capture.json");

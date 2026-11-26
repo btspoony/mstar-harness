@@ -82,10 +82,12 @@ export function extractFrontmatterAndBody(content: string): FrontmatterAndBody {
     // A carriage return counts as a line ending only before a located `\n`
     // (CRLF). A lone `\r` at end of input is content, so `---\r` at EOF is
     // not a complete closing fence.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const textEnd = newlineAt !== -1 && content[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
     if (content.slice(lineStart, textEnd) === "---") {
       // The closing fence never consumes the line ending that precedes
       // it, so the frontmatter block of `---\nfoo\n---` is `foo`.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       let frontmatterEnd = lineStart;
       if (content[frontmatterEnd - 1] === "\n") {
         frontmatterEnd -= 1;
@@ -112,7 +114,10 @@ function parseScalar(raw: string): string | number | boolean | null {
   return unquote(value);
 }
 
-/** Strip one surrounding pair of matching quotes, or return the input. */
+/**
+ * Strip one surrounding pair of matching quotes, or return the input.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 function unquote(value: string): string {
   if (value.length >= 2) {
     const first = value[0];
@@ -172,7 +177,9 @@ interface Level {
  * bracket starts and the YAML structural prefixes (`&`, `*`, `!`); the
  * `flat` compass profile keeps its old contract — empty parts (a trailing
  * separator) are skipped, any interior `[`/`]` bracket refuses, and no
- * item prefix rules apply. */
+ * item prefix rules apply.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => never): string[] {
   if (!raw.endsWith("]")) {
     fail();
@@ -197,6 +204,7 @@ function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => ne
     if (item === "") {
       // A trailing separator yields an empty part, which the flat compass
       // contract always discarded; the strict document profile refuses it.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       if (profile === "flat") continue;
       fail();
     }
@@ -206,6 +214,7 @@ function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => ne
       // then drops empties: a quoted empty item (`["", a]`) skips like a
       // plain empty one. An interior bracket inside stripped quotes
       // (`"["` stripped to `[`) still refuses — brackets are structural.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const stripped = item.replace(/^["']|["']$/g, "");
       if (stripped.includes("[") || stripped.includes("]")) {
         fail();
@@ -245,7 +254,9 @@ function parseFlowArray(raw: string, profile: FrontmatterProfile, fail: () => ne
  * scalar text — the single interpretation adapters consume instead of
  * rescanning lines. Any other line form throws `DocumentFrontmatterError`
  * with the source label, the 1-based line in the document the frontmatter
- * was extracted from and the offending raw line. */
+ * was extracted from and the offending raw line.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function parseFrontmatterStructure(
   frontmatter: string,
   source: string,
@@ -256,6 +267,7 @@ function parseFrontmatterStructure(
   const fail = (lineIndex: number, lineText: string, reason: string, fix?: string): never => {
     // `+ 2` because the diagnostic contract is document-relative: the
     // opening `---` fence is document line 1, frontmatter line 0 is line 2.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     throw new DocumentFrontmatterError(
       source,
       lineIndex + 2,
@@ -269,7 +281,10 @@ function parseFrontmatterStructure(
   const entries = collectEntries ? new Map<string, FrontmatterEntry>() : null;
   const rootLevel: Level = { indent: -1, kind: "map", target: root, childIndent: null };
   const stack: Level[] = [rootLevel];
-  /** Record the entry when a root-level key gains its value. */
+  /**
+   * Record the entry when a root-level key gains its value.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   const assign = (
     target: JsonObject,
     key: string,
@@ -299,6 +314,7 @@ function parseFrontmatterStructure(
     if (/^-\s+/.test(trimmed) || trimmed === "-") {
       // `- item` lines (optionally indented) continue the innermost open
       // `key:` list; items at the list key's own indent are accepted.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       while (stack.length > 1 && indent < stack[stack.length - 1].indent) {
         stack.pop();
       }
@@ -306,6 +322,7 @@ function parseFrontmatterStructure(
       if (top.kind === "pending") {
         // The first child of a bare `key:` is a dash item: the key is a
         // block list, not the tentative empty map.
+        // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
         const list: string[] = [];
         setOwn(top.parent!, top.key!, list);
         top.kind = "list";
@@ -320,6 +337,7 @@ function parseFrontmatterStructure(
       }
       // The first item's indent is the sibling indent for the whole list;
       // a deeper or inconsistent indent is not a sibling of the open list.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       if (top.childIndent === null) {
         top.childIndent = indent;
       } else if (indent !== top.childIndent) {
@@ -331,6 +349,7 @@ function parseFrontmatterStructure(
       // to shapes outside the accepted subset — while the flat compass
       // profile keeps the old compass contract: `- &value`, `- *x`,
       // `- !x`, `- {a}`, `- [a]` are accepted as plain strings.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       if (
         item === "" ||
         (profile === "document" &&
@@ -374,6 +393,7 @@ function parseFrontmatterStructure(
     if (container.kind === "pending") {
       // The first child of a bare `key:` is a key line: it is a nested map,
       // which the compass flat profile refuses instead of silently dropping.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       if (profile === "flat") {
         fail(
           i,
@@ -396,6 +416,7 @@ function parseFrontmatterStructure(
     // The separator colon terminates the key; for a quoted key it is the
     // colon after the closing quote, so a colon inside the quotes stays
     // part of the key.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     let separator: number;
     const firstChar = trimmed[0]!;
     if (firstChar === '"' || firstChar === "'") {
@@ -419,6 +440,7 @@ function parseFrontmatterStructure(
     const keyRaw = trimmed.slice(0, separator).trim();
     // NOTE: compute the key without `let` — a `let` captured by the
     // `assign` closure would lose TypeScript's definite-assignment narrowing.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const key: string = BARE_KEY.test(keyRaw)
       ? keyRaw
       : keyRaw.length >= 2 &&
@@ -441,6 +463,7 @@ function parseFrontmatterStructure(
     if (rawValue === "") {
       // Bare `key:` opens either a nested map or a `- item` list; until the
       // first child line decides, it is the host's empty-map result.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const child: JsonObject = {};
       const entry = assign(target, key, child, i, rawValue, "map");
       stack.push({ indent, kind: "pending", target: child, key, parent: target, childIndent: null, entry });
@@ -455,6 +478,7 @@ function parseFrontmatterStructure(
       // The flat compass contract never had block scalars: the content
       // lines under the key would be silently swallowed, so refuse at the
       // key line instead.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       fail(i, raw, "block scalar in flat frontmatter");
     }
     if (rawValue === "|" || rawValue === "|-") {
@@ -462,6 +486,7 @@ function parseFrontmatterStructure(
       // inside the block stay empty, the block ends at the first nonblank
       // line indented at or below the key. Every consumed line gets the
       // same tab-in-indentation refusal as any other frontmatter line.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       const keyLineIndex = i;
       const blockLines: string[] = [];
       for (let j = i + 1; j < lines.length; j += 1) {
@@ -474,6 +499,7 @@ function parseFrontmatterStructure(
         if (blockLine.trim() && blockIndent <= indent) break;
         // The tab refusal above guarantees the measured indentation is
         // spaces, so comparing the indent directly decides the slice.
+        // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
         const normalized =
           blockIndent >= indent + 2
             ? blockLine.slice(indent + 2)
@@ -531,6 +557,7 @@ function parseFrontmatterStructure(
     // In the flat profile a scalar keeps its source text verbatim — the
     // compass contract never typed `true`/numbers/`null` and never stripped
     // quotes in the shared reader's sense, so adapters decode what they need.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     assign(target, key, profile === "flat" ? rawValue : parseScalar(rawValue), i, rawValue, "scalar");
     stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
   }

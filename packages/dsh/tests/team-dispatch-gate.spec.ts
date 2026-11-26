@@ -217,7 +217,10 @@ describe('team dispatch gate — task board (description carrier)', () => {
   })
 })
 
-/* ---------------------------------- D16 legacy body-label regression ---------------------------------- */
+/**
+ * ---------------------------------- D16 legacy body-label regression ----------------------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('team dispatch gate — the retired body-label grammar refuses on the team carrier too', () => {
   it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
@@ -225,6 +228,7 @@ describe('team dispatch gate — the retired body-label grammar refuses on the t
     // text shaped like an Assignment whose fields live in the retired
     // `**Label**` grammar must reach the legacy-format refusal, never pass
     // as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -240,6 +244,7 @@ Do the thing.
     const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(LEGACY_BODY_LABEL), defaultAllow)
 
     // Terminal on the team carrier too: the same core, the same veto.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(advisories).toHaveLength(0)
@@ -248,6 +253,7 @@ Do the thing.
   it('a team carrier naming an out-of-home pointer is denied in the default mode (same terminal refusal)', async () => {
     // The team carriers route through the SAME core as `subagent`, so a
     // source refusal is a veto here too — not an advisory.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const app = booted = await bootApp()
     const outside = join(app.root, 'outside-assignment.md')
     writeFileSync(outside, '---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\n---\n\n## Task\n\nDo the thing.\n')

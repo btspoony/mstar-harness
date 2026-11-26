@@ -725,13 +725,17 @@ describe('team agent flow — an ACTIVE-workflow-seeded activation resolves or i
   })
 })
 
-/* ------------------- D16 legacy body-label regression ------------------- */
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 
 describe('team agent flow — the retired body-label grammar is inert in the ledger', () => {
   it('a body-label Assignment records no derived fields (the only legacy fixture)', async () => {
     // D16 regression — the ONE body-label fixture of this spec: the dispatch
     // gate refuses the retired `**Label**` grammar upstream, so its ledger
     // mirror is a dispatch row with NO derived role/category/plan fields.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const LEGACY_BODY_LABEL = `## Assignment
 

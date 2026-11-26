@@ -85,11 +85,13 @@ export async function leaseGateViolations(
   // the same row-scope questions from the SAME document the core validated.
   // A pointer the resolver refuses is the core's terminal refusal — the
   // lease adds nothing.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (!assignmentSource.ok) return []
   // One parse per dispatch: the caller's already-parsed entries and the plan
   // id they resolved — the lease reads the SAME parse the decision used and
   // never reparses the document. `execution_mode` is the engine parsed field
   // (the front matter scalar key is the single declaration contract).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const { entries, planId } = decision
   const fields = parseAssignmentFieldsFromFrontmatter(entries)
   const sdd = executionModeToN(fields.executionMode ?? '').n === 3

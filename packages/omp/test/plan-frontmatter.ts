@@ -2,6 +2,7 @@
  * The one shared plan-fixture renderer for omp tests: every migrated test
  * writes plan documents through this renderer so the front-matter contract
  * shape is maintained in exactly one place.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
 
 /** Render a plan markdown whose declarations live in the front matter fence. */

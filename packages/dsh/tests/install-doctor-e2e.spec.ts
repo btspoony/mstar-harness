@@ -223,7 +223,10 @@ const ASSIGNMENT_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** The retired body-label form — the ONE legacy fixture of this spec (D16). */
+/**
+ * The retired body-label form — the ONE legacy fixture of this spec (D16).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const LEGACY_BODY_LABEL_PROMPT = [
   '## Assignment',
   '',
@@ -348,6 +351,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
         ;(app.ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
         // D16 regression — the retired `**Label**` grammar refuses at the
         // native start (terminal), so the provider never sees a start for it.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         await startActivationViaNativeChannel(app, activationSpec(LEGACY_BODY_LABEL_PROMPT)).then(
           () => { throw new Error('expected the retired body-label start to refuse') },
           () => {},

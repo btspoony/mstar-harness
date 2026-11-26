@@ -80,11 +80,20 @@ const BLANK = /^\s*$/;
 const ASSIGNMENT_HEADING = /##\s+Assignment\s*$/;
 /** A fence line: three or more backticks or tildes, plus its info string. */
 const FENCE_OPEN = /^\s*(`{3,}|~{3,})(.*)$/;
-/** The front matter seat declaration key (snake_case — the only field contract). */
+/**
+ * The front matter seat declaration key (snake_case — the only field contract).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const EXECUTE_AS_KEY = /^[ \t]*execute_as[ \t]*:/;
-/** The retired body-label role line, located only to point a refusal at it. */
+/**
+ * The retired body-label role line, located only to point a refusal at it.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const EXECUTE_AS_LABEL = /^[ \t]*(?:\*\*[ \t]*)?Execute as/i;
-/** A front matter fence line (an empty `---` line, at either end of the block). */
+/**
+ * A front matter fence line (an empty `---` line, at either end of the block).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const FRONT_MATTER_FENCE = /^[ \t]*---[ \t]*$/;
 
 export type Doc = { rel: string; text: string };
@@ -185,12 +194,14 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
         const fields = parseAssignmentFields(text);
         const executeAs = fields.executeAs?.trim();
         // Point at the declaration line when there is one, else at the segment start.
+        // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
         const declOffset = segment.lines.findIndex((line) => EXECUTE_AS_KEY.test(line) || EXECUTE_AS_LABEL.test(line));
         const at = block.line + segment.start + (declOffset === -1 ? 0 : declOffset);
         const subject = `Assignment (Execute as: ${executeAs === undefined || executeAs === "" ? "(absent)" : executeAs})`;
         // A seat still written with the retired body-label grammar declares
         // nothing the gate can read; the engine's own D16 refusal names it
         // instead of letting it pass as an unbounded-but-clean segment.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         if (legacyAssignmentShape(text)) {
           const refusal = legacyFormatViolation();
           rows.push(`${doc.rel}:${at} ${subject} ${refusal.message} - ${refusal.fix} (dispatch reports ${refusal.code})`);
@@ -211,6 +222,7 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
     // fence pair dropped while other templates still scan), which a "zero segments
     // from this document" test cannot see. The marker is the declaration key
     // itself, so a mid-line prose mention is not counted; a 4-space indent is.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const scanned = blocks - before;
     perDoc.set(doc.rel, scanned);
     const markers = doc.text
@@ -250,6 +262,7 @@ export function checkSeatBounding(docs: readonly Doc[]): { rows: string[]; block
  * retired shape, reported as the D16 refusal), and runs to the next start or
  * the fence end. A front-matter fence that declares no seat is skipped whole, so
  * its keys can never re-anchor a segment.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function seatSegments(lines: readonly string[]): Array<{ start: number; lines: string[] }> {
   const starts: number[] = [];

@@ -28,7 +28,10 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-/** An Assignment whose `execution_mode` front matter field drives the QC seat count. */
+/**
+ * An Assignment whose `execution_mode` front matter field drives the QC seat count.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const ASSIGNMENT_SDD = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -40,7 +43,10 @@ working_branch: feature/foo
 ## Assignment
 `;
 
-/** One QC Assignment carrying the three byte-identical alignment front matter keys. */
+/**
+ * One QC Assignment carrying the three byte-identical alignment front matter keys.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function qcAssignment(planId: string, range: string): string {
   return `---
 execute_as: qc-specialist

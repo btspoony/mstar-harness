@@ -110,7 +110,10 @@ function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void
   ;(write as (value: unknown) => void)(mode)
 }
 
-/** The delegation tool call the `tools/pre-execute` listener gates. */
+/**
+ * The delegation tool call the `tools/pre-execute` listener gates.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function subagentCall(prompt: string, agent?: unknown, callId = 'call-1'): ToolExecution {
   return {
     callId: callId as ToolExecution['callId'],
@@ -122,15 +125,22 @@ function subagentCall(prompt: string, agent?: unknown, callId = 'call-1'): ToolE
   } as unknown as ToolExecution
 }
 
-/** The registry's bare default decision (the waterfall's terminal `next()`). */
+/**
+ * The registry's bare default decision (the waterfall's terminal `next()`).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const allowNext = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
-/** A successful dispatch outcome (the around-dispatch waterfall's terminal value). */
+/**
+ * A successful dispatch outcome (the around-dispatch waterfall's terminal value).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const okResult = { isError: false as const, value: null, content: [] }
 
 /**
  * Run one tool call's body inside the `tools/execute` scope the plugin
  * registers — the seam that lets a start consume THAT call's carrier handoff.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 async function runInCall(app: BootResult, exec: ToolExecution, body: () => Promise<unknown>): Promise<void> {
   await app.ctx.waterfall('tools/execute', exec, async () => {
@@ -197,7 +207,10 @@ const FIELD_ROLE_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** A fully valid front-matter Assignment missing ONLY the role declaration. */
+/**
+ * A fully valid front-matter Assignment missing ONLY the role declaration.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const NO_DECLARATION_PROMPT = [
   '---',
   'delegation: forbidden',
@@ -209,7 +222,10 @@ const NO_DECLARATION_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** The canonical declaration: `execute_as` in the front matter block. */
+/**
+ * The canonical declaration: `execute_as` in the front matter block.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const CANONICAL_PROMPT = [
   '---',
   'execute_as: fullstack-dev',
@@ -221,7 +237,10 @@ const CANONICAL_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
-/** The D16 regression — the ONE legacy body-label fixture of this spec. */
+/**
+ * The D16 regression — the ONE legacy body-label fixture of this spec.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const LEGACY_BODY_LABEL_PROMPT = [
   '## Assignment',
   '',
@@ -246,6 +265,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       const sent = provider.starts[0]!.request as RecordedRequest
       const text = promptTextOf(sent)
       // The canonical front matter block is prepended.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(text.startsWith('---\nexecute_as: fullstack-dev\n---\n')).toBe(true)
       // The rest of the prompt is preserved byte-for-byte.
       expect(text).toContain('Role: `fullstack-dev`\n\n## Task\n\nImplement the assigned work.')
@@ -391,6 +411,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // hands a recognized retired body-label Assignment to a provider: the
     // terminal D16 check sits AHEAD of the preset exemption, so the same
     // request without a preset ((p20)) and with one are refused identically.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { app, provider, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(LEGACY_BODY_LABEL_PROMPT), cwd: workspace, agentPreset: 'caller-preset' }))
 
@@ -561,6 +582,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(text).toContain('\nexecute_as: fullstack-dev\n')
     expect(text).not.toContain('Execute_As')
     // The downstream parser reads the repaired key.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(sent.agentPreset).toBe(PRESET_ID)
   })
 
@@ -582,6 +604,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(text.match(/^execute_as: fullstack-dev$/gm)).toHaveLength(1)
     expect(text).not.toContain('act_as')
     // The collapsed key parses, so the inner consumer selected the preset.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect((provider.starts[0]!.request as RecordedRequest).agentPreset).toBe(PRESET_ID)
   })
 
@@ -617,6 +640,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // A quoted example is evidence, not a declaration: the fence masks it in
     // both the candidate scan and the rewrite, so the verdict is the missing-
     // declaration refusal.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(error.message).toContain('carries no role declaration')
     expect(error.message).toContain('execute_as')
     expect(error.message).toContain('roleGate')
@@ -654,6 +678,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // The front matter declares the role but the block is not valid YAML:
     // replacing the role key cannot make the strict parser read it, so the
     // proof fails and "repaired" is never claimed.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const prompt = [
       '---',
       'role: `fullstack-dev`',
@@ -679,6 +704,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
   it('(x) an `Assignment file:` pointer binds the gate and the preset exactly as the inline form (compass D14)', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     // Inline control: the canonical document selects the role's preset.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(CANONICAL_PROMPT), cwd: workspace }))
     expect(provider.starts).toHaveLength(1)
     const inline = provider.starts[0]!.request as RecordedRequest
@@ -688,6 +714,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // The SAME document passed as a pointer under the accepted harness home:
     // the gate resolves it before role evaluation, and the preset merge reads
     // the document — never the pointer line.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const assignmentsDir = join(app.harnessDir, 'assignments')
     mkdirSync(assignmentsDir, { recursive: true })
     const file = join(assignmentsDir, 'pointer-assignment.md')
@@ -699,6 +726,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(sent.agentPreset).toBe(PRESET_ID)
     // The child receives the RESOLVED document (the re-carried inline form),
     // so the pointer and inline starts deliver the same prompt content.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
   })
 
@@ -729,6 +757,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
   it('(aa) a refused pointer is terminal — no roleGate mode or role exemption softens it', async () => {
     // `off` is the documented rollback for ordinary gate verdicts; a source
     // refusal has no verified document, so the start is still refused.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const { app, provider, workspace } = await bootWithProvider({ roleGate: 'off' })
     const outside = join(app.root, 'outside-assignment.md')
     writeFileSync(outside, CANONICAL_PROMPT)
@@ -740,6 +769,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
 
     // A non-harness start directory exempts the ordinary gate, never the
     // terminal refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-plain-'))
     scratchDirs.push(plain)
     const exempt = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), parent: parentAgent(plain) }))
@@ -763,6 +793,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // Controlled boundary, no timer: the file is rewritten AFTER the gate's
     // decision and BEFORE the start seam runs. A second read would start the
     // child on the rewritten document.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
     await runInCall(app, exec, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
 
@@ -785,6 +816,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // Two calls on the SAME pointer text and parent: the second admission
     // resolves the rewritten document. A handoff keyed by parent + text would
     // let the second overwrite the first's snapshot.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const first = subagentCall(pointer, caller, 'call-overlap-a')
     const second = subagentCall(pointer, caller, 'call-overlap-b')
     expect((await app.ctx.waterfall('tools/pre-execute', first, allowNext)).kind).toBe('allow')
@@ -816,11 +848,13 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect((await app.ctx.waterfall('tools/pre-execute', exec, allowNext)).kind).toBe('allow')
     // The call runs without an activation (a downstream denial or a carrier
     // that starts no child): its handoff must die with the call.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     await runInCall(app, exec, async () => {})
     writeFileSync(file, rewritten)
 
     // A later direct start resolves the source ITSELF — never the dropped
     // snapshot of an earlier call.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller }))
 
     expect(provider.starts).toHaveLength(1)
@@ -840,6 +874,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // A downstream listener denies AFTER this gate admitted the call: the
     // preflight publishes its carrier, then the call never reaches
     // `tools/execute` (no body, no settle).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     let denyNext = true
     app.ctx.on('tools/pre-execute', (_exec, next) => {
       if (!denyNext) return next()
@@ -852,6 +887,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     // The file is rewritten; the later invocation is a DIFFERENT execution that
     // happens to spell the same caller id and carries its own inline document.
     // The denied call's document must not surface as this call's carrier.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
     const inline = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
     const later = subagentCall(inline, caller, 'call-reused')
@@ -887,6 +923,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       '- **Role**: fullstack-dev',
       // A wrapped legacy `Execute as` label value is not usable as-is — it is
       // repaired into front matter, not treated as canonical.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       'Execute as: `fullstack-dev`',
       'Execute as: "fullstack-dev"',
     ]) {
@@ -1021,6 +1058,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     // Terminal, exactly like the shared `dispatch.assignment.legacy-format`
     // violation: the retired document declares no front matter, so a mode that
     // only softens ordinary role-declaration verdicts cannot admit the start.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     for (const mode of ['hard', 'warn', 'off'] as const) {
       const decision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, { mode }))
       expect(decision.kind, mode).toBe('refuse')
@@ -1031,6 +1069,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       // An explicit `agentPreset` bypasses nothing: the terminal D16 check
       // sits ahead of the preset exemption, so every mode refuses the same
       // retired document with a caller-supplied preset selection too.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const presetDecision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, {
         mode,
         request: { ...gateInput(LEGACY_BODY_LABEL_PROMPT).request, agentPreset: 'caller-preset' },
@@ -1121,6 +1160,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     // The front matter contract is fence-aware at the scan level: a quoted
     // example masks out of the candidate scan, so the verdict is the missing-
     // declaration refusal — never a silent pass that arms a pasted template.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const hard = evaluateRoleGate(gateInput(text))
     expect(hard.kind).toBe('refuse')
     if (hard.kind === 'refuse') {
@@ -1134,6 +1174,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(evaluateRoleGate(gateInput(text, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
     // The rewrite still never edits fenced content: a fresh front matter
     // block is prepended and the quoted key lines inside it stay intact.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const rewritten = rewritePromptWithExecuteAs(text, EXECUTE_AS)
     expect(rewritten.startsWith('---\nexecute_as: fullstack-dev\n')).toBe(true)
     expect(rewritten).toContain('```text\nexecute_as: fullstack-dev\n```')
@@ -1167,6 +1208,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     // replacing the role key cannot make the strict parser read it, so the
     // proof fails and "repaired" is never claimed — the verdict is the
     // configured mode, never a "repaired" claim that leaves the child unbound.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const text = [
       '---',
       'role: `fullstack-dev`',
@@ -1263,6 +1305,7 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
     // before AND after the role keys: before the span-aware offset fix the
     // rewrite drifted one byte per preceding CRLF line, landing the splice
     // inside `task_category` and leaving `\r` fragments around the drop.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const unrelatedBefore = ['---', 'delegation: forbidden', 'task_category: logic'].join('\r\n')
     const unrelatedAfter = ['---', '', '## Task', '', 'Do it.', '- keep this  ', ''].join('\r\n')
     const document = [unrelatedBefore, 'role: `fullstack-dev`', 'act_as: fullstack-dev', unrelatedAfter].join('\r\n')
@@ -1270,15 +1313,19 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
     const rewritten = rewritePromptWithExecuteAs(document, EXECUTE_AS)
 
     // The repaired document parses to the role (the proof the gate claims).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
     // The unrelated preceding fields are byte-identical: the canonical line
     // follows them with the document's own CRLF ending.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(rewritten.startsWith(`${unrelatedBefore}\r\nexecute_as: fullstack-dev`)).toBe(true)
     // The duplicate was dropped WITH its real ending — no orphan `\r`.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(rewritten).not.toContain('act_as')
     expect(rewritten).not.toMatch(/\r[^\n]/)
     // Everything after the role family is byte-identical (the closing fence,
     // the body, trailing whitespace).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(rewritten.endsWith(`\r\n${unrelatedAfter}`)).toBe(true)
   })
 

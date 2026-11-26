@@ -935,6 +935,7 @@ export function recordDispatch(input: {
    * resolved document carrying a standalone `Assignment file:` line is
    * never reparsed as another pointer. Omitted (direct callers) → the
    * record resolves the prompt itself, the pre-fix behavior.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   assignmentSource?: AssignmentSourceResult
   /**
@@ -943,9 +944,13 @@ export function recordDispatch(input: {
    * the rejected block is never read again (its structured diagnostic remains
    * with the gate's schema layer). Omitted (direct callers) → the record
    * parses the resolved document once here.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   entries?: Map<string, FrontmatterEntry> | null
-  /** The plan id the decision derived from those entries; absent stays absent. */
+  /**
+   * The plan id the decision derived from those entries; absent stays absent.
+   * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+   */
   planId?: string | undefined
   violations: readonly unknown[]
   hard: boolean
@@ -992,6 +997,7 @@ export function recordDispatch(input: {
     // records the same fields the inline form does. A refused/unresolvable
     // source falls back to the carrier text (the row still records — identity
     // fields are simply absent, never fabricated).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const assignmentSource = input.assignmentSource ?? readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
     const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
     // ONE parse serves the decision, the handoff and the ledger (QC3-04): the
@@ -999,6 +1005,7 @@ export function recordDispatch(input: {
     // absent plan id are FINAL, never a reason to read the text again — else
     // one local parse for direct callers. taskIdOf scans the body slice only
     // (no front matter parse).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const entries = input.entries !== undefined ? input.entries : assignmentFrontmatterEntries(assignmentText)
     const fields = parseAssignmentFieldsFromFrontmatter(entries)
     const planId = input.planId ?? planIdOfEntries(entries)

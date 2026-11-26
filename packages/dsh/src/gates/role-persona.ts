@@ -119,6 +119,7 @@
  * dsh-subagent dependency: the
  * runtime surface is consumed structurally (same pattern as the probe's
  * `LoaderEntryView` and T2's `fallbacks-structural.ts`).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { isAbsolute, resolve } from 'node:path'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -614,6 +615,7 @@ export interface RoleGateInput {
    * refusal is terminal: the gate refuses in every mode. When supplied and
    * resolved, the caller has already re-carried the resolved document in
    * `request`, so the scan below reads the same text the dispatch gate would.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
    */
   readonly assignmentSource?: AssignmentSourceResult
 }
@@ -625,6 +627,7 @@ export interface RoleGateInput {
  *
  * @param cwd - the child's effective start directory, when known.
  * @param refusal - the resolver refusal being propagated.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function sourceRefusalMessage(cwd: string | undefined, refusal: { code: string; message: string; fix?: string }): string {
   const cause = `carries an \`Assignment file:\` pointer the source resolver refuses (${refusal.code}): ${refusal.message}`
@@ -651,13 +654,22 @@ export type RoleGateDecision =
 /** Field labels whose value is a role declaration (case-insensitive). */
 const ROLE_FIELD_LABELS: ReadonlySet<string> = new Set(['execute as', 'act as', 'role'])
 
-/** Bold field line (`**Role**: <value>`, optional list bullet). */
+/**
+ * Bold field line (`**Role**: <value>`, optional list bullet).
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const BOLD_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*([^*:]+?)\s*\*\*\s*:\s*(.*)$/
-/** Plain field line (`Role: <value>`, optional list bullet). */
+/**
+ * Plain field line (`Role: <value>`, optional list bullet).
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const PLAIN_FIELD_LINE_RE = /^[ \t]*(?:[-*][ \t]+)?([A-Za-z][A-Za-z -]*?)\s*:\s*(.*)$/
 
 
-/** Legacy body-label keys the repaired front matter replaces: `execute_as` variants plus the prose-tier `role` / `act_as` (case-insensitive — a case-variant key binds nothing and is normalized in place; a CRLF line's trailing `\r` is formatting). */
+/**
+ * Legacy body-label keys the repaired front matter replaces: `execute_as` variants plus the prose-tier `role` / `act_as` (case-insensitive — a case-variant key binds nothing and is normalized in place; a CRLF line's trailing `\r` is formatting).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const FM_ROLE_KEY_RE = /^([ \t]*)(?:execute_as|role|act_as)([ \t]*:[ \t]*)(.*)\r?$/i
 
 /**
@@ -668,6 +680,7 @@ const FM_ROLE_KEY_RE = /^([ \t]*)(?:execute_as|role|act_as)([ \t]*:[ \t]*)(.*)\r
  * that boundary never declares the role — a `## Task` sentence or a quoted
  * example is evidence, not a declaration. The scan runs on the fence-masked
  * text (same offsets), so a fenced example supplies no candidate.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 function declarationScope(unfenced: string): string {
   if (/^---[ \t]*\r?\n/.test(unfenced)) {
@@ -722,6 +735,7 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // proved there is no document, so no role exemption (preset, non-harness
   // project, unknown provider), no preset merge and no `roleGate` mode may
   // soften it — the start has nothing verified to run.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const source = input.assignmentSource
   if (source !== undefined && !source.ok) return { kind: 'refuse', message: sourceRefusalMessage(input.cwd, source) }
   const text = promptText(request)
@@ -732,10 +746,12 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // retired Assignment to a provider (the retired document declares no front
   // matter, so no `roleGate` mode and no preset selection may soften a start
   // the dispatch tools already veto).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   if (legacyAssignmentShape(text)) {
     return { kind: 'refuse', message: legacyDeclarationMessage(input.cwd) }
   }
   // (2) An explicit selection is caller intent — never gated.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   // (3) A canonical front matter `execute_as` is already in place — no
   // rewrite (byte-identical). This reads the WHOLE raw text, which is exactly
@@ -743,20 +759,25 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // wrapped/odd scalar is not canonical: the strict parser keeps it raw, so
   // it binds nothing and falls through to the repair tiers below (repaired
   // in place, never duplicated).
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   if (isCanonicalExecuteAs(parseAssignmentFields(text).executeAs ?? '')) {
     return { kind: 'pass', reason: 'canonical' }
   }
   // (4) Non-harness projects are exempt (the caller resolved the child's
   // EFFECTIVE start directory, so an omitted/relative cwd is decided by the
   // directory the child inherits, never treated as non-harness blindly).
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   if (!input.harnessProject) return { kind: 'pass', reason: 'non-harness' }
   // (5) The runtime's own `NO_PROVIDER` failure must not be shadowed.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
   // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
   // example is never a declaration, and the scan and the rewrite cannot
   // disagree about where fences are.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const unfenced = maskFencedCodeBlocks(text)
   // (6) Repair candidates: exactly one distinct value across the tiers.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   const { fields, tokens, unusable } = roleCandidates(unfenced, input.declaredRoleIds)
   const candidates = [...new Set([...fields, ...tokens])]
   // The candidate the rewrite produced but could not make the seam bind (an
@@ -769,6 +790,7 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
     // uses (`withRolePreset`): a rewrite whose canonical front matter key
     // does not parse leaves the child unbound, and claiming "repaired" would
     // hide exactly that.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     if (parseAssignmentFields(promptText(repaired)).executeAs === roleId) {
       return { kind: 'repair', roleId, evidence: fields.length === 1 ? 'field' : 'token', request: repaired }
     }
@@ -864,6 +886,7 @@ function isHarnessProject(directory: string): boolean {
  * assignment-source resolver (`readAssignmentSource`) can containment-check
  * an `Assignment file: <abs>` pointer against it. `null` = no control root
  * (the resolver itself refuses the pointer — never a containment skip).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function harnessRootFor(directory: string): string | null {
   const abs = resolve(directory)
@@ -899,6 +922,7 @@ function roleCandidates(
   // (`Execute as:` / `Act as:` / `Role:`, bold or plain) inside the
   // declaration scope. A normalizable value is a candidate; anything else is
   // unusable evidence (the cause-specific refusal names it).
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   for (const line of scope.split(/\r?\n/)) {
     const fmMatch = /^[ \t]*(execute_as|role|act_as)[ \t]*:[ \t]*(.*)$/i.exec(line)
     const match = fmMatch !== null
@@ -1013,6 +1037,7 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
       // No role-family key: splice the canonical key as the first line of the
       // existing block. Invalid YAML is irrelevant here — the proof re-parse
       // decides whether the rewrite is ever claimed.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       return `${text.slice(0, openEnd)}execute_as: ${roleId}\n${text.slice(openEnd)}`
     }
     // Replace every role-family line (all duplicates — the strict parser
@@ -1023,6 +1048,7 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
     // and lands the replacement inside unrelated fields. The masked block is
     // character-position identical to the original text, so walking the
     // original text yields the same line count and the true widths.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const starts: number[] = []
     let rest = text.slice(openEnd, openEnd + block.length)
     for (let count = 0; count < lines.length; count += 1) {
@@ -1038,6 +1064,7 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
     // outside the swapped byte range); a DROPPED line consumes its real
     // ending (width derived from the next line's start, so a CRLF line ends
     // exactly at its `\n`, not between `\r` and `\n`).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     let out = text
     for (let position = roleLines.length - 1; position >= 0; position -= 1) {
       const index = roleLines[position]!
@@ -1081,6 +1108,7 @@ function repairRequest(request: SubagentStartRequestView, roleId: string): Subag
  * `Assignment file: <abs>` pointer re-carries the document it names, so the
  * gate, the preset merge and the child all read the document, never the
  * pointer line.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function foldPromptText(request: SubagentActivationSpecView, text: string): SubagentActivationSpecView {
   const blocks = request.prompt ?? []
@@ -1162,6 +1190,7 @@ function startLocation(cwd: string | undefined): string {
  * the retired document declares no front matter, so the refusal is terminal.
  *
  * @param cwd - the child's effective start directory, when known.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function legacyDeclarationMessage(cwd: string | undefined): string {
   const cause =
@@ -1206,10 +1235,14 @@ function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'har
  * start's document — that start resolves the source itself. The body runs
  * inside its own execution's scope (`runWithDispatchCall`), so overlapping
  * calls from the same parent cannot overwrite each other's snapshot.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 const resolvedCarriers = new WeakMap<ToolExecution, AssignmentSourceResult>()
 
-/** The execution whose body is currently running (empty outside a call). */
+/**
+ * The execution whose body is currently running (empty outside a call).
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const activeCall = new AsyncLocalStorage<ToolExecution>()
 
 /**
@@ -1239,12 +1272,16 @@ export function runWithDispatchCall<T>(exec: ToolExecution, body: () => Promise<
       return await body()
     } finally {
       // An unconsumed handoff must not outlive its call.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       resolvedCarriers.delete(exec)
     }
   })
 }
 
-/** Consume this call's handed-off carrier (single use), if any. */
+/**
+ * Consume this call's handed-off carrier (single use), if any.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function takeResolvedCarrier(): AssignmentSourceResult | undefined {
   const exec = activeCall.getStore()
   if (exec === undefined) return undefined
@@ -1307,6 +1344,7 @@ function wrapSubagentsService(
       // resolved pointer is re-carried as the prompt text (the text blocks
       // folded, exactly as the joined projection the gate reads), so the gate
       // and the preset merge both read the document — never the pointer line.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const carrierText = promptText(spec)
       const assignmentSource = takeResolvedCarrier()
         ?? readAssignmentSource(carrierText, { harnessDir: harnessRootFor(startDirectory) })
@@ -1347,6 +1385,7 @@ function wrapSubagentsService(
     // warns: the preset merge and the child read the document a pointer
     // names, exactly as the inline form carries it (a degraded or refused
     // start keeps the original spec — nothing was proven about it).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     if (decision.kind !== 'repair') gated = carrier
     let merged = gated
     try {
@@ -1408,6 +1447,7 @@ function withRolePreset(
   if (taskPrompt.trim().length === 0) return spec
   // (4) The SAME engine Assignment grammar the dispatch gate uses: front
   // matter is the only field contract, so a body-quoted key cannot shape a merge.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   const executeAs = parseAssignmentFields(taskPrompt).executeAs
   if (executeAs === undefined) return spec
   // (5) Only a mapped role selects a preset (an empty mapping value is

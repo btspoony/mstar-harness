@@ -149,7 +149,10 @@ describe("lint --type specs", () => {
   });
 });
 
-/** Run any validation verb with an explicit control root (the resolver's harness anchor). */
+/**
+ * Run any validation verb with an explicit control root (the resolver's harness anchor).
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 async function runVerb(id: string, cwd: string, input: Record<string, unknown>, controlRoot: string | null = null) {
   const definition = getCommandDefinitions().find((command) => command.id === id);
   if (definition === undefined) throw new Error(`missing ${id} definition`);
@@ -198,6 +201,7 @@ describe("assignment files resolve through the ONE source resolver", () => {
 
       // The pointer line itself declares no execution mode: reading the file
       // bytes without the resolver answers "" and refuses the verb.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const bare = await runVerb("review.seats", root, { assignmentFile: input }, null);
       expect(bare.status).toBe("refused");
       expect(bare.code).toBe("dispatch.assignment.path");
@@ -309,6 +313,7 @@ describe("lint --type acceptance", () => {
     expect(result.status).toBe("refused");
     // pm-acceptance.md is not auto-detected, so a recovery without the flag
     // would rerun a different check.
+    // see docs/knowledge/conventions/brief-acceptance-declarations.md
     expect(result.details?.recovery).toContain("--type acceptance");
     expect(JSON.stringify(result.details)).toContain("lint.acceptance.frontmatter.missing");
   });

@@ -151,6 +151,7 @@ const loadAgentsFromDir = (agentsDirPath: string): Record<string, JsonObject> =>
     const { frontmatter, body } = extractFrontmatterAndBody(content);
     // The loader names its file as the reader's source label, so a refusal
     // attributes the violation to this asset (path, document line and fix).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName = typeof parsed.name === "string" ? parsed.name : "";
     const id = parsedName || file.replace(/\.md$/, "");
@@ -676,6 +677,7 @@ export function validateDispatchAssignment(
 // out-of-home / unrooted / ambiguous pointer): there is no verified
 // assignment to dispatch on, so it is hard independently of document or
 // repo enforcement — every refusing-capable caller fails closed.
+// see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const harnessDir = resolveHarnessDir();
     const source = readAssignmentSource(assignmentText, { harnessDir });
     let violations: ValidationResult[];
@@ -686,6 +688,7 @@ export function validateDispatchAssignment(
       // host has no refusal channel (I-001258, advisory), so the terminal
       // refusal is surfaced as the error line + `hardBlocked` for any
       // refusal-capable caller.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       violations = [source];
       terminal = source.terminal === true;
     } else {
@@ -694,10 +697,12 @@ export function validateDispatchAssignment(
       // pointer commits to the Assignment contract, so its bytes validate
       // as one even without a recognized core key. Inline prompts keep the
       // silent path.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const carrier = source.path;
       const fileCarrier = carrier !== undefined;
  // One parse per decision: the role read and the composition share this
  // parse (the composition also owns the D16 legacy refusal).
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
@@ -710,6 +715,7 @@ export function validateDispatchAssignment(
         // own directory (CLI parity); Git discovery stays on the checkout
         // (`cwd` unset), so an out-of-repo assignment home never changes the
         // inspected repository.
+        // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
         assignmentDir: carrier === undefined ? undefined : path.dirname(carrier),
       });
       violations = composed.violations;
@@ -718,11 +724,13 @@ export function validateDispatchAssignment(
       // a veto enforcement cannot soften. This host has no refusal channel
       // (`I-001258`), so it is surfaced through `hardBlocked` + the error
       // log for any refusal-capable caller — never downgraded to a warning.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       terminal = violations.some((violation) => violation.terminal === true);
     }
  // Header flag, a terminal refusal, else repo-level hard (`.mstarc` →
  // compass) — the same precedence the status-write gate and dsh dispatches
  // honor.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const hard = terminal || enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
     const gated: GateResult = applyEnforcement({ ok: violations.length === 0, violations }, { hard });
 

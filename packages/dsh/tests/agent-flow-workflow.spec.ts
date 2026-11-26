@@ -707,6 +707,7 @@ execute_as: @fullstack-dev
     // D16 regression — the ONE body-label fixture of this spec: the dispatch
     // gate refuses the retired `**Label**` grammar upstream, so its ledger
     // mirror is a dispatch row with NO derived role/category/plan fields.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     recordDispatch({
       harnessDir,

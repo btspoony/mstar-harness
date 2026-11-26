@@ -1414,6 +1414,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     // (worktree.main.tracked-changes) requires it committed after gitInit.
     // The repository ignores its control harness (`/.mstar/`), and a dispatch
     // gates the checkout its session runs in — so the fixture ignores it too.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const gitignore = join(root, '.gitignore')
     if (!existsSync(gitignore)) writeFileSync(gitignore, '.mstar/\n')
     gitInit(root)

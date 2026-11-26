@@ -1073,11 +1073,13 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   // rescanned here. Compass scalar contract: values keep their source
   // text (never typed); a double-quoted scalar keeps its JSON-escape
   // decode because the roadmap export writes values with `JSON.stringify`.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
   // Every projected key lands as an own data property: a plain assignment
   // for the accepted key `__proto__` would invoke the inherited prototype
   // setter, dropping the value and repointing the prototype instead.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   for (const [key, entry] of entries) {
     if (entry.kind === "list") {
       setOwn(doc, key, entry.value);
@@ -1086,11 +1088,13 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
     const raw = entry.rawText;
     if (raw === "") {
       // A bare `key:` is null in the compass contract.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       setOwn(doc, key, null);
     } else if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
       // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
       // \\" → quote, \\\\ → backslash; a lone backslash before any
       // other character is preserved (JSON.stringify parity).
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       setOwn(
         doc,
         key,

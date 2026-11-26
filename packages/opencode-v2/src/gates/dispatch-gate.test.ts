@@ -237,7 +237,9 @@ describe("OpenCode V2 subagent dispatch gate", () => {
 });
 
 /** The retired body-label format of the same dispatch — same fields as
- * `**Label**` body lines (the format front matter replaced). */
+ * `**Label**` body lines (the format front matter replaced).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -253,6 +255,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
   test("a pointer under an accepted assignment home produces the SAME decision as the inline form", async () => {
     const logs: string[] = [];
     // Inline: missing-branch violations in warn mode.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const inlineBranchless = validAssignment().replace("working_branch: feature/opencode-v2-dispatch-test", "");
     const warnInline = await fixture((_level, message) => logs.push("inline: " + message));
     await warnInline.invoke(makeEvent("project-manager", "fullstack-dev", inlineBranchless));
@@ -267,6 +270,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(warnPointer.bodyCalls()).toBe(1);
     expect(logs2.join("\n")).toContain("assignment.field.branch-missing");
     // Same decision as inline: the one violation code matches.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(inlineCodes).toContain("assignment.field.branch-missing");
   });
 
@@ -277,6 +281,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
  // Critical source-resolution refusal: hard independent of document/repo
  // enforcement — the typed Tool.Error refuses even on the soft tree, and
  // the tool body is never reached.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${outside}`))).rejects.toMatchObject({
       _tag: "Tool.Error",
       message: expect.stringContaining("dispatch.assignment.path"),
@@ -287,6 +292,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
   test("a null control harness root refuses the pointer — the tool body is never reached", async () => {
  // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
  // answer a root, so the pointer can never be containment-checked.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const bare = mkdtempSync(join(tmpdir(), "opencode-v2-null-root-"));
     writeFileSync(join(bare, "a.md"), validAssignment());
     process.chdir(bare);
@@ -323,6 +329,7 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     const harness = await fixture();
     // No repo hard setting, no document enforcement: the retired format has
     // no verified declaration, so the subagent is never spawned.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", LEGACY_BODY_LABEL))).rejects.toMatchObject({
       _tag: "Tool.Error",
       message: expect.stringContaining("dispatch.assignment.legacy-format"),
@@ -340,12 +347,14 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(soft.bodyCalls()).toBe(1);
     // The pointer named an Assignment: an empty file is that Assignment's
     // shape violation, never the silent non-Assignment prompt path.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(logs.join("\n")).toContain("dispatch.assignment.shape");
   });
 
   test("a pointed document that declares hard enforcement refuses like the inline form", async () => {
     // Missing every declaration but `execute_as`: both forms carry the same
     // front matter, so both must refuse with the same field code.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
     const inline = await fixture();
     const inlineError = await inline.invoke(makeEvent("project-manager", "fullstack-dev", unshapedHard)).catch((error: unknown) => error);

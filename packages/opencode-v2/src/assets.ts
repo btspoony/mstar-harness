@@ -111,6 +111,7 @@ export function loadAgentsFromDir(agentsDirPath: string): Record<string, JsonObj
     const { frontmatter, body } = extractFrontmatterAndBody(content);
     // The loader names its file as the reader's source label, so a refusal
     // attributes the violation to this asset (path, document line and fix).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName = typeof parsed.name === "string" ? parsed.name : "";
     const id = parsedName || file.replace(/\.md$/, "");

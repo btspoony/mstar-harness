@@ -10,6 +10,7 @@
  * Diagnostic line numbers are document-relative: the opening `---` fence is
  * document line 1, so frontmatter text line N is document line N + 1 and
  * the expectations below assert those document positions.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
 import * as fs from "node:fs";
 import { join } from "node:path";
@@ -333,6 +334,7 @@ describe("parseDocumentFrontmatter — refused line forms", () => {
     const document = `---\nname: x\ninvalid line\n---\nbody`;
     const { frontmatter } = extractFrontmatterAndBody(document);
     // `invalid line` is frontmatter index 1 → document line 3 (`---` is line 1).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const error = expectRefusal(frontmatter, 3);
     expect(error.lineText).toBe("invalid line");
   });
@@ -482,6 +484,7 @@ describe("extractFrontmatterAndBody — fence handling", () => {
   test("a closing fence at end of input accepts LF, CRLF and exact EOF but not a bare CR", () => {
     // The exact-EOF close was always valid; LF and CRLF close through their
     // `\n`. A lone `\r` is not a line ending — `---\r` stays content.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(extractFrontmatterAndBody(`---\nname: x\n---\n`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
     expect(extractFrontmatterAndBody(`---\r\nname: x\r\n---\r\n`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
     expect(extractFrontmatterAndBody(`---\nname: x\n---`)).toEqual({ frontmatter: "name: x", body: "", fenced: true });
@@ -517,6 +520,7 @@ describe("shipped corpus — every bundled frontmatter parses", () => {
   // is the single arbiter of whether frontmatter exists; no second fence
   // grammar lives here. The sweep itself must find files, or the guard
   // proves nothing (an empty sweep is a failure, not a green pass).
+  // see docs/knowledge/conventions/brief-acceptance-declarations.md
 
   const skillDir = join(repoRoot, "skills");
   const skillFiles = fs

@@ -153,6 +153,7 @@ describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-in
  * so the assertion reads the prompt bytes the host would send — not the
  * template source. `legacyAssignmentShape` is the engine's own recognition,
  * so a reintroduced body-label prompt fails the gate's own predicate.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 const SEAT_SCRIPTS = [
   {
@@ -174,6 +175,7 @@ const SEAT_SCRIPTS = [
       auditRef: "/tmp/mstar-audit-references",
       recon: "languages: ts",
       // One category keeps the seat count comparable; the all-nine default is covered above.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       categories: ["bug"],
     },
     roles: ["code-reviewer"],
@@ -229,8 +231,10 @@ describe("dsh workflow scripts emit Assignments in front matter", () => {
       expect(prompts.length).toBe(target.roles.length);
       for (const [index, prompt] of prompts.entries()) {
         // The gate's own retired-format recognizer must not fire.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         expect(legacyAssignmentShape(prompt)).toBe(false);
         // ... and the front matter must bind the seat role the script targets.
+        // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
         expect(parseAssignmentFields(prompt).executeAs).toBe(target.roles[index]);
       }
     });

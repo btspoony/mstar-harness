@@ -39,6 +39,7 @@ describe("parseCompassFrontmatter — structural errors carry the file path", ()
     try {
       // Document-relative diagnostic: `---` is line 1, so `- dangling` is
       // line 3, and the shared reader names the structural reason.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(() => parseCompassFrontmatter(file)).toThrow(
         /broken\.md:3: list item outside a list key: "- dangling"/,
       );

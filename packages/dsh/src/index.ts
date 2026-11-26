@@ -850,6 +850,7 @@ export function apply(ctx: Context, config: Config): void {
   // Keyed on the execution object itself (the identity both seams share), not
   // on its caller-supplied `callId`. Calls without a handoff skip the scope
   // entirely (zero cost).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   ctx.on('tools/execute', (exec, next) => runWithDispatchCall(exec, next), { prepend: true })
 
   // Role → agent preset channel: an `internal/get`

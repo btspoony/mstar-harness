@@ -16,6 +16,7 @@
  *
  * No barrel: importers name this module by explicit relative path; it
  * re-exports nothing from a sibling and imports no sibling dispatch module.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { basename } from 'node:path'
 import { extractFrontmatterAndBody, legacyAssignmentShape, parseDocumentFrontmatterEntries, parseEnforcementFlag, parseEnforcementFlagFromFrontmatter } from '@mstar-harness/engine'
@@ -24,7 +25,9 @@ import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 
 /** Shape-guard match of one Assignment core front matter key (engine parity:
- * the snake_case key inside the document's own fence declares the shape). */
+ * the snake_case key inside the document's own fence declares the shape).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m
 
 /**
@@ -35,6 +38,7 @@ const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s
  * ordinary prompt. The key must live in the FENCE: a `execute_as:` line
  * quoted in the body is prose, never shape evidence.
  * @param assignmentText - the carrier text.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function frontmatterCarriesCoreKey(assignmentText: string): boolean {
   if (!assignmentText.startsWith('---\n') && !assignmentText.startsWith('---\r\n')) return false
@@ -89,6 +93,7 @@ export function resolveDispatchHard(
  * matter snake_case key (`Plan Path` → `plan_path`, `SDD dir` → `sdd_dir`,
  * `Task budget (implement / ops rounds)` → `task_budget` — the
  * parenthesized qualifier is the label suffix, never part of the key).
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
 function labelToFrontmatterKey(label: string): string {
   return label.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase().replace(/\s+/g, '_')
@@ -117,6 +122,7 @@ function stripWrappingCodeSpan(value: string): string {
  * gates never read fields of a document the schema refuses. The region keeps
  * its fences (engine `assignmentHeaderRegion` contract); an unterminated
  * fence yields no block, exactly as `assignmentHeaderRegion` declares.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntry> | null {
   if (headerRegion === '') return null
@@ -133,7 +139,9 @@ function frontmatterEntriesOf(headerRegion: string): Map<string, FrontmatterEntr
  * (`key:`) is present-but-empty; numbers/booleans read as their string form
  * (the line-shaped contract never typed them — the conversion only narrows
  * the entries API onto it). Lists, maps and block scalars are never a
- * single scalar field. */
+ * single scalar field.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
   if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
   if (typeof entry.value === 'string') return entry.value

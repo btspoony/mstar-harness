@@ -22,6 +22,7 @@
  *
  * Each case runs the real CLI as a subprocess against a temp assignment
  * fixture and asserts the exit code + reported violation codes.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -73,7 +74,9 @@ task_budget: S — one implementer round closing the declared Files and gates
 `;
 
 /** One front matter override value: a scalar, a block list, or `undefined`
- * to DROP the key (missing-field probes rely on the drop). */
+ * to DROP the key (missing-field probes rely on the drop).
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 type FixtureValue = string | string[] | undefined;
 
 function assignment(overrides: Record<string, FixtureValue> = {}): string {
@@ -93,6 +96,7 @@ function assignment(overrides: Record<string, FixtureValue> = {}): string {
     if (value === undefined) continue;
     // `control_write_paths` is the one list-typed key: its caller spelling is
     // comma-separated, and the front matter type is a YAML block list.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const items = Array.isArray(value)
       ? value
       : field === "control_write_paths"
@@ -114,7 +118,9 @@ function assignment(overrides: Record<string, FixtureValue> = {}): string {
 
 /** Control-checkout fixture shared by the control-write and pointer suites:
  * a git repo (the control checkout, main branch) plus one linked worktree,
- * so the harness root the CLI resolves is `<control>/.mstar`. */
+ * so the harness root the CLI resolves is `<control>/.mstar`.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function fixture(fn: (control: string, linked: string, file: string) => void, canonical = false): void {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-control-dispatch-")));
   const control = join(root, "control");
@@ -224,6 +230,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
       const envelope = expectEnvelope(result, "refused", "dispatch.assignment.legacy-format");
       expect(violationCodes(result)).toContain("dispatch.assignment.legacy-format");
       // The recovery names the supported front matter form, not a generic block.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
       expect(`${envelope.message} ${envelope.recovery}`).toContain("front matter");
     });
   });
@@ -231,6 +238,7 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
   test("plain body labels without the heading refuse dispatch.assignment.legacy-format, exit 1", () => {
     // The previously accepted body-label grammar: no `## Assignment` heading,
     // no bolding — plain `Label:` lines still shape a legacy Assignment.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const plain = `Execute as: fullstack-dev
 Delegation: forbidden
 Task category: logic
@@ -262,6 +270,7 @@ Task budget (implement / ops rounds): S — one implementer round
   test("ordinary prose with one bold field line is NOT an Assignment → the schema row stands, exit 1", () => {
     // One bolded label in ordinary prose never shapes the document: the
     // generic front-matter row is the whole verdict, not the D16 refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const prose = `Some notes on the upcoming work.
 
 **Working branch**: feature/foo might be a good name for it.
@@ -624,6 +633,7 @@ describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
   // source resolver: an `Assignment file: <abs>` pointer inside it resolves
   // under the accepted assignment homes of the harness root the invocation
   // directory belongs to (fixture: the control checkout's `.mstar`).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
 
   test("a pointer under an accepted assignment home validates the pointed assignment → exit 0", () => {
     fixture((control, linked) => {
@@ -643,6 +653,7 @@ describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
     fixture((control, linked) => {
       // `.mstar/scratch/` is inside the harness dir but outside every accepted
       // assignment home (the sdd home needs `<base>/<one segment>/assignments`).
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const outside = join(control, ".mstar", "scratch");
       mkdirSync(outside, { recursive: true });
       const stray = join(outside, "stray.md");
@@ -660,6 +671,7 @@ describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
     // cwd is a bare temp dir outside any Git checkout: the control harness
     // root is unavailable, so containment cannot be checked and the refusal
     // is terminal — no downstream field violations.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     withAssignment(`Assignment file: ${join(tmpdir(), "anywhere.md")}\n`, (file) => {
       const bare = mkdtempSync(join(tmpdir(), "mstar-no-root-"));
       try {
@@ -696,6 +708,7 @@ describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
       // plan-x/assignments`), `../../../..` IS the control checkout; resolved
       // relative to the CLI input file (sitting directly in <control>, as an
       // inline source would be) the same relative path misses it.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
       const text = assignment({ write_domain: "control", worktree_path: "../../../..", working_branch: "main", control_write_paths: ".mstar/plans/run.md" });
       writeFileSync(pointed, text);
       const inputFile = join(control, "dispatch-input.md");
@@ -707,6 +720,7 @@ describe("mstar dispatch validate — pointer resolution (compass D14)", () => {
       // worktree_path against the input file's directory — the relative
       // location decides the verdict, so the positive run proves the pointed
       // path reached validation.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       writeFileSync(inputFile, text);
       const inline = runCli(["dispatch", "validate", inputFile], { cwd: linked });
       expect(inline.exitCode).toBe(1);

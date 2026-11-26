@@ -76,7 +76,9 @@ Do the thing.
 
 /** Assignment-shaped but none of the three core fields and no branch form:
  * the core keys are present-but-empty (the shape `validateAssignmentFields`
- * flags), so the document is Assignment-shaped AND missing all of them. */
+ * flags), so the document is Assignment-shaped AND missing all of them.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 const MISSING_ALL_CORE = `---
 execute_as:
 delegation:
@@ -286,6 +288,7 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
  * in-process subagent child stamps it at creation. Neither carries a durable
  * id/cwd, so the session-hint derivation stays as cheap as the agent-less
  * shapes these tests used before.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 const rootAgent = { session: { header: {} } }
 const childAgent = { session: { header: { parentSession: 'root-session' } } }
@@ -629,7 +632,10 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   })
 })
 
-/* ---------------------------------- derived caller ---------------------------------- */
+/**
+ * ---------------------------------- derived caller ----------------------------------
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 
 /* -------------------- boot diagnostic: explicit soft vs a repo hard arm -------------------- */
 
@@ -684,6 +690,7 @@ describe('the anti-recursion caller is DERIVED from the calling session, never i
     // Before this derivation the schema default fabricated `project-manager` for every
     // caller, so a leaf could dispatch a same-role child and pass the
     // anti-recursion precheck. A leaf must not dispatch: the caller is empty.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const app = booted = await bootApp({ enforcement: 'hard' })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, childAgent), defaultAllow)
@@ -998,6 +1005,7 @@ describe('dispatch gate — Assignment header values written as markdown code sp
     // Only ONE clean wrapping pair is stripped: a value that wraps several
     // spans has backticks inside, so it is left exactly as written. The YAML
     // scalar is quoted so the backticks survive the document parse.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(idOf('---\nplan_id: "`/a`, `/b`"\n---\n')).toBe('`/a`, `/b`')
   })
 })
@@ -1048,6 +1056,7 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
     execFileSync('git', ['init', '-q', '-b', 'main', root])
     // Both checkouts live INSIDE the fixture root; ignoring them keeps the
     // main worktree clean (a dispatch gates the checkout its session runs in).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     writeFileSync(join(root, '.gitignore'), '.mstar/\nintegration-checkout/\nfeature-checkout/\n')
     execFileSync('git', ['-C', root, 'add', '.gitignore'])
     execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'init'])
@@ -1158,6 +1167,7 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
     // dispatch — the deterministic mid-dispatch seam is the first resolution
     // itself. The swap and first-refusal regressions live in
     // host-adapter.spec.ts over `dispatchGate`'s single-resolution input.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     it('a pointer dispatch of a CLEAN document through the waterfall records exactly one consistent ledger row', async () => {
       const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
       const feature = await seedTwoActives(app)
@@ -1386,10 +1396,13 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
 /* ===========================================================================
  * D14/D16 — the ONE assignment source: pointer parity, containment refusals
  * and the legacy body-label refusal
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  * ========================================================================== */
 
 /** The retired body-label format of {@link VALID_WRITABLE} — same fields as
- * `**Label**` body lines (the format front matter replaced). */
+ * `**Label**` body lines (the format front matter replaced).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 const LEGACY_BODY_LABEL = `## Assignment
 
 **Execute as**: fullstack-dev
@@ -1402,7 +1415,10 @@ Do the thing, evidence-first.
 `
 
 describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy refusal)', () => {
-  /** Write one assignment file under the accepted harness home and return the pointer prompt. */
+  /**
+   * Write one assignment file under the accepted harness home and return the pointer prompt.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
   function pointerInHome(harnessDir: string, content: string): string {
     const dir = join(harnessDir, 'assignments')
     mkdirSync(dir, { recursive: true })
@@ -1443,6 +1459,7 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
     // A source refusal is not an ordinary violation: there is no verified
     // document, so no enforcement setting softens it and no advisory path runs.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
     expect(advisories).toHaveLength(0)
@@ -1463,6 +1480,7 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     const app = booted = await bootApp()
     // No explicit root AND an agent without a session cwd: the resolver
     // cannot produce ANY harness dir, so containment cannot be proven.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const resolver = new HarnessResolver(undefined)
     const config: Config = {}
     const adapter = new DshHostAdapter(new Context(), { resolver, config })
@@ -1471,6 +1489,7 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     const decision = await preExecuteListener(app.ctx, resolver, config, adapter, agentless, defaultAllow)
 
     // Terminal source refusal: the default (soft) mode denies it too.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
     expect(decision.kind === 'deny' && decision.reason).toContain('control harness root is unavailable')
@@ -1483,7 +1502,9 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' }) // soft mode: the shape refusal is an ordinary violation
+    // soft mode: the shape refusal is an ordinary violation
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    expect(decision).toEqual({ kind: 'allow' })
     expect(violationCodes(advisories[0])).toContain('dispatch.assignment.shape')
   })
 
@@ -1495,11 +1516,13 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
     // No verified declaration exists in the retired format, so no soft setting
     // downgrades it: the dispatch is vetoed before the advisory channel.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(decision.kind === 'deny' && decision.reason).toContain('front-matter document')
     expect(decision.kind === 'deny' && decision.reason).toContain('Assignment file:')
     // The schema's generic absent-fence row is superseded — one defect, one message.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(decision.kind === 'deny' && decision.reason).not.toContain('document.frontmatter.absent')
     expect(advisories).toHaveLength(0)
   })
@@ -1528,10 +1551,14 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
 /* ===========================================================================
  * Pointer/inline parity under the document's OWN hard enforcement
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  * ========================================================================= */
 
 describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
-  /** Write one assignment file under the accepted harness home and return the pointer prompt. */
+  /**
+   * Write one assignment file under the accepted harness home and return the pointer prompt.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
   function hardPointerInHome(harnessDir: string, content: string): string {
     const dir = join(harnessDir, 'assignments')
     mkdirSync(dir, { recursive: true })
@@ -1540,7 +1567,10 @@ describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
     return `Assignment file: ${file}`
   }
 
-  /** Violation codes of a deny reason (the deny channel is the verdict — no advisory in hard mode). */
+  /**
+   * Violation codes of a deny reason (the deny channel is the verdict — no advisory in hard mode).
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   const denyCodes = (decision: PreToolDecision): string[] =>
     decision.kind === 'deny' ? [...decision.reason.matchAll(/\[(?:critical|high|medium|low)\] ([\w.-]+)/g)].map((match) => match[1]!) : []
 
@@ -1549,6 +1579,7 @@ describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
     // Assignment document's own flag. The inline form denies; reading the
     // pointer LINE (no front matter) instead of the document used to allow in
     // warn mode.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const app = booted = await bootApp({ dispatchBinding: '' })
 
     const inlineDecision = await app.ctx.waterfall('tools/pre-execute', subagentExec(HARD_HEADER_FLAG), defaultAllow)
@@ -1573,6 +1604,7 @@ describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
     // The document carries execute_as: fullstack-dev; the pointer line carries none.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const pointer = hardPointerInHome(app.harnessDir, MISSING_BRANCH)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
@@ -1586,10 +1618,14 @@ describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
 
 /* ===========================================================================
  * Isolation shapes at the worktree L2 gate (the shared entries API)
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  * ========================================================================= */
 
 describe('dispatch gate — worktree L2 isolation shapes', () => {
-  /** Real git worktrees for the L2 probe (`git -C <path> branch --show-current`). */
+  /**
+   * Real git worktrees for the L2 probe (`git -C <path> branch --show-current`).
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   function trackWorktrees(root: string, branches: readonly string[]): Map<string, string> {
     const paths = new Map<string, string>()
     for (const branch of branches) {
@@ -1600,7 +1636,10 @@ describe('dispatch gate — worktree L2 isolation shapes', () => {
     return paths
   }
 
-  /** Front-matter parallel-track document: both tracks as flow or block list values. */
+  /**
+   * Front-matter parallel-track document: both tracks as flow or block list values.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
   function parallelTracksDoc(pathA: string, branchA: string, pathB: string, branchB: string, flow: boolean, hard = false): string {
     const paths = flow ? `worktree_path: [${pathA}, ${pathB}]` : `worktree_path:\n  - ${pathA}\n  - ${pathB}`
     const branches = flow ? `working_branch: [${branchA}, ${branchB}]` : `working_branch:\n  - ${branchA}\n  - ${branchB}`
@@ -1623,6 +1662,7 @@ Two parallel writable tracks.
     const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     // bootApp's root is already a git repo with its initial commit — add the
     // two track worktrees to it (the L2 probe needs real checkouts on their branches).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const tracks = trackWorktrees(app.root, ['feature/track-a', 'feature/track-b'])
     const advisories = captureAdvisories(app.ctx)
 
@@ -1637,6 +1677,7 @@ Two parallel writable tracks.
     // declared on the WRONG branch, so the mismatch can only surface when the
     // gate reads the list as two tracks — before the shared entries API the
     // flow array read as one scalar and the gate skipped isolation entirely.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
   }, 60_000)
 
@@ -1647,6 +1688,7 @@ Two parallel writable tracks.
 
     // Track B declared on the WRONG branch: only a gate that reads the block
     // list as two tracks can detect it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
       subagentExec(parallelTracksDoc(tracks.get('feature/block-a')!, 'feature/block-a', tracks.get('feature/block-b')!, 'feature/not-block-b', false)),
@@ -1672,6 +1714,7 @@ Two parallel writable tracks.
     // The list IS the schema's own parallel shape: the shared field/branch
     // gate accepts it (no branch presence/multiple row) and the L2 pairing
     // finds both tracks on their declared branches.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const codes = violationCodes(advisories[0])
     expect(codes.filter((code) => code.startsWith('assignment.field.branch') || code.startsWith('worktree.l2.'))).toEqual([])
     expect(codes).not.toContain('document.frontmatter.invalid')
@@ -1686,12 +1729,14 @@ Two parallel writable tracks.
       'tools/pre-execute',
       // A ROOT session supplies the caller identity: a hard dispatch must clear
       // the anti-recursion binding too, not only the track checks.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
       subagentExec(parallelTracksDoc(tracks.get('feature/hard-a')!, 'feature/hard-a', tracks.get('feature/hard-b')!, 'feature/hard-b', true, true), rootAgent),
       defaultAllow,
     )
 
     // Genuinely hard (the document's own flag vetoes ANY violation), so an
     // allow proves the pair is clean rather than soft mode hiding a refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
   }, 60_000)
@@ -1703,6 +1748,7 @@ Two parallel writable tracks.
     const branch = execFileSync('git', ['-C', app.root, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
     // `<app.root>/.mstar/assignments/../..` IS the control checkout: only the
     // pointed file's own directory makes that relative path resolve onto it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     const doc = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -1726,6 +1772,7 @@ Update control state.
     try {
       // The control checkout is the checkout the gate inspects: run from it,
       // exactly as a session in that repo does.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       process.chdir(app.root)
       const viaPointer = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${pointed}`), defaultAllow)
       expect(viaPointer).toEqual({ kind: 'allow' })
@@ -1734,6 +1781,7 @@ Update control state.
 
       // Negative control: the SAME document inline has no pointed directory,
       // so the relative path resolves against the checkout and misses it.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       await app.ctx.waterfall('tools/pre-execute', subagentExec(doc), defaultAllow)
       expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
     } finally {
@@ -1770,12 +1818,14 @@ Update control state.
     // The process runs in the suite's clean control fixture repo — a DIFFERENT
     // checkout. An exec-less dispatch (no session) still anchors there, so the
     // pointed worktree is not that control root.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
     expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
 
     // A session in app.root inspects ITS OWN checkout instead: the same
     // document is clean against the control root it names, while the process
     // cwd never enters the decision.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     advisories.length = 0
     const session = { session: { header: { cwd: app.root } } }
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer, session), defaultAllow)
@@ -1787,6 +1837,7 @@ Update control state.
     // The TEXT declares no enforcement flag; the supplied parse does. A fresh
     // parse of the text would answer soft, so only reuse reads hard — the
     // default dsh path hands its one parse to this decision.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const silent = '---\nexecute_as: fullstack-dev\n---\n'
     const entries = assignmentFrontmatterEntries('---\nexecute_as: fullstack-dev\nenforcement: hard\n---\n')
     expect(resolveDispatchHard(null, {} as Config, silent, entries)).toBe(true)
@@ -1800,6 +1851,7 @@ Update control state.
     // The retired parallel grammar: repeated keys. The shared entries parser
     // refuses the whole block — the schema layer reports the malformed
     // document rather than the worktree gate silently pairing the first keys.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const prompt = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -1824,6 +1876,7 @@ Two parallel writable tracks.
     // through the adapter/core/composition into the schema layer — it still
     // names the document line and the recovery, never a second read of the
     // rejected block.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const invalid = advisories[0]!.result.violations.find((v) => v.code === 'document.frontmatter.invalid')!
     expect(invalid.message).toContain('assignment:7:')
     expect(invalid.message).toContain('duplicate key')
@@ -1837,6 +1890,7 @@ Two parallel writable tracks.
     // The opening fence never closes: every field line below is inert. Before
     // the shared entries API the local scanner still read the lines as root
     // keys and could pair tracks out of a malformed document.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     const prompt = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -1871,6 +1925,7 @@ describe('dispatch gate — the ACTIVE-workflow ledger records only a declared d
     // so no role or category may reach the ledger. The header must stay
     // parseable (no body text inside it), or the entries come back `null`
     // and the parse refusal masks the missing fence.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const prompt = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -1887,6 +1942,7 @@ task_budget: S — one focused implementer round
 
     // The guard is the UNDECLARED document only: the same fields under a
     // closed fence record their one row.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
     const dispatches = flowEvents(app).filter((event) => event.kind === 'dispatch')
     expect(dispatches).toHaveLength(1)

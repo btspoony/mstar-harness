@@ -308,7 +308,9 @@ function collectTargets(dir: string, accept: (file: string) => boolean = (file) 
 /** why: D16 — the QC alignment fields are Assignment front matter keys, so
  * this reads the fenced block ONLY; a `**Label**: value` body line is never a
  * declaration and never satisfies the alignment check. Invalid front matter
- * yields "" (the caller reports the field as missing). */
+ * yields "" (the caller reports the field as missing).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
 function frontMatterScalar(text: string, key: string): string {
   const { frontmatter } = extractFrontmatterAndBody(text);
   if (frontmatter === "") return "";
@@ -328,6 +330,7 @@ function frontMatterScalar(text: string, key: string): string {
  * the CLI as it does at a gate. A refusal is terminal for the verb: validating
  * a text that is not the named assignment would report fields on the wrong
  * body.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function resolveAssignmentFile(file: string, context: InvocationContext): AssignmentSourceResult {
   const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
@@ -445,6 +448,7 @@ function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, 
       // why: the PM acceptance gate fields are one document schema, so the
       // lint type reports it under its own namespace instead of a second
       // validator.
+      // see docs/knowledge/conventions/brief-acceptance-declarations.md
       for (const schemaViolation of validateDocumentFrontmatter("pm-acceptance", text, "pm-acceptance").violations) {
         violations.push({ ...schemaViolation, code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.acceptance.frontmatter.") });
       }
@@ -473,6 +477,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // containment rules every gate shares. The resolver's refusal is
         // terminal for this command: validating a text that is not the
         // assignment source would report field violations on the wrong body.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         const source = resolveAssignmentFile(file, context);
         if (!source.ok) {
           return rejected(
@@ -488,6 +493,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // absent-fence row, so every gate the caller consults answers the same
         // code. Shape detection and the refusal text are the engine's ONE
         // copies; a fenced document keeps the schema verdict.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         const legacy = legacyAssignmentShape(text);
         if (legacy) violations.push(legacyFormatViolation());
         const fields = parseAssignmentFields(text);
@@ -496,6 +502,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           // why: the legacy refusal supersedes the schema's absent-fence row
           // for Assignment-shaped input — one defect, one message. Any other
           // document keeps the schema row as its whole verdict.
+          // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
           (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
         ));
         if (!readOnly) {
@@ -663,6 +670,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // diff_basis — never body labels, and the file resolves through the
         // shared source resolver (a pointer-form assignment aligns on the
         // document it names).
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         const assignments: QcAlignmentAssignment[] = [];
         for (const named of files) {
           const file = absolute(context.cwd, named);
@@ -700,6 +708,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // why: the seat count is read from the caller's assignment through the
         // ONE source resolver — `dispatch validate` and this verb must answer
         // the same for one assignment file, including its pointer form.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
         const source = resolveAssignmentFile(file, context);
         if (!source.ok) {
           return rejected(
@@ -731,12 +740,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           // extension or tree check applies), so a directory would either
           // report success over nothing or check unrelated auto-detected
           // files against the acceptance schema. Name the file instead.
+          // see docs/knowledge/conventions/brief-acceptance-declarations.md
           throw new SddScriptError(`usage: lint <report.md> --type acceptance — the acceptance type validates one PM acceptance report and does not walk a directory; name the report file`, 2);
         }
         // why: the recovery must rerun the SAME check, and `acceptance` is the
         // one type whose filename inference never reproduces it, so that arm
         // names its flag verbatim. Both arms stay literal: the refusal prover
         // evaluates recovery text statically and cannot read `--type ${forced}`.
+        // see docs/knowledge/conventions/brief-acceptance-declarations.md
         const rerun = forced === "acceptance"
           ? "Resolve each reported lint violation, then rerun mstar lint <target> --type acceptance."
           : "Resolve each reported lint violation, then rerun mstar lint <target>, repeating the same --type value if you supplied one.";

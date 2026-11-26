@@ -710,6 +710,7 @@ type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "acceptanceGate
  * stored as the scope. The create-form grammar is the engine's single one
  * (`dispatch.ts`), read at the VALUE level: a claim is not a document, so the
  * front matter scope the Assignment reader applies cannot apply here.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 function branchOfClaim(value: string): string {
   if (/[\r\n]/.test(value)) {

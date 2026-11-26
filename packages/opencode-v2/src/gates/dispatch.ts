@@ -83,6 +83,7 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // ambiguous pointer): there is no verified assignment to dispatch on,
  // so it is hard independently of document or repo enforcement — the
  // tool body is never reached.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  const harnessDir = api.resolveHarnessDir();
  const source = api.readAssignmentSource(prompt, { harnessDir });
  let violations: readonly GateViolation[];
@@ -98,10 +99,12 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // without a recognized core key — an empty or unrelated pointed file
  // refuses instead of passing silently as an ordinary prompt. Inline
  // prompts keep the silent path.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  const carrier = source.path;
  const fileCarrier = carrier !== undefined;
  // One parse per decision: the target-role read and the composition share
  // this parse (the composition also owns the D16 refusal).
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  const entries = api.assignmentFrontmatterEntries(text);
  const fields = api.parseAssignmentFieldsFromFrontmatter(entries);
  // Normalize both sides the way the engine does (strip a leading @,
@@ -129,12 +132,14 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // directory (CLI parity); Git discovery stays on the checkout (`cwd`
  // unset), so an out-of-repo assignment home never changes the inspected
  // repository.
+ // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  assignmentDir: carrier === undefined ? undefined : dirname(carrier),
  });
  violations = composed.violations;
  enforcementHard = composed.enforcement.hard;
  // A TERMINAL violation (source refusal or the retired-format one) has no
  // verdict enforcement could soften: the subagent is never spawned.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  terminal = violations.some((violation) => violation.terminal === true);
  }
  const hard = terminal || enforcementHard || (harnessDir !== null && api.resolveRepoEnforcement(harnessDir).hard);

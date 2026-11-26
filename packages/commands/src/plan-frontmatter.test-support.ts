@@ -5,6 +5,7 @@
  * the in-src test files are inside the declaration build's `rootDir` —
  * a helper under `test/` is unimportable for them (TS6059), and this module
  * is never exported from the package entrypoints.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
  */
 
 /** Render a plan markdown whose declarations live in the front matter fence. */
