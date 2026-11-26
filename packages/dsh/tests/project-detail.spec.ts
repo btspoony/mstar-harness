@@ -1,8 +1,10 @@
 /**
  * `project-detail` — the product's only hierarchy page (final round).
  *
- * The adapter owns the FEATURE state: the fixed three tabs, `Roadmap`
- * permanently the default, and each tab's body from its own project-scoped read.
+ * The milestone rollup is the page's default body, read from the project-scoped
+ * `overview` read's `milestones` member; the adapter owns the list-FEATURE
+ * state: the fixed two tabs, `Issues` the default, and each tab's body from its
+ * own project-scoped read.
  */
 
 import { describe, expect, it } from 'bun:test'
@@ -16,60 +18,66 @@ import { ProjectDetailDestination } from '../src/client/panel/destinations.tsx'
 const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
 const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
 
-const ROADMAP = {
+const OVERVIEW = {
   projectId: 'proj-1',
-  catalog: {
-    kind: 'project', id: 'proj-1', title: 'Project One', description: null, rootKind: 'projects',
-    relativePath: 'proj-1', documentKind: null, lifecycle: 'active', revision: 1,
-    registeredAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
-  },
-  authority: { state: 'absent' },
-  content: null,
-  milestones: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 },
+  workflows: { state: 'not-applicable', reason: 'not read' },
+  residuals: { state: 'not-applicable', reason: 'not read' },
+  milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
+  latestIteration: { state: 'not-applicable', reason: 'not read' },
+  issueFlow: { state: 'not-applicable', reason: 'not read' },
+}
+
+const PROJECTS = {
+  items: [
+    {
+      project: { id: 'proj-1', title: 'Project One', description: null, lifecycle: 'active' },
+      openIssues: 1,
+    },
+  ],
+  total: 1,
 }
 
 const ISSUES = { items: [{ id: 'I-1', title: 'a project issue', severity: 'high', disposition: 'open', projectId: 'proj-1' }], total: 1, storeRevision: 2 }
 
-const emptyEnvelope = () => ({ kind: 'ok' as const, envelope: { data: null, projection: { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] } } })
-
-function render(over: { issues?: unknown; feature?: string } = {}): string {
+function render(over: { issues?: unknown; feature?: string; projects?: unknown } = {}): string {
   return renderToStaticMarkup(createElement(ProjectDetailDestination, {
-    state: envelope(ROADMAP),
+    id: 'proj-1',
+    state: envelope(OVERVIEW),
     locale: 'en',
     onBack: () => {},
     issues: envelope(over.issues ?? ISSUES),
     iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
+    ...(over.projects === undefined ? {} : { projects: envelope(over.projects) }),
     ...(over.feature === undefined ? {} : { initialFeature: over.feature }),
   } as never))
 }
 
-describe('project detail — three tabs, Roadmap the default, scoped issue list', () => {
-  it('renders the fixed three features with Roadmap as the default', () => {
+describe('project detail — the milestone body, two tabs, Issues the default', () => {
+  it('renders the milestone body and the fixed two features', () => {
     const markup = render()
     expect(markup).toContain('data-ms-screen="project-detail"')
-    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
+    expect(markup).toContain(uiEn.projectDetail.milestones.milestonesHeading)
     expect(markup).toContain(uiEn.projectDetail.features.issues)
     expect(markup).toContain(uiEn.projectDetail.features.iterations)
-    // Roadmap is the default feature: the project's issue list is NOT the body.
-    expect(markup).not.toContain('a project issue')
-  })
-
-  it('the Issues tab renders that project’s issue list', () => {
-    const markup = render({ feature: 'issues' })
+    // No tab, route or label named roadmap survives.
+    expect(markup).not.toContain('Roadmap')
+    // Issues is the default feature: the project's issue list IS the body under it.
     expect(markup).toContain('a project issue')
-    expect(markup).toContain('data-ms-screen="issues"')
   })
 
-  it('switching back to Roadmap renders the roadmap body again', () => {
-    const markup = render({ feature: 'roadmap' })
+  it('the Iterations tab renders that project’s iteration list', () => {
+    const markup = render({ feature: 'iterations' })
     expect(markup).toContain('data-ms-screen="project-detail"')
-    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
-    expect(markup).not.toContain('a project issue')
+    expect(markup).toContain('data-ms-feature="iterations"')
+  })
+
+  it('the milestone body stays mounted whichever feature is selected', () => {
+    const markup = render({ feature: 'iterations' })
+    expect(markup).toContain(uiEn.projectDetail.milestones.milestonesHeading)
   })
 })
 
-describe('project detail — one absence authority, an empty arm, and a per-project default', () => {
-  const projectionOf = (generation: number | null) => ({ generation, freshness: generation === null ? 'unavailable' : 'current', builtAt: null, checkedAt: '', diagnostics: [] })
+describe('project detail — one absence authority and the degraded member arms', () => {
   const renderState = (state: unknown, over: { issues?: unknown; feature?: string } = {}) =>
     renderToStaticMarkup(createElement(ProjectDetailDestination, {
       id: 'proj-1',
@@ -81,68 +89,47 @@ describe('project detail — one absence authority, an empty arm, and a per-proj
       ...(over.feature === undefined ? {} : { initialFeature: over.feature }),
     } as never))
 
-  it('an unknown project answers `absent` (the shared roadmap arm), not an error', () => {
-    // Red: the pre-fix adapter answered "unavailable / no project record".
-    const markup = renderState({ kind: 'ok', envelope: { data: null, projection: projectionOf(1) } })
-    expect(markup).toContain('data-ms-absence="absent"')
-    expect(markup).not.toContain('no project record')
+  it('an empty milestone set answers the empty arm, never an absent one', () => {
+    const markup = renderState(envelope(OVERVIEW))
+    expect(markup).toContain('data-ms-absence="empty"')
+    expect(markup).not.toContain('data-ms-absence="absent"')
   })
 
-  it('a project read with no published generation agrees with the shared arm', () => {
-    // `roadmapFeatureArm` resolves through `resolveRecord` without requiring a
-    // projection, so a null project row is `absent` (the project declared no
-    // roadmap) whether or not a generation was published. The dashboard maps
-    // the same envelope through the same arm; this pins that they agree.
-    const markup = renderState({ kind: 'ok', envelope: { data: null, projection: projectionOf(null) } })
-    expect(markup).toContain('data-ms-absence="absent"')
-    expect(markup).not.toContain('data-ms-absence="unavailable"')
+  it('an unavailable milestones member keeps its own arm and reason', () => {
+    const degraded = {
+      ...OVERVIEW,
+      milestones: { state: 'unavailable', reason: 'the milestone read could not be completed' },
+    }
+    const markup = renderState(envelope(degraded))
+    expect(markup).toContain('data-ms-absence="unavailable"')
+    expect(markup).toContain('the milestone read could not be completed')
   })
 
   it('a successful-but-empty feature read draws an explicit empty arm', () => {
     // Red: `ReadState` returned null for an `ok` read, so the slot drew nothing.
-    const markup = renderState(envelope(ROADMAP), { issues: envelope(null), feature: 'issues' })
+    const markup = renderState(envelope(OVERVIEW), { issues: envelope(null), feature: 'issues' })
     expect(markup).toContain('data-ms-absence="empty"')
   })
 
-  it('the page is keyed by project, so a second project starts at the Roadmap default', () => {
+  it('the page is keyed by project, so a second project starts at the default feature', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src/client/panel/destinations.tsx'), 'utf8')
     expect(source).toContain('<ProjectDetailDestination\n          key={id}')
   })
 })
 
-describe('project identity — the catalog row is the identity, not a guess', () => {
-  it('a project with a catalog row but an absent roadmap shows the catalog title and path', () => {
-    // The roadmap authority is absent; the ENVELOPE still carries the catalog row.
-    const markup = renderToStaticMarkup(createElement(ProjectDetailDestination, {
-      id: 'proj-1',
-      state: envelope({ ...ROADMAP, catalog: { ...ROADMAP.catalog, title: 'Real Project Title', lifecycle: 'archived', relativePath: 'projects/real' } }),
-      locale: 'en',
-      onBack: () => {},
-      issues: envelope(ISSUES),
-      iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
-    } as never))
-    expect(markup).toContain('Real Project Title')
-    expect(markup).toContain('projects/real')
-    // Not the guessed metadata the pre-fix page printed.
-    expect(markup).not.toContain('projects/proj-1')
-    // The roadmap BODY's own arm is unchanged: the project declares no roadmap.
-    expect(markup).toContain('data-ms-absence="absent"')
+describe('project identity — the projects list row is the identity, not a guess', () => {
+  it('a project the list carries shows the list row’s title and lifecycle', () => {
+    const markup = render({ projects: PROJECTS })
+    expect(markup).toContain('Project One')
+    expect(markup).toContain('active')
   })
 
-  it('a project with no catalog row still renders its tabs and claims nothing it does not know', () => {
-    const markup = renderToStaticMarkup(createElement(ProjectDetailDestination, {
-      id: 'proj-1',
-      state: emptyEnvelope(),
-      locale: 'en',
-      onBack: () => {},
-      issues: envelope({ items: [], total: 0, storeRevision: 1 }),
-      iterations: envelope({ items: [], total: 0, attribution: 'absent' }),
-    } as never))
-    // The page renders (three features) instead of an error or a blank landmark.
+  it('a project with no list row still renders its tabs and claims nothing it does not know', () => {
+    const markup = render()
+    // The page renders (milestone body + two features) instead of an error or a blank landmark.
     expect(markup).toContain('data-ms-screen="project-detail"')
-    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
-    // The fallback does not claim a lifecycle or a made-up path.
+    expect(markup).toContain(uiEn.projectDetail.features.issues)
+    // The fallback does not claim a lifecycle.
     expect(markup).not.toContain('active')
-    expect(markup).not.toContain('projects/proj-1')
   })
 })

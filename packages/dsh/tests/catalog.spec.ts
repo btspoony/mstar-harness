@@ -46,10 +46,7 @@ import {
   initializeStore,
   openStore,
   readExecutionState,
-  importRoadmapAuthority,
   registerCatalogEntity,
-  reviewRoadmapImport,
-  replaceRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -711,7 +708,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
         { severity: 'nit', count: 5 },
       ],
       residualFindings: [{ planId: '', id: 'I-1', severity: 'high', title: 'a panel-only detail row' }],
-      project: { milestones: ['P1 foundation'], roadmapSource: { kind: 'present', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
+      project: { milestones: ['P1 foundation'], milestoneSource: { kind: 'present', diagnostic: null }, openResiduals: [] },
       iterationBaseBranch: 'feature/x',
       targetBranch: 'main',
       specIntegrationBranch: 'iteration/iter-compact',
@@ -805,7 +802,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
       ['row scopes', (mutated) => { if (mutated.state !== null) (mutated.state as { rowScopes: unknown }).rowScopes = [] }],
       ['branch policy', (mutated) => { if (mutated.state !== null) (mutated.state as { pushPolicy: unknown }).pushPolicy = null }],
       ['spec integration branch', (mutated) => { if (mutated.state !== null) (mutated.state as { specIntegrationBranch: unknown }).specIntegrationBranch = null }],
-      ['roadmap milestones', (mutated) => { if (mutated.state !== null) (mutated.state.project as { milestones: unknown }).milestones = [] }],
+      ['project milestones', (mutated) => { if (mutated.state !== null) (mutated.state.project as { milestones: unknown }).milestones = [] }],
       ['store diagnostic', (mutated) => { if (mutated.state !== null && mutated.state.storeFacts !== undefined) (mutated.state.storeFacts as { diagnostic: unknown }).diagnostic = null }],
       ['workflow type/status (digest facts)', (mutated) => { if (mutated.state !== null) { (mutated.state as { workflowType: unknown }).workflowType = 'plan'; (mutated.state as { workflowStatus: unknown }).workflowStatus = 'paused' } }],
     ]

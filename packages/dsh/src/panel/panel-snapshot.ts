@@ -4,7 +4,7 @@
  * SHRUNK BY DECISION (plan dsh-panel-unification Task 4; compass D23): the
  * transport carries only the facts no dashboard DTO owns. Everything an engine
  * `DashboardView` answers — workflows, iterations, issues, projects, the
- * roadmap — is read per view through `mstar/dashboardView` by the screen that
+ * overview — is read per view through `mstar/dashboardView` by the screen that
  * needs it, so this payload cannot go stale behind a poll or duplicate a DTO.
  *
  * - `enforcement` — harness state. The dashboard has none to read.

@@ -8,7 +8,7 @@
  * through.
  *
  * No test pins this workspace's revision: every expected revision is read
- * through the panel's own `roadmap` view first (contract C2).
+ * through the panel's own `overview` view first (contract C2).
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
@@ -127,22 +127,22 @@ function liveSession(app: BootResult, id: string, cwd: string): void {
 
 /** The observed store revision, read the way the panel reads it (contract C2). */
 async function observedRevision(endpoint: WriteEndpoint, sessionId: string, cwd: string): Promise<number> {
-  const read = await endpoint.dashboardView(sessionId, cwd, 'roadmap', { project: '_default' })
-  if (read.kind !== 'ok' || read.envelope === undefined) throw new Error('roadmap read failed in fixture')
+  const read = await endpoint.dashboardView(sessionId, cwd, 'overview', { project: '_default' })
+  if (read.kind !== 'ok' || read.envelope === undefined) throw new Error('overview read failed in fixture')
   return read.envelope.storeRevision
 }
 
-interface RoadmapMilestone {
+interface RollupMilestone {
   milestoneId: string
   name: string
   status: string
   effortSessions: number | null
 }
 
-async function roadmapMilestones(endpoint: WriteEndpoint, sessionId: string, cwd: string): Promise<RoadmapMilestone[]> {
-  const read = await endpoint.dashboardView(sessionId, cwd, 'roadmap', { project: '_default' })
-  if (read.envelope === undefined) throw new Error('roadmap read failed in fixture')
-  return (read.envelope.data as { milestones: { milestones: RoadmapMilestone[] } }).milestones.milestones
+async function milestoneRollup(endpoint: WriteEndpoint, sessionId: string, cwd: string): Promise<RollupMilestone[]> {
+  const read = await endpoint.dashboardView(sessionId, cwd, 'overview', { project: '_default' })
+  if (read.envelope === undefined) throw new Error('overview read failed in fixture')
+  return (read.envelope.data as { milestones: { data: { milestones: RollupMilestone[] } } }).milestones.data.milestones
 }
 
 // why: route the production client's RPC at the REAL panel service, so a spec drives
@@ -342,7 +342,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     liveSession(app, 'ses_ms2', app.root)
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
-    const milestonesOf = () => roadmapMilestones(endpoint, 'ses_ms2', app.root)
+    const milestonesOf = () => milestoneRollup(endpoint, 'ses_ms2', app.root)
 
     const created = await endpoint.milestoneAdd(
       'ses_ms2',
@@ -425,7 +425,7 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     create.channel.create({ name: 'Chained', effortSessions: 12, ordinal: 0 })
     await create.settle()
     expect(create.refusal()).toBeNull()
-    const created = await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)
+    const created = await milestoneRollup(endpoint, 'ses_ms_chain', app.root)
     expect(created).toMatchObject([{ name: 'Chained', effortSessions: 12 }])
 
     // why: the clear travels as an explicit `null` — an omitted field would leave the
@@ -434,12 +434,12 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     clear.channel.update(created[0]!.milestoneId, { effortSessions: null })
     await clear.settle()
     expect(clear.refusal()).toBeNull()
-    expect(await roadmapMilestones(endpoint, 'ses_ms_chain', app.root)).toMatchObject([
+    expect(await milestoneRollup(endpoint, 'ses_ms_chain', app.root)).toMatchObject([
       { name: 'Chained', effortSessions: null },
     ])
   })
 
-  it('sets and clears the effort count through the endpoint, and the roadmap read shows each value', async () => {
+  it('sets and clears the effort count through the endpoint, and the overview read shows each value', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await seedStore(app.harnessDir)
     liveSession(app, 'ses_eff', app.root)
@@ -466,9 +466,9 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       { operationId: 'op-effort-set', expectedStoreRevision: await observedRevision(endpoint, 'ses_eff', app.root) },
     )
     expect(set.ok).toBe(true)
-    const setRead = await endpoint.dashboardView('ses_eff', app.root, 'roadmap', { project: '_default' })
-    const afterSet = (setRead.envelope?.data as { milestones: { milestones: Array<{ effortSessions: number | null }> } })
-      .milestones.milestones
+    const setRead = await endpoint.dashboardView('ses_eff', app.root, 'overview', { project: '_default' })
+    const afterSet = (setRead.envelope?.data as { milestones: { data: { milestones: Array<{ effortSessions: number | null }> } } })
+      .milestones.data.milestones
     expect(afterSet).toHaveLength(1)
     expect(afterSet[0]!.effortSessions).toBe(12)
 
@@ -481,9 +481,9 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       { operationId: 'op-effort-clear', expectedStoreRevision: await observedRevision(endpoint, 'ses_eff', app.root) },
     )
     expect(cleared.ok).toBe(true)
-    const clearRead = await endpoint.dashboardView('ses_eff', app.root, 'roadmap', { project: '_default' })
-    const afterClear = (clearRead.envelope?.data as { milestones: { milestones: Array<{ effortSessions: number | null }> } })
-      .milestones.milestones
+    const clearRead = await endpoint.dashboardView('ses_eff', app.root, 'overview', { project: '_default' })
+    const afterClear = (clearRead.envelope?.data as { milestones: { data: { milestones: Array<{ effortSessions: number | null }> } } })
+      .milestones.data.milestones
     expect(afterClear).toHaveLength(1)
     expect(afterClear[0]!.effortSessions).toBeNull()
   })
@@ -547,8 +547,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(removed.ok).toBe(true)
     if (!removed.ok) return
     expect((removed.receipt as { changed: boolean }).changed).toBe(true)
-    const read = await endpoint.dashboardView('ses_rm', app.root, 'roadmap', { project: '_default' })
-    const milestones = (read.envelope?.data as { milestones: { milestones: unknown[] } }).milestones.milestones
+    const read = await endpoint.dashboardView('ses_rm', app.root, 'overview', { project: '_default' })
+    const milestones = (read.envelope?.data as { milestones: { data: { milestones: unknown[] } } }).milestones.data.milestones
     expect(milestones).toHaveLength(0)
   })
 
@@ -579,9 +579,9 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     )
     expect(second.ok).toBe(true)
 
-    const read = await endpoint.dashboardView('ses_ms4', app.root, 'roadmap', { project: '_default' })
-    const milestones = (read.envelope?.data as { milestones: { milestones: Array<{ name: string; ordinal: number }> } })
-      .milestones.milestones
+    const read = await endpoint.dashboardView('ses_ms4', app.root, 'overview', { project: '_default' })
+    const milestones = (read.envelope?.data as { milestones: { data: { milestones: Array<{ name: string; ordinal: number }> } } })
+      .milestones.data.milestones
     expect(milestones.map((row) => [row.name, row.ordinal])).toEqual([
       ['First', 0],
       ['Second', 1],
@@ -602,8 +602,8 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(second).toEqual(first)
     // The retry replayed the recorded receipt: the store holds ONE milestone, which
     // is the whole point of reusing the id across an ambiguous attempt (C1).
-    const read = await endpoint.dashboardView('ses_ms3', app.root, 'roadmap', { project: '_default' })
-    const held = (read.envelope?.data as { milestones: { milestones: unknown[] } }).milestones.milestones
+    const read = await endpoint.dashboardView('ses_ms3', app.root, 'overview', { project: '_default' })
+    const held = (read.envelope?.data as { milestones: { data: { milestones: unknown[] } } }).milestones.data.milestones
     expect(held).toHaveLength(1)
     // And a DIFFERENT request reusing the id is refused, per the engine's rule.
     const conflict = await endpoint.milestoneAdd('ses_ms3', app.root, '_default', { name: 'Other', effortSessions: null, ordinal: 1 }, mutation)
@@ -783,7 +783,7 @@ describe('a refused write never reloads the read — the operator\'s draft survi
   // mounted forms
   // (and the operator's typed draft) are destroyed. A refused write wrote
   // nothing, so there is nothing to reload: only an ACCEPTED write refreshes
-  // the roadmap. These specs drive the production channel against the REAL
+  // the overview read. These specs drive the production channel against the REAL
   // engine (the validation is the engine's own) and count the reload callback.
 
   async function harness(sessionId: string) {
@@ -834,7 +834,7 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     // the operator's typed name and count.
     expect(seat.reloads).toHaveLength(0)
     // why: the store holds no milestone, so the refusal really wrote nothing.
-    expect(await roadmapMilestones(endpoint, 'ses_draft_create', app.root)).toHaveLength(0)
+    expect(await milestoneRollup(endpoint, 'ses_draft_create', app.root)).toHaveLength(0)
   })
 
   it('a refused UPDATE (effort count -1) does not reload either', async () => {
@@ -858,12 +858,12 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     expect(seat.channel.refusal).toContain('milestone.invalid-input')
     expect(seat.reloads).toHaveLength(0)
     // invariant: the stored milestone is untouched, so the editor stays open over true data.
-    expect(await roadmapMilestones(endpoint, 'ses_draft_update', app.root)).toMatchObject([
+    expect(await milestoneRollup(endpoint, 'ses_draft_update', app.root)).toMatchObject([
       { name: 'Existing', effortSessions: 12 },
     ])
   })
 
-  it('an ACCEPTED write still reloads the roadmap', async () => {
+  it('an ACCEPTED write still reloads the overview read', async () => {
     const { app, endpoint } = await harness('ses_draft_accept')
     const seat = channelFor(endpoint, 'ses_draft_accept', app.root, await observedRevision(endpoint, 'ses_draft_accept', app.root))
 
@@ -872,7 +872,7 @@ describe('a refused write never reloads the read — the operator\'s draft survi
 
     expect(seat.channel.refusal).toBeNull()
     expect(seat.reloads).toHaveLength(1)
-    expect(await roadmapMilestones(endpoint, 'ses_draft_accept', app.root)).toMatchObject([{ name: 'Accepted' }])
+    expect(await milestoneRollup(endpoint, 'ses_draft_accept', app.root)).toMatchObject([{ name: 'Accepted' }])
   })
 
   it('the reader itself is unchanged: a new identity (navigation) still enters loading', async () => {
@@ -975,7 +975,7 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     await rearmed.settle()
     expect(rearmed.channel.refusal).toBeNull()
     expect(rearmed.reloads).toHaveLength(1)
-    expect(await roadmapMilestones(endpoint, 'ses_conflict', app.root)).toMatchObject([
+    expect(await milestoneRollup(endpoint, 'ses_conflict', app.root)).toMatchObject([
       { name: 'Someone else wrote' },
       { name: 'Typed draft name', effortSessions: 4 },
     ])
@@ -1030,7 +1030,7 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
   it('the create draft is keyed by the project the form was opened over — a project switch never re-seeds', async () => {
     // invariant: the draft store is one per seat and survives navigation, so the key must carry
     // the identity the form belongs to. Seed project A's create slot through the SAME key the
-    // production form computes (the roadmap's project identity plus the create target), switch
+    // production form computes (the page's project identity plus the create target), switch
     // to project B, and B's form must read empty; back on A the typed text is still there.
     const { createMilestoneDraftStore, milestoneDraftTargetKey } = await import('@mstar-harness/ui')
     const drafts = createMilestoneDraftStore()

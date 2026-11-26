@@ -460,26 +460,27 @@ describe('the shell holds the open record and the project detail mounts', () => 
     expect(back).not.toContain('data-ms-screen="issue-detail"')
   })
 
-  it('project detail mounts its three tabs with Roadmap default and a scoped list', () => {
-    const roadmap = {
+  it('project detail mounts the milestone body and two tabs with Issues default', () => {
+    const overview = {
       projectId: 'proj-1',
-      catalog: { kind: 'project', id: 'proj-1', title: 'Project One', description: null, rootKind: 'projects', relativePath: 'proj-1', documentKind: null, lifecycle: 'active', revision: 1, registeredAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' },
-      authority: { state: 'absent' },
-      content: null,
-      milestones: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 },
+      workflows: { state: 'not-applicable', reason: 'not read' },
+      residuals: { state: 'not-applicable', reason: 'not read' },
+      milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
+      latestIteration: { state: 'not-applicable', reason: 'not read' },
+      issueFlow: { state: 'not-applicable', reason: 'not read' },
     }
     const markup = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
       { projectIterations: envelope({ items: [], total: 0, attribution: 'absent' }) },
     )
     expect(markup).toContain('data-ms-screen="project-detail"')
-    // The three fixed features, Roadmap permanently the default.
-    expect(markup).toContain(uiEn.projectDetail.features.roadmap)
+    // The milestone rollup is the default body; the two fixed list features
+    // follow, Issues the default.
+    expect(markup).toContain(uiEn.projectDetail.milestones.milestonesHeading)
     expect(markup).toContain(uiEn.projectDetail.features.issues)
     expect(markup).toContain(uiEn.projectDetail.features.iterations)
-    // The Roadmap feature body is mounted (its own read is the project's), and
-    // the two scoped lists sit under their features (see the report: the scoped
-    // Iterations attribution arm is asserted at the resolver level, not here).
+    // No tab, route or label named roadmap survives.
+    expect(markup).not.toContain('Roadmap')
     expect(markup).not.toContain('data-ms-screen="projects"')
     expect(markup.length).toBeGreaterThan(200)
   })
@@ -488,27 +489,28 @@ describe('the shell holds the open record and the project detail mounts', () => 
     // The adapter chain dropped `writes` once, so every project page rendered its
     // read-only shape even when the seat supplied a channel. This proves the
     // props arrive: with a channel the controls are there, without one they are not.
-    const roadmap = {
+    const overview = {
       projectId: 'proj-1',
-      catalog: { kind: 'project', id: 'proj-1', title: 'Project One', description: null, rootKind: 'projects', relativePath: 'proj-1', documentKind: null, lifecycle: 'active', revision: 1, registeredAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' },
-      authority: { state: 'present', revision: 1, contentHash: 'sha256:fixture' },
-      content: null,
-      milestones: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 },
+      workflows: { state: 'not-applicable', reason: 'not read' },
+      residuals: { state: 'not-applicable', reason: 'not read' },
+      milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
+      latestIteration: { state: 'not-applicable', reason: 'not read' },
+      issueFlow: { state: 'not-applicable', reason: 'not read' },
     }
     const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} }
     const withWrites = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
       { writes, assignableIssues: [] },
     )
     expect(withWrites).toContain('data-ms-milestone-create=""')
     // The refusal line is the channel's, and it appears only when the store refused.
     const refused = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(roadmap) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
       { writes: { ...writes, refusal: '[milestone.not-empty] Milestone still holds issues.' }, assignableIssues: [] },
     )
     expect(refused).toContain('data-ms-write-refusal=""')
     expect(refused).toContain('[milestone.not-empty] Milestone still holds issues.')
-    const readOnly = render({ view: 'project-detail', id: 'proj-1', state: envelope(roadmap) })
+    const readOnly = render({ view: 'project-detail', id: 'proj-1', state: envelope(overview) })
     expect(readOnly).not.toContain('data-ms-milestone-create')
   })
 })

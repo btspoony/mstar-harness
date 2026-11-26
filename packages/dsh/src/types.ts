@@ -221,21 +221,21 @@ export interface HarnessRowScopeView {
 }
 
 /**
- * Whether the store-backed roadmap authority has roadmap content, no roadmap
- * content, or could not be read. Partial coverage is explicit in
- * `absentProjectIds`; `diagnostic` carries an actionable read failure.
+ * Whether the store-backed milestone rollup answered or could not be read.
+ * `present` covers an empty set — a store with no milestones is a successful
+ * read, not a missing source; `unavailable` carries an actionable read failure
+ * in `diagnostic`.
  */
-export interface RoadmapSourceView {
-  readonly kind: 'present' | 'absent' | 'unavailable'
-  readonly absentProjectIds: readonly string[]
+export interface MilestoneSourceView {
+  readonly kind: 'present' | 'unavailable'
   readonly diagnostic: string | null
 }
 
 /** The additive project rollup, sourced from store authority and open issues. */
 export interface MstarHarnessProject {
-  /** Roadmap milestones in deterministic catalog-project order, roadmap order within each project. */
+  /** Milestone names in deterministic catalog-project order, ordinal order within each project. */
   readonly milestones: readonly string[]
-  readonly roadmapSource: RoadmapSourceView
+  readonly milestoneSource: MilestoneSourceView
   /** Open-issue counts by severity across the harness (non-zero severities only — same rollup as `state.residuals`). */
   readonly openResiduals: readonly HarnessResidualView[]
 }
@@ -318,8 +318,8 @@ export interface MstarHarnessState {
   readonly residuals: readonly HarnessResidualView[]
   /**
    * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
-   * zone): store-authoritative roadmap milestones plus open-issue counts.
-   * Always-present (lossless), including an explicit roadmap-source verdict.
+   * zone): store-authoritative milestones plus open-issue counts.
+   * Always-present (lossless), including an explicit milestone-source verdict.
    */
   readonly project: MstarHarnessProject
   /**

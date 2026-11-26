@@ -575,7 +575,7 @@ const DIGEST_PLAN_CAP = 8
  * enforcement / the agent-flow ledger are NOT re-added here: they stay
  * payload-only (the panel renders them from the persisted emission) and each is
  * read on demand from its own authority (`mstar status tech-debt`, the compass
- * document, `mstar roadmap show`, the knowledge tree) — no single `status`
+ * document, the knowledge tree) — no single `status`
  * command serves them. Do not restate a dropped row line in this digest: the
  * two surfaces must not duplicate each other.
  *

@@ -455,7 +455,7 @@ describe('panelSnapshot endpoint — server-side target resolution (F1)', () => 
     }
   }
 
-  it('answers readable workflow/iteration/roadmap members from { sessionId, cwd } alone', async () => {
+  it('answers readable workflow/iteration members from { sessionId, cwd } alone', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake' }))
     await seedStore(app.harnessDir)
     await seedActiveWorkflow(app.harnessDir, 'wf-solo', [{ id: 'plan-solo', status: 'Todo' }])

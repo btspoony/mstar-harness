@@ -265,11 +265,13 @@ export function PanelShell(props: {
   projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read. */
   projectIssues?: MstarDashboardViewState
+  /** The projects list read — a project page's identity comes from the same rows the list renders. */
+  projectsList?: MstarDashboardViewState
   /** The milestone write channel, alive only while a project page is open. */
   writes?: MilestoneWriteChannel
   /** The project's open unassigned issues, as the assign picker's options. */
   assignableIssues?: ReadonlyArray<{ id: string; title: string; severity: string; revision: number }>
-  /** note: the seat-owned milestone draft store — the forms live under the roadmap read, so a
+  /** note: the seat-owned milestone draft store — the forms live under the overview read, so a
    *  refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
   drafts?: MilestoneDraftStore
 }): React.ReactElement {
@@ -314,6 +316,7 @@ export function PanelShell(props: {
               onBack={props.onBack ?? (() => {})}
               {...(props.projectIterations === undefined ? {} : { projectIterations: props.projectIterations })}
               {...(props.projectIssues === undefined ? {} : { projectIssues: props.projectIssues })}
+              {...(props.projectsList === undefined ? {} : { projects: props.projectsList })}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignableIssues === undefined ? {} : { assignableIssues: props.assignableIssues })}
               {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
@@ -450,13 +453,14 @@ const NO_SUBSCRIBE = (): (() => void) => () => {}
 /**
  * The read target for an open detail. The engine has NO `project-detail` view:
  * a project's page is composed from the views that exist, so the project open
- * reads its `roadmap` scoped to the project. Every other detail is its own view.
+ * reads its `overview` scoped to the project (the milestone body's source).
+ * Every other detail is its own view.
  */
 export function detailReadTarget(
   view: DetailView,
   id: string,
 ): { view: string; params?: Record<string, string>; id?: string } {
-  return view === 'project-detail' ? { view: 'roadmap', params: { project: id } } : { view, id }
+  return view === 'project-detail' ? { view: 'overview', params: { project: id } } : { view, id }
 }
 
 /**
@@ -517,7 +521,7 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
 /**
  * note: the milestone write channel the seat hands the project page (plan Task 4).
  * The UI owns no optimistic state: a refused write only sets the refusal copy.
- * An ACCEPTED write and a revision-conflict refusal re-issue the roadmap read
+ * An ACCEPTED write and a revision-conflict refusal re-issue the overview read
  * (the store moved, so the open read is stale); an input refusal does not —
  * nothing moved, and a refresh would destroy the form mid-edit for no fact.
  * Either way the operator's draft survives in the seat-owned store.
@@ -868,8 +872,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
   React.useEffect(() => { setDetail(null) }, [destination])
   // The engine has no `project-detail` view: a project's page is composed from
-  // the views that exist — its `roadmap` (project-scoped), plus the scoped
-  // `issues` / `iterations` reads below.
+  // the views that exist — its `overview` (project-scoped, the milestone body's
+  // source), plus the scoped `issues` / `iterations` reads below.
   const detailView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
@@ -896,7 +900,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   })
 
   // The milestone write channel (plan Task 4): one write at a time, driven by
-  // the roadmap read's own store revision (contract C2). Only alive while a
+  // the overview read's own store revision (contract C2). Only alive while a
   // project page is open.
   const expectedStoreRevision =
     detailView.state.kind === 'ok' && Number.isInteger(detailView.state.envelope.storeRevision)
@@ -1007,6 +1011,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       onBack={() => setDetail(null)}
       projectIterations={projectIterationsView.state}
       projectIssues={projectIssuesView.state}
+      {...(destination === 'projects' ? { projectsList: destinationView.state } : {})}
       {...(milestoneWrites === undefined ? {} : { writes: milestoneWrites })}
       {...(assignableIssues === undefined ? {} : { assignableIssues })}
       drafts={milestoneDrafts}

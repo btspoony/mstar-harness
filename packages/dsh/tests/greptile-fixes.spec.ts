@@ -26,8 +26,8 @@ describe('P1 — a project opens the read that exists', () => {
     expect(String(refused)).toContain('unknown dashboard view')
   })
 
-  it('a project open reads its roadmap, scoped to the project', () => {
-    expect(detailReadTarget('project-detail', 'proj-1')).toEqual({ view: 'roadmap', params: { project: 'proj-1' } })
+  it('a project open reads its overview, scoped to the project', () => {
+    expect(detailReadTarget('project-detail', 'proj-1')).toEqual({ view: 'overview', params: { project: 'proj-1' } })
     // Every other detail is its own view with its id.
     expect(detailReadTarget('workflow-detail', 'wf-1')).toEqual({ view: 'workflow-detail', id: 'wf-1' })
     expect(detailReadTarget('issue-detail', 'I-1')).toEqual({ view: 'issue-detail', id: 'I-1' })

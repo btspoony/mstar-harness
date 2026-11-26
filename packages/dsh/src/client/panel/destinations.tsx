@@ -232,15 +232,16 @@ export function ProjectsDestination({ state, locale, onOpen }: DestinationProps)
 
 import {
   EmptyState,
-  roadmapFeatureArm,
+  DEFAULT_PROJECT_FEATURE,
   IssueDetail,
   WorkflowDetail,
   IterationDetail,
   ProjectDetail,
   Iterations as IterationsScreen,
   iterationListModel as iterationListModelFor,
-  roadmapBody,
+  milestonesArm,
   projectIdentity,
+  projectIdentityFor,
   resolveRead,
   issueDetailModel,
   workflowDetailModel,
@@ -249,8 +250,9 @@ import {
   type MilestoneDraftStore,
   type MilestoneWriteSurface,
   type ProjectFeature,
+  type ProjectIdentity,
 } from '@mstar-harness/ui'
-import type { IssueDetail as IssueDetailDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
+import type { IssueDetail as IssueDetailDTO, OverviewDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
 
 /** The four detail views a destination can open. */
 export type DetailView = 'issue-detail' | 'workflow-detail' | 'iteration-detail' | 'project-detail'
@@ -266,6 +268,8 @@ export type DetailProps = {
   readonly projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read (`project` enforced on the request). */
   readonly projectIssues?: MstarDashboardViewState
+  /** The projects list read — the project page's identity comes from the same rows the list renders. */
+  readonly projects?: MstarDashboardViewState
   /**
    * The milestone write channel, alive only while a project page is open. This
    * adapter must carry it: dropping it here made every project page render its
@@ -293,6 +297,7 @@ export function DetailBody({
   onOpenWorkflow,
   projectIterations,
   projectIssues,
+  projects,
   writes,
   assignableIssues,
   drafts,
@@ -366,6 +371,7 @@ export function DetailBody({
           onBack={onBack}
           {...(projectIterations === undefined ? {} : { iterations: projectIterations })}
           {...(projectIssues === undefined ? {} : { issues: projectIssues })}
+          {...(projects === undefined ? {} : { projects })}
           {...(writes === undefined ? {} : { writes })}
           {...(assignableIssues === undefined ? {} : { assignableIssues })}
           {...(drafts === undefined ? {} : { drafts })}
@@ -376,29 +382,36 @@ export function DetailBody({
 }
 
 /**
- * The project's identity, from wherever the envelope actually carries a catalog
- * row. An `absent` roadmap authority is NOT permission to invent identity: the
- * project exists (its catalog row is in the same envelope) even when it declares
- * no roadmap, so the title/path/lifecycle come from that row. Only a genuinely
- * missing catalog row falls back — and the fallback claims less, not more.
+ * The project's identity, from the projects list read when it is available.
+ * The list's rows are the same facts the Projects destination renders, so the
+ * head cannot disagree with the row the reader opened. A list that has not
+ * answered (or does not carry the project) falls back to the route's own id —
+ * the fallback claims less, not more.
  */
 export function projectIdentityOf(
   id: string,
-  data: unknown,
-): { projectId: string; title: string; description: string | null; lifecycle: string; lifecycleTone: 'neutral'; path: string; revision: string; registeredAt: string | null; updatedAt: string | null } {
-  const catalog = (data as { catalog?: Parameters<typeof projectIdentity>[0] | null } | null | undefined)?.catalog
-  if (catalog !== null && catalog !== undefined) return projectIdentity(catalog) as never
-  // Nothing is known: no guessed path, no guessed lifecycle.
-  // No catalog row: the dates are empty rather than invented, and the panel shows `—`.
-  return { projectId: id, title: id, description: null, lifecycle: 'unknown', lifecycleTone: 'neutral', path: '', revision: '', registeredAt: null, updatedAt: null }
+  projects: MstarDashboardViewState | undefined,
+): ProjectIdentity {
+  if (projects !== undefined && projects.kind === 'ok' && projects.envelope.data !== null) {
+    const model = projectListModel({
+      data: projects.envelope.data as Parameters<typeof projectListModel>[0]['data'],
+      projection: projects.envelope.projection,
+    })
+    if (model.rows.kind === 'populated') {
+      const row = model.rows.value.find((candidate) => candidate.projectId === id)
+      if (row !== undefined) return projectIdentity(row)
+    }
+  }
+  return projectIdentityFor(id)
 }
 
 /**
  * `project-detail` — the only place the product expresses its hierarchy.
  *
- * The adapter owns the FEATURE state: the fixed three tabs, with `Roadmap`
- * permanently the default (a constant, never "first non-empty"). Each tab's body
- * comes from its own project-scoped read: `roadmap` (the project's authority),
+ * The milestone rollup is the page's default body, read from the project-scoped
+ * `overview` read's `milestones` member; the adapter owns the list-FEATURE
+ * state: the fixed two tabs, with `Issues` the default (a constant, never
+ * "first non-empty"). Each tab's body comes from its own project-scoped read:
  * `issues?project=<id>` and `iterations?project=<id>`.
  */
 export function ProjectDetailDestination(props: {
@@ -408,6 +421,8 @@ export function ProjectDetailDestination(props: {
   onBack: () => void
   iterations?: MstarDashboardViewState
   issues?: MstarDashboardViewState
+  /** The projects list read — the head's identity comes from the same rows the list renders. */
+  projects?: MstarDashboardViewState
   /**
    * The milestone write channel and the assign picker's options. Carried here
    * explicitly: this adapter sat between the seat and the screen, and any prop it
@@ -417,18 +432,19 @@ export function ProjectDetailDestination(props: {
   assignableIssues?: readonly AssignableIssue[]
   /** note: the seat-owned milestone draft store (the forms' drafts survive a read refresh). */
   drafts?: MilestoneDraftStore
-  /** Test seam: the tab the page opens on. Production always starts at Roadmap. */
+  /** Test seam: the tab the page opens on. Production always starts at the default. */
   initialFeature?: ProjectFeature
 }): React.ReactElement {
   const copy = copyFor(props.locale)
-  const [feature, setFeature] = React.useState<ProjectFeature>(props.initialFeature ?? 'roadmap')
+  const [feature, setFeature] = React.useState<ProjectFeature>(props.initialFeature ?? DEFAULT_PROJECT_FEATURE)
   if (props.state.kind !== 'ok') return <ReadState state={props.state} copy={copy} />
   const data = props.state.envelope.data
-  const envelope = props.state.envelope
-  // The shared arm owns the decision (unknown project → `absent`, no generation →
-  // `unavailable`), so both hosts answer a project the same way.
-  const featureArm = roadmapFeatureArm({ data: data as never, projection: envelope.projection })
-  const roadmap = roadmapBody(featureArm)
+  // The shared arm owns the decision (a degraded member keeps its own state and
+  // reason), so both hosts answer a project the same way.
+  const milestones =
+    data === null
+      ? milestonesArm({ state: 'unavailable', reason: 'no overview payload' })
+      : milestonesArm((data as OverviewDTO).milestones)
   const iterationsCopy = {
     ...copy.iterations,
     notStarted: copy.workflowDetail.fields.notStarted,
@@ -455,10 +471,10 @@ export function ProjectDetailDestination(props: {
       : null
   return (
     <ProjectDetail
-      identity={projectIdentityOf(props.id, data)}
+      identity={projectIdentityOf(props.id, props.projects)}
       feature={feature}
       onFeatureChange={(next: ProjectFeature) => setFeature(next)}
-      roadmap={roadmap as never}
+      milestones={milestones}
       issues={
         issuesModel !== null
           ? (
@@ -506,10 +522,9 @@ export function ProjectDetailDestination(props: {
       copy={{
         ...copy.projectDetail,
         absence: {
-          absent: { ...copy.state.absent, heading: copy.projectDetail.features.roadmap },
-          empty: { ...copy.state.empty, heading: copy.projectDetail.features.roadmap },
-          unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.features.roadmap },
-          'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.features.roadmap },
+          empty: { ...copy.state.empty, heading: copy.projectDetail.milestones.milestonesHeading },
+          unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.milestones.milestonesHeading },
+          'not-applicable': { ...copy.state['not-applicable'], heading: copy.projectDetail.milestones.milestonesHeading },
         },
       }}
       {...(props.writes === undefined ? {} : { writes: props.writes })}
