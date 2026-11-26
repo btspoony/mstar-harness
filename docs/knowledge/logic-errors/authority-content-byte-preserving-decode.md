@@ -1,5 +1,5 @@
 ---
-module: packages/engine document authority store + CLI content authoring verbs (source decode, content/provenance hashing)
+module: packages/engine catalog registration + CLI authoring verbs (source decode, content/provenance hashing)
 date: 2026-09-25
 problem_type: logic_error
 category: logic-errors
@@ -71,4 +71,4 @@ const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decod
 
 ## Source
 
-Iteration `iter-<plan-id>`, plan `<plan-id>`. The decode sites are the roadmap-authority store's `sourceBytes` helper (import preview/apply) and its round-trip content validator, plus the CLI replacement verb that already preserved the BOM; evidence for the defect, the fix, and the BOM round-trip regression is in the plan's QC reports and consolidated decision under `{SDD_DIR}/<plan-id>/review/` and in its task reports. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (what a store authority owns and what its receipts must carry), `testing-patterns/store-bytes-are-not-a-write-proof.md` (choosing the observable for a store claim), `conventions/authored-harness-ignore-preservation.md` (one shared predicate instead of per-caller copies of the same rule).
+Iteration `iter-<plan-id>`, plan `<plan-id>`. The decode sites are the catalog import's source reader (`catalog-import.ts`, the import preview/apply path) and the catalog registration's round-trip content validator, plus the CLI replacement verb that already preserved the BOM; evidence for the defect, the fix, and the BOM round-trip regression is in the plan's QC reports and consolidated decision under `{SDD_DIR}/<plan-id>/review/` and in its task reports. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (what a store authority owns and what its receipts must carry), `testing-patterns/store-bytes-are-not-a-write-proof.md` (choosing the observable for a store claim), `conventions/authored-harness-ignore-preservation.md` (one shared predicate instead of per-caller copies of the same rule).
