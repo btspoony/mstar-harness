@@ -48,10 +48,11 @@ import {
   type WorkflowFilters,
   type IssueQuery,
   type Locale,
-  type ProjectFeature,
 } from "@mstar-harness/ui";
 
 import "./shell.css";
+
+import type { IssuePage } from "@mstar-harness/engine";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
 import { browserStore, resolveLocale, resolveTheme, storeLocale, storeTheme, type Theme } from "./prefs";
@@ -72,6 +73,8 @@ import {
   issuesCopy,
   issuesOutcome,
   issuesPath,
+  assignableOptions,
+  readAssignableIssues,
   readIssueDetail,
   readIssues,
   startRead,
@@ -81,15 +84,28 @@ import {
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
 import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
+  createMilestoneDraftStore,
   projectDetailCopy,
+  projectIdentity,
+  projectIdentityFor,
   projectOptions,
   projectsCopy,
   projectsOutcome,
+  readProjectMilestones,
   readProjects,
-  readRoadmap,
-  roadmapOutcome,
+  projectMilestonesOutcome,
+  milestoneWriteIds,
+  applyMilestoneFollowUp,
+  milestoneWriteFollowUp,
+  milestoneWriteStarted,
+  writeMilestone,
+  type AssignableIssuesRead,
+  type MilestoneMutationRequest,
+  type MilestonePageState,
+  type MilestoneWriteSurface,
+  type ProjectFeature,
+  type ProjectMilestonesOutcome,
   type ProjectsOutcome,
-  type RoadmapOutcome,
 } from "./projects-data";
 import {
   readWorkflowDetail,
@@ -211,7 +227,48 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
 }
 
 /**
- * The Issues list, behind its own read.
+ * The assign picker's own read: every open issue of one project, independent of
+ * the address bar and the list's page. `refreshToken` re-issues it after a write
+ * moves an issue's milestone or revision; `retry()` re-issues it after a failure.
+ *
+ * Three arms, never two: a rejected read is `failed` with the store's own reason,
+ * so the picker states the cause and offers the retry instead of spinning or
+ * vanishing.
+ */
+function useAssignableIssues(
+  projectId: string | null,
+  refreshToken: number,
+): {
+  read: { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } | { kind: "failed"; reason: string };
+  retry: () => void;
+} {
+  const [read, setRead] = useState<
+    { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } | { kind: "failed"; reason: string }
+  >({ kind: "loading" });
+  const [retryToken, setRetryToken] = useState(0);
+  useEffect(() => {
+    if (projectId === null) return;
+    const controller = new AbortController();
+    let current = true;
+    setRead({ kind: "loading" });
+    void readAssignableIssues(fetch, projectId, controller.signal).then((result) => {
+      if (!current) return;
+      setRead(
+        result.status === "ready"
+          ? { kind: "ready", model: result.envelope.data.items }
+          : { kind: "failed", reason: result.message },
+      );
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [projectId, refreshToken, retryToken]);
+  return { read, retry: () => setRetryToken((token) => token + 1) };
+}
+
+/**
+ * The project's scoped Issues list, behind its own read.
  *
  * The query is the address bar's: the screen reports a whole query change and this
  * destination turns it into history — `replace` for a filter change, so Back steps
@@ -240,7 +297,7 @@ function useIterationsRaw(scope: string | null, enabled = true): Parameters<type
   return raw;
 }
 
-function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
+function useIssues(query: IssueQuery, enabled = true, refreshToken = 0): IssuesOutcome {
   const [outcome, setOutcome] = useState<IssuesOutcome>({ kind: "loading" });
   const key = `${query.filters.disposition}|${query.filters.project}|${query.filters.kind}|${query.filters.severity}|${query.filters.q}|${query.offset}`;
   useEffect(() => {
@@ -260,8 +317,9 @@ function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
       controller.abort();
     };
     // The key is the request's identity: a new object with the same values must not
-    // refetch on every render.
-  }, [key, enabled]);
+    // refetch on every render. `refreshToken` is the explicit re-issue a write asks
+    // for (the store moved, so the painted rows are stale).
+  }, [key, enabled, refreshToken]);
   return outcome;
 }
 
@@ -685,7 +743,7 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
       model={props.outcome.model}
       copy={projectsCopy(copy)}
       onOpen={(projectId) => {
-        // The default feature is the route model's: `#project/<id>` means Roadmap.
+        // The default feature is the route model's: `#project/<id>` means the default.
         navigate({ name: "project", id: projectId, feature: DEFAULT_PROJECT_FEATURE }, "", "push");
       }}
     />
@@ -693,13 +751,30 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
 }
 
 /**
- * One project: the identity head, the three fixed features, and the selected
- * feature's content. `Roadmap` is the route's default and never "the first
+ * One project: the identity head, the milestone rollup as the default body, and
+ * the two list features. `Issues` is the route's default and never "the first
  * feature with data".
  */
-function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[] }) {
+export function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
-  const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
+  const [outcome, setOutcome] = useState<ProjectMilestonesOutcome>({ kind: "loading" });
+  /**
+   * The forms' drafts live OUTSIDE the read's subtree (the overview read
+   * unmounts them on a re-read), so a typed name/effort survives an accepted
+   * write's re-read and a revision-conflict retry.
+   */
+  const [drafts] = useState(createMilestoneDraftStore);
+  const [pageState, setPageState] = useState<MilestonePageState>({
+    overviewReloadToken: 0,
+    issuesRefreshToken: 0,
+    writes: { busy: false, refusal: null, keepDraft: undefined },
+    operationPending: false,
+  });
+  /** One operation id per logical write, retained across a transport-ambiguous retry. */
+  const [operationIds] = useState(milestoneWriteIds);
+  // The scoped Issues list and the assignable read both follow an assignment: the
+  // page state's `issuesRefreshToken` re-issues them (an assigned issue leaves the
+  // offer set and its revision moves).
   /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
@@ -709,6 +784,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const scopedIssues: IssuesOutcome = useIssues(
     { ...query, filters: { ...query.filters, project: projectId } },
     projectId !== "",
+    pageState.issuesRefreshToken,
   );
   /**
    * The project's size for the tab and head: the default `open` read over the whole
@@ -741,16 +817,81 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
-    void readRoadmap(fetch, projectId, controller.signal).then((result) => {
+    void readProjectMilestones(fetch, projectId, controller.signal).then((result) => {
       if (!current) return;
-      const next = roadmapOutcome(result, projectId);
+      const next = projectMilestonesOutcome(result);
       setOutcome(next);
     });
     return () => {
       current = false;
       controller.abort();
     };
-  }, [projectId]);
+  }, [projectId, pageState.overviewReloadToken]);
+
+  // The assign picker's options: the project's OPEN issues, read by its OWN query
+  // (disposition only, every page) so the address bar's filters, search and page
+  // window can never shrink the offer; the unassigned subset is the picker's rule.
+  const assignable = useAssignableIssues(projectId === "" ? null : projectId, pageState.issuesRefreshToken);
+  const assignableIssues: AssignableIssuesRead =
+    assignable.read.kind === "ready"
+      ? assignableOptions(assignable.read.model)
+      : assignable.read.kind === "failed"
+        ? { kind: "failed", reason: assignable.read.reason }
+        : { kind: "loading" };
+
+  /**
+   * The milestone write channel: one write at a time, each carrying the store
+   * revision of the overview read that rendered the forms. A revision conflict
+   * re-reads (the read moved under the observation, so the re-armed channel gets
+   * the new revision and the operator's draft survives the re-mount); an input
+   * refusal wrote nothing and does not re-read. An ambiguous transport failure
+   * keeps its operation id and revision so a retry replays the engine's receipt.
+   */
+  const writes: MilestoneWriteSurface | undefined =
+    outcome.kind !== "ready" || outcome.storeRevision === null
+      ? undefined
+      : {
+          busy: pageState.writes.busy,
+          refusal: pageState.writes.refusal,
+          keepDraft: pageState.writes.keepDraft,
+          create: (input) => runMilestoneWrite({ verb: "create", projectId, input }),
+          update: (milestoneId, patch) => runMilestoneWrite({ verb: "update", projectId, milestoneId, patch }),
+          assign: (issueId, issueRevision, milestoneId) =>
+            runMilestoneWrite({ verb: "assign", projectId, issueId, milestoneId, issueRevision }),
+          remove: (milestoneId) => runMilestoneWrite({ verb: "remove", projectId, milestoneId }),
+        };
+
+  function runMilestoneWrite(request: MilestoneMutationRequest): void {
+    if (outcome.kind !== "ready" || outcome.storeRevision === null || pageState.writes.busy) return;
+    const revision = outcome.storeRevision;
+    setPageState(milestoneWriteStarted);
+    const retained = operationIds.for(JSON.stringify(request), { expectedStoreRevision: revision });
+    void writeMilestone(fetch, {
+      ...request,
+      operationId: retained.operationId,
+      expectedStoreRevision: retained.request.expectedStoreRevision,
+    }).then((result) => {
+      // The whole policy lives in one asserted function: accepted → re-read and clear
+      // the draft; conflict → re-read and KEEP it; input refusal → neither; ambiguous
+      // transport failure → retain the operation for a replay.
+      const followUp = milestoneWriteFollowUp(request, result);
+      if (!followUp.retainOperation) operationIds.settled();
+      // One pure transition: the reload/refresh tokens, the surface's verdict and the
+      // operation's fate are all its output — nothing here decides any of them.
+      setPageState((current) => applyMilestoneFollowUp(current, followUp));
+    });
+  }
+
+  // The head's identity comes from the same list read the Projects destination
+  // renders, so the two can never disagree; a project the list does not carry
+  // gets the route's own id and nothing invented beside it.
+  const identity = (() => {
+    if (props.projects.kind === "ready" && props.projects.model.rows.kind === "populated") {
+      const row = props.projects.model.rows.value.find((candidate) => candidate.projectId === projectId);
+      if (row !== undefined) return projectIdentity(row);
+    }
+    return projectIdentityFor(projectId);
+  })();
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -767,12 +908,12 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
 
   return (
     <ProjectDetail
-      identity={outcome.identity}
+      identity={identity}
       feature={props.feature}
       onFeatureChange={(feature) => {
         navigate({ name: "project", id: projectId, feature }, "", "push");
       }}
-      roadmap={outcome.roadmap}
+      milestones={outcome.milestones}
       issues={
         <IssueListScreen
           // The route carries the feature's own filter state; the table reads it, not
@@ -804,6 +945,10 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       }
       {...(issuesCount === undefined ? {} : { issuesCount })}
       {...(iterationsCount === undefined ? {} : { iterationsCount })}
+      {...(writes === undefined ? {} : { writes })}
+      assignableIssues={assignableIssues}
+      onRetryAssignable={assignable.retry}
+      drafts={drafts}
       copy={projectDetailCopy(copy)}
       onBack={() => {
         // The breadcrumb and Escape are one move from two places: a hardcoded
@@ -1009,6 +1154,7 @@ function Shell(props: {
             address={address}
             feature={(address.route as Extract<Route, { name: "project" }>).feature}
             projectIds={projectIds}
+            projects={projects}
           />
         ) : null}
       </main>
@@ -1147,8 +1293,15 @@ function ThemeButton(props: {
   );
 }
 
-/** The wrapper the shell renders into, with both host contracts applied. */
+/**
+ * The wrapper the shell renders into, with both host contracts applied.
+ *
+ * Guarded on `document`: the module is imported by the page-render test (which has
+ * no DOM) as well as by the browser bundle. A missing document is not an error —
+ * there is simply nothing to mount.
+ */
 function mount(): void {
+  if (typeof document === "undefined") return;
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   rootElement.classList.add(MS_CONTAINER_CLASS);

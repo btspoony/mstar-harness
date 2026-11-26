@@ -8,7 +8,7 @@
  * landmark, sidebar row), the host affordance that opens the full page, and the
  * seat's four transport states (which exist before any product screen does).
  *
- * The registry and the tab/zone/roadmap/event-log/state/freshness families are
+ * The registry and the tab/zone/event-log/state/freshness families are
  * DELETED with the surfaces that rendered them — dead copy in a shipped bundle
  * is inventory, not a translation.
  */

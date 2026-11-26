@@ -8,11 +8,11 @@
  * them would let a screen render what the owner removed.
  */
 import { describe, expect, test } from "bun:test";
-import type { IterationDTO, IterationListDTO, ProjectListDTO, RoadmapDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
+import type { IterationDTO, IterationListDTO, MilestoneRead, ProjectListDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
 import { branchAnchors, workflowDetailModel, workflowListModel, workflowRow } from "./workflows.ts";
 import { iterationDetailModel, iterationListModel, iterationRow } from "./iterations.ts";
-import { projectIdentity, projectListModel, projectRow, roadmapFeatureArm } from "./projects.ts";
+import { milestonesArm, projectIdentity, projectListModel, projectRow } from "./projects.ts";
 
 const projection = (generation: number | null) => ({
   generation,
@@ -276,15 +276,18 @@ describe("projects", () => {
     expect(row.lifecycleTone).toBe("neutral");
   });
 
-  test("the identity block carries the path, the revision and the catalog's two dates", () => {
-    const identity = projectIdentity(catalog({ kind: "project", id: "engine", title: "Engine" }));
-    expect(identity.path).toBe("plans:p.md");
-    // The prototype's identity panel prints Revision, Registered and Updated, so all three
-    // are carried. The source hash stays out — the screen has no place for it.
-    expect(identity.revision).toBe("3");
-    expect(Object.keys(identity)).toContain("registeredAt");
-    expect(Object.keys(identity)).toContain("updatedAt");
+  test("the identity block carries exactly the list row's facts", () => {
+    const identity = projectIdentity(projectRow(listItem("engine", 14, null)));
+    expect(identity).toEqual({
+      projectId: "engine",
+      title: "engine",
+      description: null,
+      lifecycle: "active",
+      lifecycleTone: "neutral",
+    });
+    // The source hash and the churn metadata stay out — the screen has no place for them.
     expect(Object.keys(identity)).not.toContain("sourceHash");
+    expect(Object.keys(identity)).not.toContain("revision");
   });
 
   test("the list resolves empty vs unavailable distinctly", () => {
@@ -294,26 +297,34 @@ describe("projects", () => {
     expect(projectListModel({ data, projection: projection(null) }).rows).toEqual({ kind: "empty" });
   });
 
-  test("a project with no roadmap authority row is absent, not an empty board", () => {
-    const absentRoadmap = {
-      projectId: "om",
-      catalog: catalog({ kind: "project", id: "om" }),
-      authority: { state: "absent" as const },
-      content: null,
-      milestones: { projectId: "om", milestones: [], issues: [], unassignedIssues: 0 },
-    } satisfies RoadmapDTO;
-    expect(roadmapFeatureArm({ data: absentRoadmap, projection: projection(3) })).toEqual({ kind: "absent" });
+  test("an empty milestone rollup is the empty arm, not an absence", () => {
+    const read: MilestoneRead = { projectId: "om", milestones: [], issues: [], unassignedIssues: 0 };
+    expect(milestonesArm({ state: "read", data: read })).toEqual({ kind: "empty" });
   });
 
-  test("a declared roadmap with no milestones is populated, and the milestone list is empty", () => {
-    const present = {
+  test("a rollup carrying milestone work is populated", () => {
+    const read: MilestoneRead = {
       projectId: "engine",
-      catalog: catalog({ kind: "project", id: "engine" }),
-      authority: { state: "present" as const, revision: 7, contentHash: "sha256:abcd" },
-      content: null,
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    } satisfies RoadmapDTO;
-    const arm = roadmapFeatureArm({ data: present, projection: projection(3) });
-    expect(arm.kind).toBe("populated");
+      milestones: [
+        {
+          milestoneId: "m-1",
+          projectId: "engine",
+          name: "First",
+          effortSessions: null,
+          status: "planned",
+          ordinal: 0,
+          revision: 1,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+          totalIssues: 0,
+          openIssues: 0,
+          resolvedIssues: 0,
+          otherRetiredIssues: 0,
+        },
+      ],
+      issues: [],
+      unassignedIssues: 0,
+    };
+    expect(milestonesArm({ state: "read", data: read }).kind).toBe("populated");
   });
 });

@@ -1,5 +1,5 @@
 /**
- * The feature tabs inside a record: a project's Roadmap / Issues / Iterations.
+ * The feature tabs inside a record: a project's Issues / Iterations.
  *
  * A tab strip, not a second navigation: the destinations stay in `Nav`, and this
  * only switches the sections of the record the reader already opened. The panel

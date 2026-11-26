@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
+import { addMilestone, captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, updateMilestone, withStoreRead, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -140,7 +140,7 @@ function withoutHarnessDirectory(body: string): string {
 function raw(
 
   input: string,
-  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean } = {},
+  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean; body?: string } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   const url = new URL(input);
   const suppliedToken = url.searchParams.get("token");
@@ -158,7 +158,7 @@ function raw(
       );
     });
     req.once("error", reject);
-    req.end();
+    req.end(options.body);
   });
 }
 
@@ -374,13 +374,13 @@ describe("API over a real store", () => {
     }
   });
 
-  test("POST to the API is refused: the dashboard is read-only", async () => {
+  test("POST to a read route is refused: writes belong to the one milestone route", async () => {
     for (const pathname of ["/api/issues", "/api/workflows"]) {
       const res = await raw(new URL(pathname, server.url).href, { method: "POST", headers: { "content-type": "application/json" } });
       expect(res.status).toBe(405);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
       expect(body.error.code).toBe("method-not-allowed");
-      expect(body.error.message).toMatch(/read-only/);
+      expect(body.error.message).toMatch(/POST \/api\/milestones/);
     }
   });
 
@@ -577,6 +577,348 @@ describe("dashboard --project selector", () => {
     );
     const server = await start(dir, { project: "registered-project" });
     await server.close();
+  });
+});
+
+describe("the milestone write route", () => {
+  /** The store revision the page would have observed from its overview read. */
+  async function observedRevision(context: StoreContext, projectId: string): Promise<number> {
+    const envelope = await withStoreRead(context, {
+      view: "milestones",
+      needsProjection: false,
+      collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+      execution: "not-requested",
+      run: (sources) => ({ data: null }),
+    } as never);
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      return (lane.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+    } finally {
+      lane.close();
+      void envelope;
+    }
+  }
+
+  async function post(dir: string, body: Record<string, unknown>) {
+    const server = await start(dir);
+    try {
+      return await raw(new URL("/api/milestones", server.url).href, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } finally {
+      await server.close();
+    }
+  }
+
+  test("creates and updates a milestone under the observed revision, refusing a stale one", async () => {
+    const { dir, context } = await workspace("milestone-write-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-write-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "First", effortSessions: 3, ordinal: 0 },
+      operationId: "op-create",
+      expectedStoreRevision: revision,
+    });
+    expect(created.status).toBe(200);
+    const receipt = JSON.parse(created.body) as { data: { milestoneId: string; revision: number; storeRevision: number } };
+    expect(receipt.data.revision).toBe(1);
+    expect(receipt.data.storeRevision).toBe(revision + 1);
+
+    // A write that observed the PRE-write revision is refused with the engine's
+    // own conflict code — never applied, never silently retried.
+    const stale = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-stale",
+      expectedStoreRevision: revision,
+    });
+    expect(stale.status).toBe(500);
+    const refusal = JSON.parse(stale.body) as { error: { code: string; message: string } };
+    expect(refusal.error.code).toBe("milestone.revision-conflict");
+
+    const updated = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-update",
+      expectedStoreRevision: receipt.data.storeRevision,
+    });
+    expect(updated.status).toBe(200);
+    expect((JSON.parse(updated.body) as { data: { revision: number } }).data.revision).toBe(2);
+  });
+
+  test("assigns an issue to a milestone and retires it under the observed revision", async () => {
+    const { dir, context } = await workspace("milestone-assign-retire-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-assign-project", actor: "dashboard-test" },
+    );
+    await seedIssue(context, "Assignable offer", "low");
+    const projectRevision = await observedRevision(context, "proj-a");
+
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Sprint", effortSessions: null, ordinal: 0 },
+      operationId: "op-assign-create",
+      expectedStoreRevision: projectRevision,
+    });
+    expect(created.status).toBe(200);
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+
+    // The offer the picker renders is the project's OPEN issue page: the issue and
+    // the revision the assignment must hash come from the SAME read the page makes.
+    const issues = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
+    const offered = issues.items.find((item) => item.title === "Assignable offer");
+    if (offered === undefined) throw new Error("the seeded issue must be offered");
+
+    const assigned = await post(dir, {
+      verb: "assign",
+      projectId: "proj-a",
+      issueId: offered.id,
+      milestoneId: milestone.milestoneId,
+      issueRevision: offered.revision,
+      operationId: "op-assign",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+    expect(assigned.status).toBe(200);
+    const afterAssign = (JSON.parse(assigned.body) as { data: { storeRevision: number } }).data;
+    const after = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
+    const assignedRow = after.items.find((item) => item.id === offered.id);
+    expect(assignedRow?.milestoneId).toBe(milestone.milestoneId);
+    // The assignment moved the issue's own revision, so the picker's next observation differs.
+    expect(assignedRow?.revision).not.toBe(offered.revision);
+
+    // Retire (remove) the now non-empty milestone: the engine refuses in place, the
+    // route passes the refusal through, and the message names the real cause.
+    const retire = await post(dir, {
+      verb: "remove",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      operationId: "op-retire",
+      expectedStoreRevision: afterAssign.storeRevision,
+    });
+    expect(retire.status).toBe(500);
+    expect((JSON.parse(retire.body) as { error: { code: string } }).error.code).toMatch(/milestone\./);
+  });
+
+  test("retires an EMPTY milestone successfully, and the overview read no longer carries it", async () => {
+    const { dir, context } = await workspace("milestone-retire-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-retire-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Empty sprint", effortSessions: null, ordinal: 0 },
+      operationId: "op-retire-create",
+      expectedStoreRevision: revision,
+    });
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+    const server = await start(dir);
+    try {
+      const before = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      expect(before.status).toBe(200);
+      const beforeMilestones = (JSON.parse(before.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(beforeMilestones.map((row) => row.milestoneId)).toContain(milestone.milestoneId);
+
+      const retired = await post(dir, {
+        verb: "remove",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        operationId: "op-retire",
+        expectedStoreRevision: milestone.storeRevision,
+      });
+      expect(retired.status).toBe(200);
+      expect((JSON.parse(retired.body) as { data: { changed: boolean } }).data.changed).toBe(true);
+
+      // The re-read the page performs no longer carries it.
+      const after = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      const afterMilestones = (JSON.parse(after.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(afterMilestones).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("the dashboard host's own read/write loop re-reads after a conflict and keeps the typed draft", async () => {
+    // Drives the SHIPPED host pair — `readProjectMilestones` + `writeMilestone` —
+    // exactly as `ProjectDetailDestination` does, over the real loopback server:
+    // the read that renders the forms supplies the revision, the write carries it,
+    // a conflict triggers the host's re-read, and the draft kept outside the read's
+    // subtree survives that re-read and lands on the retry.
+    const { createMilestoneDraftStore, milestoneDraftTargetKey, readProjectMilestones, writeMilestone } = await import(
+      "../web/projects-data.ts"
+    );
+    const { dir, context } = await workspace("milestone-host-loop-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-host-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir);
+    try {
+      // The page's first action is a create; the milestone must exist for the forms.
+      const projectRevision = await observedRevision(context, "proj-a");
+      const created = await post(dir, {
+        verb: "create",
+        projectId: "proj-a",
+        input: { name: "Original", effortSessions: null, ordinal: 0 },
+        operationId: "op-host-create",
+        expectedStoreRevision: projectRevision,
+      });
+      const milestone = (JSON.parse(created.body) as { data: { milestoneId: string } }).data;
+
+      // The browser's `fetch`, against the real server and its token boundary.
+      const token = new URL(server.url).searchParams.get("token")!;
+      const origin = `http://127.0.0.1:${new URL(server.url).port}`;
+      const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+        const raw = String(input);
+        const url = raw.startsWith("/") ? `${origin}${raw}${raw.includes("?") ? "&" : "?"}token=${token}` : raw;
+        return fetch(url, init);
+      }) as unknown as typeof fetch;
+
+      // The read that renders the forms: the observed revision rides its envelope.
+      const first = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(first.status).toBe("ready");
+      if (first.status !== "ready") return;
+
+      // Another writer moves the store between the read and the write.
+      await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved elsewhere" }, {
+        operationId: "op-host-other",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+
+      // The operator's draft lives OUTSIDE the read's subtree — the host's store.
+      const drafts = createMilestoneDraftStore();
+      const target = milestoneDraftTargetKey("proj-a", milestone.milestoneId);
+      drafts.write(target, { name: "Typed in the editor", effort: "4" });
+
+      const stale = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: "Typed in the editor" },
+        operationId: "op-host-stale",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+      expect(stale).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+
+      // The host's re-read (the conflict's own follow-up) answers the FRESH revision.
+      const second = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(second.status).toBe("ready");
+      if (second.status !== "ready") return;
+      expect(second.storeRevision).not.toBe(first.storeRevision);
+      // ...and the draft the operator typed survived that re-read untouched.
+      expect(drafts.read(target)).toMatchObject({ name: "Typed in the editor", effort: "4" });
+
+      // The retry at the fresh revision carries the draft's text and lands.
+      const retried = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: drafts.read(target)!.name },
+        operationId: "op-host-retry",
+        expectedStoreRevision: second.storeRevision as number,
+      });
+      expect(retried.status).toBe("ok");
+      const settled = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(settled.status).toBe("ready");
+      if (settled.status !== "ready") return;
+      expect(settled.milestones.kind).toBe("populated");
+      if (settled.milestones.kind !== "populated") return;
+      expect(settled.milestones.value.milestones.map((row) => row.name)).toEqual(["Typed in the editor"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a conflict re-read re-arms the write and the operator's draft survives it", async () => {
+    const { dir, context } = await workspace("milestone-conflict-draft-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-conflict-project", actor: "dashboard-test" },
+    );
+    const staleRevision = await observedRevision(context, "proj-a");
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Original", effortSessions: null, ordinal: 0 },
+      operationId: "op-conflict-create",
+      expectedStoreRevision: staleRevision,
+    });
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+
+    // Another writer moves the store between the page's read and its write.
+    await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved by another writer" }, {
+      operationId: "op-other-writer",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+
+    const stale = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      patch: { name: "Typed before the conflict" },
+      operationId: "op-conflict",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+    expect(stale.status).toBe(500);
+    expect((JSON.parse(stale.body) as { error: { code: string } }).error.code).toBe("milestone.revision-conflict");
+
+    // The re-read the page performs answers the FRESH revision; the retained draft
+    // (what the operator typed) is a pure value the host keeps, so the retry sends
+    // exactly it at the new revision and lands.
+    const fresh = await observedRevision(context, "proj-a");
+    expect(fresh).not.toBe(milestone.storeRevision);
+    const retry = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      patch: { name: "Typed before the conflict" },
+      operationId: "op-conflict-retry",
+      expectedStoreRevision: fresh,
+    });
+    expect(retry.status).toBe(200);
+    const reread = await observedRevision(context, "proj-a");
+    expect(reread).toBeGreaterThan(fresh);
+  });
+
+  test("refuses a body that is not one JSON milestone request", async () => {
+    const { dir } = await workspace("milestone-write-bad-body-");
+    const notJson = await post(dir, { verb: "nonsense" });
+    expect(notJson.status).toBe(400);
+    expect((JSON.parse(notJson.body) as { error: { code: string } }).error.code).toBe("usage");
+  });
+
+  test("keeps the read-only refusal for every GET API route", async () => {
+    const { dir } = await workspace("milestone-write-get-");
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/milestones", server.url).href);
+      expect(res.status).toBe(405);
+    } finally {
+      await server.close();
+    }
   });
 });
 

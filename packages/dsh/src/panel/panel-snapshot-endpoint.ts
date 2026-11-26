@@ -330,7 +330,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
 
   /**
    * Create one milestone (engine `addMilestone`) under the observed store
-   * revision (contract C2: `expectedStoreRevision` comes from the roadmap
+   * revision (contract C2: `expectedStoreRevision` comes from the overview
    * read's envelope). One request, one transaction, no partial write.
    */
   async milestoneAdd(

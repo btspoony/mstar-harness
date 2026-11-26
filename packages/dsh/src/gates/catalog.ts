@@ -12,7 +12,7 @@
  * renders them from the persisted emission), and each dropped fact is read on
  * demand from its own authority: `mstar status tech-debt` for the open-issue
  * rollup,
- * `mstar roadmap show` / the compass document for direction and branch policy,
+ * the compass document for direction and branch policy,
  * `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single
  * `status` command that serves them. ONE exception keeps a line: when the
  * issue authority could not be READ at all, the row renders a fixed failure
@@ -33,8 +33,8 @@
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
  * verbatim, `agentFlow` from the selected workflow's native event rows, open
- * issues from the issue authority, and roadmap milestones from the store
- * roadmap authority — never from retired root or workflow files.
+ * issues from the issue authority, and milestone names from the store
+ * milestone rollup — never from retired root or workflow files.
  * The direction one-liner and the iteration gate come
  * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
  * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
@@ -64,10 +64,10 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
+  queryMilestones,
   queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
-  listRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
 import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
@@ -85,7 +85,7 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
-  RoadmapSourceView,
+  MilestoneSourceView,
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
@@ -856,7 +856,7 @@ function harnessStateSource(
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(facts.roadmap, facts.residuals),
+      project: projectRollupSource(facts.milestones, facts.residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -910,7 +910,7 @@ function selectionErrorState(
     // open-item facts.
     residuals: facts.residuals,
     residualFindings: facts.residualFindings,
-    project: projectRollupSource(facts.roadmap, facts.residuals),
+    project: projectRollupSource(facts.milestones, facts.residuals),
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -926,13 +926,13 @@ function selectionErrorState(
 }
 
 /**
- * The project rollup uses only roadmap records read from the store authority.
+ * The project rollup uses only milestone records read from the store authority.
  * The issue counts are independent and remain available if that read fails.
  */
-function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
+function projectRollupSource(milestones: ProjectMilestoneFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
   return {
-    milestones: roadmap.milestones,
-    roadmapSource: roadmap.source,
+    milestones: milestones.names,
+    milestoneSource: milestones.source,
     openResiduals: residuals,
   }
 }
@@ -945,14 +945,14 @@ function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly H
  * path; the synchronous builders fall back to {@link UNREAD_STORE_FACTS},
  * which says so instead of pretending the rollup is empty.
  */
-interface ProjectRoadmapFacts {
-  readonly milestones: readonly string[]
-  readonly source: RoadmapSourceView
+interface ProjectMilestoneFacts {
+  readonly names: readonly string[]
+  readonly source: MilestoneSourceView
 }
 
 interface StoreFacts {
   readonly source: StoreFactsView
-  readonly roadmap: ProjectRoadmapFacts
+  readonly milestones: ProjectMilestoneFacts
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
@@ -970,12 +970,11 @@ const UNREAD_STORE_FACTS: StoreFacts = {
     asOf: null,
     diagnostic: 'the issue/catalog store was not read for this build',
   },
-  roadmap: {
-    milestones: [],
+  milestones: {
+    names: [],
     source: {
       kind: 'unavailable',
-      absentProjectIds: [],
-      diagnostic: 'the roadmap authority was not read for this build',
+      diagnostic: 'the milestone rollup was not read for this build',
     },
   },
   residuals: [],
@@ -983,37 +982,34 @@ const UNREAD_STORE_FACTS: StoreFacts = {
   knowledge: null,
 }
 
-/** Read the store-backed roadmap authority once, retaining catalog order. */
-async function readProjectRoadmapFacts(context: StoreContext): Promise<ProjectRoadmapFacts> {
+/** Read the store-backed milestone rollup once, retaining catalog order. */
+async function readProjectMilestoneFacts(context: StoreContext): Promise<ProjectMilestoneFacts> {
   try {
-    const records = await listRoadmapAuthority(context)
-    const milestones: string[] = []
-    const absentProjectIds: string[] = []
-    let hasRoadmap = false
-    for (const record of records) {
-      if (record.roadmap === null) {
-        absentProjectIds.push(record.projectId)
-        continue
+    const names: string[] = []
+    let offset = 0
+    // Page the whole catalog: one page would present its projects as all of them.
+    for (;;) {
+      const page = await listCatalog(context, { kind: 'project', limit: 200, offset })
+      for (const entity of page.items) {
+        const envelope = await withStoreRead(context, queryMilestones(entity.id))
+        names.push(...envelope.data.milestones.map((milestone) => milestone.name))
       }
-      hasRoadmap = true
-      milestones.push(...record.content.milestones)
+      offset += page.items.length
+      if (page.items.length === 0 || offset >= page.total) break
     }
-    return {
-      milestones,
-      source: { kind: hasRoadmap ? 'present' : 'absent', absentProjectIds, diagnostic: null },
-    }
+    return { names, source: { kind: 'present', diagnostic: null } }
   } catch (error) {
     return {
-      milestones: [],
-      source: { kind: 'unavailable', absentProjectIds: [], diagnostic: storeRefusalText(error) },
+      names: [],
+      source: { kind: 'unavailable', diagnostic: storeRefusalText(error) },
     }
   }
 }
 
-/** One refresh's open-issue rollup, roadmap source, and knowledge digest. */
+/** One refresh's open-issue rollup, milestone rollup, and knowledge digest. */
 async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
-  const roadmap = await readProjectRoadmapFacts(context)
+  const milestones = await readProjectMilestoneFacts(context)
   try {
     // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
     // preview come from the same read, so no offset page from a different
@@ -1030,7 +1026,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
           asOf: null,
           diagnostic: observation === null ? 'the collaboration authority did not answer this rollup' : `[${observation.code}] the collaboration authority reported no usable rollup`,
         },
-        roadmap,
+        milestones,
         residuals: [],
         residualFindings: null,
         knowledge: null,
@@ -1061,7 +1057,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         diagnostic: storeProjectionDiagnostic(envelope.projection, observation),
       },
       residuals,
-      roadmap,
+      milestones,
       residualFindings,
       knowledge: await readKnowledgeDigest(context),
     }
@@ -1075,7 +1071,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         asOf: null,
         diagnostic: storeRefusalText(error),
       },
-      roadmap,
+      milestones,
       residuals: [],
       residualFindings: null,
       knowledge: null,
