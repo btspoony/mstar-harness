@@ -356,6 +356,7 @@ export { planWorktreeCleanup } from "./cleanup.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,
+  AssignmentSourceResult,
   ComposeDispatchGateOptions,
   ComposeDispatchGateResult,
   DefaultBranchOptions,

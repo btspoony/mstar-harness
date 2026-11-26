@@ -33,6 +33,7 @@ import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { planIdOf } from '../src/gates/dispatch-assignment.ts'
+import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { dispatchCallerOf } from '../src/gates/dispatch-core.ts'
 import { preExecuteListener } from '../src/gates/dispatch-listener.ts'
 import { DshHostAdapter } from '../src/gates/adapter.ts'
@@ -1145,6 +1146,46 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+
+  describe('dispatch gate — ONE resolution per dispatch (5A2-02: the source cannot split decision from record)', () => {
+    it('a source swapped mid-dispatch still yields the FIRST document’s consistent decision and ledger record', async () => {
+      const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+      const feature = await seedTwoActives(app)
+      expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+      const advisories = captureAdvisories(app.ctx)
+
+      // v1 dispatches cleanly into the row scope; v2 swaps the role AND drops
+      // the branch form — a document that can only violate. The swap is armed
+      // on the FIRST macrotask boundary, interleaving it between the gate's
+      // asynchronous steps (workflow selection, lease re-verify, record).
+      const assignmentsDir = join(app.harnessDir, 'assignments')
+      mkdirSync(assignmentsDir, { recursive: true })
+      const file = join(assignmentsDir, 'mid-dispatch-swap.md')
+      writeFileSync(file, sddAssignment(feature, ROW_BRANCH))
+      setTimeout(() => {
+        writeFileSync(file, sddAssignment(feature, ROW_BRANCH).replace('fullstack-dev', 'qc-specialist').replace('working_branch: feature/lease-attribution\n', ''))
+      }, 0)
+
+      const decision = await app.ctx.waterfall(
+        'tools/pre-execute',
+        subagentExec(`Assignment file: ${file}`, sessionAgent('sess-x', app.root)),
+        defaultAllow,
+      )
+
+      // The decision is v1's: clean, no advisory — the lease re-verify read the
+      // SAME resolved document the workflow selection did, never the swap.
+      expect(decision).toEqual({ kind: 'allow' })
+      expect(advisories).toHaveLength(0)
+
+      // The ledger record agrees with the decision: ONE dispatch row, v1's
+      // role, v1's clean verdict — a split read would carry the swapped role
+      // or a violation the decision never reported.
+      const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
+      const dispatches = events.filter((event) => event.kind === 'dispatch')
+      expect(dispatches).toHaveLength(1)
+      expect(dispatches[0]).toMatchObject({ role: 'fullstack-dev', verdict: 'ok' })
+    }, 60_000)
   })
 })
 

@@ -25,6 +25,7 @@ import {
   validateIntegrationMergeLease,
 } from '@mstar-harness/engine'
 import type {
+  AssignmentSourceResult,
   AssignmentFields,
   GateResult,
   HostAdapter,
@@ -268,21 +269,27 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * `tools/pre-execute` listener derives it once and shares it with the
    * workflow branch); omitted → derived here from `exec.agent`.
    */
-  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): Promise<GateResult> {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    // compass D14 — the ONE source resolution: an `Assignment file: <abs>`
-    // pointer resolves against the gate's own control harness root, so the
-    // plan-id hint, the shape guard and the ledger record all read the
-    // RESOLVED document — never the pointer line. A refused pointer yields no
-    // resolved text: the core's refusal is the verdict and the record stays
-    // silent for the unresolved input. The Assignment names its plan row, and
-    // that row belongs to exactly one ACTIVE lifecycle — evidence the shared
-    // source must be resolved WITH, not ahead of: several active lifecycles
-    // with no discriminating cwd is the ordinary parallel-worktree case, not
-    // an unverifiable dispatch.
-    const assignmentSource = readAssignmentSource(prompt, { harnessDir })
+    // compass D14 — the ONE source resolution PER DISPATCH: an `Assignment
+    // file: <abs>` pointer resolves exactly once, HERE, against the gate's
+    // own control harness root. The RESOLVED document — never the pointer
+    // line, never a second read — is what the plan-id hint, the workflow
+    // selection, the enforcement resolution, the core, the lease gate and
+    // the ledger record all consume: the core/lease paths re-resolve only
+    // the already-resolved text (an inline document is a passthrough, no
+    // second filesystem read), so a source file swapped mid-dispatch cannot
+    // split the decision from the record. A refused pointer yields no
+    // resolved text: the raw carrier reaches the core, whose own resolution
+    // refuses it the same way (a passthrough never flips a refusal), and
+    // the record stays silent for the unresolved input. The Assignment
+    // names its plan row, and that row belongs to exactly one ACTIVE
+    // lifecycle — evidence the shared source must be resolved WITH, not
+    // ahead of: several active lifecycles with no discriminating cwd is the
+    // ordinary parallel-worktree case, not an unverifiable dispatch.
+    const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
     const text = assignmentSource.ok ? assignmentSource.text : prompt
     const headerRegion = assignmentHeaderRegion(text)
     const planId = planIdOf(headerRegion)
@@ -290,9 +297,9 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const activeSource = harnessDir !== null && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, exec?.agent, hint, activeSource)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, exec?.agent, hint, activeSource)
     if (exec !== undefined) {
-      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, selectionHint, activeSource))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, text, selectionHint, activeSource))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -431,7 +438,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // read per dispatch.
     const hookSource = readAssignmentSource(prompt, { harnessDir })
     const hard = resolveDispatchHard(harnessDir, this.config, hookSource.ok ? hookSource.text : prompt)
-    const gate = await this.dispatchGate(prompt, undefined, hard)
+    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource)
     return applyEnforcement(gate, { hard })
   }
 

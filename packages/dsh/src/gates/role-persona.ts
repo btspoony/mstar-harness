@@ -122,7 +122,8 @@
  */
 import { isAbsolute, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { parseAssignmentFields, resolveHarnessDir } from '@mstar-harness/engine'
+import { parseAssignmentFields, readAssignmentSource, resolveHarnessDir } from '@mstar-harness/engine'
+import type { AssignmentSourceResult } from '@mstar-harness/engine'
 import {
   isLiveConfigRef,
   packagedAgentsDir,
@@ -603,7 +604,33 @@ export interface RoleGateInput {
   /** The runtime declares `provider`; an unknown provider fails loud its own way (`NO_PROVIDER`). */
   readonly providerKnown: boolean
   /** Declared role ids: `Config.rolePresets` keys ∪ packaged mirror shell stems. */
-  readonly declaredRoleIds: ReadonlySet<string>
+  /**
+   * The ONE assignment-source resolution for this start (compass D14) — the
+   * caller resolves `Assignment file: <abs>` against the applicable control
+   * harness root BEFORE role evaluation. When supplied and refused, the
+   * refusal propagates as the gate verdict under the configured mode: a
+   * pointer the resolver refuses is never silently validated as the inline
+   * text it cannot be (containment bypass). When supplied and resolved, the
+   * caller has already re-carried the resolved document in `request`, so the
+   * scan below reads the same text the dispatch gate would.
+   */
+  readonly assignmentSource?: AssignmentSourceResult
+}
+
+/**
+ * The `hard` refusal / `warn` advisory text for a refused assignment-source
+ * pointer (compass D14) — the resolver's own refusal text plus the mode
+ * recovery. Containment can never be skipped: the pointer document is
+ * unknown, so the declaration question has no answer.
+ *
+ * @param cwd - the child's effective start directory, when known.
+ * @param mode - the configured mode (`hard` refusal or `warn` advisory).
+ * @param refusal - the resolver refusal being propagated.
+ */
+function sourceRefusalMessage(cwd: string | undefined, mode: 'warn' | 'hard', refusal: { severity: string; code: string; message: string; fix: string }): string {
+  const cause = `carries an \`Assignment file:\` pointer the source resolver refuses (${refusal.code}): ${refusal.message}`
+  const fix = `Fix: ${refusal.fix}`
+  return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
 }
 
 /**
@@ -710,6 +737,16 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // retired body-label grammar is refused on EVERY gate; the role gate is
   // the first gate the subagent-start channel reaches, so it names the same
   // cause the dispatch gate would. `off` stays the documented rollback.
+  // (4b) compass D14 — a refused assignment-source resolution propagates as
+  // the gate verdict: the pointer document is unknown, so the declaration
+  // question has no answer, and validating the pointer line itself would
+  // silently bypass containment. `off` stays the documented rollback.
+  const source = input.assignmentSource
+  if (source !== undefined && !source.ok) {
+    if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
+    const message = sourceRefusalMessage(input.cwd, input.mode, source)
+    return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
+  }
   if (legacyAssignmentShape(text)) {
     if (input.mode !== 'off') {
       const message = legacyDeclarationMessage(input.cwd, input.mode)
@@ -820,8 +857,19 @@ function currentDirectoryOf(parent: unknown, ctx: Context): string | undefined {
  * start and null out an otherwise resolvable harness root.
  */
 function isHarnessProject(directory: string): boolean {
+  return harnessRootFor(directory) !== null
+}
+
+/**
+ * The applicable control harness root for one start directory (compass D14)
+ * — the SAME resolution the harness-project predicate runs, lifted so the
+ * assignment-source resolver (`readAssignmentSource`) can containment-check
+ * an `Assignment file: <abs>` pointer against it. `null` = no control root
+ * (the resolver itself refuses the pointer — never a containment skip).
+ */
+function harnessRootFor(directory: string): string | null {
   const abs = resolve(directory)
-  return resolveHarnessDir(abs, { workspaceRoot: abs }) !== null
+  return resolveHarnessDir(abs, { workspaceRoot: abs })
 }
 
 /**
@@ -971,17 +1019,27 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
     }
     // Replace every role-family line (all duplicates — the strict parser
     // refuses duplicates, so a surviving second line would break the proof).
-    let lineStart = openEnd
+    // Offsets are computed from the ORIGINAL line spans including their real
+    // line endings: `split(/\r?\n/)` drops the `\r` from a CRLF line, so a
+    // `line.length + 1` advance misses one character per preceding CRLF line
+    // and lands the replacement inside unrelated fields. The masked block is
+    // character-position identical to the original text, so walking the
+    // original text yields the same line count and the true widths.
     const starts: number[] = []
-    for (const line of lines) {
-      starts.push(lineStart)
-      lineStart += line.length + 1
+    let rest = text.slice(openEnd, openEnd + block.length)
+    for (let count = 0; count < lines.length; count += 1) {
+      starts.push(openEnd + block.length - rest.length)
+      const newlineAt = rest.indexOf('\n')
+      rest = newlineAt < 0 ? '' : rest.slice(newlineAt + 1)
     }
     // Collapse the family to ONE canonical line: the FIRST role-family line
     // becomes `execute_as: <id>` and every later one (a duplicate the strict
     // parser refuses, or a prose-family key the parser never reads) is
-    // dropped. Editing BACKWARDS keeps earlier offsets valid: the dropped
-    // line consumes its line ending, the kept line ends before it.
+    // dropped. Editing BACKWARDS keeps earlier offsets valid. A REPLACED line
+    // keeps its original line ending (the newline — and a CRLF `\r` — sit
+    // outside the swapped byte range); a DROPPED line consumes its real
+    // ending (width derived from the next line's start, so a CRLF line ends
+    // exactly at its `\n`, not between `\r` and `\n`).
     let out = text
     for (let position = roleLines.length - 1; position >= 0; position -= 1) {
       const index = roleLines[position]!
@@ -990,8 +1048,8 @@ export function rewritePromptWithExecuteAs(text: string, roleId: string): string
         const end = start + lines[index]!.length
         out = `${out.slice(0, start)}execute_as: ${roleId}${out.slice(end)}`
       } else {
-        const end = start + lines[index]!.length + 1
-        out = `${out.slice(0, start)}${out.slice(end)}`
+        const next = index + 1 < starts.length ? starts[index + 1]! : start + lines[index]!.length + 1
+        out = `${out.slice(0, start)}${out.slice(next)}`
       }
     }
     return out
@@ -1017,6 +1075,24 @@ function repairRequest(request: SubagentStartRequestView, roleId: string): Subag
   return { ...request, prompt }
 }
 
+/**
+ * Replace the prompt text projection with one text (compass D14 — the
+ * assignment-source carrier): the first text block carries the replacement
+ * and the remaining text blocks fold into it, exactly as {@link repairRequest}
+ * splices a rewrite — non-text blocks stay in place. Used when a resolved
+ * `Assignment file: <abs>` pointer re-carries the document it names, so the
+ * gate, the preset merge and the child all read the document, never the
+ * pointer line.
+ */
+function foldPromptText(request: SubagentStartRequestView, text: string): SubagentStartRequestView {
+  const blocks = request.prompt ?? []
+  const index = blocks.findIndex((block) => block.type === 'text')
+  if (index < 0) return { ...request, prompt: [{ type: 'text', text }] }
+  const prompt = blocks.flatMap((block, i) =>
+    i === index ? [{ ...block, text }] : block.type === 'text' ? [] : [block],
+  )
+  return { ...request, prompt }
+}
 /**
  * The `hard` refusal / `warn` advisory text: the actual cause (no declaration,
  * or more than one distinct one), the exact fix, and the mode-appropriate
@@ -1153,6 +1229,7 @@ function wrapSubagentsService(
     // merge's contained-degradation catch below — a gate refusal must never
     // be swallowed. Only the gate's own reads are contained.
     let gated = spec
+    let carrier: SubagentActivationSpecView = spec
     let decision: RoleGateDecision
     try {
       // The child's EFFECTIVE start directory — an omitted/relative cwd
@@ -1161,13 +1238,26 @@ function wrapSubagentsService(
       // the harness predicate (an omitted cwd is never a non-harness
       // exemption).
       const startDirectory = effectiveStartDirectory(spec, currentDirectoryOf(spec.parent, ctx))
+      // compass D14 — the ONE assignment-source resolution for this start:
+      // an `Assignment file: <abs>` pointer resolves ONCE against the
+      // applicable control harness root, BEFORE role evaluation and preset
+      // selection. A pointer the resolver refuses propagates through the
+      // evaluator (never a containment bypass); a resolved pointer is
+      // re-carried as the prompt text (the text blocks folded, exactly as
+      // the joined projection the gate reads), so the gate and the preset
+      // merge both read the document — never the pointer line.
+      const assignmentSource = readAssignmentSource(promptText(spec), { harnessDir: harnessRootFor(startDirectory) })
+      carrier = assignmentSource.ok && assignmentSource.text !== promptText(spec)
+        ? foldPromptText(spec, assignmentSource.text)
+        : spec
       decision = evaluateRoleGate({
-        request: spec,
+        request: carrier,
         mode: readRoleGate(),
         cwd: startDirectory,
         harnessProject: isHarnessProject(startDirectory),
         providerKnown: service.getProvider(spec.provider) !== undefined,
         declaredRoleIds,
+        assignmentSource,
       })
     } catch {
       // Contained fail-open: an unreadable request/provider is a pathological
@@ -1190,6 +1280,11 @@ function wrapSubagentsService(
         `role gate repaired the dispatch role '${decision.roleId}' from a ${decision.evidence === 'field' ? 'role field line' : 'declared role-id token'}; the canonical 'Execute as' header is what the child receives`,
       )
     }
+    // The resolved carrier replaces the spec even when the gate passes or
+    // warns: the preset merge and the child read the document a pointer
+    // names, exactly as the inline form carries it (a degraded or refused
+    // start keeps the original spec — nothing was proven about it).
+    if (decision.kind !== 'repair') gated = carrier
     let merged = gated
     try {
       const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, gated, rolePresets)

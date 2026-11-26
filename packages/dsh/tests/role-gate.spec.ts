@@ -17,6 +17,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -630,6 +631,56 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(0)
   })
+
+  it('(x) an `Assignment file:` pointer binds the gate and the preset exactly as the inline form (compass D14)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    // Inline control: the canonical document selects the role's preset.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(CANONICAL_PROMPT), cwd: workspace }))
+    expect(provider.starts).toHaveLength(1)
+    const inline = provider.starts[0]!.request as RecordedRequest
+    expect(inline.agentPreset).toBe(PRESET_ID)
+    expect(promptTextOf(inline)).toBe(CANONICAL_PROMPT)
+
+    // The SAME document passed as a pointer under the accepted harness home:
+    // the gate resolves it before role evaluation, and the preset merge reads
+    // the document — never the pointer line.
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'pointer-assignment.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(`Assignment file: ${file}`), cwd: workspace }))
+
+    expect(provider.starts).toHaveLength(2)
+    const sent = provider.starts[1]!.request as RecordedRequest
+    expect(sent.agentPreset).toBe(PRESET_ID)
+    // The child receives the RESOLVED document (the re-carried inline form),
+    // so the pointer and inline starts deliver the same prompt content.
+    expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
+  })
+
+  it('(y) a pointer OUTSIDE every accepted assignment home propagates the resolver refusal (no containment bypass)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, CANONICAL_PROMPT)
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), cwd: workspace }))
+
+    expect(error.message).toContain('dispatch.assignment.path')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(z) a MISSING declaration inside the pointer document is refused exactly as the inline form (hard)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'no-declaration.md')
+    writeFileSync(file, NO_DECLARATION_PROMPT)
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${file}`), cwd: workspace }))
+
+    expect(error.message).toContain('execute_as')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -1014,5 +1065,34 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
     const rest = '## Assignment\n\nSome prose.\n\n## Task\n\n- keep `this`  \n- and this\n'
     const rewritten = rewritePromptWithExecuteAs(rest, EXECUTE_AS)
     expect(rewritten.endsWith(rest)).toBe(true)
+  })
+
+  it('a CRLF document with preceding fields and duplicate role keys repairs without touching unrelated bytes (5A2-03)', () => {
+    // `\r\n` line endings through the WHOLE document, with unrelated fields
+    // before AND after the role keys: before the span-aware offset fix the
+    // rewrite drifted one byte per preceding CRLF line, landing the splice
+    // inside `task_category` and leaving `\r` fragments around the drop.
+    const unrelatedBefore = ['---', 'delegation: forbidden', 'task_category: logic'].join('\r\n')
+    const unrelatedAfter = ['---', '', '## Task', '', 'Do it.', '- keep this  ', ''].join('\r\n')
+    const document = [unrelatedBefore, 'role: `fullstack-dev`', 'act_as: fullstack-dev', unrelatedAfter].join('\r\n')
+
+    const rewritten = rewritePromptWithExecuteAs(document, EXECUTE_AS)
+
+    // The repaired document parses to the role (the proof the gate claims).
+    expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+    // The unrelated preceding fields are byte-identical: the canonical line
+    // follows them with the document's own CRLF ending.
+    expect(rewritten.startsWith(`${unrelatedBefore}\r\nexecute_as: fullstack-dev`)).toBe(true)
+    // The duplicate was dropped WITH its real ending — no orphan `\r`.
+    expect(rewritten).not.toContain('act_as')
+    expect(rewritten).not.toMatch(/\r[^\n]/)
+    // Everything after the role family is byte-identical (the closing fence,
+    // the body, trailing whitespace).
+    expect(rewritten.endsWith(`\r\n${unrelatedAfter}`)).toBe(true)
+  })
+
+  it('a CRLF single role key replaces in place, keeping the line ending intact', () => {
+    const rewritten = rewritePromptWithExecuteAs('---\r\nexecute_as: `fullstack-dev`\r\ndelegation: forbidden\r\n---\r\n', EXECUTE_AS)
+    expect(rewritten).toBe('---\r\nexecute_as: fullstack-dev\r\ndelegation: forbidden\r\n---\r\n')
   })
 })

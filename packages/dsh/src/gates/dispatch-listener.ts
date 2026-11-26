@@ -84,7 +84,7 @@ async function gateAssignmentText(
   // gate decision share the single resolution instead of each re-reading
   // the compass.
   const hard = resolveDispatchHard(harnessDir, config, text)
-  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf())
+  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source)
   const verdict = applyEnforcement(result, { hard })
   if (verdict.hardBlocked) {
     ctx.logger(DISPATCH_LOGGER).error(
