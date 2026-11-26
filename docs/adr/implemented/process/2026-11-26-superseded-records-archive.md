@@ -3,7 +3,7 @@
 Status: implemented — `adr.md` states the one rule, `lintAdrTree` refuses `adr.implemented-superseded`, and `2026-11-03-one-way-linear-push.md` is archived with its `Archived:` and `Superseded-by:` lines.
 Date: 2026-11-26
 
-Scope: the `implemented → archived` lifecycle move of `skills/mstar-doc-corpus/references/adr.md` when the reason is a supersession, the `lintAdrTree` ADR rules in `packages/engine/src/lint.ts`, and the two existing records that already carry a `Superseded-by:` line.
+Scope: the `implemented → archived` lifecycle move of `skills/mstar-doc-corpus/references/adr.md` when the reason is a supersession, the `lintAdrTree` ADR rules in `packages/engine/src/lint.ts`, and the existing record that already carried a `Superseded-by:` line at the time of the decision.
 
 ## Problem
 
