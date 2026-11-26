@@ -55,72 +55,84 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment (mirrors the dispatch-gate spec). */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-host-adapter
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-host-adapter
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
 /** Writable assignment with no branch form at all (field-gate violation). */
-const MISSING_BRANCH = `## Assignment
+const MISSING_BRANCH = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `
 
 /** Read-only orientation role — no branch form is legitimate. */
-const SCOUT_NO_BRANCH = `## Assignment
+const SCOUT_NO_BRANCH = `---
+execute_as: scout
+delegation: n/a
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 
 Survey the codebase, report only.
 `
 
 /** Existing-branch form on a default protected branch without an exception. */
-const WORKING_BRANCH_MAIN = `## Assignment
+const WORKING_BRANCH_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 Do the thing.
 `
 
 /** Self-recursion: the Assignment's `Execute as` equals the dispatcher's own role. */
-const SELF_RECURSION = `## Assignment
+const SELF_RECURSION = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Working branch on main with a BODY-QUOTED direct-on exception — both paths must ignore the body.*/
-const BODY_QUOTED_BRANCH_POLICY = `## Assignment
+const BODY_QUOTED_BRANCH_POLICY = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 ## Task
 
 The task body quotes an example header line:
-**Branch policy**: direct on main — hotfix quoted in the body
+branch_policy: direct on main — hotfix quoted in the body
 `
 
 /** The fields-form equivalent of WORKING_BRANCH_MAIN (parsed input shape). */
@@ -131,22 +143,30 @@ const MAIN_FIELDS = {
   workingBranch: 'main',
 } satisfies AssignmentFields
 
-/** The canonical text form of MAIN_FIELDS (engine header grammar). */
-const MAIN_FIELDS_TEXT = `## Assignment
+/** The canonical text form of MAIN_FIELDS (engine front matter grammar). */
+const MAIN_FIELDS_TEXT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 `
 
-/** A parsed-fields Assignment missing all three core fields. */
-const BARE_FIELDS = { workingBranch: 'feature/x' } satisfies AssignmentFields
+/** A parsed-fields Assignment missing the `Execute as` core field — the
+ * shape guard reads core KEYS, so the bare-fields-only shape of the retired
+ * grammar was carried as the two-key form the conversion itself asserts. */
+const BARE_FIELDS = { delegation: 'forbidden', taskCategory: 'logic', workingBranch: 'feature/x' } satisfies AssignmentFields
 
 /** The canonical text form of BARE_FIELDS. */
-const BARE_FIELDS_TEXT = `## Assignment
+const BARE_FIELDS_TEXT = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Working branch**: feature/x
+## Assignment
 `
 
 /** Implement-round fields WITH a typed Task budget — the fields→text
@@ -160,14 +180,16 @@ const IMPLEMENT_FIELDS_WITH_BUDGET = {
   taskBudget: 'S — one focused implementer round',
 } satisfies AssignmentFields
 
-/** The canonical text form of IMPLEMENT_FIELDS_WITH_BUDGET (engine header grammar). */
-const IMPLEMENT_FIELDS_WITH_BUDGET_TEXT = `## Assignment
+/** The canonical text form of IMPLEMENT_FIELDS_WITH_BUDGET (engine front matter grammar). */
+const IMPLEMENT_FIELDS_WITH_BUDGET_TEXT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
+working_branch: feature/typed-budget
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-**Working branch**: feature/typed-budget
+## Assignment
 `
 
 /** The same implement round WITHOUT the Task budget — guards the gate itself. */
@@ -190,14 +212,16 @@ const REVIEW_SEAT_FIELDS = {
 } satisfies AssignmentFields
 
 /** The canonical text form of REVIEW_SEAT_FIELDS. */
-const REVIEW_SEAT_FIELDS_TEXT = `## Assignment
+const REVIEW_SEAT_FIELDS_TEXT = `---
+execute_as: qc-specialist
+delegation: forbidden
+task_category: logic
+working_branch: feature/typed-budget
+budget: 12 file opens or 10 minutes
+return_shape: verdict + findings; a clean round returns findings: []
+---
 
-**Execute as**: qc-specialist
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/typed-budget
-**Budget (review / QC seats)**: 12 file opens or 10 minutes
-**Return shape (review / QC seats)**: verdict + findings; a clean round returns findings: []
+## Assignment
 `
 
 /* ---------------------------------- helpers ---------------------------------- */
@@ -423,11 +447,34 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     expect(bare.violations).toEqual(bareText.violations)
     expect(bare.violations.map((v) => v.code)).toEqual(
       expect.arrayContaining([
-        'assignment.field.missing-execute-as',
-        'assignment.field.missing-delegation',
-        'assignment.field.missing-task-category',
+        'assignment.field.execute-as',
       ]),
     )
+    // The retired Slice-2 alias survives on the same violation row.
+    expect(bare.violations.find((v) => v.code === 'assignment.field.execute-as')?.aliases)
+      .toContain('assignment.presence.missing-execute-as')
+  })
+
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // whose fields live in the retired `**Label**` grammar must reach the
+    // legacy-format refusal on the exec-less hook exactly as the gate does.
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/dsh-host-adapter
+
+Do the thing.
+`
+    booted = await bootApp()
+    const adapter = makeAdapter()
+
+    const result = await adapter.beforeDispatch(LEGACY_BODY_LABEL)
+
+    expect(result.ok).toBe(false)
+    expect(result.violations.map((v) => v.code)).toContain('dispatch.assignment.legacy-format')
   })
 
   it('typed Task budget survives the fields→text normalization (§ A1) — and its absence still fails the gate', async () => {

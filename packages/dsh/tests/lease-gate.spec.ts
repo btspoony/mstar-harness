@@ -232,6 +232,37 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
+/* ------------------------------ D16 legacy body-label regression ------------------------------ */
+
+describe('dispatch gate — the retired body-label grammar refuses at the lease surface too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // whose fields live in the retired `**Label**` grammar must reach the
+    // legacy-format refusal on the lease-gate surface exactly as on every
+    // other gate, never pass as a field-gate miss.
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan path**: /srv/plans/${PLAN_ID}.md
+**Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
+
+Do the thing.
+`
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
+  })
+})
+
 /* ---------------------------------- scope matrix ---------------------------------- */
 
 describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
