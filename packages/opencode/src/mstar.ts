@@ -714,18 +714,23 @@ export function validateDispatchAssignment(
     if (typeof assignmentText !== "string") {
       return { ok: true, violations: [] };
     }
- // compass D14 — resolve the Assignment source ONCE through the engine
- // resolver (inline front-matter passthrough or the `Assignment file:
- // <abs>` pointer, containment-checked against the control harness root).
- // A refusal is itself the verdict: validating the pointer text would
- // report field violations on the wrong body. A null root refuses the
- // pointer (`dispatch.assignment.path`) — containment is never skipped.
+// compass D14 — resolve the Assignment source ONCE through the engine
+// resolver (inline front-matter passthrough or the `Assignment file:
+// <abs>` pointer, containment-checked against the control harness root).
+// A refusal is itself the verdict: validating the pointer text would
+// report field violations on the wrong body. A null root refuses the
+// pointer (`dispatch.assignment.path`) — containment is never skipped.
+// A source-resolution refusal is CRITICAL by contract (unreadable /
+// out-of-home / unrooted / ambiguous pointer): there is no verified
+// assignment to dispatch on, so it is hard independently of document or
+// repo enforcement — every refusing-capable caller fails closed.
     const harnessDir = resolveHarnessDir();
     const source = readAssignmentSource(assignmentText, { harnessDir });
     let violations: ValidationResult[];
     let enforcementHard = false;
     if (!source.ok) {
       violations = [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }];
+      enforcementHard = true;
     } else {
       const text = source.text;
       // D16 — an Assignment-shaped document whose fields live in the

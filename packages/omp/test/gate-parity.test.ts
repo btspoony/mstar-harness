@@ -446,14 +446,32 @@ No branch form here.
     expect(pointerResult?.reason).toContain("assignment.field.branch-missing");
   });
 
-  test("an out-of-home pointer refuses dispatch.assignment.path (warn mode advisory)", async () => {
+  test("an out-of-home pointer blocks fail-closed even under SOFT enforcement — tool body not reached", async () => {
     const gate = gate2();
     const outside = join(root, "outside-assignment.md");
     writeFileSync(outside, VALID_WRITABLE);
-    const result = (await gate.handler(dispatchEvent(`Assignment file: ${outside}`))) as { block: boolean } | undefined;
-    // Soft compass: advisory, never a block.
-    expect(result).toBeUndefined();
-    expect(gate.warnings.join("\n")).toContain("dispatch.assignment.path");
+    const result = (await gate.handler(dispatchEvent(`Assignment file: ${outside}`))) as { block: boolean; reason: string } | undefined;
+ // Critical source-resolution refusal: hard independent of document/repo
+ // enforcement — the hook blocks even on the soft compass.
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("dispatch.assignment.path");
+  });
+
+  test("a null control harness root blocks fail-closed — tool body not reached", async () => {
+ // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
+ // answer a root, so the pointer can never be containment-checked.
+    const bare = mkdtempSync(join(tmpdir(), "omp-null-root-"));
+    writeFileSync(join(bare, "a.md"), VALID_WRITABLE);
+    process.chdir(bare);
+    try {
+      const gate = gate2();
+      const result = (await gate.handler(dispatchEvent(`Assignment file: ${join(bare, "a.md")}`))) as { block: boolean; reason: string } | undefined;
+      expect(result?.block).toBe(true);
+      expect(result?.reason).toContain("dispatch.assignment.path");
+    } finally {
+      process.chdir(root);
+      rmSync(bare, { recursive: true, force: true });
+    }
   });
 
   test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", async () => {

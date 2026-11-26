@@ -120,13 +120,18 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // <abs>` pointer, containment-checked against the control harness root;
  // a null root refuses the pointer — containment is never skipped). A
  // refusal is itself the verdict: validating the pointer text would
- // report field violations on the wrong body.
+ // report field violations on the wrong body. A source-resolution
+ // refusal is CRITICAL by contract (unreadable / out-of-home / unrooted /
+ // ambiguous pointer): there is no verified assignment to dispatch on,
+ // so it is hard independently of document or repo enforcement — the
+ // tool body is never reached.
  const harnessDir = api.resolveHarnessDir();
  const source = api.readAssignmentSource(prompt, { harnessDir });
  let violations: readonly GateViolation[];
  let enforcementHard = false;
  if (!source.ok) {
  violations = [source];
+ enforcementHard = true;
  } else {
  const text = source.text;
  const fields = api.parseAssignmentFields(text);

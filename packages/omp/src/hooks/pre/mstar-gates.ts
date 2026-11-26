@@ -457,17 +457,21 @@ function validateDispatchEntry(
   readSource: ReadAssignmentSourceFn,
   harnessDir: string | null,
 ): { violations: ValidationResult[]; hard: boolean } {
- // compass D14 — resolve the Assignment source ONCE through the engine
- // resolver (inline front-matter passthrough or the `Assignment file:
- // <abs>` pointer, containment-checked against the control harness root;
- // a null root refuses the pointer — containment is never skipped). A
- // refusal is itself the verdict: validating the pointer text would
- // report field violations on the wrong body.
+// compass D14 — resolve the Assignment source ONCE through the engine
+// resolver (inline front-matter passthrough or the `Assignment file:
+// <abs>` pointer, containment-checked against the control harness root;
+// a null root refuses the pointer — containment is never skipped). A
+// refusal is itself the verdict: validating the pointer text would
+// report field violations on the wrong body. A source-resolution
+// refusal is CRITICAL by contract (unreadable / out-of-home / unrooted /
+// ambiguous pointer): there is no verified assignment to dispatch on,
+// so it is hard independently of document or repo enforcement — the
+// call fails closed on every compass setting.
   const source = readSource(entry.task, { harnessDir });
   if (!source.ok) {
     return {
       violations: [{ ok: false, severity: source.severity as ValidationResult["severity"], code: source.code, message: source.message, fix: source.fix }],
-      hard: false,
+      hard: true,
     };
   }
   const text = source.text;

@@ -270,15 +270,37 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(inlineCodes).toContain("assignment.field.branch-missing");
   });
 
-  test("an out-of-home pointer refuses dispatch.assignment.path", async () => {
-    const logs: string[] = [];
-    const harness = await fixture((_level, message) => logs.push(message));
+  test("an out-of-home pointer refuses dispatch.assignment.path — fail-closed before the tool body under SOFT enforcement", async () => {
+    const harness = await fixture();
     const outside = join(controlRoot, "outside-assignment.md");
     writeFileSync(outside, validAssignment());
-    await harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${outside}`));
-    // Warn mode: advisory log, no refusal.
-    expect(harness.bodyCalls()).toBe(1);
-    expect(logs.join("\n")).toContain("dispatch.assignment.path");
+ // Critical source-resolution refusal: hard independent of document/repo
+ // enforcement — the typed Tool.Error refuses even on the soft tree, and
+ // the tool body is never reached.
+    await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${outside}`))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.assignment.path"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("a null control harness root refuses the pointer — the tool body is never reached", async () => {
+ // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
+ // answer a root, so the pointer can never be containment-checked.
+    const bare = mkdtempSync(join(tmpdir(), "opencode-v2-null-root-"));
+    writeFileSync(join(bare, "a.md"), validAssignment());
+    process.chdir(bare);
+    try {
+      const harness = await fixture();
+      await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${join(bare, "a.md")}`))).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("dispatch.assignment.path"),
+      });
+      expect(harness.bodyCalls()).toBe(0);
+    } finally {
+      process.chdir(controlRoot);
+      rmSync(bare, { recursive: true, force: true });
+    }
   });
 
   test("an out-of-home pointer under repo-level hard refuses the dispatch", async () => {

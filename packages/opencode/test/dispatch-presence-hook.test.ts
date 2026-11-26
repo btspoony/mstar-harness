@@ -341,13 +341,25 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     ]) {
       expect(warnings.some((w) => w.includes(code))).toBe(true);
     }
- // Every core-field violation carries its legacy presence alias.
-    for (const v of result!.violations) {
-      if (v.code.startsWith("assignment.field.missing-")) {
-        expect(v.aliases).toHaveLength(1);
-        expect(v.aliases![0]).toMatch(/^assignment\.presence\.missing-/);
-      }
+ // Every core-field violation carries its legacy presence alias: select
+ // the three actual field codes (not the retired `missing-` infix), find
+ // each violation, and assert all three were checked.
+    const checked: string[] = [];
+    for (const [fieldCode, presenceCode] of [
+      ["assignment.field.execute-as", "assignment.presence.missing-execute-as"],
+      ["assignment.field.delegation", "assignment.presence.missing-delegation"],
+      ["assignment.field.task-category", "assignment.presence.missing-task-category"],
+    ] as const) {
+      const violation = result!.violations.find((v) => v.code === fieldCode);
+      expect(violation).toBeDefined();
+      expect(violation?.aliases).toContain(presenceCode);
+      checked.push(fieldCode);
     }
+    expect(checked).toEqual([
+      "assignment.field.execute-as",
+      "assignment.field.delegation",
+      "assignment.field.task-category",
+    ]);
   });
 
   test("garbage text → no warnings, ok result", () => {
@@ -942,14 +954,59 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(pointerCodes).toContain("assignment.field.branch-missing");
   });
 
-  test("an out-of-home pointer refuses dispatch.assignment.path", () => {
-    const { warnings, log } = captureWarnings();
+  test("an out-of-home pointer refuses dispatch.assignment.path — fail-closed hardBlocked under SOFT repo enforcement", () => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
     const outside = join(fixtureRepo, "outside-assignment.md");
     writeFileSync(outside, completeAssignment);
+ // Critical source-resolution refusal: hard independent of document/repo
+ // enforcement (the fixture tree is soft) — error-level lines, no warn lines.
     const result = validateDispatchAssignment(`Assignment file: ${outside}`, { log });
     expect(result!.ok).toBe(false);
     expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
-    expect(warnings.some((w) => w.includes("dispatch.assignment.path"))).toBe(true);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
+    expect(entries.some(([level]) => level === "warn")).toBe(false);
+  });
+
+  test("a null control harness root refuses the pointer — fail-closed hardBlocked", () => {
+ // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
+ // answer a root, so the pointer can never be containment-checked. Fail-closed
+ // hard enforcement applies independently of any document or repo flag.
+    const bare = mkdtempSync(join(tmpdir(), "mstar-null-root-"));
+    writeFileSync(join(bare, "a.md"), completeAssignment);
+    process.chdir(bare);
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    try {
+      const result = validateDispatchAssignment(`Assignment file: ${join(bare, "a.md")}`, { log });
+      expect(result!.ok).toBe(false);
+      expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
+      expect(result!.violations.some((v) => v.message.includes("control harness root"))).toBe(true);
+      expect(result!.hardBlocked).toBe(true);
+      expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
+    } finally {
+      process.chdir(fixtureRepo);
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable pointer under an accepted home refuses fail-closed", () => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const missing = join(fixtureRepo, ".mstar", "assignments", "absent-file.md");
+    const result = validateDispatchAssignment(`Assignment file: ${missing}`, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
   });
 
   test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", () => {
