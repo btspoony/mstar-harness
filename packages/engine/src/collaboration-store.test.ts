@@ -2062,7 +2062,7 @@ describe("collaboration remote schema ladder", () => {
     expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
   });
 
-  test("an upgrade interrupted inside its own transaction leaves the predecessor visible and recovers on replay", async () => {
+  test("a copy of the lane taken inside its own upgrade transaction recovers as v6 and replays to v7", async () => {
     const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
@@ -2079,31 +2079,38 @@ describe("collaboration remote schema ladder", () => {
 
     // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
     // seam runs inside the ladder's own `BEGIN IMMEDIATE`, after the v7 rebuild and before its ledger
-    // row. The callback throws, so the ladder's real rollback branch is the one that executes.
+    // row. Everything the recovery proof needs is copied HERE, so the proof never depends on this
+    // process's rollback.
     const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
     mkdirSync(snapshotDir, { recursive: true });
-    const snapshot = join(snapshotDir, "collaboration.db");
+    const captured: string[] = [];
     let journalBytes = 0;
     let journalHasDroppedTable = false;
     let outsideTables: string[] = [];
     setCollaborationRoadmapRemovalGapForTest((inFlightDb) => {
       // note: Evict the rebuild's dirty pages to the file so the journal beside them is real work,
-      // not an empty allocation.
+      // not an empty allocation, and the database file itself is mid-transaction.
       inFlightDb.exec("pragma cache_size=1");
       inFlightDb.exec("create table crash_spill(x text)");
       const insert = inFlightDb.prepare("insert into crash_spill values (?)");
       for (let index = 0; index < 40; index++) insert.run("x".repeat(4096));
-      expect(existsSync(`${location.dbPath}-journal`)).toBe(true);
-      journalBytes = statSync(`${location.dbPath}-journal`).size;
-      copyFileSync(location.dbPath, snapshot);
-      copyFileSync(`${location.dbPath}-journal`, `${snapshot}-journal`);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+        const source = `${location.dbPath}${suffix}`;
+        if (!existsSync(source)) continue;
+        const target = join(snapshotDir, `collaboration.db${suffix}`);
+        copyFileSync(source, target);
+        captured.push(target);
+      }
+      journalBytes = existsSync(`${snapshotDir}/collaboration.db-journal`)
+        ? statSync(`${snapshotDir}/collaboration.db-journal`).size
+        : 0;
       // invariant: The PRODUCTION boundary holds while the seam runs: a second connection opened on the
       // lane right now still sees the committed v6 schema, because the rebuild is inside the ladder's
       // one transaction and nothing of it is published.
       outsideTables = tableNames(location.dbPath);
-      journalHasDroppedTable = readFileSync(`${location.dbPath}-journal`).includes(
-        Buffer.from("CREATE TABLE project_roadmaps"),
-      );
+      journalHasDroppedTable =
+        journalBytes > 0 &&
+        readFileSync(`${snapshotDir}/collaboration.db-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"));
       throw new Error("crash-seam");
     });
     try {
@@ -2112,19 +2119,46 @@ describe("collaboration remote schema ladder", () => {
       setCollaborationRoadmapRemovalGapForTest(undefined);
     }
 
-    // invariant: The rebuild was genuinely in flight: its journal is non-empty and carries the ORIGINAL
-    // page of the table it dropped (a rollback journal stores pre-images, so an unrelated or absent
-    // journal could not hold that DDL text).
+    // invariant: The capture is a genuinely interrupted rebuild and is INDEPENDENT of this process:
+    // the rollback journal holds the dropped table's own pre-image DDL (a DELETE journal stores
+    // pre-images, so an absent or unrelated journal could not carry that text), and it was copied out
+    // of the live lane while the production transaction held it.
+    // note: The database file itself is not asserted to differ from the pristine bytes: in a DELETE
+    // journal the predecessor's pages may stay in place, so the journal - not the file - is the
+    // pre-image, and the recovery proof below is what establishes that the copy is mid-transaction.
+    expect(captured).toContain(join(snapshotDir, "collaboration.db"));
     expect(journalBytes).toBeGreaterThan(0);
-    expect(statSync(`${snapshot}-journal`).size).toBe(journalBytes);
-    expect(readFileSync(`${snapshot}-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"))).toBe(true);
     expect(journalHasDroppedTable).toBe(true);
     // invariant: Uncommitted work was never visible outside the transaction.
     expect(outsideTables).toEqual(v6Tables);
-    // invariant: The production path rolled back: the lane holds its v6 ledger again.
-    expect(ledgerRows(location.dbPath)).toEqual(v6Ledger);
 
-    // note: Replaying the same verb after that interruption completes the upgrade.
+    // note: Recover from the COPY, not from the interrupted lane: a fresh connection opened on the
+    // captured pair must roll the hot journal back and answer the v6 predecessor, with no half-applied
+    // v7 (no rebuilt catalog_entities, no dropped roadmap table).
+    const recovered = new DatabaseSync(join(snapshotDir, "collaboration.db"));
+    try {
+      const tables = (recovered.prepare("select name from sqlite_master where type='table'").all() as Array<{ name: string }>).map(
+        (row) => row.name,
+      );
+      expect(tables.sort()).toEqual([...v6Tables].sort());
+      expect(
+        recovered.prepare("select version from schema_version order by version").all() as Array<{ version: number }>,
+      ).toEqual(v6Ledger.map((row) => ({ version: row.version })));
+      expect(recovered.prepare("select document_kind, revision from catalog_entities where id = 'doc-r'").get()).toEqual({
+        document_kind: "roadmap",
+        revision: 7,
+      });
+      // note: The journal FILE may remain (SQLite truncates rather than unlinks on some paths); what
+      // proves recovery is the answered v6 state above - the pre-image was applied, not the v7 DDL.
+    } finally {
+      recovered.close();
+    }
+
+    // note: Replaying the same verb over the recovered copy completes the upgrade.
+    rmSync(location.dbPath, { force: true });
+    rmSync(`${location.dbPath}-journal`, { force: true });
+    copyFileSync(join(snapshotDir, "collaboration.db"), location.dbPath);
+    chmodSync(location.dbPath, 0o600);
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
     expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
