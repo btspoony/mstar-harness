@@ -191,6 +191,9 @@ const detailCopy: ProjectDetailCopy = {
       assign: "Assign issues",
       unassign: "Unassign",
       assignCap: "Showing the first 50 unassigned open issues.",
+      assignLoading: "Loading assignable issues…",
+      assignFailed: "The assignable issues could not be read:",
+      assignRetry: "Retry",
       remove: "Remove",
       removeConfirm: "Remove this milestone?",
       refusalLead: "The store refused the change:",
@@ -214,6 +217,7 @@ const renderDetail = (
     writes?: ProjectDetailProps["writes"];
     assignableIssues?: ProjectDetailProps["assignableIssues"];
     drafts?: ProjectDetailProps["drafts"];
+    onRetryAssignable?: ProjectDetailProps["onRetryAssignable"];
   },
   onClearScope?: () => void,
 ): string =>
@@ -229,6 +233,7 @@ const renderDetail = (
       {...(input.writes === undefined ? {} : { writes: input.writes })}
       {...(input.assignableIssues === undefined ? {} : { assignableIssues: input.assignableIssues })}
       {...(input.drafts === undefined ? {} : { drafts: input.drafts })}
+      {...(input.onRetryAssignable === undefined ? {} : { onRetryAssignable: input.onRetryAssignable })}
       onBack={() => {}}
       onClearScope={onClearScope}
     />,

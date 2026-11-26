@@ -39,6 +39,21 @@ const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as cons
 export type AssignableIssue = { id: string; title: string; severity: string; revision: number };
 
 /**
+ * The picker's read state. A list is the answered set; the two other arms say
+ * why there is no set yet — a read that cannot answer must never look like a
+ * project with nothing to assign, and it must not disappear or spin forever.
+ */
+export type AssignableIssuesRead =
+  | readonly AssignableIssue[]
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed"; readonly reason: string };
+
+/** Whether the picker's read answered with a list (`Array.isArray` cannot narrow a readonly union arm). */
+export function isAssignableList(read: AssignableIssuesRead): read is readonly AssignableIssue[] {
+  return Array.isArray(read);
+}
+
+/**
  * How many assignable issues the host hands the picker. The host applies the
  * same limit to its read, so the picker states the cap instead of truncating
  * silently.
@@ -283,6 +298,12 @@ export type ProjectDetailCopy = {
       unassign: string;
       /** Said when the picker hit the cap, so the truncation is never silent. */
       assignCap: string;
+      /** The picker's read is pending. */
+      assignLoading: string;
+      /** The picker's read failed; the store's own reason follows. */
+      assignFailed: string;
+      /** The retry control's word, beside the failure reason. */
+      assignRetry: string;
       remove: string;
       removeConfirm: string;
       refusalLead: string;
@@ -322,19 +343,63 @@ export type ProjectDetailProps = {
   writes?: MilestoneWriteSurface;
   /** note: the host-owned draft store; absent, drafts live in component state as before. */
   drafts?: MilestoneDraftStore;
-  /** The project's open, unassigned issues, as the assign picker's options. */
-  assignableIssues?: readonly AssignableIssue[];
+  /** The assign picker's read: the offer list, or the loading/failed arm. */
+  assignableIssues?: AssignableIssuesRead;
+  /** Re-issue the picker's read after a failure; absent means the host cannot retry. */
+  onRetryAssignable?: () => void;
   onBack?: () => void;
   /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
   onClearScope?: () => void;
 };
 
+/**
+ * The assignment picker for one milestone: a native `<details>` whose summary is
+ * the control (natively focusable, toggles on Enter/Space and pointer), with one
+ * chip per offered issue and the stated cap.
+ */
+function AssignPicker(props: {
+  milestone: Milestone;
+  writes: MilestoneWriteSurface;
+  assignable: readonly AssignableIssue[];
+  copy: ProjectDetailCopy;
+}) {
+  const { milestone, writes, assignable, copy } = props;
+  return (
+    <details data-ms-milestone-assign="">
+      <summary className={"link"} data-ms-milestone-assign-toggle={milestone.milestoneId}>
+        {copy.milestones.writes.assign}
+      </summary>
+      {assignable.length >= ASSIGNABLE_ISSUE_LIMIT ? (
+        <span className="muted t-11" data-ms-assign-cap={ASSIGNABLE_ISSUE_LIMIT}>
+          {copy.milestones.writes.assignCap}
+        </span>
+      ) : null}
+      {assignable.map((issue) => (
+        <button
+          key={issue.id}
+          type="button"
+          className={"chip"}
+          disabled={writes.busy}
+          title={issue.title}
+          data-ms-assign-issue={issue.id}
+          onClick={() => writes.assign(issue.id, issue.revision, milestone.milestoneId)}
+        >
+          {issue.id}
+          <span className="muted"> · {issue.severity}</span>
+        </button>
+      ))}
+    </details>
+  );
+}
+
 /** The milestone board's inline write controls for one milestone (plan Task 4). */
 function MilestoneActions(props: {
   milestone: Milestone;
   writes: MilestoneWriteSurface;
-  /** The assign picker's options; absent means this host offers no picker here. */
-  assignable: readonly AssignableIssue[] | undefined;
+  /** The picker's read; absent means this host offers no picker here. */
+  assignable: AssignableIssuesRead | undefined;
+  /** Re-issue the picker's read; absent means this host cannot retry. */
+  onRetryAssignable?: () => void;
   copy: ProjectDetailCopy;
   /** note: the host-owned draft store (absent: drafts live in component state, as before). */
   drafts?: MilestoneDraftStore;
@@ -431,34 +496,28 @@ function MilestoneActions(props: {
             {copy.milestones.writes.remove}
           </button>
         )}
-        {assignable === undefined || assignable.length === 0 ? null : (
-          <details data-ms-milestone-assign="">
-            {/* The summary IS the control: it is natively focusable and toggles on
-                Enter/Space and on a pointer click. A nested button would swallow the
-                activation and leave the visible trigger inert. */}
-            <summary className={"link"} data-ms-milestone-assign-toggle={milestone.milestoneId}>
-              {copy.milestones.writes.assign}
-            </summary>
-            {assignable.length >= ASSIGNABLE_ISSUE_LIMIT ? (
-              <span className="muted t-11" data-ms-assign-cap={ASSIGNABLE_ISSUE_LIMIT}>
-                {copy.milestones.writes.assignCap}
-              </span>
-            ) : null}
-            {assignable.map((issue) => (
-              <button
-                key={issue.id}
-                type="button"
-                className={"chip"}
-                disabled={writes.busy}
-                title={issue.title}
-                data-ms-assign-issue={issue.id}
-                onClick={() => writes.assign(issue.id, issue.revision, milestone.milestoneId)}
-              >
-                {issue.id}
-                <span className="muted"> · {issue.severity}</span>
+        {assignable === undefined ? null : isAssignableList(assignable) ? (
+          assignable.length === 0 ? null : (
+            <AssignPicker milestone={milestone} writes={writes} assignable={assignable} copy={copy} />
+          )
+        ) : assignable.kind === "failed" ? (
+          // A failed read is stated IN PLACE: the picker must not vanish (an entry the
+          // operator cannot find reads as "nothing to assign") and a retry must exist.
+          <span className={"inline-write-error"} role="alert" data-ms-assign-error="">
+            <span className="muted t-11">
+              {copy.milestones.writes.assignFailed} {assignable.reason}
+            </span>
+            {props.onRetryAssignable === undefined ? null : (
+              <button type="button" className={"link"} disabled={writes.busy} data-ms-assign-retry="" onClick={props.onRetryAssignable}>
+                {copy.milestones.writes.assignRetry}
               </button>
-            ))}
-          </details>
+            )}
+          </span>
+        ) : (
+          // A pending read says so instead of pretending the set is empty.
+          <span className="muted t-11" data-ms-assign-loading="">
+            {copy.milestones.writes.assignLoading}
+          </span>
         )}
       </span>
     );
@@ -539,7 +598,8 @@ function MilestoneBlock(props: {
   milestone: Milestone;
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
-  assignable?: readonly AssignableIssue[];
+  assignable?: AssignableIssuesRead;
+  onRetryAssignable?: () => void;
   drafts?: MilestoneDraftStore;
   draftsProject?: string;
 }) {
@@ -623,6 +683,7 @@ function MilestoneBlock(props: {
           milestone={milestone}
           writes={writes}
           assignable={props.assignable}
+          {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
           copy={copy}
           {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
           {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
@@ -781,7 +842,8 @@ function MilestoneBoard(props: {
   model: MilestonesModel;
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
-  assignable?: readonly AssignableIssue[];
+  assignable?: AssignableIssuesRead;
+  onRetryAssignable?: () => void;
   drafts?: MilestoneDraftStore;
   draftsProject?: string;
 }) {
@@ -814,6 +876,7 @@ function MilestoneBoard(props: {
               copy={copy}
               {...(props.writes === undefined ? {} : { writes: props.writes })}
               {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+          {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
               {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
           {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
             />
@@ -872,7 +935,8 @@ function MilestonesArm(props: {
   milestones: Resolved<MilestonesModel>;
   copy: ProjectDetailCopy;
   writes?: MilestoneWriteSurface;
-  assignable?: readonly AssignableIssue[];
+  assignable?: AssignableIssuesRead;
+  onRetryAssignable?: () => void;
   drafts?: MilestoneDraftStore;
   draftsProject?: string;
 }) {
@@ -900,6 +964,7 @@ function MilestonesArm(props: {
             copy={copy}
             {...(props.writes === undefined ? {} : { writes: props.writes })}
             {...(props.assignable === undefined ? {} : { assignable: props.assignable })}
+          {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
             {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
           {...(props.draftsProject === undefined ? {} : { draftsProject: props.draftsProject })}
           />
@@ -1016,6 +1081,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
         copy={copy}
         {...(props.writes === undefined ? {} : { writes: props.writes })}
         {...(props.assignableIssues === undefined ? {} : { assignable: props.assignableIssues })}
+        {...(props.onRetryAssignable === undefined ? {} : { onRetryAssignable: props.onRetryAssignable })}
         {...(props.drafts === undefined ? {} : { drafts: props.drafts })}
         draftsProject={identity.projectId}
       />

@@ -247,6 +247,7 @@ import {
   workflowDetailModel,
   iterationDetailModel,
   type AssignableIssue,
+  type AssignableIssuesRead,
   type MilestoneDraftStore,
   type MilestoneWriteSurface,
   type ProjectFeature,
@@ -277,7 +278,7 @@ export type DetailProps = {
    */
   readonly writes?: MilestoneWriteSurface
   /** The project's open unassigned issues, as the assign picker's options. */
-  readonly assignableIssues?: readonly AssignableIssue[]
+  readonly assignableIssues?: AssignableIssuesRead
   /** note: the seat-owned draft store, passed to the project page's forms. */
   readonly drafts?: MilestoneDraftStore
 }
@@ -429,7 +430,7 @@ export function ProjectDetailDestination(props: {
    * does not declare stops at it.
    */
   writes?: MilestoneWriteSurface
-  assignableIssues?: readonly AssignableIssue[]
+  assignableIssues?: AssignableIssuesRead
   /** note: the seat-owned milestone draft store (the forms' drafts survive a read refresh). */
   drafts?: MilestoneDraftStore
   /** Test seam: the tab the page opens on. Production always starts at the default. */

@@ -96,7 +96,7 @@ import {
   projectMilestonesOutcome,
   milestoneWriteIds,
   writeMilestone,
-  type AssignableIssue,
+  type AssignableIssuesRead,
   type MilestoneMutationRequest,
   type MilestoneWriteSurface,
   type ProjectFeature,
@@ -225,34 +225,42 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
 /**
  * The assign picker's own read: every open issue of one project, independent of
  * the address bar and the list's page. `refreshToken` re-issues it after a write
- * moves an issue's milestone or revision.
+ * moves an issue's milestone or revision; `retry()` re-issues it after a failure.
+ *
+ * Three arms, never two: a rejected read is `failed` with the store's own reason,
+ * so the picker states the cause and offers the retry instead of spinning or
+ * vanishing.
  */
 function useAssignableIssues(
   projectId: string | null,
   refreshToken: number,
-): { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } {
-  const [outcome, setOutcome] = useState<
-    { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] }
+): {
+  read: { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } | { kind: "failed"; reason: string };
+  retry: () => void;
+} {
+  const [read, setRead] = useState<
+    { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } | { kind: "failed"; reason: string }
   >({ kind: "loading" });
+  const [retryToken, setRetryToken] = useState(0);
   useEffect(() => {
     if (projectId === null) return;
     const controller = new AbortController();
     let current = true;
-    setOutcome({ kind: "loading" });
+    setRead({ kind: "loading" });
     void readAssignableIssues(fetch, projectId, controller.signal).then((result) => {
       if (!current) return;
-      setOutcome(
+      setRead(
         result.status === "ready"
           ? { kind: "ready", model: result.envelope.data.items }
-          : { kind: "loading" },
+          : { kind: "failed", reason: result.message },
       );
     });
     return () => {
       current = false;
       controller.abort();
     };
-  }, [projectId, refreshToken]);
-  return outcome;
+  }, [projectId, refreshToken, retryToken]);
+  return { read, retry: () => setRetryToken((token) => token + 1) };
 }
 
 /**
@@ -820,8 +828,12 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   // (disposition only, every page) so the address bar's filters, search and page
   // window can never shrink the offer; the unassigned subset is the picker's rule.
   const assignable = useAssignableIssues(projectId === "" ? null : projectId, issuesRefreshToken);
-  const assignableIssues: AssignableIssue[] | undefined =
-    assignable.kind === "ready" ? assignableOptions(assignable.model) : undefined;
+  const assignableIssues: AssignableIssuesRead | undefined =
+    assignable.read.kind === "ready"
+      ? assignableOptions(assignable.read.model)
+      : assignable.read.kind === "failed"
+        ? { kind: "failed", reason: assignable.read.reason }
+        : { kind: "loading" };
 
   /**
    * The milestone write channel: one write at a time, each carrying the store
@@ -937,6 +949,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       {...(iterationsCount === undefined ? {} : { iterationsCount })}
       {...(writes === undefined ? {} : { writes })}
       {...(assignableIssues === undefined ? {} : { assignableIssues })}
+      onRetryAssignable={assignable.retry}
       drafts={drafts}
       copy={projectDetailCopy(copy)}
       onBack={() => {

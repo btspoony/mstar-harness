@@ -19,7 +19,7 @@ import {
   projectIdentity,
   projectIdentityFor,
   projectListModel,
-  type AssignableIssue,
+  type AssignableIssuesRead,
   type Copy,
   type MilestoneWriteSurface,
   type MilestonesModel,
@@ -260,6 +260,7 @@ export {
   projectIdentity,
   projectIdentityFor,
   type AssignableIssue,
+  type AssignableIssuesRead,
   type MilestoneWriteSurface,
 };
 export type { IssuePage, IterationListDTO, ProjectFeature };

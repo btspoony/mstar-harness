@@ -39,6 +39,7 @@ import {
   type FocusOverviewInput,
   createMilestoneDraftStore,
   milestoneDraftTargetKey,
+  type AssignableIssuesRead,
   type Locale,
   type MilestoneDraftStore,
   type SessionBinding,
@@ -269,8 +270,8 @@ export function PanelShell(props: {
   projectsList?: MstarDashboardViewState
   /** The milestone write channel, alive only while a project page is open. */
   writes?: MilestoneWriteChannel
-  /** The project's open unassigned issues, as the assign picker's options. */
-  assignableIssues?: ReadonlyArray<{ id: string; title: string; severity: string; revision: number }>
+  /** The assign picker's read: the offer list, or the loading/failed arm. */
+  assignableIssues?: AssignableIssuesRead
   /** note: the seat-owned milestone draft store — the forms live under the overview read, so a
    *  refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
   drafts?: MilestoneDraftStore
@@ -918,9 +919,12 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     },
     drafts: milestoneDrafts,
   })
-  // The assign picker's options: the project's OPEN, UNASSIGNED issues as the
-  // scoped Issues read answers them (id, title, severity, revision for the CAS).
-  const assignableIssues =
+  // The assign picker's read: the project's issues, narrowed to the OPEN,
+  // UNASSIGNED ones (id, title, severity, revision for the CAS). The scoped read
+  // is already every page and every open disposition, so the offer is complete;
+  // a read that did not answer keeps its own arm (`loading`, or `failed` with the
+  // store's reason) rather than masquerading as "nothing to assign".
+  const assignableIssues: AssignableIssuesRead | undefined =
     projectIssuesView.state.kind === 'ok' && projectIssuesView.state.envelope.data !== null
       ? (
           projectIssuesView.state.envelope.data as {
@@ -930,7 +934,9 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
           .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
           .slice(0, ASSIGNABLE_ISSUE_LIMIT)
           .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
-      : undefined
+      : projectIssuesView.state.kind === 'ok'
+        ? { kind: 'loading' }
+        : { kind: 'failed', reason: projectIssuesView.state.kind === 'unavailable' ? projectIssuesView.state.reason : 'the project issues read did not answer' }
 
   // (b) The workflow pick is the product's only write: once the commit lands,
   // every read that DEPENDS on the binding re-reads — the digest (selection),
