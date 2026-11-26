@@ -755,7 +755,7 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
  * the two list features. `Issues` is the route's default and never "the first
  * feature with data".
  */
-function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
+export function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<ProjectMilestonesOutcome>({ kind: "loading" });
   /**
@@ -831,7 +831,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   // The assign picker's options: the project's OPEN issues, read by its OWN query
   // (disposition only, every page) so the address bar's filters, search and page
   // window can never shrink the offer; the unassigned subset is the picker's rule.
-  const assignable = useAssignableIssues(projectId === "" ? null : projectId, issuesRefreshToken);
+  const assignable = useAssignableIssues(projectId === "" ? null : projectId, pageState.issuesRefreshToken);
   const assignableIssues: AssignableIssuesRead =
     assignable.read.kind === "ready"
       ? assignableOptions(assignable.read.model)
@@ -1293,8 +1293,15 @@ function ThemeButton(props: {
   );
 }
 
-/** The wrapper the shell renders into, with both host contracts applied. */
+/**
+ * The wrapper the shell renders into, with both host contracts applied.
+ *
+ * Guarded on `document`: the module is imported by the page-render test (which has
+ * no DOM) as well as by the browser bundle. A missing document is not an error —
+ * there is simply nothing to mount.
+ */
 function mount(): void {
+  if (typeof document === "undefined") return;
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   rootElement.classList.add(MS_CONTAINER_CLASS);
