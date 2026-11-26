@@ -2061,41 +2061,72 @@ describe("collaboration remote schema ladder", () => {
     expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
   });
 
-  test("a snapshot of the uncommitted v7 rebuild reopens at v6 intact and replays to completion", async () => {
+  test("a snapshot of an in-flight v7 rebuild reopens as the intact v6 lane and replays to completion", async () => {
     const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
+    const context = contextAt(repo);
     const location = locationAt(repo);
     writeV6Lane(location, (db) => {
       db.exec(
-        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
-          "values ('project', 'p-one', 'Project One', 'projects', 'p-one', '2026-09-01T00:00:00.000Z', " +
-          "'2026-09-01T00:00:00.000Z')",
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, " +
+          "updated_at) values ('document', 'doc-r', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 7, " +
+          "'2026-09-02T00:00:00.000Z', '2026-11-22T00:00:00.000Z')",
       );
     });
     activate(location.dbPath);
     const v6Tables = tableNames(location.dbPath);
     const v6Ledger = ledgerRows(location.dbPath);
 
-    // note: The crash snapshot: the DDL ran inside a transaction that never committed, so the file
-    // holds the predecessor's bytes.
+    // note: A SECOND connection opens the real v7 rebuild and stops INSIDE it: the transaction is
+    // open, the DDL has run, and neither a commit nor a ledger row exists. The lane below holds a
+    // live journal, exactly the state a crash leaves behind.
     const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
     mkdirSync(snapshotDir, { recursive: true });
     const snapshot = join(snapshotDir, "collaboration.db");
-    copyFileSync(location.dbPath, snapshot);
-    for (const sidecar of ["-wal", "-shm"]) {
-      if (existsSync(`${location.dbPath}${sidecar}`)) copyFileSync(`${location.dbPath}${sidecar}`, `${snapshot}${sidecar}`);
+    const inFlight = new DatabaseSync(location.dbPath);
+    try {
+      inFlight.exec("pragma foreign_keys=ON");
+      inFlight.exec("begin immediate");
+      inFlight.exec(COLLABORATION_MIGRATIONS[6]!.sql);
+      // invariant: The rebuild really ran: inside this open transaction the table is gone and the
+      // former roadmap row already reads back as `other`.
+      expect(
+        (inFlight.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'project_roadmaps'").get() as { n: number }).n,
+      ).toBe(0);
+      expect(
+        inFlight.prepare("select document_kind from catalog_entities where id = 'doc-r'").get(),
+      ).toEqual({ document_kind: "other" });
+      // note: The crash snapshot: the database file as the in-flight writer left it, with its journal.
+      copyFileSync(location.dbPath, snapshot);
+      for (const sidecar of ["-journal", "-wal", "-shm"]) {
+        if (existsSync(`${location.dbPath}${sidecar}`)) copyFileSync(`${location.dbPath}${sidecar}`, `${snapshot}${sidecar}`);
+      }
+    } finally {
+      // note: The unsent transaction is abandoned, not committed: the lane keeps its v6 bytes.
+      inFlight.exec("rollback");
+      inFlight.close();
     }
     chmodSync(snapshot, 0o600);
+    // invariant: Reopening the snapshot recovers the predecessor: SQLite rolls the hot journal back,
+    // so the v6 table, ledger and row are all intact and the uncommitted reclassification is gone.
     expect(tableNames(snapshot)).toEqual(v6Tables);
     expect(ledgerRows(snapshot)).toEqual(v6Ledger);
 
-    // note: Reopening that snapshot and replaying the same verb completes the upgrade: the
-    // predecessor's bytes are the whole input, so the replay needs nothing else.
+    // note: Replaying the same verb over those recovered bytes completes the upgrade.
     copyFileSync(snapshot, location.dbPath);
     chmodSync(location.dbPath, 0o600);
-    const receipt = await upgradeCollaborationStore(contextAt(repo), "ops-engineer");
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
     expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(db.prepare("select document_kind, revision from catalog_entities where id = 'doc-r'").get()).toEqual({
+        document_kind: "other",
+        revision: 7,
+      });
+    } finally {
+      db.close();
+    }
   });
 
   test("an interrupted v7 rebuild without its ledger row refuses instead of accepting a half-applied schema", async () => {
@@ -5542,6 +5573,56 @@ describe("remote outbox lifecycle", () => {
     await expect(recordRemoteReceipt(cache.context, input)).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringContaining("must carry the imported record's business fields"),
+    });
+  });
+
+  test("a journal document carrying project.roadmap is refused at that field path, and one without it is accepted", async () => {
+    // invariant: The frozen project document is a `version: 1` shape revised in place. The observe
+    // submission and the journal event are separate boundaries, so this exercises the event: the
+    // strict project document refuses the retired member by its own path, and the runtime parser
+    // that freezes an intent refuses the same document for the same reason.
+    const cache = await outboxCache("journal-roadmap-member");
+    const operationId = "00000000-0000-4000-8000-000000000a91";
+    const envelope = () => ({
+      version: 1 as const,
+      selectorCommit: cache.commit,
+      generation: 3,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      attemptId: "00000000-0000-4000-8000-000000000a92",
+      requestHash: "0".repeat(64),
+      observedAt: new Date().toISOString(),
+    });
+    const event = (project: Record<string, unknown>) => ({
+      version: 1 as const,
+      repoKey: cache.fixture.repoKey,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      parents: [OBSERVED_PROJECT_HEAD],
+      change: { kind: "project-replace" as const, project },
+    });
+    const subject = completeProjectSubject();
+    // invariant: Without the member the document is the accepted shape.
+    expect(remoteReceiptDocumentSchema.safeParse({
+      ...envelope(),
+      outcome: { kind: "confirmed", identity: { ...providerScope(), issueId: JOURNAL_ANCHOR }, recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea", event: event(subject) },
+    }).success).toBe(true);
+    const withRoadmap = {
+      ...envelope(),
+      outcome: {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea",
+        event: event({ ...subject, roadmap: { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: "2026-11-20T00:00:00.000Z" } }),
+      },
+    };
+    const descriptor = remoteReceiptDocumentSchema.safeParse(withRoadmap);
+    expect(descriptor.success).toBe(false);
+    expect(JSON.stringify(descriptor.error?.issues)).toContain("roadmap");
+    // invariant: The runtime freeze refuses the same document at the same path.
+    await expect(recordRemoteReceipt(cache.context, withRoadmap as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining("change.project.roadmap"),
     });
   });
 

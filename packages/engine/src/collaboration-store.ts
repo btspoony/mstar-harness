@@ -1334,6 +1334,20 @@ export const COLLABORATION_CUTOVER_TABLES: readonly string[] = [
   "issue_counter",
 ];
 
+/**
+ * invariant: The tables the source fence DROPS, parents-first. It is the copied set plus the
+ * retired roadmap table, which still exists in a combined source (immutable execution-store
+ * migration 6 creates it) but has no counterpart in the lane any more: its content is not carried
+ * forward, so the fence removes it. It lists `project_roadmaps` after `catalog_entities` because the
+ * fence drops the list in reverse order - the child must go before the parent it references, or a
+ * populated roadmap table rolls the whole fence back.
+ */
+export const COLLABORATION_SOURCE_DROP_TABLES: readonly string[] = [
+  ...COLLABORATION_CUTOVER_TABLES.slice(0, 2),
+  COLLABORATION_ROADMAP_TABLE,
+  ...COLLABORATION_CUTOVER_TABLES.slice(2),
+];
+
 /** The exact trusted generation a caller may act on. */
 export type CollaborationStamp = Readonly<{
   repoKey: string;
