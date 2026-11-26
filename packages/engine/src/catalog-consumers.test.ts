@@ -344,7 +344,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     writeFileSync(join(harness, "iterations", iteration), "# compass\n");
     writeFileSync(join(harness, "plans", plan), "# plan\n");
     writeFileSync(join(root, ".agents", "knowledge", knowledge), "# knowledge\n");
-    writeFileSync(join(harness, "projects", "_default", "roadmap.md"), "---\nproject_id: _default\n---\n");
+
     return { iteration, plan, knowledge };
   }
 
@@ -354,7 +354,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     await registerCatalogEntity(context, { kind: "iteration", id: "20260101-iteration-one", title: "Iteration one", rootKind: "iterations", relativePath: stores.iteration }, op("reg-iteration"));
     await registerCatalogEntity(context, { kind: "plan", id: "plan-one", title: "Plan one", rootKind: "plans", relativePath: stores.plan }, op("reg-plan"));
     await registerCatalogEntity(context, { kind: "document", id: "doc-knowledge-one", title: "Knowledge one", rootKind: "knowledge", relativePath: stores.knowledge, documentKind: "knowledge" }, op("reg-doc"));
-    await registerCatalogEntity(context, { kind: "project", id: "_default", title: "Default Project", rootKind: "projects", relativePath: "_default/roadmap.md" }, op("reg-project"));
+    await registerCatalogEntity(context, { kind: "project", id: "_default", title: "Default Project", rootKind: "projects", relativePath: "_default" }, op("reg-project"));
 
     expect(existsSync(join(harness, "iterations", "README.md"))).toBe(false);
     const report = await readCatalogCompleteness(context);

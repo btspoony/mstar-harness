@@ -112,8 +112,8 @@ describe("dashboardFilters refusals", () => {
 
   test("refuses an unsupported query field per view", () => {
     expect(() => dashboardFilters("projects", { limit: "2" })).toThrow(/"limit" is not a supported projects query parameter/);
-    expect(() => dashboardFilters("roadmap", { disposition: "open" })).toThrow(
-      /"disposition" is not a supported roadmap query parameter/,
+    expect(() => dashboardFilters("projects", { project: "proj-a" })).toThrow(
+      /"project" is not a supported projects query parameter/,
     );
   });
 
@@ -142,10 +142,6 @@ describe("dashboardFilters refusals", () => {
     for (const unsafe of [".", "..", "/", "\\", "a/b", "a\\b", "a\u0000b"]) {
       expect(() => dashboardFilters("issues", { project: unsafe })).toThrow(/project must be a single safe id/);
     }
-  });
-
-  test("refuses the roadmap view without a project", () => {
-    expect(() => dashboardFilters("roadmap")).toThrow(/the roadmap view requires a project query parameter/);
   });
 
   test("refuses a detail view without an id", () => {
@@ -183,7 +179,7 @@ describe("dashboardFilters refusals", () => {
     expect(
       dashboardFilters("issues", { project: "proj-a", disposition: "open", kind: "bug", severity: "high", q: "race", limit: "10", offset: "5" }),
     ).toEqual({ issue: { projectId: "proj-a", disposition: "open", kind: "bug", severity: "high", query: "race", limit: 10, offset: 5 } });
-    expect(dashboardFilters("roadmap", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
+    expect(dashboardFilters("overview", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
     expect(dashboardFilters("iteration-detail", {}, "iter-read")).toEqual({ id: "iter-read" });
   });
 });
@@ -839,7 +835,7 @@ describe("overview read model", () => {
     expect((listed.data as IterationListDTO).attribution).toBe("absent");
   });
 
-  test("a resolved project with no roadmap answers milestones with data, never not-applicable", async () => {
+  test("a resolved project with no milestones answers milestones with data, never not-applicable", async () => {
     const context = await workspace("overview-empty-project-");
     await registerCatalogEntity(
       context,

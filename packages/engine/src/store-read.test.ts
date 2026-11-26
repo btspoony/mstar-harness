@@ -20,7 +20,7 @@
  *   bucket;
  * - every terminal disposition counts as retired (no "fixed"/"resolved"
  *   metric), with the authoritative current open count reported separately;
- * - projected workflow/iteration/roadmap DTOs join the catalog by id and
+ * - projected workflow/iteration DTOs join the catalog by id and
  *   disclose a missing link or pin as a badge instead of guessing;
  * - an unavailable projection is disclosed as unavailable, not as zero work;
  * - a store that cannot be served (missing, staged) fails instead of returning
@@ -44,7 +44,6 @@ import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
 import { executionInputHash } from "./coordination.js";
 import { captureProjectionSources, refreshProjections } from "./projection.js";
-import { importRoadmapAuthority, readRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "./execution-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import {
@@ -282,33 +281,9 @@ const COMPASS_DOC = [
   "",
 ].join("\n");
 
-const ROADMAP_DOC = [
-  "---",
-  "project_id: proj-a",
-  "title: Project A",
-  "status: active",
-  "created_at: 2026-09-01",
-  "milestones:",
-  "  - Read boundary",
-  "---",
-  "",
-  "# proj-a Roadmap",
-  "",
-  "## Direction",
-  "",
-  "Serve the dashboard from the store, never from source JSON.",
-  "",
-  "## Goals",
-  "",
-  "- [x] Ship the read boundary",
-  "- [ ] Ship the dashboard",
-  "",
-].join("\n");
-
 /**
  * A workspace with a published projection generation 1: one plan workflow with
- * a catalog plan row, an iteration with a compass document, and a project with
- * a roadmap document.
+ * a catalog plan row, an iteration with a compass document and a project.
  */
 async function projectedWorkspace(name: string): Promise<Fixture & { generation: number; planRevision: number }> {
   const fixture = await workspace(name);
@@ -341,18 +316,6 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
     },
     op("compass"),
   );
-  await registerCatalogEntity(
-    context,
-    {
-      kind: "document",
-      id: "doc-roadmap",
-      title: "Roadmap",
-      rootKind: "projects",
-      relativePath: "proj-a/roadmap.md",
-      documentKind: "roadmap",
-    },
-    op("roadmap"),
-  );
   await linkCatalogEntities(
     context,
     { from: { kind: "plan", id: "wf-read" }, relation: "belongs-to", to: { kind: "project", id: "proj-a" } },
@@ -373,19 +336,8 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
     { from: { kind: "iteration", id: "iter-read" }, relation: "documents", to: { kind: "document", id: "doc-compass" } },
     op("link-compass"),
   );
-  await linkCatalogEntities(
-    context,
-    { from: { kind: "project", id: "proj-a" }, relation: "documents", to: { kind: "document", id: "doc-roadmap" } },
-    op("link-roadmap"),
-  );
 
   writeFile(join(catalogRootDir(context, "iterations"), "iter-read/delivery-compass.md"), COMPASS_DOC);
-  writeFile(join(catalogRootDir(context, "projects"), "proj-a/roadmap.md"), ROADMAP_DOC);
-  const project = await getCatalog(context, { kind: "project", id: "proj-a" });
-  const review = await reviewRoadmapImport(context, "proj-a", join(catalogRootDir(context, "projects"), "proj-a/roadmap.md"));
-  expect(review.expectedProjectRevision).toBe(project.entity.revision);
-  await importRoadmapAuthority(context, review, op("roadmap-authority"));
-
   // The frozen pin must be the catalog revision this prepare actually saw:
   // a link also bumps its from-row revision, so it is read back here.
   const plan = await getCatalog(context, { kind: "plan", id: "wf-read" });
@@ -574,45 +526,37 @@ describe("milestone views", () => {
   });
 
   test("milestone assignment and disposition updates are visible without a projection refresh", async () => {
-    const { context, harness, generation } = await projectedWorkspace("milestone-live-");
+    const { context, generation } = await projectedWorkspace("milestone-live-");
     await withWrite(context, (db) => {
       seedMilestone(db, { id: "M-1", name: "Live", ordinal: 0 });
       seedIssue(db, { id: "I-1", title: "unassigned yet" });
     });
-    const before = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
+    const before = await withStoreRead(context, queryMilestones("proj-a"));
     // invariant: A pure collaboration view never opens the execution database, so it
     // discloses NO projection observation instead of a health verdict.
     expect(before.projection.observed).toBe(false);
     expect(before.projection.generation).toBeNull();
     const beforeRevision = before.storeRevision;
     if (beforeRevision === null) throw new Error("fixture: a complete collaboration read reports its revision");
-    expect(before.data?.milestones.milestones[0]?.totalIssues).toBe(0);
-    expect(before.data?.milestones.unassignedIssues).toBe(1);
+    expect(before.data.milestones[0]?.totalIssues).toBe(0);
+    expect(before.data.unassignedIssues).toBe(1);
 
     await withWrite(context, (db) => {
       db.prepare("update issues set milestone_id = 'M-1', revision = revision + 1 where id = 'I-1'").run();
       db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
     });
-    const assigned = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(assigned.data?.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 1 });
-    expect(assigned.data?.milestones.unassignedIssues).toBe(0);
+    const assigned = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(assigned.data.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 1 });
+    expect(assigned.data.unassignedIssues).toBe(0);
     expect(assigned.storeRevision).toBe(beforeRevision + 1);
 
     await withWrite(context, (db) => {
       db.prepare("update issues set disposition = 'resolved', closed_at = ?, revision = revision + 1 where id = 'I-1'").run(RECORDED_AT);
       db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
     });
-    const resolved = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    const resolvedData = resolved.data;
-    if (resolvedData === null) throw new Error("fixture: the roadmap view must answer for proj-a");
-    expect(resolvedData.milestones.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 0, resolvedIssues: 1 });
+    const resolved = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(resolved.data.milestones[0]).toMatchObject({ totalIssues: 1, openIssues: 0, resolvedIssues: 1 });
 
-    // The same membership answers through the standalone view at the same
-    // revision: a milestone-only read answers from committed rows, and the
-    // source I/O that changed after publication does not move them.
-    const standalone = await withStoreRead(context, queryMilestones("proj-a"));
-    expect(standalone.storeRevision).toBe(resolved.storeRevision);
-    expect(standalone.data).toEqual(resolvedData.milestones);
     // A milestone-only read needs no projection refresh, so a later
     // projection-consuming read adopts the unchanged published generation and
     // the milestone grouping is answered from the committed rows either way
@@ -621,8 +565,8 @@ describe("milestone views", () => {
     const refreshed = await withStoreRead(context, queryDashboard("workflows"));
     expect(refreshed.projection.freshness).toBe("current");
     expect(refreshed.projection.generation).toBeGreaterThanOrEqual(generation);
-    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(roadmap.data?.milestones).toEqual(standalone.data);
+    const after = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(after.data).toEqual(resolved.data);
   });
 
   test("a concurrent assignment cannot change the milestone counts or revisions one read reports", async () => {
@@ -669,8 +613,8 @@ describe("milestone views", () => {
     expect(later.storeRevision).toBe(beforeRevision + 3);
   });
 
-  test("the roadmap view carries the milestone grouping even with absent Markdown, and answers null for an unknown project", async () => {
-    const { context, harness } = await projectedWorkspace("milestone-roadmap-");
+  test("the milestone grouping answers even after the source text is gone, and an unknown project refuses", async () => {
+    const { context, harness } = await projectedWorkspace("milestone-grouping-");
     await withWrite(context, (db) => {
       seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, effortSessions: 3, status: "active" });
       seedMilestone(db, { id: "M-2", name: "Dashboard", ordinal: 1 });
@@ -678,50 +622,39 @@ describe("milestone views", () => {
       seedIssue(db, { id: "I-2", title: "render", milestoneId: "M-2" });
       seedIssue(db, { id: "I-3", title: "loose" });
     });
-    const present = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(present.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
-    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.effortSessions, milestone.status, milestone.ordinal])).toEqual([
+    const present = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(present.data.milestones.map((milestone) => [milestone.name, milestone.effortSessions, milestone.status, milestone.ordinal])).toEqual([
       ["Read boundary", 3, "active", 0],
       ["Dashboard", null, "planned", 1],
     ]);
-    expect(present.data?.milestones.issues.map((issue) => [issue.id, issue.milestoneId])).toEqual([
+    expect(present.data.issues.map((issue) => [issue.id, issue.milestoneId])).toEqual([
       ["I-1", "M-1"],
       ["I-2", "M-2"],
     ]);
-    expect(present.data?.milestones.unassignedIssues).toBe(1);
+    expect(present.data.unassignedIssues).toBe(1);
 
-    // invariant: The stored source text is gone, yet the milestone grouping is still
-    // answered: it is collaboration data, not Markdown-derived, and the view
-    // never reads the disposable execution projection at all.
-    rmSync(join(harness, "projects/proj-a/roadmap.md"), { force: true });
-    const absent = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(absent.data).toEqual(present.data);
-    // why: `checkedAt` is when THIS read observed, so it is the only member that
-    // moves; nothing else about the unobserved projection may change.
-    const { checkedAt: _checkedAt, ...absentProjection } = absent.projection;
+    // invariant: The grouping is collaboration data read from the committed rows, and
+    // the view never opens the disposable execution projection at all.
+    expect(existsSync(join(harness, "projects/proj-a/roadmap.md"))).toBe(false);
+    const again = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(again.data).toEqual(present.data);
+    const { checkedAt: _checkedAt, ...againProjection } = again.projection;
     const { checkedAt: _presentCheckedAt, ...presentProjection } = present.projection;
-    expect(absentProjection).toEqual(presentProjection);
-    expect(absent.projection.observed).toBe(false);
+    expect(againProjection).toEqual(presentProjection);
+    expect(again.projection.observed).toBe(false);
 
-    // A registered project with no roadmap authority and no milestones still
-    // answers empty content AND empty milestone data -- never null.
+    // A registered project with no milestones still answers empty grouping -- never null.
     await registerCatalogEntity(
       context,
       { kind: "project", id: "proj-known-empty", title: "Known empty", rootKind: "projects", relativePath: "proj-known-empty" },
       op("known-empty"),
     );
-    const noContent = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-known-empty" }));
-    expect(noContent.data).toEqual({
-      projectId: "proj-known-empty",
-      catalog: expect.anything(),
-      authority: { state: "absent" },
-      content: null,
-      milestones: { projectId: "proj-known-empty", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    expect((await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-absent" }))).data).toBeNull();
+    const noContent = await withStoreRead(context, queryMilestones("proj-known-empty"));
+    expect(noContent.data).toEqual({ projectId: "proj-known-empty", milestones: [], issues: [], unassignedIssues: 0 });
+    await expect(withStoreRead(context, queryMilestones("proj-absent"))).rejects.toMatchObject({ code: "milestone.project-not-found" });
   });
 
-  test("a milestone-only read of a project without roadmap authority keeps the absent-content roadmap contract", async () => {
+  test("a milestone-only read of a project with no milestones answers an empty grouping", async () => {
     const { context } = await workspace("milestone-absent-");
     await registerProject(context, "proj-solo");
     await withWrite(context, (db) => {
@@ -729,13 +662,11 @@ describe("milestone views", () => {
       seedIssue(db, { id: "I-S1", title: "solo issue", projectId: "proj-solo", milestoneId: "M-S1", disposition: "duplicate", acceptance: "dup" });
       seedIssue(db, { id: "I-S2", title: "loose", projectId: "proj-solo" });
     });
-    const envelope = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-solo" }));
-    expect(envelope.data?.authority).toEqual({ state: "absent" });
-    expect(envelope.data?.content).toBeNull();
-    expect(envelope.data?.milestones.milestones[0]).toMatchObject({ name: "Solo milestone", totalIssues: 1, otherRetiredIssues: 1 });
-    expect(envelope.data?.milestones.issues[0]).toMatchObject({ id: "I-S1", disposition: "duplicate", acceptance: "dup" });
-    expect(envelope.data?.milestones.unassignedIssues).toBe(1);
-    expect(envelope.data?.milestones.projectId).toBe("proj-solo");
+    const envelope = await withStoreRead(context, queryMilestones("proj-solo"));
+    expect(envelope.data.milestones[0]).toMatchObject({ name: "Solo milestone", totalIssues: 1, otherRetiredIssues: 1 });
+    expect(envelope.data.issues[0]).toMatchObject({ id: "I-S1", disposition: "duplicate", acceptance: "dup" });
+    expect(envelope.data.unassignedIssues).toBe(1);
+    expect(envelope.data.projectId).toBe("proj-solo");
     // A milestone belongs to exactly one project: the other project's view
     // cannot observe it even by id.
     await registerCatalogEntity(
@@ -743,8 +674,8 @@ describe("milestone views", () => {
       { kind: "project", id: "proj-other", title: "Other", rootKind: "projects", relativePath: "proj-other" },
       op("proj-other"),
     );
-    const other = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-other" }));
-    expect(other.data?.milestones).toEqual({ projectId: "proj-other", milestones: [], issues: [], unassignedIssues: 0 });
+    const other = await withStoreRead(context, queryMilestones("proj-other"));
+    expect(other.data).toEqual({ projectId: "proj-other", milestones: [], issues: [], unassignedIssues: 0 });
   });
 });
 
@@ -875,7 +806,6 @@ describe("read envelope and transaction", () => {
     // any database is opened.
     expect(() => queryDashboard("issue-detail")).toThrow();
     expect(() => queryDashboard("workflow-detail")).toThrow();
-    expect(() => queryDashboard("roadmap")).toThrow();
     expect(() => queryDashboard("issues", { issue: { limit: 201 } })).toThrow();
     expect(() => queryDashboard("issues", { issue: { offset: -1 } })).toThrow();
     await expect(withStoreRead(context, queryDashboard("issues", { issue: { kind: "toString" as never } }))).rejects.toMatchObject({
@@ -1504,32 +1434,12 @@ describe("projection views", () => {
     expect(detail.data?.plans[0]?.catalogPinRevision).toBe(9);
   });
 
-  test("roadmap reads full authoritative content without refreshing projections", async () => {
-    const { context, harness, generation } = await projectedWorkspace("roadmap-");
-    const before = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(before.data?.projectId).toBe("proj-a");
-    expect(before.data?.catalog.title).toBe("Project A");
-    expect(before.data?.authority).toMatchObject({ state: "present", revision: 1 });
-    expect(before.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
-    expect(before.data?.content?.direction).toContain("Serve the dashboard from the store");
-    expect(before.data?.content?.goals.map(({ title, checked }) => ({ title, checked }))).toEqual([
-      { title: "Ship the read boundary", checked: true },
-      { title: "Ship the dashboard", checked: false },
-    ]);
-    expect(before.data?.content?.milestones).toEqual(["Read boundary"]);
-
-    rmSync(join(harness, "projects/proj-a/roadmap.md"), { force: true });
-    const after = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
-    expect(after.data).toEqual(before.data);
-    expect(after.projection.observed).toBe(false);
-    expect((await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-absent" }))).data).toBeNull();
-    await registerCatalogEntity(
-      context,
-      { kind: "project", id: "proj-known-empty", title: "Known empty", rootKind: "projects", relativePath: "proj-known-empty" },
-      op("known-empty"),
-    );
-    const empty = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-known-empty" }));
-    expect(empty.data).toMatchObject({ authority: { state: "absent" }, content: null });
+  test("a milestone read never refreshes projections and answers for an unknown project with a refusal", async () => {
+    const { context } = await projectedWorkspace("milestone-noprojection-");
+    const before = await withStoreRead(context, queryMilestones("proj-a"));
+    expect(before.projection.observed).toBe(false);
+    expect(before.projection.generation).toBeNull();
+    await expect(withStoreRead(context, queryMilestones("proj-absent"))).rejects.toMatchObject({ code: "milestone.project-not-found" });
   });
 
   test("an unavailable projection is disclosed as unavailable, not as zero work", async () => {
@@ -2131,7 +2041,7 @@ describe("remote read boundary", () => {
     });
   });
 
-  test("project, milestone, roadmap and flow reads use admitted snapshot evidence", async () => {
+  test("project, milestone and flow reads use admitted snapshot evidence", async () => {
     const { context } = await boundScope("remote-read-views");
     const projects = await withStoreRead(context, queryDashboard("projects"));
     expect(projects.data).toEqual({
@@ -2160,15 +2070,6 @@ describe("remote read boundary", () => {
         remoteProject: REMOTE_IDS.providerProjectId,
       },
     });
-
-    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: REMOTE_IDS.projectId }));
-    expect(roadmap.data).toMatchObject({
-      projectId: REMOTE_IDS.projectId,
-      catalog: { id: REMOTE_IDS.projectId, source: "remote", relativePath: null },
-      authority: { state: "present", revision: 2 },
-    });
-    const authority = await readRoadmapAuthority(context, REMOTE_IDS.projectId);
-    expect(authority.roadmap).toMatchObject({ projectId: REMOTE_IDS.projectId, revision: 2 });
 
     const flow = await withStoreRead(context, queryDashboard("issue-flow"));
     expect(flow.data.currentOpen).toBe(1);
@@ -2364,8 +2265,8 @@ describe("remote read boundary", () => {
       providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
     });
 
-    const roadmap = await withStoreRead(context, queryDashboard("roadmap", { projectId: REMOTE_IDS.projectId }));
-    expect(roadmap.collaboration).toMatchObject({
+    const milestones = await withStoreRead(context, queryMilestones(REMOTE_IDS.projectId));
+    expect(milestones.collaboration).toMatchObject({
       completeness: "complete",
       providerScopes: [expect.objectContaining({ projectId: REMOTE_IDS.projectId })],
     });

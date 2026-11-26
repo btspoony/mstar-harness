@@ -584,8 +584,9 @@ function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
 }
 
 /**
- * invariant: roadmap-store.ts persisted roadmap receipt. The writer records the returned
- * receipt PLUS the recorded outcome and the nullable reviewed provenance:
+ * invariant: The retired roadmap writer's persisted receipt, still promoted verbatim as a
+ * historical operation. It recorded the returned receipt PLUS the recorded outcome and
+ * the nullable reviewed provenance:
  * `{projectId, revision, contentHash, storeRevision, outcome: "committed",
  * provenance: {sourcePath, sourceHash} | null}`. A receipt written before those
  * two fields were recorded keeps the four-field shape, which is accepted too -

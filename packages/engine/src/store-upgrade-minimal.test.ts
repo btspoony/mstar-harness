@@ -21,7 +21,6 @@ import { previewExecutionRestore, restoreExecutionBackup } from "./execution-rec
 import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { registerCatalogEntity } from "./catalog.js";
-import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
 import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
@@ -2970,39 +2969,6 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   );
   expect(readFileSync(statusPath)).toEqual(sourceBytes);
 
-  const project = await registerCatalogEntity(
-    context,
-    { kind: "project", id: "_default", title: "Default project", rootKind: "projects", relativePath: "_default/roadmap.md" },
-    { operationId: "op-register-default-roadmap", actor: "store-upgrade-minimal.test" },
-  );
-  expect(project.id).toBe("_default");
-  const current = await readRoadmapAuthority(context, "_default");
-  const { collaboration: currentEvidence, ...currentRead } = current;
-  expect(currentRead).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
-  expect(currentEvidence.completeness).toBe("complete");
-  const roadmap = [
-    "---",
-    "project_id: _default",
-    "title: Recovered legacy roadmap",
-    "status: active",
-    "created_at: 2026-10-04",
-    "---",
-    "",
-    "## Direction",
-    "",
-    "Recovered from the preserved program_roadmap source.",
-    "",
-    "## Goals",
-    "",
-    "- [ ] Keep the original roadmap goal",
-    "",
-  ].join("\n");
-  await replaceRoadmapAuthority(
-    context,
-    { projectId: "_default", expectedProjectRevision: current.projectRevision, expectedRoadmapRevision: "absent", contentMarkdown: roadmap },
-    { operationId: "op-recover-default-roadmap" },
-  );
-  expect((await readRoadmapAuthority(context, "_default")).roadmap?.contentMarkdown).toBe(roadmap);
   expect(readFileSync(statusPath)).toEqual(sourceBytes);
 });
 

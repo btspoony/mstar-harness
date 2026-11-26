@@ -27,7 +27,6 @@ const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
-const ROADMAP_FILE = "roadmap.md";
 
 /**
  * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
@@ -859,7 +858,7 @@ function listDocumentBodies(dir: string, base = ""): string[] {
  * Every store location the harness layout convention proposes (§4: discovery
  * is a proposal, never a live parallel authority). Identity comes from the
  * layout rule — an iteration is a directory carrying a compass, a project a
- * directory carrying a roadmap, a plan a file under `plans/` — and never from
+ * directory under `projects/`, a plan a file under `plans/` — and never from
  * a maintained index table.
  */
 function discoverCatalogLocations(context: StoreContext, roots: readonly CatalogCompletenessRoot[]): DiscoveredLocation[] {
@@ -880,9 +879,7 @@ function discoverCatalogLocations(context: StoreContext, roots: readonly Catalog
       }
       case "projects": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync(join(dir, id, ROADMAP_FILE))) {
-            locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
-          }
+          locations.push({ rootKind, kind: "project", id, relativePath: id });
         }
         break;
       }
@@ -1035,7 +1032,7 @@ export async function assertCatalogCompleteness(
  * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
  * validates the parsed doc. The engine deliberately has no YAML dependency,
  * so this hand-rolled flat-subset parser lives here — the single shared
- * parser used by the CLI and the roadmap validator (no fork). Path wrapper
+ * parser used by the CLI and the compass validator (no fork). Path wrapper
  * over `parseCompassFrontmatterText`.
  *
  * Throws with the file path on structural errors (no fence / unterminated
@@ -1047,8 +1044,7 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
 
 /**
  * Parse flat-subset YAML frontmatter from raw file content — the single
- * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
- * the roadmap validator (extract/reuse the same parsing, no fork).
+ * shared parser core behind `parseCompassFrontmatter` (path wrapper).
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
@@ -1085,7 +1081,7 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
       value === ""
         ? null
         : value.startsWith('"') && value.endsWith('"') && value.length >= 2
-          ? // Double-quoted scalar (e.g. from JSON.stringify in roadmap export):
+          ? // Double-quoted scalar (e.g. from JSON.stringify):
             // decode \\ and \" (placeholder pass so \" survives the \\ decode).
             value
               .slice(1, -1)

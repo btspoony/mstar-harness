@@ -41,7 +41,6 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   "workflow-detail": [],
   iterations: ["project", "limit", "offset"],
   "iteration-detail": [],
-  roadmap: ["project"],
   "issue-flow": ["project"],
   projects: [],
   // `project` scopes milestones, latestIteration and issueFlow; the view reads
@@ -142,11 +141,6 @@ export function dashboardFilters(
   if (view === "workflow-detail" || view === "iteration-detail") {
     if (id === undefined) refuse(`the ${view} route requires an id`);
     return { id: requireSafeId(`${view} id`, id) };
-  }
-
-  // The roadmap view is per project; its identity is required, not guessed.
-  if (view === "roadmap" && scoped === undefined) {
-    refuse("the roadmap view requires a project query parameter");
   }
 
   return {

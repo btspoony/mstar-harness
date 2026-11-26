@@ -15,7 +15,6 @@
  * - Nothing here writes, refreshes, or opens a local-authority lane, and no
  *   provider call happens: an observation is a trusted-host assertion.
  */
-import { createHash } from "node:crypto";
 import {
   openRemoteCache,
   readCollaborationBinding,
@@ -44,11 +43,7 @@ import {
   type Severity,
 } from "./issue.js";
 import { MilestoneError, type MilestoneRead, type ProjectMilestoneDTO } from "./milestone-store.js";
-import { RoadmapError, type RoadmapRead } from "./roadmap-store.js";
-import type { RoadmapDTO } from "./store-read.js";
-import type { CatalogIdentityDTO } from "./store-read.js";
 import { StoreError, type StoreContext } from "./store-db.js";
-import { parseRoadmapContent } from "./roadmap-content.js";
 
 /** note: A provider issue id is an immutable Linear UUID, never a display identifier such as ENG-42. */
 const PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -1006,7 +1001,7 @@ export function remoteIssueFlow(view: RemoteReadView, projectId?: string) {
 }
 
 // ---------------------------------------------------------------------------
-// note: Catalog, projects, milestones and roadmap
+// note: Catalog, projects and milestones
 // ---------------------------------------------------------------------------
 
 /** note: The portable catalog identity a snapshot carries; checkout locations are deliberately absent. */
@@ -1154,70 +1149,4 @@ export function remoteMilestones(view: RemoteReadView, projectId: string, milest
     }));
   const unassignedIssues = subjects.filter((entry) => nullableTextField(projectId, entry.issue, "milestoneId") === null).length;
   return { projectId, milestones, issues, unassignedIssues };
-}
-
-/** note: The roadmap authority of one project from admitted evidence (the `RoadmapRead` shape). */
-export function remoteRoadmapRead(view: RemoteReadView, projectId: string): RoadmapRead {
-  const evidence = requireRemoteProjects(view, [projectId])[0]!;
-  const identity = remoteCatalogRows(view, [projectId]).find((row) => row.kind === "project" && row.id === projectId);
-  if (identity === undefined) throw new RoadmapError("roadmap.project-not-found", `Catalog project ${projectId} does not exist.`);
-  const roadmap = evidence.snapshot?.project.roadmap ?? null;
-  if (roadmap === null) return { projectId, projectRevision: identity.revision, roadmap: null };
-  let content;
-  try {
-    content = parseRoadmapContent(roadmap.contentMarkdown);
-    if (content.frontmatter.project_id !== projectId) {
-      throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
-    }
-  } catch (error) {
-    if (error instanceof RoadmapError) throw error;
-    throw new StoreError(
-      "remote.unavailable",
-      `The observed roadmap for project ${projectId} cannot be parsed (${error instanceof Error ? error.message : String(error)}); ` +
-        "this read does not present it as a valid document. Re-observe the project with a valid roadmap.",
-      { projectId },
-    );
-  }
-  return {
-    projectId,
-    projectRevision: identity.revision,
-    roadmap: {
-      projectId,
-      revision: roadmap.revision,
-      contentHash: createHash("sha256").update(roadmap.contentMarkdown, "utf8").digest("hex"),
-      updatedAt: roadmap.updatedAt,
-      contentMarkdown: roadmap.contentMarkdown,
-    },
-    content,
-  };
-}
-
-/** note: The project's roadmap and milestones from admitted evidence; the Markdown is parsed, never trusted as structure. */
-export function remoteRoadmap(view: RemoteReadView, projectId: string): RoadmapDTO | null {
-  const identity = remoteCatalogRows(view, [projectId]).find((row) => row.kind === "project" && row.id === projectId);
-  if (identity === undefined) return null;
-  const catalog = {
-    kind: "project" as const,
-    id: identity.id,
-    title: identity.title,
-    description: identity.description,
-    rootKind: null,
-    relativePath: null,
-    documentKind: identity.documentKind as CatalogIdentityDTO["documentKind"],
-    lifecycle: identity.lifecycle,
-    revision: identity.revision,
-    registeredAt: null,
-    updatedAt: null,
-    source: "remote" as const,
-  };
-  const milestones = remoteMilestones(view, projectId);
-  const authority = remoteRoadmapRead(view, projectId);
-  if (authority.roadmap === null) return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
-  return {
-    projectId,
-    catalog,
-    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: authority.content,
-    milestones,
-  };
 }

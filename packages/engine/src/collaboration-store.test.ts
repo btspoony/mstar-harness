@@ -128,7 +128,6 @@ import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
 import { discardAcrossAuthorities, moveAcrossByDocument, recordIssueMove, remoteMoveOperationId, setMoveGapForTest } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
-import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
@@ -5841,11 +5840,10 @@ describe("remote outbox review fixes", () => {
 
     // invariant: Another verb under the same operation id never replays the milestone request.
     await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n` },
-        { operationId: duplicateId },
-      ),
+      removeMilestone(cache.context, project, "milestone-1", {
+        operationId: duplicateId,
+        expectedStoreRevision: observationRevision(cache.dbPath),
+      }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     // invariant: A changed payload under the same id never replays the accepted request.
     await expect(
@@ -6193,34 +6191,6 @@ describe("remote outbox review fixes", () => {
       ),
     ).rejects.toMatchObject({ code: "milestone.not-found" });
     expect(outboxRows(cache.dbPath)).toEqual([]);
-  });
-
-  test("a roadmap write refuses a stale reviewed revision", async () => {
-    const cache = await outboxCache("outbox-roadmap-revision");
-    const project = SELECTED_PROJECT.localProjectId;
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 9, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000671" },
-      ),
-    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 7, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000672" },
-      ),
-    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
-    expect(outboxRows(cache.dbPath)).toEqual([]);
-    // invariant: The reviewed basis still admits the write, and its confirmation is reported.
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000673" },
-      ),
-    ).rejects.toMatchObject({ code: "remote.effect-pending" });
   });
 
   test("an unrelated conflict keeps blocking after a reviewed resolution", async () => {
@@ -7820,7 +7790,7 @@ describe("remote execution-import flow", () => {
 });
 
 describe("remote confirmed business results", () => {
-  test("milestone, roadmap and catalog replays report their recorded results", async () => {
+  test("milestone, milestone-update and catalog replays report their recorded results", async () => {
     const cache = await outboxCache("outbox-confirmed-results");
     const project = SELECTED_PROJECT.localProjectId;
 
@@ -7843,23 +7813,16 @@ describe("remote confirmed business results", () => {
     // note: A confirmed effect invalidates the read base, so the next write re-observes first.
     await reobserve(cache, 2);
 
-    // note: One roadmap replacement, confirmed, then replayed by its own verb.
-    const roadmapId = "00000000-0000-4000-8000-000000000a12";
-    const content = `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n`;
+    // note: One milestone update, confirmed, then replayed by its own verb.
+    const renameId = "00000000-0000-4000-8000-000000000a12";
+    const renameMutation = { operationId: renameId, expectedStoreRevision: observationRevision(cache.dbPath) };
     await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
-        { operationId: roadmapId },
-      ),
+      updateMilestone(cache.context, project, "milestone-1", { name: "First delivery, renamed" }, renameMutation),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
-    await confirmIntent(cache, outboxIdFor(cache.dbPath, roadmapId), JOURNAL_ANCHOR);
-    const roadmap = await replaceRoadmapAuthority(
-      cache.context,
-      { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
-      { operationId: roadmapId },
-    );
-    expect(roadmap).toMatchObject({ projectId: project, revision: 3, storeRevision: 0 });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, renameId), JOURNAL_ANCHOR);
+    const renamed = await updateMilestone(cache.context, project, "milestone-1", { name: "First delivery, renamed" }, renameMutation);
+    expect(renamed).toMatchObject({ projectId: project, storeRevision: 0, changed: true });
+    expect(renamed.revision).toBe(2);
 
     await reobserve(cache, 4);
 

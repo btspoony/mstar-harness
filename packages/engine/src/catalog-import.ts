@@ -21,7 +21,7 @@
  *
  * Identity sources (what a proposal's id may come from, §2):
  * - iteration / project package directory names (a directory holding the
- *   canonical `delivery-compass.md` / `roadmap.md` marker) and the canonical
+ *   canonical `delivery-compass.md` marker) and the canonical
  *   `{PLANS_DIR}/<plan-id>.md` plan-file convention: the harness's own layout
  *   identity, read from the filesystem and not from a maintained index.
  * - an explicit id cell in a legacy index row (backticked first cell).
@@ -107,7 +107,6 @@ const RELATIONS: Record<CatalogRelation, true> = {
 const ORDINARY_FILES: Record<string, true> = { "readme.md": true, "install.md": true, "index.md": true };
 
 const COMPASS_FILE = "delivery-compass.md";
-const ROADMAP_FILE = "roadmap.md";
 
 /** Refusal codes for import shape, semantic conflicts and partial progress. */
 export type CatalogImportErrorCode =
@@ -886,7 +885,7 @@ function collectBodies(root: string, relativeDir = ""): string[] {
 /**
  * One tracked-body proposal. `evidencePath` names the file the metadata is
  * read from: the body itself for documents, and the package marker file
- * (`delivery-compass.md` / `roadmap.md`) for a directory-located package,
+ * (`delivery-compass.md`) for a directory-located package,
  * whose own location stays the directory.
  */
 function bodyProposal(
@@ -1277,24 +1276,30 @@ export async function discoverCatalog(context: StoreContext): Promise<CatalogImp
   const projectsRoot = catalogRootDir(context, "projects");
 
   const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join(iterationsRoot, id), COMPASS_FILE));
-  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join(projectsRoot, id), ROADMAP_FILE));
 
-  // 1. Layout identity: the harness's own directory conventions (§1).
-  for (const id of projectIds) {
-    bodyProposal(
-      acc,
-      context,
-      "projects",
+  // 1. Layout identity: the harness's own directory conventions (§1). A project
+  // package is its directory: it carries no marker file, so its location IS
+  // `projects/<id>` and it contributes no body digest.
+  for (const id of listDirectories(projectsRoot)) {
+    addEntity(acc, {
+      kind: "project",
       id,
-      "project",
-      null,
-      {
-        value: id,
-        assigned: false,
-        evidence: [{ sourceKey: sourceKeyOf("projects", `${id}/${ROADMAP_FILE}`), field: "layout.directory", value: id }],
-      },
-      `${id}/${ROADMAP_FILE}`,
-    );
+      title: fallbackTitle(id),
+      description: null,
+      rootKind: "projects",
+      relativePath: id,
+      documentKind: null,
+      lifecycle: "active",
+      sourceHash: null,
+      idAssigned: false,
+      evidence: [{ sourceKey: sourceKeyOf("projects", id), field: "layout.directory", value: id }],
+    });
+    acc.unknowns.push({
+      code: "membership",
+      key: entityKey("project", id),
+      detail: "the tracked source declares no project/iteration membership; relations are never inferred from its name or location",
+      sourceKey: sourceKeyOf("projects", id),
+    });
   }
   for (const id of iterationIds) {
     bodyProposal(
