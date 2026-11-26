@@ -7,7 +7,7 @@ severity: high
 plan_id: <plan-id>
 applies_when:
   - "adding a store verb, migration source family, or activation/retirement step for the harness governance store"
-  - "building v4 phase 2 (execution write authority) or phase 3 (roadmap authority) on the same store"
+  - "building v4 phase 2 (execution write authority) on the same store (the phase-3 roadmap authority never shipped: the roadmap authority was retired by the 2026-11-26 retire-project-roadmap decision)"
   - "reviewing any change that could make a retired JSON surface readable or writable again"
 tags:
   - store-authority
@@ -38,7 +38,7 @@ Each violation is a silent dual-authority or silent-empty failure mode that no t
 
 ## When to Apply
 
-Any change to `packages/engine/src/store-*.ts`, the issue/catalog verbs, the migration/activation surface, or any consumer that reads issue/catalog data; any future "phase" that moves another authority (execution writes in v4 phase 2, roadmap content in phase 3) into the same store.
+Any change to `packages/engine/src/store-*.ts`, the issue/catalog verbs, the migration/activation surface, or any consumer that reads issue/catalog data; any future "phase" that moves another authority into the same store (execution writes in v4 phase 2; the roadmap-content phase never shipped and was retired by the 2026-11-26 retire-project-roadmap decision — no roadmap authority moves into any store).
 
 ## Examples
 
