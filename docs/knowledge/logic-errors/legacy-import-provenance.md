@@ -1,3 +1,17 @@
+---
+module: store upgrade / legacy execution import
+date: 2026-11-09
+problem_type: logic_error
+category: logic-errors
+severity: high
+symptoms:
+  - "a second mstar store upgrade refuses with execution.migration-conflict although nothing changed"
+  - "the operator must acknowledge already-imported workflow ids as import losses"
+  - "the receipt records losses for imports that in fact completed"
+root_cause: "the importer's only replay path requires a caller-supplied operationId with identical request hash, but the command surface mints the id per invocation and never reports it back, so genuine same-operation replay is unreachable through the public entry"
+resolution_type: code_fix
+---
+
 # Legacy execution import: proven replay versus an unproven ID collision
 
 **Kind**: Knowledge (Bug track) · **Status**: implemented · **Feeds**: anyone maintaining `store upgrade` / legacy execution import

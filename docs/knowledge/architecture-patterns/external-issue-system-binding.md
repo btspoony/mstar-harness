@@ -1,11 +1,11 @@
 ---
-title: Binding a local store to an external issue system over MCP
-category: architecture-patterns
-status: active
-created: 2026-11-01
+module: issue mirroring (store + MCP binding)
+date: 2026-11-01
 last_updated: 2026-11-19
-source_iteration: iter-<plan-id>
----
+problem_type: architecture_pattern
+category: architecture-patterns
+severity: high
+
 
 # Binding a local store to an external issue system over MCP
 

@@ -1,12 +1,15 @@
 ---
-title: Committed bundles for checkout-root plugins
-category: architecture-patterns
-status: active
-tags: [packaging, committed-artifact, config-only-targets]
-created: 2026-09-26
+module: plugin packaging (hosts: zcode, cursor, codex, kimi)
+date: 2026-09-26
 last_updated: 2026-11-13
-source: iter-<plan-id>
----
+problem_type: architecture_pattern
+category: architecture-patterns
+severity: high
+tags:
+  - packaging
+  - committed-artifact
+  - config-only-targets
+
 
 # Committed bundles for checkout-root plugins
 

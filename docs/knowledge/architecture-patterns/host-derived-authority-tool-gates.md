@@ -1,9 +1,10 @@
 ---
-title: Derive session authority from host facts, never tool input
+module: extension tool gating (host-derived session authority)
+date: 2026-11-01
+problem_type: architecture_pattern
 category: architecture-patterns
-source: iter-<plan-id> (model row Task 3, Critical fix 298339c9)
-status: active
----
+severity: high
+
 
 # Host-derived authority beats caller-asserted authority
 
