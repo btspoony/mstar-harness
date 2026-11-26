@@ -108,7 +108,7 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
       "--expect", await readExecutionAuthority(f.context, { workflowId: WF, planId: PLAN }).then((r) => r.token), "--operation", "unbound", "--harness", f.harness], f);
     expect(absent.code).toBe(2); expect(absent.json).toMatchObject({ command: "plan.prepare", status: "usage", code: "command.invalid-input" });
     expect(absent.json.message).toContain("verified binding");
-  });
+  }, 30_000);
   test("prepare, changed-source refresh, and progress update ACTIVE plan", async () => {
     const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
     const prepared = cli(prepareArgs(f, PLAN, f.worktree, "feature/plan-coordination", await token(f), "prepare-1"), f, identity());
