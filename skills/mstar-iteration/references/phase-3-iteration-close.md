@@ -53,7 +53,13 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 ## 3.3 记录 next iteration 投影候选
 
 1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：记录匹配 milestone 的状态候选及其关联 issue 证据，与 next iteration 即将开始的内容、触发条件和 owner；**不**在此写 `delivered`。compass 是执行叙事，不是项目目标权威。
-2. **planboard 编辑取代旧的 roadmap 投影候选**：用 `mstar planboard check` 读 `{HARNESS_DIR}/planboard.md`，按报告清空 `stale` / `missing` 行、把本迭代未开工的 `overdue` 与遗留候选写成 `- ? <candidate> — <evidence>` 行，并重写 `review_after`。planboard 只存指针，不承载状态；next iteration 的内容、触发条件与 owner 仍写在 compass `## Roadmap Position`，不重复进 planboard。
+2. **planboard 编辑取代旧的 roadmap 投影候选**：先 `mstar planboard check` 取漂移报告，再直接读 `{HARNESS_DIR}/planboard.md` 本身，然后按报告与正文编辑：
+   - 删除全部 `stale` / `missing` 行；
+   - **每一个** `overdue` 候选必须显式处置后才能重写 `review_after`：用 `mstar issue add` 捕获成 issue（该行改写为 `- I-xxxxxx — <reason>`，或从板上删除并把新 issue 留在 open-issue 候选中），或判定不再推进并删除该行。把 overdue 行原样留下、只把 `review_after` 往后推，等于把未处置的漂移藏到新期限之后，属未完成收口；
+   - 本迭代未开工、仍需下一轮推进的候选写成 `- ? <candidate> — <evidence>` 行（evidence 是路径、ADR 名或 `I-` id）；
+   - 最后重写 `review_after`。
+
+   planboard 只存指针，不承载状态；next iteration 的内容、触发条件与 owner 仍写在 compass `## Roadmap Position`，不重复进 planboard。
 3. **交付投影只在整链证明之后写一次**：`delivered` 标记与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 milestone 保持其 pre-delivery 状态。
 4. deferred-feature tracker 等历史文件若需保留只能是历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
