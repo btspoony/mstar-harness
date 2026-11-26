@@ -1301,9 +1301,8 @@ function takeResolvedCarrier(): AssignmentSourceResult | undefined {
  * its reader sees BEFORE the opening fence; the document below is untouched,
  * so this channel and the dispatch gate keep reading the front matter.
  *
- * shortcut: the fallbacks reader only understands the body-label header, so
- * the bridge adds a second declaration to the RUNTIME prompt (never to a
- * stored document). Remove it once dsh-llm-fallbacks reads `execute_as`.
+ * shortcut: the fallbacks reader understands only the body-label header,
+ * upgrade: remove this bridge once dsh-llm-fallbacks resolves `execute_as`.
  *
  * @param roleId - the canonical role id (already normalized).
  */
@@ -1311,7 +1310,6 @@ function fallbacksRoleBridge(roleId: string): PromptBlockView {
   return { type: 'text', text: `**Execute as**: ${roleId}\n` }
 }
 
-/** The canonical role id a prompt declares (`inherit` declares none), or `undefined`. */
 function bridgedRoleIdOf(prompt: string): string | undefined {
   const value = parseAssignmentFields(prompt).executeAs
   return value === undefined ? undefined : normalizeRoleFieldValue(value)
@@ -1427,6 +1425,7 @@ function wrapSubagentsService(
     // not from front matter — bridge the declaration it cannot see (see
     // {@link fallbacksRoleBridge}). The role comes from the RESOLVED spec, so
     // a repaired or pointer-carried declaration is the one delivered.
+    // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
     if (fallbacksMounted(ctx)) {
       const roleId = decision.kind === 'repair' ? decision.roleId : bridgedRoleIdOf(promptText(merged))
       if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }

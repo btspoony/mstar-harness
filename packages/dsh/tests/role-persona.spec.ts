@@ -41,12 +41,15 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { SubagentActivationSpec, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
+import * as fallbacksModule from 'dsh-llm-fallbacks'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as plugin from '../src/index.ts'
 import type { SubagentActivationSpecView, SubagentsServiceView } from '../src/gates/role-persona.ts'
 import { fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
+import { subagentRoleIds } from '../src/gates/agent-personas.ts'
+import { packagedAgentsDir } from '../src/gates/_shared.ts'
 import {
   FakeAgentPresetRegistry,
   FakeLoaderRegistry,
@@ -252,9 +255,6 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
   })
 
   it('(c2) fallbacks mounted → the delegated prompt carries the Execute-as bridge line', async () => {
-    // dsh-llm-fallbacks resolves a role from a body-label header only, and its
-    // header region ends at the first `---`; a front-matter document alone
-    // would leave its role (chain, persona, notice) unbound.
     const { app, provider } = await bootWithProvider('fake-spawn')
     const loader = app.ctx.get('loader') as FakeLoaderRegistry
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
@@ -263,12 +263,33 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
 
     const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
-    // One header line BEFORE the opening fence — the only shape the fallbacks
-    // reader sees (its region ends at that fence).
     expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
-    // Additive: the Assignment document it bridges is byte-identical.
     expect(prompt.slice(1)).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
   })
+
+  const packagedRoles = subagentRoleIds(packagedAgentsDir() ?? '')
+  it.skipIf(!packagedRoles.includes(EXECUTE_AS))(
+    '(c3) real dsh-llm-fallbacks resolves the bridged role from a front-matter Assignment',
+    async () => {
+      const { app, provider } = await bootWithProvider('fake-spawn', {}, {
+        fallbacksModule,
+        settingsService: 'fake-deferred',
+      })
+      const fallbacks = app.ctx.get('llm-fallbacks')
+      if (fallbacks === undefined) throw new Error('the real llm-fallbacks service is not applied')
+      await untilReached(() => fallbacks.getEffectiveRoles().roles.some((row) => row.id === EXECUTE_AS))
+
+      const result = await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+      const childId = typeof result === 'object' && result !== null && 'id' in result && typeof result.id === 'string'
+        ? result.id
+        : undefined
+      expect(typeof childId).toBe('string')
+      if (childId === undefined) throw new Error('the activation result carries no child id')
+      await untilReached(() => fallbacks.getAgentRole(childId) === EXECUTE_AS)
+      expect(fallbacks.getAgentRole(childId)).toBe(EXECUTE_AS)
+      expect(provider.starts[0]!.request.agentPreset).toBe(PRESET_ID)
+    },
+  )
 
   it('(d) provider without the agentPreset capability → no selection + ONE debug, the start proceeds', async () => {
     // Selecting a preset the runtime would reject is never acceptable, so the
