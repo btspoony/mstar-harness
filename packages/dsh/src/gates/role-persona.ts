@@ -1316,17 +1316,6 @@ function bridgedRoleIdOf(prompt: string): string | undefined {
 }
 
 /**
- * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
- * (the service is absent) pass through untouched. The wrapper is a
- * prototype-delegating object whose OWN `startActivation` merges the role's
- * preset into the spec before delegating — the underlying service object is
- * never mutated (no monkey-patching), and no surface the service does not
- * carry is invented (a runtime without `startActivation` keeps answering
- * `typeof service.startActivation === 'undefined'`). Identity is cached per
- * (service value, preset mapping, registrant context) so repeated reads
- * agree and re-applies re-bind.
- */
-/**
  * The role id the fallbacks bridge may deliver for one gate verdict: only a
  * role this channel itself normalized (`repair`) or confirmed canonical
  * (`pass`/`canonical`). Every exemption the gate grants — non-harness
@@ -1344,7 +1333,17 @@ function bridgeableRoleId(decision: RoleGateDecision, prompt: string): string | 
   return undefined
 }
 
-
+/**
+ * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
+ * (the service is absent) pass through untouched. The wrapper is a
+ * prototype-delegating object whose OWN `startActivation` merges the role's
+ * preset into the spec before delegating — the underlying service object is
+ * never mutated (no monkey-patching), and no surface the service does not
+ * carry is invented (a runtime without `startActivation` keeps answering
+ * `typeof service.startActivation === 'undefined'`). Identity is cached per
+ * (service value, preset mapping, registrant context) so repeated reads
+ * agree and re-applies re-bind.
+ */
 function wrapSubagentsService(
   value: unknown,
   rolePresets: Config['rolePresets'],
@@ -1373,6 +1372,7 @@ function wrapSubagentsService(
     let gated = spec
     let carrier: SubagentActivationSpecView = spec
     let decision: RoleGateDecision
+    let bridgeEligible = false
     try {
       // The child's EFFECTIVE start directory — an omitted/relative cwd
       // inherits the parent's CURRENT directory (the working-directory
@@ -1395,15 +1395,24 @@ function wrapSubagentsService(
       carrier = assignmentSource.ok && assignmentSource.text !== carrierText
         ? foldPromptText(spec, assignmentSource.text)
         : spec
+      const mode = readRoleGate()
+      const harnessProject = isHarnessProject(startDirectory)
+      const providerKnown = service.getProvider(spec.provider) !== undefined
       decision = evaluateRoleGate({
         request: carrier,
-        mode: readRoleGate(),
+        mode,
         cwd: startDirectory,
-        harnessProject: isHarnessProject(startDirectory),
-        providerKnown: service.getProvider(spec.provider) !== undefined,
+        harnessProject,
+        providerKnown,
         declaredRoleIds,
         assignmentSource,
       })
+      // Only a start the gate actually POLICED may receive the fallbacks
+      // bridge line. A canonical pass short-circuits ahead of the harness and
+      // provider exemptions, and `off` never refuses — so the verdict alone
+      // cannot tell an exempted start from a policed one.
+      // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
+      bridgeEligible = harnessProject && providerKnown && mode !== 'off'
     } catch {
       // Contained fail-open: an unreadable request/provider is a pathological
       // caller object, and the merge below reads the same fields under its
@@ -1445,7 +1454,7 @@ function wrapSubagentsService(
     // when the gate itself confirmed or normalized that declaration (see
     // {@link bridgeableRoleId}); every gate exemption stays untouched.
     // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
-    if (fallbacksMounted(ctx)) {
+    if (fallbacksMounted(ctx) && bridgeEligible) {
       const roleId = bridgeableRoleId(decision, promptText(merged))
       if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }
     }

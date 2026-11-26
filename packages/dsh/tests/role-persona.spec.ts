@@ -260,7 +260,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
     expect(fallbacksMounted(app.ctx)).toBe(true)
 
-    await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
 
     const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
     expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
@@ -276,6 +276,30 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     await startActivationViaNativeChannel(app, specFor('fake-spawn', request))
 
     expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  it('(c5) roleGate off keeps the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', {}, { roleGate: 'off' })
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+
+    expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  it('(c6) a non-harness start keeps the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    const outside = await mkdtemp(join(tmpdir(), 'dsh-non-harness-'))
+    try {
+      await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: outside }))
+
+      expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
   })
 
   const agentsRoot = packagedAgentsDir()
@@ -296,7 +320,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
       if (fallbacks === undefined) throw new Error('the real llm-fallbacks service is not applied')
       await untilReached(() => fallbacks.getEffectiveRoles().roles.some((row) => row.id === EXECUTE_AS))
 
-      const result = await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+      const result = await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
       const childId = typeof result === 'object' && result !== null && 'id' in result && typeof result.id === 'string'
         ? result.id
         : undefined
