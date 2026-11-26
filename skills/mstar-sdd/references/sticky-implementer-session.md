@@ -1,6 +1,6 @@
 # Sticky implementer session (SDD token optimization)
 
-Reuse the **same implementer subagent** across multiple tasks in one plan when tasks are tightly coupled, same `Execute as` role, and same `Working branch`. **L2 task reviewers stay fresh per task** — do not sticky reviewers.
+Reuse the **same implementer subagent** across multiple tasks in one plan when tasks are tightly coupled, same front matter `execute_as` role, and same `working_branch`. **L2 task reviewers stay fresh per task** — do not sticky reviewers.
 
 SSOT for mode selection and host resume → this file (the main skill's dsh continuation-resume clause defers to § Host mapping here). Per-task artifacts → **`file-handoffs.md`**.
 
@@ -8,7 +8,7 @@ SSOT for mode selection and host resume → this file (the main skill's dsh cont
 
 ## When to use
 
-| `SDD implementer session` | Use |
+| `sdd_implementer_session` | Use |
 |---------------------------|-----|
 | **`fresh`** (default) | Independent tasks, module boundaries, different dev tracks, or first task on a plan |
 | **`sticky`** | One sequential dependency chain on one owner track; same `fullstack-dev` (or same role id), sequential tasks on one branch, strong file/context continuity (e.g. T3+T4 daemon stderr + DB reset) |
@@ -17,17 +17,19 @@ SSOT for mode selection and host resume → this file (the main skill's dsh cont
 
 ## Assignment fields (implement dispatch)
 
+Front matter is the only field contract (full key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)); the covered task id is body narrative, not a key:
+
 ```markdown
-**Execution mode**: sdd
-**SDD implementer session**: sticky | fresh
-**SDD dir**: `{HARNESS_DIR}/sdd/<plan-id>/`
-**Execute as**: fullstack-dev
-**Working branch**: <branch>
-**Covers task**: N | N–M   # single task id for this dispatch turn
+---
+execute_as: fullstack-dev
+execution_mode: sdd
+sdd_implementer_session: sticky | fresh
+working_branch: <branch>
+---
 ```
 
-- **Task 1** (or first task after `fresh` reset): `SDD implementer session: fresh` or `sticky` (starts sticky ledger).
-- **Task 2+** with sticky: `SDD implementer session: sticky` + the host's own resume route (§ Host mapping) or the continuation prompt (fallback).
+- **Task 1** (or first task after `fresh` reset): `sdd_implementer_session: fresh` or `sticky` (starts sticky ledger).
+- **Task 2+** with sticky: `sdd_implementer_session: sticky` + the host's own resume route (§ Host mapping) or the continuation prompt (fallback).
 
 ## Session ledger: `implementer-session.json`
 
@@ -72,8 +74,8 @@ Each task's commit uses the already-configured identity; missing/failing identit
 Start a **new** implementer session (`session_mode: fresh` or new ledger) when any:
 
 - `BLOCKED` / `NEEDS_CONTEXT` not resolved in one continuation turn
-- `Execute as` role changes (`fullstack-dev` → `fullstack-dev-2`)
-- `Working branch` changes
+- `execute_as` role changes (`fullstack-dev` → `fullstack-dev-2`)
+- `working_branch` changes
 - Host does not support resume (OpenCode without resume → use **micro-batch** or `fresh`)
 - Context clearly degraded (implementer confuses prior tasks) — PM judgment
 - Switching from another dev track mid-plan

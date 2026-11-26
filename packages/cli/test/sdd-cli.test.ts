@@ -28,8 +28,13 @@ import { expectUsageDiagnostic } from "./support/cli-assertions";
 /** Built entry when the suite runs against a built CLI (CI); else the source entry. */
 const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
-/** Sample plan mirroring the engine fixture: fenced fake headings + real ones. */
-const SAMPLE_PLAN = `# Fixture Plan
+/** Sample plan mirroring the engine fixture: fenced fake headings + real ones.
+ * A `plan_id` front matter fence is required — a brief without one is refused. */
+const SAMPLE_PLAN = `---
+plan_id: 20260907-sdd-brief-fixture
+---
+
+# Fixture Plan
 
 ## Goal
 
@@ -409,7 +414,8 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   const harnessDir = join(control, ".mstar");
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
-  writeFileSync(planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+  // A declared plan_id is required: taskBrief refuses a plan without one.
+  writeFileSync(planFile, `---\nplan_id: ${PLAN_ID}\n---\n\n# Plan\n\n## Task 1\n\n- implement\n`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
   const ctxFile = join(sddDir, "context.json");

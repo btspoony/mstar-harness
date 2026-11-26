@@ -474,7 +474,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // regression this case originally pinned, minus the removed section).
     const app = booted = await bootApp({ agentsService: 'fake', rolePresets: { 'fullstack-dev': 'mstar-execute' } })
     await assembleWithEngineStatus(app.ctx)
-    const { agent, scopeKey } = await fakeChild(app.ctx, '**Execute as**: fullstack-dev\n\nImplement the assigned work.')
+    const { agent, scopeKey } = await fakeChild(app.ctx, '---\nexecute_as: fullstack-dev\n---\n\nImplement the assigned work.')
     app.ctx.get('agents')!.register(agent)
 
     app.ctx.events.emit('subagent/start', { runId: `run-${agent.id}`, provider: 'in-process', id: agent.id, local: true })

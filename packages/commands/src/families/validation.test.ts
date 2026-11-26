@@ -234,6 +234,86 @@ describe("assignment files resolve through the ONE source resolver", () => {
   });
 });
 
+const ACCEPTANCE_REPORT = `---
+plan_id: 20261125-demo
+gate: pm-acceptance
+verdict: Approve
+generated_at: 2026-11-26T08:00:00Z
+---
+
+# PM Acceptance Report
+
+## Scope
+`;
+
+describe("lint --type acceptance", () => {
+  test("the definition description names the acceptance type", () => {
+    expect(lintDefinition().description).toContain("acceptance");
+  });
+
+  test("a complete acceptance report passes", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("a missing gate reports lint.acceptance.frontmatter.missing", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance\n", "") },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("refused");
+    expect(JSON.stringify(result.details)).toContain("lint.acceptance.frontmatter.missing");
+  });
+
+  test("gate: qc reports invalid", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance", "gate: qc") },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("refused");
+    expect(JSON.stringify(result.details)).toContain("lint.acceptance.frontmatter.invalid");
+  });
+
+  test("verdict: okay reports the accepted enum", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("verdict: Approve", "verdict: okay") },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("refused");
+    const details = JSON.stringify(result.details);
+    expect(details).toContain("lint.acceptance.frontmatter.invalid");
+    expect(details).toContain("Approve with residuals");
+  });
+
+  test("a directory target is refused, naming the report file", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance\n", "") },
+      (dir) => runLint(dir, { target: "review", type: "acceptance" }),
+    );
+    expect(result.status).toBe("usage");
+    if (result.status !== "usage") throw new Error(`expected a usage envelope, got ${result.status}`);
+    expect(result.exitCode).toBe(2);
+    expect(result.message).toContain("--type acceptance");
+    expect(result.message).toContain("report file");
+  });
+
+  test("the refusal recovery keeps the type that selected the check", async () => {
+    const result = await withTree(
+      { "review/pm-acceptance.md": ACCEPTANCE_REPORT.replace("gate: pm-acceptance\n", "") },
+      (dir) => runLint(dir, { target: "review/pm-acceptance.md", type: "acceptance" }),
+    );
+    expect(result.status).toBe("refused");
+    // pm-acceptance.md is not auto-detected, so a recovery without the flag
+    // would rerun a different check.
+    expect(result.details?.recovery).toContain("--type acceptance");
+    expect(JSON.stringify(result.details)).toContain("lint.acceptance.frontmatter.missing");
+  });
+});
+
 describe("lint --type adr", () => {
   test("a directory target runs the tree check and passes on a valid tree", async () => {
     const result = await withTree(

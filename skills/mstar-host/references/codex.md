@@ -52,10 +52,10 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - **No invoke tool / no available custom agent = no dispatch**: printing `## Assignment` does not start another Codex worker.
 - If Codex exposes custom-agent / multi-agent tools and matching Morning Star agents are available, PM may dispatch through those tools and must follow `parallel-dispatch.md`.
 - If no invoke tool is present when dispatch is required, return **`Blocked`** — report missing invoke capability to the user. Do not substitute single-session role execution in the PM thread unless the user explicitly overrides harness dispatch for this turn.
-- Bind the role using the actual invoke schema. For example, when `collaboration.spawn_agent` exposes `agent_type`, set `agent_type: "fullstack-dev"` for `Execute as: fullstack-dev`; do not guess another host's parameter name.
+- Bind the role using the actual invoke schema. For example, when `collaboration.spawn_agent` exposes `agent_type`, set `agent_type: "fullstack-dev"` for `execute_as: fullstack-dev`; do not guess another host's parameter name.
 - Discovery does not prove loading: an advertised role may still fail to start. Record the actual invocation error; a role-load failure is not a missing-tool failure. For installed TOML issues, use `mstar-harness doctor --target codex --scope <global|project>` and repair via `init` for that scope, then retry the named role. Claim dispatch only after a successful invocation.
-- QC: N rules → **`parallel-dispatch.md`** (**`Execution mode: sdd`** → N=3; **`inline`** → N=1) when a callable invoke tool exists. Cannot emit required **N** → **`Blocked`**.
-- Leaf executors still follow `mstar-dispatch-gates`: no recursive Task/subagent calls unless Assignment says `Delegation: allowed (...)`.
+- QC: N rules → **`parallel-dispatch.md`** (**`execution_mode: sdd`** → N=3; **`inline`** → N=1) when a callable invoke tool exists. Cannot emit required **N** → **`Blocked`**.
+- Leaf executors still follow `mstar-dispatch-gates`: no recursive Task/subagent calls unless the Assignment front matter says `delegation: allowed (...)`.
 
 ## Files, shell, and approvals
 
@@ -66,12 +66,12 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 
 ## Git and final evidence
 
-- Git work still follows `mstar-branch-worktree` and the Assignment `Working branch` / `Branch policy`.
+- Git work still follows `mstar-branch-worktree` and the Assignment front matter `working_branch` / `branch_policy`.
 - Codex app git directives, when available, are audit annotations only. Emit them only after the underlying git action succeeds; never use a directive as a substitute for staging, committing, pushing, or PR creation evidence.
 - Completion reports should cite concrete commands, artifacts, and commit lines when required by the Assignment.
 
 ## Gotchas
 
 - Codex plugin install gives skills; Morning Star role subagents require regular custom agent TOML files installed from `codex/agents/`.
-- Tool discovery (`tool_search`) can reveal capabilities, but availability is not authorization; Assignment `Delegation` still controls use.
+- Tool discovery (`tool_search`) can reveal capabilities, but availability is not authorization; the Assignment front matter `delegation` still controls use.
 - Session plans, Goal Mode text, chat summaries, and UI todos are not durable harness SSOT unless mirrored to `{HARNESS_DIR}`.

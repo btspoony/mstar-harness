@@ -53,7 +53,8 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
-import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries } from "../src/document-frontmatter.js";
+import { validateDocumentFrontmatter } from "../src/document-schema.js";
 import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
@@ -120,6 +121,17 @@ function gitFixture(root: string): { base: string; head: string } {
   git(["commit", "-q", "-m", "head commit"], root);
   const head = git(["rev-parse", "HEAD"], root);
   return { base, head };
+}
+
+/** A written brief split by the shared reader: the parsed header values and
+ * the body below the fence. */
+function splitBrief(content: string): { header: Map<string, unknown>; body: string } {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const header = new Map<string, unknown>();
+  for (const [key, entry] of parseDocumentFrontmatterEntries(frontmatter, "brief")) {
+    header.set(key, entry.value);
+  }
+  return { header, body };
 }
 
 function errOf(fn: () => unknown): SddScriptError {
@@ -544,19 +556,32 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
 });
 
 describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CLI)", () => {
+  /** The fixture plan body behind a valid front matter fence (a brief without
+   * `plan_id` is refused, so every extraction case needs one). */
+  function samplePlan(dir: string): string {
+    const plan = join(dir, "sample-plan.md");
+    writeFileSync(plan, planFrontMatter("sample-plan", readFileSync(SAMPLE_PLAN, "utf8")));
+    return plan;
+  }
+
   test("extracts from the matching '## Task N' heading; fenced headings and number boundaries ignored", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const plan = samplePlan(out);
       const file = join(out, "task-2-brief.md");
-      const written = taskBrief(SAMPLE_PLAN, 2, file);
+      const written = taskBrief(plan, 2, file);
       expect(written).toBe(file);
-      const content = readFileSync(file, "utf8");
-      expect(content.startsWith("### Task 2: second task\n")).toBe(true);
-      expect(content).not.toContain("hidden behind a fence");
-      expect(content).not.toContain("Task 1: first task");
+      const { header, body } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("sample-plan");
+      expect(header.get("task")).toBe(2);
+      // The body is the Task 2 section: it opens at that heading and the
+      // fenced Task 2 example inside it is slice content, not a boundary.
+      expect(body.slice(0, body.indexOf("\n"))).toBe("### Task 2: second task");
+      expect(body).not.toContain("Task 1: first task");
+      expect(body).not.toContain("hidden behind a fence");
       const task10 = join(out, "task-10-brief.md");
-      taskBrief(SAMPLE_PLAN, 10, task10);
-      expect(readFileSync(task10, "utf8")).toContain("### Task 10: tenth task");
+      taskBrief(plan, 10, task10);
+      expect(splitBrief(readFileSync(task10, "utf8")).body).toContain("### Task 10: tenth task");
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
@@ -598,19 +623,194 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
   test("default out path uses SDD_DIR/task-N-brief.md and creates SDD_DIR", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const plan = samplePlan(out);
       const sddDir = join(out, "sdd", "sub");
       withEnv(SDD_DIR, sddDir, () => {
-        const file = taskBrief(SAMPLE_PLAN, 1);
+        const file = taskBrief(plan, 1);
         expect(file).toBe(join(sddDir, "task-1-brief.md"));
         expect(existsSync(file)).toBe(true);
       });
       withEnv(SDD_DIR, undefined, () => {
-        const err = errOf(() => taskBrief(SAMPLE_PLAN, 1));
+        const err = errOf(() => taskBrief(plan, 1));
         expect(err.exitCode).toBe(2);
         expect(err.message).toMatch(/set SDD_DIR or pass OUTFILE/);
       });
     } finally {
       rmSync(out, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("taskBrief — brief front matter (plan_id / task / files)", () => {
+  const BODY = [
+    "### Task 1: first",
+    "",
+    "**Files:**",
+    "- Create: `src/one.ts`",
+    "",
+    "### Task 2: second",
+    "",
+    "**Files:**",
+    "- Create: `src/b.ts`",
+    "- Modify: `src/a.ts` (only `taskBrief`)",
+    "- Create: `src/b.ts`",
+    "- Check: `not-a-file.md`",
+    "",
+    "A fenced example is not an ownership entry:",
+    "",
+    "```text",
+    "- Create: `other-task.ts`",
+    "- Modify: `src/b.ts`",
+    "```",
+    "",
+    "Body of task two.",
+    "",
+    "### Task 3: third",
+    "",
+    "No file entries in this task.",
+    "",
+  ].join("\n");
+  const PLAN = planFrontMatter("plan-brief-fixture", BODY);
+
+  function writePlan(content = PLAN): { dir: string; plan: string } {
+    const dir = tmpRoot("sdd-brief-fm-");
+    const plan = join(dir, "plan.md");
+    writeFileSync(plan, content);
+    return { dir, plan };
+  }
+
+  test("Task 2 brief declares plan_id, task and its own files in source order without duplicates", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      // A described entry (`- Modify: `src/a.ts` (only `taskBrief`)`) yields the
+      // path alone; a fenced example is not an entry; another task's file and
+      // an unrecognized label are not this task's files.
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(2);
+      expect(header.get("files")).toEqual(["src/b.ts", "src/a.ts"]);
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-2-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the body after the header is the Task 2 section and stops at the next Task heading", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const { body } = splitBrief(readFileSync(file, "utf8"));
+      // Fence and heading boundaries: the section opens at its own heading,
+      // keeps the fenced example inside it, and ends before Task 3.
+      expect(body.startsWith("### Task 2: second\n")).toBe(true);
+      expect(body).toContain("Body of task two.");
+      expect(body).toContain("```text");
+      expect(body).not.toContain("### Task 3: third");
+      expect(body).not.toContain("No file entries in this task.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task without Files entries writes no files key", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-3-brief.md");
+      taskBrief(plan, 3, file);
+      const { header } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(3);
+      expect(header.has("files")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan without a declared plan_id is refused before any write", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("plan_id");
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a blank plan_id is refused before any write", () => {
+    for (const declaration of ['plan_id: ""', 'plan_id: "   "']) {
+      const { dir, plan } = writePlan(`---\n${declaration}\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+      try {
+        const file = join(dir, "task-1-brief.md");
+        const err = errOf(() => taskBrief(plan, 1, file));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(file)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a plan without a declared plan_id does not create the default SDD directory", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const sddDir = join(dir, "missing", "sdd");
+      withEnv(SDD_DIR, sddDir, () => {
+        const err = errOf(() => taskBrief(plan, 1));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(sddDir)).toBe(false);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan_id that reads as another scalar shape round-trips as its own text", () => {
+    const { dir, plan } = writePlan(`---\nplan_id: "null"\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("plan_id")).toBe("null");
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file entry the reader would decode as a flow array stays its own path", () => {
+    const body = "### Task 1: only\n\n- Modify: `[draft].md`\n";
+    const { dir, plan } = writePlan(planFrontMatter("plan-brief-fixture", body));
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("files")).toEqual(["[draft].md"]);
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task-shaped front matter comment is not a body task", () => {
+    const { dir, plan } = writePlan(
+      "---\nplan_id: plan-brief-fixture\n# Task 1: draft\n---\n\n# Plan\n\n### Task 2: second\n\n- [ ] step\n",
+    );
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(3);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

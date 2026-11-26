@@ -1,6 +1,6 @@
 ---
 name: mstar-sdd
-description: "Subagent-driven development (SDD): file handoff, per-task implementer + reviewer (L2), progress ledger, review package for plan QC tri (L3), fresh or sticky session. Read under Execution mode: sdd."
+description: "Subagent-driven development (SDD): file handoff, per-task implementer + reviewer (L2), progress ledger, review package for plan QC tri (L3), fresh or sticky session. Read under execution_mode: sdd."
 ---
 
 ## Load order
@@ -14,14 +14,14 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 ## When to use
 
 - Plan locked; tasks mostly independent; PM orchestrates in-session
-- Assignment has **`Execution mode: sdd`**
-- **Not** for hotfix inline work (`Execution mode: inline`) or leaf self-dispatch
+- Assignment has **`execution_mode: sdd`**
+- **Not** for hotfix inline work (`execution_mode: inline`) or leaf self-dispatch
 
 ## Core principle
 
 **Default:** fresh implementer per ready task + task-scoped review + plan QC on the changed diff and directly affected interfaces. Execution scope → **`mstar-harness-core`** § 定向执行与验证边界.
 
-**Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
+**Optional:** **`sdd_implementer_session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
 > **Engine check:** engine `implementerSessionStickyRules` to validate the sticky resume decision above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
@@ -54,9 +54,9 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；Git 主 worktree 发现失败（`readMainWorktree` 返回 null）时 fail closed）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式 Git root 必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由）；无文件命中则使用主根下的固定 `.mstar`（`.agents/` 回退已退役），不因 linked worktree 缺文件而拒绝）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
-    - Copy the plan task's budget into the Assignment header field **`Task budget (implement / ops rounds)`** (canonical template → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — header region only, before the body markers
-    - **`SDD implementer session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
-    - **`SDD implementer session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
+    - Copy the plan task's budget into the Assignment front matter key **`task_budget`** (shape → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical); one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — front matter is the only field contract, so a budget stated in the body declares nothing
+    - **`sdd_implementer_session: fresh`** (default) — new subagent; templates: `references/implementer-prompt.md`
+    - **`sdd_implementer_session: sticky`** — first task: same as fresh + write `{SDD_DIR}/implementer-session.json` with `host_agent_id`; later tasks: host **resume** + `references/implementer-continuation-prompt.md` (see **`references/sticky-implementer-session.md`**)
 5. On `DONE`: `mstar sdd review-package BASE HEAD` → diff file
 6. Dispatch **fresh** task reviewer — role **`code-reviewer`** (L2; **not** `qc-specialist*`; host fallback generic + C5b → `mstar-host` C5) — brief, implementer report, diff, Global Constraints, and the reviewer's own output **`REPORT_FILE`** = `{SDD_DIR}/task-N-review.md` — `references/task-reviewer-prompt.md` — **never** sticky resume for reviewers
 7. Fix loop for Critical/Important; re-review until approved. Then PM reads `{SDD_DIR}/task-N-review.md` — the always-on L2 report, never the implementer's `task-N-report.md` — before appending step 8: the earned `Task quality` and partial findings stand for the reviewed scope, but assigned review scope left uncovered blocks task-complete and dependent release, so PM routes the remaining scope through a fresh/tightened reviewer dispatch; it never overwrites an `Approved` earned for checked scope or invents `Needs fixes` because the budget ended
@@ -88,7 +88,7 @@ Detail: **`references/file-handoffs.md`**.
 ## After all tasks
 
 1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
-2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, mandatory whenever `Execution mode: sdd` (single-plan or iteration) — with branch review-package path and report paths under `{SDD_DIR}/review/`; seat count → **`mstar-review-qc`** § 分派时机. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary.
+2. PM dispatches **plan QC tri-review (L3)** — **`qc_mode: full tri-review`**, mandatory whenever `execution_mode: sdd` (single-plan or iteration) — with branch review-package path and report paths under `{SDD_DIR}/review/`; seat count → **`mstar-review-qc`** § 分派时机. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary.
 3. Critical/Important QC findings → fix assignments partitioned by ownership/dependency, then targeted re-review. Independent fixes run concurrently; PM retains the complete findings ledger. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
     - **Unverified rounds count**: a fix round without verification evidence (reviewer not confirmed / report not on disk) is **not clean** — re-check and count the round; never enter the convergence branch.
     - **Complete ledger, scoped dispatch**: PM retains every open finding, including unverified items; each fix assignment carries only its owned findings and relevant fix delta. Unrelated findings do not expand a leaf task.
@@ -138,7 +138,7 @@ Developer check evidence: the task report's command plus its observed result; a 
 
 - `references/file-handoffs.md` — open when passing PM↔implementer artifacts as files, writing `context.json` / `progress.md`, or recording fix-loop evidence; paths and fix-loop evidence
 - `references/sticky-implementer-session.md` — open when choosing `fresh` vs `sticky` for a multi-task plan or resuming an implementer on another host; `fresh` vs `sticky`, ledger, host resume, micro-batch fallback
-- `references/implementer-prompt.md` — open when dispatching an SDD implementer on a fresh session (first task or `SDD implementer session: fresh`)
-- `references/implementer-continuation-prompt.md` — open when continuing the same implementer session for Task N>1 (`SDD implementer session: sticky`)
+- `references/implementer-prompt.md` — open when dispatching an SDD implementer on a fresh session (first task or `sdd_implementer_session: fresh`)
+- `references/implementer-continuation-prompt.md` — open when continuing the same implementer session for Task N>1 (`sdd_implementer_session: sticky`)
 - `references/task-reviewer-prompt.md` — open when dispatching the one L2 per-task reviewer (spec compliance + code quality)
 - `mstar-artifacts/references/plan-quality-bar.md` — open when dispatching SDD work, to check the plan meets the required self-containment standard; plan self-containment standard (plans must meet this before SDD dispatch)

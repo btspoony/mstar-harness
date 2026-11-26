@@ -123,6 +123,25 @@ function unquote(value: string): string {
   return value;
 }
 
+/**
+ * Spell one scalar value so this reader decodes it back verbatim — the writer
+ * side of `parseScalar` / `unquote` for produced documents (an sdd brief
+ * header). Unquoted only when the spelling already round-trips: a typed
+ * literal (`null`, `true`, `5.0`), a whitespace edge the line trim would eat, a
+ * value already wrapped in quotes, or a leading YAML structural prefix
+ * (`[`, `{`, `&`, `*`, `!`, `>`, `|`) is written inside one pair of double
+ * quotes. Callers that emit block-list items rely on the same rule: an item's
+ * structural prefixes are refused before unquoting, so quoting is the one
+ * supported spelling for such a path.
+ */
+export function quoteFrontmatterScalar(value: string): string {
+  const decodesVerbatim =
+    parseScalar(value) === value &&
+    value.trim() === value &&
+    !/^[[\]{}&*!>|]/.test(value);
+  return decodesVerbatim ? value : `"${value}"`;
+}
+
 /** Assign as an own data property: a plain `target[key] = value` write for
  * the accepted key `__proto__` would invoke the inherited prototype setter
  * instead of storing the key. Shared with the compass adapter, which faces

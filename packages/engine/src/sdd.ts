@@ -58,7 +58,9 @@ import {
   resolveFixedHarnessDir,
   resolveSddDir,
 } from "./path.js";
-import { planDeclaredHeaders } from "./plan-path.js";
+import { planDeclaredHeaders, planDeclaredHeadersFromContent } from "./plan-path.js";
+import { extractFrontmatterAndBody, quoteFrontmatterScalar } from "./document-frontmatter.js";
+import { validateDocumentFrontmatter } from "./document-schema.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
@@ -316,7 +318,20 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
 
 /**
  * Extract the `## Task N` section of a plan into a file (default
- * `{SDD_DIR}/task-N-brief.md`). Line state machine: ``` fences toggle
+ * `{SDD_DIR}/task-N-brief.md`). The written brief opens with a front matter
+ * block carrying `plan_id` (the plan's own front matter of the SAME snapshot
+ * the slice came from — a plan that declares none, or only a blank one, is
+ * refused before any mkdir or write), `task` and — when the task declares file
+ * entries — `files` as a block list of its Create/Modify/Test/Delete/Rename
+ * entry paths (the first backtick-delimited path after the label; trailing
+ * prose is allowed and not part of the path), in order, duplicates removed.
+ * Entries inside fenced code are examples, not ownership, and the task scan
+ * reads the body only: a task-shaped line inside the front matter declares
+ * nothing. Every written value is quoted when the shared reader would decode
+ * it as another shape (`plan_id: "null"`, a `[`-leading path), and the
+ * assembled header must pass the `sdd-brief` schema before anything is
+ * written.
+ * Line state machine: ``` fences toggle
  * `infence`; headings inside fences are ignored; printing starts at the
  * heading for `taskN` and continues until the NEXT `## Task` heading (or
  * EOF for the last task) — a later Task heading resets the section. A
@@ -386,8 +401,11 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   }
 
  // awk records: every newline-terminated line plus a final unterminated
- // line; each printed record is emitted with a trailing newline.
-  const records = content.endsWith("\n") ? content.split("\n").slice(0, -1) : content.split("\n");
+ // line; each printed record is emitted with a trailing newline. The scan
+ // reads the BODY of the one snapshot read above: a task-shaped line inside
+ // the front matter declares nothing.
+  const { body } = extractFrontmatterAndBody(content);
+  const records = body.endsWith("\n") ? body.split("\n").slice(0, -1) : body.split("\n");
   const headingRe = /^#+[ \t]+Task[ \t]+[0-9]+/;
   const targetRe = new RegExp(`^#+[ \t]+Task[ \t]+${taskN}([^0-9]|$)`);
   let infence = false;
@@ -401,10 +419,50 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   if (printed.length === 0) {
     throw new SddScriptError(`task ${taskN} not found in ${planFile} (no heading matching Task ${taskN})`, 3);
   }
+// The brief's declaration header: `plan_id` from the SAME snapshot's front
+// matter (shared reader, never a body label, never a second file read), the
+// task number, and the task's own file entries in order without duplicates.
+// The entry scan walks the slice's own fence state, so a fenced example line
+// is not an entry; the match anchors on the first backtick-delimited path
+// after a recognized label and tolerates trailing prose.
+  const planId = planDeclaredHeadersFromContent(content, planFile).get("plan_id");
+  if (planId === undefined || planId.trim() === "") {
+    throw new SddScriptError(
+      `plan ${planFile} declares no usable plan_id in its front matter \u2014 an sdd brief requires a non-blank plan_id; add "plan_id: <id>" to the plan's front matter`,
+      1,
+    );
+  }
+  const files = new Set<string>();
+  let entryFence = false;
+  for (const line of printed) {
+    if (/^```/.test(line)) {
+      entryFence = !entryFence;
+      continue;
+    }
+    if (entryFence) continue;
+    const entry = /^- (?:Create|Modify|Test|Delete|Rename): `([^`]+)`/.exec(line);
+    if (entry !== null) files.add(entry[1]!);
+  }
+  const brief = [
+    "---",
+    `plan_id: ${quoteFrontmatterScalar(planId)}`,
+    `task: ${taskN}`,
+    ...(files.size === 0 ? [] : ["files:", ...[...files].map((file) => `- ${quoteFrontmatterScalar(file)}`)]),
+    "---",
+  ].join("\n");
+  // The header is a document, so it must satisfy the schema its consumers
+  // apply — refuse before any mkdir/write rather than emit an unreadable one.
+  const gate = validateDocumentFrontmatter("sdd-brief", `${brief}\n`, out);
+  if (!gate.ok) {
+    throw new SddScriptError(
+      `plan ${planFile} cannot produce a schema-valid sdd brief header: ${gate.violations[0]?.message ?? "invalid declaration"} \u2014 correct the plan's plan_id / task / file entry paths and rerun mstar sdd task-brief`,
+      1,
+    );
+  }
   if (mkdirAfterGate !== null || (!bound && !outFile)) {
     mkdirSync(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR)!, { recursive: true });
   }
-  writeFileSync(out, `${printed.join("\n")}\n`);
+  writeFileSync(out, `${brief}\n${printed.join("\n")}\n`);
 
  // Bound mode emits absolute paths (A3: handoff producers carry absolute
  // destinations); unbound keeps the legacy literal return.
