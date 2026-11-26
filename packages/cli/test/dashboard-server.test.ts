@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
+import { addMilestone, captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, updateMilestone, withStoreRead, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -577,6 +577,104 @@ describe("dashboard --project selector", () => {
     );
     const server = await start(dir, { project: "registered-project" });
     await server.close();
+  });
+});
+
+describe("the milestone write route", () => {
+  /** The store revision the page would have observed from its overview read. */
+  async function observedRevision(context: StoreContext, projectId: string): Promise<number> {
+    const envelope = await withStoreRead(context, {
+      view: "milestones",
+      needsProjection: false,
+      collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+      execution: "not-requested",
+      run: (sources) => ({ data: null }),
+    } as never);
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      return (lane.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+    } finally {
+      lane.close();
+      void envelope;
+    }
+  }
+
+  async function post(dir: string, body: Record<string, unknown>) {
+    const server = await start(dir);
+    try {
+      return await raw(new URL("/api/milestones", server.url).href, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } finally {
+      await server.close();
+    }
+  }
+
+  test("creates and updates a milestone under the observed revision, refusing a stale one", async () => {
+    const { dir, context } = await workspace("milestone-write-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-write-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "First", effortSessions: 3, ordinal: 0 },
+      operationId: "op-create",
+      expectedStoreRevision: revision,
+    });
+    expect(created.status).toBe(200);
+    const receipt = JSON.parse(created.body) as { data: { milestoneId: string; revision: number; storeRevision: number } };
+    expect(receipt.data.revision).toBe(1);
+    expect(receipt.data.storeRevision).toBe(revision + 1);
+
+    // A write that observed the PRE-write revision is refused with the engine's
+    // own conflict code — never applied, never silently retried.
+    const stale = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-stale",
+      expectedStoreRevision: revision,
+    });
+    expect(stale.status).toBe(500);
+    const refusal = JSON.parse(stale.body) as { error: { code: string; message: string } };
+    expect(refusal.error.code).toBe("milestone.revision-conflict");
+
+    const updated = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-update",
+      expectedStoreRevision: receipt.data.storeRevision,
+    });
+    expect(updated.status).toBe(200);
+    expect((JSON.parse(updated.body) as { data: { revision: number } }).data.revision).toBe(2);
+  });
+
+  test("refuses a body that is not one JSON milestone request", async () => {
+    const { dir } = await workspace("milestone-write-bad-body-");
+    const notJson = await post(dir, { verb: "nonsense" });
+    expect(notJson.status).toBe(400);
+    expect((JSON.parse(notJson.body) as { error: { code: string } }).error.code).toBe("usage");
+  });
+
+  test("keeps the read-only refusal for every GET API route", async () => {
+    const { dir } = await workspace("milestone-write-get-");
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/milestones", server.url).href);
+      expect(res.status).toBe(405);
+    } finally {
+      await server.close();
+    }
   });
 });
 

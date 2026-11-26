@@ -23,6 +23,7 @@ import {
 } from "@mstar-harness/ui";
 
 import {
+  MILESTONE_WRITE_PATH,
   projectDetailCopy,
   projectOverviewPath,
   projectOptions,
@@ -30,6 +31,7 @@ import {
   projectsOutcome,
   readProjectMilestones,
   readProjects,
+  writeMilestone,
 } from "./projects-data";
 
 const projection = {
@@ -251,6 +253,107 @@ describe("the milestone read", () => {
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
     expect(await readProjectMilestones(refused, "engine")).toEqual({ status: "error", message: "the store is staged" });
+  });
+});
+
+describe("the dashboard milestone write channel", () => {
+  /** A fetch that records the request and answers one settled response. */
+  const recording = (answer: { status: number; body: unknown }) => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+      });
+      return new Response(JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  };
+
+  test("the write posts the verb, the same read's revision and the operation id", async () => {
+    const read = recording({
+      status: 200,
+      body: overviewEnvelope(overview({ state: "read", data: milestoneRead() })),
+    });
+    const observed = await readProjectMilestones(read.fetchImpl, "engine");
+    expect(observed).toMatchObject({ status: "ready", storeRevision: 41 });
+
+    const write = recording({ status: 200, body: { data: { milestoneId: "m-new", revision: 1 } } });
+    const result = await writeMilestone(write.fetchImpl, {
+      verb: "create",
+      projectId: "engine",
+      input: { name: "New milestone", effortSessions: null, ordinal: 1 },
+      operationId: "op-1",
+      expectedStoreRevision: 41,
+    });
+    expect(result.status).toBe("ok");
+    expect(write.calls[0]).toEqual({
+      url: MILESTONE_WRITE_PATH,
+      method: "POST",
+      body: {
+        verb: "create",
+        projectId: "engine",
+        input: { name: "New milestone", effortSessions: null, ordinal: 1 },
+        operationId: "op-1",
+        expectedStoreRevision: 41,
+      },
+    });
+  });
+
+  test("a stale observation is refused with the store's own revision-conflict, never a silent success", async () => {
+    const write = recording({
+      status: 500,
+      body: { error: { code: "milestone.revision-conflict", message: "[milestone.revision-conflict] the store moved" } },
+    });
+    const result = await writeMilestone(write.fetchImpl, {
+      verb: "update",
+      projectId: "engine",
+      milestoneId: "9f2c4a10",
+      patch: { name: "Renamed" },
+      operationId: "op-2",
+      expectedStoreRevision: 12,
+    });
+    expect(result).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+    if (result.status !== "refused") return;
+    expect(result.message).toContain("milestone.revision-conflict");
+  });
+
+  test("a transport failure is its own code, so a retry can keep its operation id", async () => {
+    const failing = (async () => {
+      throw new Error("connection refused");
+    }) as unknown as typeof fetch;
+    const result = await writeMilestone(failing, {
+      verb: "remove",
+      projectId: "engine",
+      milestoneId: "9f2c4a10",
+      operationId: "op-3",
+      expectedStoreRevision: 12,
+    });
+    expect(result).toMatchObject({ status: "refused", code: "transport-error" });
+  });
+
+  test("an assignment carries the issue's own revision beside the store revision", async () => {
+    const write = recording({ status: 200, body: { data: { changed: true } } });
+    await writeMilestone(write.fetchImpl, {
+      verb: "assign",
+      projectId: "engine",
+      issueId: "I-000870",
+      milestoneId: "9f2c4a10",
+      issueRevision: 3,
+      operationId: "op-4",
+      expectedStoreRevision: 41,
+    });
+    expect(write.calls[0]?.body).toMatchObject({
+      verb: "assign",
+      issueId: "I-000870",
+      milestoneId: "9f2c4a10",
+      issueRevision: 3,
+      expectedStoreRevision: 41,
+    });
   });
 });
 

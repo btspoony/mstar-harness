@@ -13,9 +13,15 @@
  */
 import type { IssuePage, IterationListDTO, OverviewDTO, ProjectListDTO } from "@mstar-harness/engine";
 import {
+  ASSIGNABLE_ISSUE_LIMIT,
+  createMilestoneDraftStore,
   milestonesArm,
+  projectIdentity,
+  projectIdentityFor,
   projectListModel,
+  type AssignableIssue,
   type Copy,
+  type MilestoneWriteSurface,
   type MilestonesModel,
   type ProjectDetailCopy,
   type ProjectFeature,
@@ -29,6 +35,32 @@ import { UNREACHABLE, asEnvelope, refusalMessage, requiredCollaborationRefusal }
 
 /** Where the pair answers. */
 export const PROJECTS_PATH = "/api/projects";
+
+/** The one milestone write route; the verb rides the request body. */
+export const MILESTONE_WRITE_PATH = "/api/milestones";
+
+/**
+ * The C1 retry policy, host-local: one id — and the whole request it was minted
+ * for — per LOGICAL write, retained across a transport-ambiguous failure so the
+ * retry replays the engine's recorded receipt instead of writing twice. A
+ * terminal answer (success or a refusal the store itself made) settles it.
+ */
+export function milestoneWriteIds(): {
+  for(signature: string, request: { expectedStoreRevision: number }): { operationId: string; request: { expectedStoreRevision: number } };
+  settled(): void;
+} {
+  let pending: { signature: string; operationId: string; request: { expectedStoreRevision: number } } | null = null;
+  return {
+    for(signature, request) {
+      if (pending !== null && pending.signature === signature) return { operationId: pending.operationId, request: pending.request };
+      pending = { signature, operationId: crypto.randomUUID(), request };
+      return { operationId: pending.operationId, request: pending.request };
+    },
+    settled() {
+      pending = null;
+    },
+  };
+}
 
 /** The project-scoped aggregated read the milestone body answers from. */
 export function projectOverviewPath(projectId: string): string {
@@ -71,10 +103,19 @@ export type ProjectsOutcome =
   | { kind: "ready"; model: ProjectListModel }
   | { kind: "failed"; message: string };
 
-/** What the project detail's milestone body is handed. */
+/** What the project detail's milestone body is handed, plus the revision a write guards on. */
 export type ProjectMilestonesOutcome =
   | { kind: "loading" }
-  | { kind: "ready"; milestones: Resolved<MilestonesModel> }
+  | {
+      kind: "ready";
+      milestones: Resolved<MilestonesModel>;
+      /**
+       * The store revision of the SAME overview read that produced the arm. A
+       * write hashes it into its request, so a stale observation is refused
+       * (`milestone.revision-conflict`) instead of overwriting another writer.
+       */
+      storeRevision: number;
+    }
   | { kind: "failed"; message: string };
 
 /** One list read. */
@@ -110,7 +151,7 @@ export async function readProjectMilestones(
   fetchImpl: typeof fetch,
   projectId: string,
   signal?: AbortSignal,
-): Promise<{ status: "ready"; milestones: Resolved<MilestonesModel> } | { status: "error"; message: string }> {
+): Promise<{ status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number } | { status: "error"; message: string }> {
   try {
     const response = await fetchImpl(projectOverviewPath(projectId), {
       headers: { accept: "application/json" },
@@ -124,7 +165,7 @@ export async function readProjectMilestones(
     // what the project owns, so the read fails rather than claiming nothing is there.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };
-    return { status: "ready", milestones: milestonesArm(envelope.data.milestones) };
+    return { status: "ready", milestones: milestonesArm(envelope.data.milestones), storeRevision: envelope.storeRevision };
   } catch {
     return { status: "error", message: UNREACHABLE };
   }
@@ -151,16 +192,55 @@ export function projectsOutcome(
 export function projectMilestonesOutcome(
   result:
     | { status: "loading" }
-    | { status: "ready"; milestones: Resolved<MilestonesModel> }
+    | { status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number }
     | { status: "error"; message: string },
 ): ProjectMilestonesOutcome {
   switch (result.status) {
     case "loading":
       return { kind: "loading" };
     case "ready":
-      return { kind: "ready", milestones: result.milestones };
+      return { kind: "ready", milestones: result.milestones, storeRevision: result.storeRevision };
     case "error":
       return { kind: "failed", message: result.message };
+  }
+}
+
+/** One milestone mutation the dashboard posts. */
+export type MilestoneMutationRequest =
+  | { verb: "create"; projectId: string; input: { name: string; effortSessions: number | null; ordinal: number } }
+  | { verb: "update"; projectId: string; milestoneId: string; patch: { name?: string; effortSessions?: number | null; status?: string } }
+  | { verb: "remove"; projectId: string; milestoneId: string }
+  | { verb: "assign"; projectId: string; issueId: string; milestoneId: string | null; issueRevision: number };
+
+/**
+ * One milestone write through the dashboard's own route, carrying the observed
+ * store revision from the read that rendered the forms. A refusal is the
+ * store's own code and message, verbatim — the caller surfaces it and, for
+ * `milestone.revision-conflict`, re-reads.
+ */
+export async function writeMilestone(
+  fetchImpl: typeof fetch,
+  request: MilestoneMutationRequest & { expectedStoreRevision: number; operationId: string },
+): Promise<{ status: "ok"; receipt: unknown } | { status: "refused"; code: string; message: string }> {
+  try {
+    const response = await fetchImpl(MILESTONE_WRITE_PATH, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const refusal = body as { error?: { code?: unknown; message?: unknown } } | null;
+      return {
+        status: "refused",
+        code: typeof refusal?.error?.code === "string" ? refusal.error.code : "dashboard-write",
+        message: typeof refusal?.error?.message === "string" ? refusal.error.message : refusalMessage(body, response.status),
+      };
+    }
+    const receipt = body as { data?: unknown } | null;
+    return { status: "ok", receipt: receipt?.data ?? null };
+  } catch {
+    return { status: "refused", code: "transport-error", message: UNREACHABLE };
   }
 }
 
@@ -170,4 +250,12 @@ export function projectOptions(model: ProjectListModel): readonly string[] {
 }
 
 /** Re-exported so a screen's scoped element can be built without a second shape. */
+export {
+  ASSIGNABLE_ISSUE_LIMIT,
+  createMilestoneDraftStore,
+  projectIdentity,
+  projectIdentityFor,
+  type AssignableIssue,
+  type MilestoneWriteSurface,
+};
 export type { IssuePage, IterationListDTO, ProjectFeature };

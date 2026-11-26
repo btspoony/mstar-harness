@@ -43,14 +43,11 @@ import {
   DEFAULT_ITERATION_FILTERS,
   DEFAULT_WORKFLOW_FILTERS,
   parseIssueQuery,
-  projectIdentity,
-  projectIdentityFor,
   useCopy,
   type IterationFilters,
   type WorkflowFilters,
   type IssueQuery,
   type Locale,
-  type ProjectFeature,
 } from "@mstar-harness/ui";
 
 import "./shell.css";
@@ -83,13 +80,22 @@ import {
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
 import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
+  ASSIGNABLE_ISSUE_LIMIT,
+  createMilestoneDraftStore,
   projectDetailCopy,
+  projectIdentity,
+  projectIdentityFor,
   projectOptions,
   projectsCopy,
   projectsOutcome,
   readProjectMilestones,
   readProjects,
   projectMilestonesOutcome,
+  writeMilestone,
+  type AssignableIssue,
+  type MilestoneMutationRequest,
+  type MilestoneWriteSurface,
+  type ProjectFeature,
   type ProjectMilestonesOutcome,
   type ProjectsOutcome,
 } from "./projects-data";
@@ -752,7 +758,62 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       current = false;
       controller.abort();
     };
-  }, [projectId]);
+  }, [projectId, reloadToken]);
+
+  // The assign picker's options: the project's OPEN, unassigned issues, as the
+  // scoped Issues read answers them (id, title, severity, revision for the CAS).
+  const assignableIssues: AssignableIssue[] | undefined =
+    scopedIssues.kind === "ready"
+      ? scopedIssues.model.rows.kind === "populated"
+        ? scopedIssues.model.rows.value
+            .filter((issue) => issue.disposition === "open" && issue.milestoneId === null)
+            .slice(0, ASSIGNABLE_ISSUE_LIMIT)
+            .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
+        : []
+      : undefined;
+
+  /**
+   * The milestone write channel: one write at a time, each carrying the store
+   * revision of the overview read that rendered the forms. A revision conflict
+   * re-reads (the read moved under the observation, so the re-armed channel gets
+   * the new revision and the operator's draft survives the re-mount); an input
+   * refusal wrote nothing and does not re-read. An ambiguous transport failure
+   * keeps its operation id and revision so a retry replays the engine's receipt.
+   */
+  const writes: MilestoneWriteSurface | undefined =
+    outcome.kind !== "ready"
+      ? undefined
+      : {
+          busy: writesState.busy,
+          refusal: writesState.refusal,
+          create: (input) => runMilestoneWrite({ verb: "create", projectId, input }),
+          update: (milestoneId, patch) => runMilestoneWrite({ verb: "update", projectId, milestoneId, patch }),
+          assign: (issueId, issueRevision, milestoneId) =>
+            runMilestoneWrite({ verb: "assign", projectId, issueId, milestoneId, issueRevision }),
+          remove: (milestoneId) => runMilestoneWrite({ verb: "remove", projectId, milestoneId }),
+        };
+
+  function runMilestoneWrite(request: MilestoneMutationRequest): void {
+    if (outcome.kind !== "ready" || writesState.busy) return;
+    const revision = outcome.storeRevision;
+    setWritesState({ busy: true, refusal: null });
+    const retained = operationIds.for(JSON.stringify(request), { expectedStoreRevision: revision });
+    void writeMilestone(fetch, {
+      ...request,
+      operationId: retained.operationId,
+      expectedStoreRevision: retained.request.expectedStoreRevision,
+    }).then((result) => {
+      const ambiguous = result.status === "refused" && result.code === "transport-error";
+      if (!ambiguous) operationIds.settled();
+      setWritesState({ busy: false, refusal: result.status === "refused" ? result.message : null });
+      // why: a re-read is only right when the store MOVED — an accepted write, or the
+      // engine's own revision-conflict verdict. Reloading after an input refusal would
+      // unmount the forms mid-edit for no fact; reloading an ambiguous failure would
+      // turn the retry into a different request.
+      if (ambiguous) return;
+      if (result.status === "ok" || result.code === "milestone.revision-conflict") setReloadToken((token) => token + 1);
+    });
+  }
 
   // The head's identity comes from the same list read the Projects destination
   // renders, so the two can never disagree; a project the list does not carry
@@ -817,6 +878,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       }
       {...(issuesCount === undefined ? {} : { issuesCount })}
       {...(iterationsCount === undefined ? {} : { iterationsCount })}
+      {...(writes === undefined ? {} : { writes })}
+      {...(assignableIssues === undefined ? {} : { assignableIssues })}
+      drafts={drafts}
       copy={projectDetailCopy(copy)}
       onBack={() => {
         // The breadcrumb and Escape are one move from two places: a hardcoded

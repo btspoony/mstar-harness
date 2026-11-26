@@ -22,6 +22,17 @@ import {
   readDashboardView,
   resolveDashboardRoute,
 } from "./store-read.js";
+import {
+  addMilestone,
+  assignIssueMilestone,
+  removeMilestone,
+  updateMilestone,
+  type IssueReceipt,
+  type MilestonePatch,
+  type MilestoneReceipt,
+  type StoreContext,
+} from "@mstar-harness/engine";
+import { SddScriptError } from "@mstar-harness/engine";
 import type { DashboardView, ProjectListDTO } from "@mstar-harness/engine";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated.js";
 
@@ -108,6 +119,99 @@ function sendStatic(
 /** Enough escaping for a quoted attribute: the value is a filesystem path. */
 function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+/** The largest milestone request body the route accepts; one small JSON object. */
+const MILESTONE_BODY_LIMIT = 16_384;
+
+/** A request body as JSON, refused as a usage error when absent, oversized or unparsable. */
+async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = chunk as Buffer;
+    size += buffer.length;
+    if (size > MILESTONE_BODY_LIMIT) throw new SddScriptError("the request body is too large", 2);
+    chunks.push(buffer);
+  }
+  try {
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error("not an object");
+    return body as Record<string, unknown>;
+  } catch {
+    throw new SddScriptError("the request body must be one JSON object", 2);
+  }
+}
+
+/** One typed field, or a usage refusal naming it. */
+function requireField<T>(body: Record<string, unknown>, field: string, test: (value: unknown) => value is T): T {
+  const value = body[field];
+  if (!test(value)) throw new SddScriptError(`the milestone request requires a valid ${field}`, 2);
+  return value;
+}
+
+const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * Execute one posted milestone mutation through the engine verbs.
+ *
+ * The route is a transport: the verb, the operation id and the observed store
+ * revision come from the caller (the project page hashes the revision of the
+ * read that rendered its forms), and every validation - the name, the ordinal,
+ * the status vocabulary, the milestone's emptiness, the issue's revision - is
+ * the engine's. A revision mismatch answers `milestone.revision-conflict`, which
+ * the page turns back into a re-read.
+ */
+async function writeMilestoneRequest(
+  context: StoreContext,
+  body: Record<string, unknown>,
+): Promise<MilestoneReceipt | IssueReceipt> {
+  const verb = requireField(
+    body,
+    "verb",
+    (value): value is "create" | "update" | "remove" | "assign" =>
+      value === "create" || value === "update" || value === "remove" || value === "assign",
+  );
+  const projectId = requireField(body, "projectId", isText);
+  const operationId = requireField(body, "operationId", isText);
+  const expectedStoreRevision = requireField(body, "expectedStoreRevision", isCount);
+  const mutation = { operationId, expectedStoreRevision };
+  switch (verb) {
+    case "create": {
+      const input = body.input as { name?: unknown; effortSessions?: unknown; ordinal?: unknown } | null;
+      if (input === null || typeof input !== "object") throw new SddScriptError("the create verb requires an input object", 2);
+      if (!isText(input.name)) throw new SddScriptError("the create verb requires a name", 2);
+      if (input.effortSessions !== null && input.effortSessions !== undefined && typeof input.effortSessions !== "number") {
+        throw new SddScriptError("effortSessions must be a number or null", 2);
+      }
+      if (!isCount(input.ordinal)) throw new SddScriptError("the create verb requires an ordinal", 2);
+      return addMilestone(context, {
+        projectId,
+        name: input.name,
+        effortSessions: typeof input.effortSessions === "number" ? input.effortSessions : null,
+        ordinal: input.ordinal,
+      }, mutation);
+    }
+    case "update": {
+      const milestoneId = requireField(body, "milestoneId", isText);
+      const patch = body.patch as { name?: unknown; effortSessions?: unknown; status?: unknown } | null;
+      if (patch === null || typeof patch !== "object") throw new SddScriptError("the update verb requires a patch object", 2);
+      return updateMilestone(context, projectId, milestoneId, patch as MilestonePatch, mutation);
+    }
+    case "remove":
+      return removeMilestone(context, projectId, requireField(body, "milestoneId", isText), mutation);
+    case "assign": {
+      const issueId = requireField(body, "issueId", isText);
+      const issueRevision = requireField(body, "issueRevision", isCount);
+      const milestoneId = body.milestoneId === null ? null : requireField(body, "milestoneId", isText);
+      return assignIssueMilestone(context, issueId, { projectId, milestoneId, reason: "assigned from the project page" }, {
+        ...mutation,
+        actor: "project-manager",
+        expectedRevision: issueRevision,
+      });
+    }
+  }
 }
 
 async function assertProjectExists(harnessDir: string, projectId: string): Promise<void> {
@@ -241,6 +345,19 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // Route resolution (including the encoded-traversal id refusal) happens
     // before any store access, and its usage throws become structured 400s.
     try {
+      // The one write surface: the project page's milestone mutations. It rides
+      // the same loopback/token boundary as the reads, and the engine verbs own
+      // every validation and the optimistic-concurrency guard.
+      if (pathname === "/api/milestones") {
+        if (method !== "POST") {
+          sendJson(res, 405, fail("method-not-allowed", "the milestone route accepts POST only"), requestHead);
+          return;
+        }
+        const request = await readJsonBody(req);
+        const receipt = await writeMilestoneRequest(context, request);
+        sendJson(res, 200, { data: receipt }, requestHead);
+        return;
+      }
       const route = resolveDashboardRoute(pathname);
       if (route === null) {
         sendJson(res, 404, fail("not-found", `no dashboard route matches ${JSON.stringify(pathname)}`), requestHead);
