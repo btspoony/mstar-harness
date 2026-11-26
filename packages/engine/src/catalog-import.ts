@@ -321,7 +321,12 @@ export type CatalogImportDrift = {
   relativePath: string;
   expectedSha256: string;
   actualSha256: string | null;
-  state: "changed" | "missing" | "refused";
+  /**
+   * note: `kind-changed` is the evidence-kind change: a location that was a digested regular file is
+   * now a directory (or the reverse). The recorded hash cannot be verified, so it is reported instead
+   * of being silently accepted as unchanged.
+   */
+  state: "changed" | "kind-changed" | "missing" | "refused";
 };
 
 export type CatalogImportVerification = {
@@ -1481,13 +1486,21 @@ export async function planCatalogImport(context: StoreContext, inputs: CatalogIm
 
     const existing = local.get(entityKey(kind, mapping.id.trim()));
     // invariant: A project row registered at the retired marker path and one at its directory are the
-    // SAME project: re-registering it is not a relocation, so the reviewed import never conflicts with
-    // the row the store already holds.
+    // SAME project. The plan therefore carries that row's OWN location, so the import replays it as an
+    // identical registration (no second row, no relocation, registration and revision untouched)
+    // instead of failing as a duplicate at a new path.
     const sameLocation =
       existing !== undefined &&
       existing.rootKind === proposal.rootKind &&
       (existing.relativePath === proposal.relativePath ||
         (proposal.kind === "project" && projectLocationIdentity(existing.relativePath) === projectLocationIdentity(proposal.relativePath)));
+    if (existing !== undefined && sameLocation && existing.relativePath !== proposal.relativePath) {
+      proposal.relativePath = existing.relativePath;
+      proposal.evidence = dedupeEvidence([
+        ...proposal.evidence,
+        { sourceKey, field: "existing.project-location", value: existing.relativePath },
+      ]);
+    }
     if (existing !== undefined && !sameLocation) {
       acc.conflicts.push({
         field: "path",
@@ -1614,8 +1627,19 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
   for (const digest of plan.sourceDigests) {
     const read = readSourceFile(context, digest.rootKind, digest.relativePath);
     if (read.state === "ok" && read.sha256 === digest.sha256) continue;
-    // note: A directory identity carries no digest, so it can never drift.
-    if (read.state === "directory") continue;
+    // invariant: Each recorded digest was a regular file's bytes. A location that is now a directory
+    // has no comparable bytes - the evidence changed KIND - so it is drift, never "unchanged".
+    if (read.state === "directory") {
+      drift.push({
+        sourceKey: digest.sourceKey,
+        rootKind: digest.rootKind,
+        relativePath: digest.relativePath,
+        expectedSha256: digest.sha256,
+        actualSha256: null,
+        state: "kind-changed",
+      });
+      continue;
+    }
     drift.push({
       sourceKey: digest.sourceKey,
       rootKind: digest.rootKind,
