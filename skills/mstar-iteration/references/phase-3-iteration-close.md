@@ -53,8 +53,9 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 ## 3.3 记录 next iteration 投影候选
 
 1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：记录匹配 milestone 的状态候选及其关联 issue 证据，与 next iteration 即将开始的内容、触发条件和 owner；**不**在此写 `delivered`。compass 是执行叙事，不是项目目标权威。
-2. **交付投影只在整链证明之后写一次**：`delivered` 标记与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 milestone 保持其 pre-delivery 状态。
-3. deferred-feature tracker 等历史文件若需保留只能是历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
+2. **planboard 编辑取代旧的 roadmap 投影候选**：用 `mstar planboard check` 读 `{HARNESS_DIR}/planboard.md`，按报告清空 `stale` / `missing` 行、把本迭代未开工的 `overdue` 与遗留候选写成 `- ? <candidate> — <evidence>` 行，并重写 `review_after`。planboard 只存指针，不承载状态；next iteration 的内容、触发条件与 owner 仍写在 compass `## Roadmap Position`，不重复进 planboard。
+3. **交付投影只在整链证明之后写一次**：`delivered` 标记与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 milestone 保持其 pre-delivery 状态。
+4. deferred-feature tracker 等历史文件若需保留只能是历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
 At close, review the local ignored per-edit attribution record for this iteration against delivered edits and plan-QC references (`mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution). Record actual correction time for a missed row and disclose the unobserved prior edit; unknown model remains `unknown`. Do not paste real runtime provenance into tracked artifacts or turn this review into a machine completeness check.
 
