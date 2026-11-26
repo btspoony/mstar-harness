@@ -1868,17 +1868,15 @@ describe('dispatch gate — the ACTIVE-workflow ledger records only a declared d
     // Parseable YAML under an opening fence that never closes: the entries
     // parser reads execute_as / task_category, but the document declares no
     // front matter — the schema refuses it (`document.frontmatter.absent`),
-    // so no role or category may reach the ledger.
+    // so no role or category may reach the ledger. The header must stay
+    // parseable (no body text inside it), or the entries come back `null`
+    // and the parse refusal masks the missing fence.
     const prompt = `---
 execute_as: fullstack-dev
 delegation: forbidden
 task_category: logic
 working_branch: feature/dsh-package-core
 task_budget: S — one focused implementer round
-
-## Assignment
-
-Do the thing, evidence-first.
 `
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
