@@ -40,13 +40,15 @@ working_branch: feature/foo
 ## Assignment
 `;
 
-/** One QC Assignment carrying the three byte-identical alignment fields. */
+/** One QC Assignment carrying the three byte-identical alignment front matter keys. */
 function qcAssignment(planId: string, range: string): string {
-  return `## Assignment
-**Execute as**: qc-specialist
-**Task category**: logic
-**plan_id**: ${planId}
-**Review range / Diff basis**: ${range}
+  return `---
+execute_as: qc-specialist
+task_category: logic
+plan_id: ${planId}
+review_range: "${range}"
+diff_basis: "${range}"
+---
 `;
 }
 

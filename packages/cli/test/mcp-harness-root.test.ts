@@ -1010,11 +1010,13 @@ task_budget: S - one focused implementer round
 `;
 
 /** Two byte-identical QC assignments, so `worktree.qc-alignment` aligns them. */
-const LAUNCH_QC_ASSIGNMENT = `## Assignment
-**Execute as**: qc-specialist
-**Task category**: logic
-**plan_id**: plan-fireplace
-**Review range / Diff basis**: merge-base: main + tip: HEAD
+const LAUNCH_QC_ASSIGNMENT = `---
+execute_as: qc-specialist
+task_category: logic
+plan_id: plan-fireplace
+review_range: "merge-base: main + tip: HEAD"
+diff_basis: "merge-base: main + tip: HEAD"
+---
 `;
 
 /**

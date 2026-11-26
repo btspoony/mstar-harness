@@ -652,31 +652,21 @@ test("degraded Git refuses a linked checkout marker before local harness discove
 // mstar worktree qc-alignment — byte-identical alignment fields (audit-004)
 // ---------------------------------------------------------------------------
 
-/** One QC Assignment fixture with the three alignment fields — canonical
- * combined `Review range / Diff basis` label form (the PM template shape,
- * real QC/QA packs use it). */
+/** One QC Assignment fixture with the three alignment front matter keys — the
+ * canonical PM template shape; real QC/QA packs use it. */
 function qcAssignmentFixture(planId: string, range: string): string {
-  return `## Assignment
-**Execute as**: qc-specialist
-**Task category**: logic
-**plan_id**: ${planId}
-**Review range / Diff basis**: ${range}
-`;
-}
-
-/** Separate-label Assignment fixture (non-canonical form, still accepted). */
-function qcAssignmentSeparateFixture(planId: string, range: string): string {
-  return `## Assignment
-**Execute as**: qc-specialist
-**Task category**: logic
-**plan_id**: ${planId}
-**Review range**: ${range}
-**Diff basis**: ${range}
+  return `---
+execute_as: qc-specialist
+task_category: logic
+plan_id: ${planId}
+review_range: "${range}"
+diff_basis: "${range}"
+---
 `;
 }
 
 describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", () => {
-  test("real-shape tri pack: 3 assignments, canonical combined label, byte-identical (exit 0)", () => {
+  test("real-shape tri pack: 3 assignments, front matter fields, byte-identical (exit 0)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
         writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
@@ -684,16 +674,6 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(3);
-    });
-  });
-
-  test("separate-label form still parses as aligned (exit 0)", () => {
-    withTempDir("mstar-slice4-cli-", (dir) => {
-      writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
-      writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
-      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
-      expect(result.exitCode).toBe(0);
-      expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(2);
     });
   });
 
@@ -706,12 +686,10 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       expect(violationCodes(result)).toEqual(["qc.alignment.mismatch", "qc.alignment.mismatch"]);
     });
   });
-  test("assignment missing an alignment field fails with qc.alignment.field.missing (exit 1)", () => {
+  test("assignment missing an alignment key fails with qc.alignment.field.missing (exit 1)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
-      // Separate-label variant with the Diff basis line removed (the combined
-      // form cannot drop a single range field).
-      const incomplete = qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
-        "**Diff basis**: merge-base: main + tip: HEAD\n",
+      const incomplete = qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD").replace(
+        'diff_basis: "merge-base: main + tip: HEAD"\n',
         "",
       );
       writeFileSync(join(dir, "qc1.md"), incomplete);

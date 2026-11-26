@@ -15,6 +15,8 @@ import {
   activeLifecyclePlanId,
   completenessLevel,
   executionModeToN,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatterEntries,
   validateIntegrationMergeLease,
   workflowEntryPreDispatchCheck,
   findSimplifyMarkers,
@@ -31,6 +33,8 @@ import {
   hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   readMainWorktree,
   probeCheckoutRoot,
   resolveHarnessDir,
@@ -95,30 +99,6 @@ type Input = {
 };
 type Violation = GateResult["violations"][number];
 
-/** why: D16 — an Assignment-shaped document whose fields live in body lines
- * (the retired format) is refused `dispatch.assignment.legacy-format`
- * instead of the schema's generic absent-fence row, so the caller reads the
- * ONE front matter contract out of the refusal. Shape detection only: the
- * previously accepted body-label grammar counts a label in any of its three
- * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
- * list-prefixed `- **Execute as**:` line (indentation and a numeric or
- * bullet list marker are formatting, never the field). Detection requires
- * at least TWO distinct core labels, so a single bolded field line in
- * ordinary prose never shapes a document as an Assignment; the `## Assignment`
- * heading is irrelevant either way. */
-function legacyLabelKey(line: string): string | null {
-  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
-  return match?.[1] ?? null;
-}
-function isLegacyAssignmentShape(text: string): boolean {
-  const found = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
-    const key = legacyLabelKey(line);
-    if (key !== null) found.add(key);
-    if (found.size >= 2) return true;
-  }
-  return false;
-}
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
@@ -321,15 +301,19 @@ function collectTargets(dir: string, accept: (file: string) => boolean = (file) 
   visit(dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`);
   return targets;
 }
-function parseHeaderField(text: string, label: string): string {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const bold = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?\\*\\*\\s*${escaped}\\s*\\*\\*\\s*:\\s*(.*)$`);
-  const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}\\s*:\\s*(.*)$`);
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(bold) ?? line.match(plain);
-    if (match) return match[1]!.trim();
+/** why: D16 — the QC alignment fields are Assignment front matter keys, so
+ * this reads the fenced block ONLY; a `**Label**: value` body line is never a
+ * declaration and never satisfies the alignment check. Invalid front matter
+ * yields "" (the caller reports the field as missing). */
+function frontMatterScalar(text: string, key: string): string {
+  const { frontmatter } = extractFrontmatterAndBody(text);
+  if (frontmatter === "") return "";
+  try {
+    const value = parseDocumentFrontmatterEntries(frontmatter, "assignment").get(key)?.value;
+    return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+  } catch {
+    return "";
   }
-  return "";
 }
 /** why: the count line sums these markers, so the wording lives here once. */
 const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
@@ -430,17 +414,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // why: D16 — the retired `**Label**` body-line format is refused with
         // the front matter recovery UP FRONT instead of the schema's generic
         // absent-fence row, so every gate the caller consults answers the same
-        // code. Shape detection only; a fenced document keeps the schema verdict.
-        const legacy = !/^---[ \t]*\r?\n/.test(text) && isLegacyAssignmentShape(text);
-        if (legacy) {
-          violations.push({
-            ok: false,
-            severity: "high",
-            code: "dispatch.assignment.legacy-format",
-            message: "the Assignment carries its fields as `**Label**` body lines \u2014 the retired format; front matter is the only field contract",
-            fix: "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home",
-          });
-        }
+        // code. Shape detection and the refusal text are the engine's ONE
+        // copies; a fenced document keeps the schema verdict.
+        const legacy = legacyAssignmentShape(text);
+        if (legacy) violations.push(legacyFormatViolation());
         const fields = parseAssignmentFields(text);
         const readOnly = isReadOnlyAssignmentRole(fields.executeAs ?? "");
         violations.push(...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations.filter(
@@ -609,20 +586,25 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           });
         }
         // Each assignment is a FILE the caller named: `launchDirectoryPaths`
-        // already refused every relative one on an unnamed workspace.
+        // already refused every relative one on an unnamed workspace. The
+        // alignment fields are front matter keys — plan_id, review_range and
+        // diff_basis — never body labels.
         const assignments: QcAlignmentAssignment[] = files.map((named) => {
           const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
           const text = readFileSync(file, "utf8");
-          const combined = parseHeaderField(text, "Review range / Diff basis");
-          return { planId: parseHeaderField(text, "plan_id"), reviewRange: parseHeaderField(text, "Review range") || combined, diffBasis: parseHeaderField(text, "Diff basis") || combined };
+          return {
+            planId: frontMatterScalar(text, "plan_id"),
+            reviewRange: frontMatterScalar(text, "review_range"),
+            diffBasis: frontMatterScalar(text, "diff_basis"),
+          };
         });
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
-          { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "Review range" }, { key: "diffBasis", label: "Diff basis" },
+          { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "review_range" }, { key: "diffBasis", label: "diff_basis" },
         ];
         for (const assignment of assignments) {
           const missing = fields.filter(({ key }) => assignment[key] === "");
-          if (missing.length) return refusal(id, "qc.alignment.field.missing", `missing "${missing[0]!.label}" header field`, { fields: missing.map(({ label }) => label), assignments }, "Add the missing Assignment header fields listed in the details, then rerun mstar worktree qc-alignment <assignment-file>.");
+          if (missing.length) return refusal(id, "qc.alignment.field.missing", `missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file>.");
         }
         const gate = assertQcAlignment(assignments);
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");
