@@ -16,9 +16,8 @@ import {
   composeDispatchGate,
   isReadOnlyAssignmentRole,
   parseAssignmentFields,
-  readAssignmentSource,
 } from '@mstar-harness/engine'
-import type { ValidationResult } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { legacyAssignmentShape, legacyFormatViolation } from './dispatch-assignment.ts'
 import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
@@ -107,23 +106,26 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  * @param hint - the carrying session's selection hint (the adapter derives
  *   it once per dispatch and shares it with the lease gate, the ledger
  *   record and every selection read below).
+ * @param source - the dispatch's ONE source resolution (`Assignment file:`
+ *   pointer or inline passthrough) as the calling gate resolved it BEFORE
+ *   its first asynchronous step. Passed, never re-resolved: a refusal is
+ *   terminal here, and a resolved document is consumed verbatim — no stage
+ *   of one dispatch may read the source a second time, so a file swapped
+ *   mid-dispatch cannot split the decision from the record.
  */
 export async function dispatchGateCore(
   config: Config,
   harnessDir: string | null,
   prompt: string,
+  source: AssignmentSourceResult,
   callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<{ violations: ValidationResult[]; writable: boolean | undefined; text: string }> {
-  // compass D14/D16 — the ONE source resolution: an `Assignment file: <abs>`
-  // pointer resolves against the gate's OWN control harness root (a root the
-  // gate cannot resolve refuses the pointer rather than skipping
-  // containment); inline front matter passes through verbatim, so a pointer
-  // and the inline form reach the composition with the SAME fields. The
-  // refusal is itself the verdict: validating the pointer text would report
-  // field violations on the wrong body.
-  const source = readAssignmentSource(prompt, { harnessDir })
+  // compass D14/D16 — the ONE resolution per dispatch: the caller hands its
+  // already-resolved `AssignmentSourceResult`; this core NEVER reads the
+  // source itself. The refusal is itself the verdict: validating the
+  // pointer text would report field violations on the wrong body.
   if (!source.ok) {
     return {
       violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }],

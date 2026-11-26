@@ -273,33 +273,35 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    // compass D14 — the ONE source resolution PER DISPATCH: an `Assignment
-    // file: <abs>` pointer resolves exactly once, HERE, against the gate's
-    // own control harness root. The RESOLVED document — never the pointer
-    // line, never a second read — is what the plan-id hint, the workflow
-    // selection, the enforcement resolution, the core, the lease gate and
-    // the ledger record all consume: the core/lease paths re-resolve only
-    // the already-resolved text (an inline document is a passthrough, no
-    // second filesystem read), so a source file swapped mid-dispatch cannot
-    // split the decision from the record. A refused pointer yields no
-    // resolved text: the raw carrier reaches the core, whose own resolution
-    // refuses it the same way (a passthrough never flips a refusal), and
-    // the record stays silent for the unresolved input. The Assignment
-    // names its plan row, and that row belongs to exactly one ACTIVE
-    // lifecycle — evidence the shared source must be resolved WITH, not
-    // ahead of: several active lifecycles with no discriminating cwd is the
-    // ordinary parallel-worktree case, not an unverifiable dispatch.
+    // compass D14 — the ONE resolution PER DISPATCH: an `Assignment file:
+    // <abs>` pointer resolves exactly once, HERE (or at the caller, which
+    // hands its own result in via `preResolved`), BEFORE the first
+    // asynchronous step. The resolution RESULT — never a re-read of the
+    // source — is what the plan-id hint, the workflow selection, the
+    // enforcement resolution, the core, the lease gate and the ledger
+    // record consume, so a source file swapped mid-dispatch cannot split
+    // the decision from the record. On success the resolved document feeds
+    // every stage verbatim (never the raw carrier: a document containing a
+    // standalone `Assignment file:` line would reparse as another pointer
+    // or an ambiguous input downstream); on refusal the same refusal is
+    // the single verdict — the core reports it terminal, the lease adds
+    // nothing, no workflow selection runs, and no ledger row is written
+    // for the unresolved input. The Assignment names its plan row, and
+    // that row belongs to exactly one ACTIVE lifecycle — evidence the
+    // shared source must be resolved WITH, not ahead of: several active
+    // lifecycles with no discriminating cwd is the ordinary
+    // parallel-worktree case, not an unverifiable dispatch.
     const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
     const text = assignmentSource.ok ? assignmentSource.text : prompt
     const headerRegion = assignmentHeaderRegion(text)
-    const planId = planIdOf(headerRegion)
+    const planId = assignmentSource.ok ? planIdOf(headerRegion) : undefined
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
-    const activeSource = harnessDir !== null && isAssignmentShaped(text)
+    const activeSource = harnessDir !== null && assignmentSource.ok && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, exec?.agent, hint, activeSource)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource)
     if (exec !== undefined) {
-      violations.push(...await leaseGateViolations(harnessDir, exec, writable, text, selectionHint, activeSource))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, text, assignmentSource, selectionHint, activeSource))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -319,7 +321,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // still gates, but no row is attributed to a session whose record cannot
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
-    if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(text)) {
+    if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)) {
       const source = activeSource
       if (source?.kind === 'active') {
         try {
@@ -327,6 +329,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             harnessDir,
             exec,
             prompt: text,
+            assignmentSource,
             violations,
             hard: hard ?? resolveDispatchHard(harnessDir, this.config, text),
             pairing: this.pairing,

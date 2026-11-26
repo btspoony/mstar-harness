@@ -39,7 +39,7 @@ import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import { assignmentHeaderRegion, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
-import type { DshSelectedGeneration } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, DshSelectedGeneration } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowContinuationEventView, AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
 
@@ -927,6 +927,16 @@ export function recordDispatch(input: {
   harnessDir: string
   exec?: unknown
   prompt: string
+  /**
+   * The dispatch's ONE source resolution, shared by the gate composition
+   * (compass D14): the ledger extracts its fields from the SAME resolved
+   * document the decision used and NEVER re-reads the source — a file
+   * swapped mid-dispatch cannot split the record from the decision, and a
+   * resolved document carrying a standalone `Assignment file:` line is
+   * never reparsed as another pointer. Omitted (direct callers) → the
+   * record resolves the prompt itself, the pre-fix behavior.
+   */
+  assignmentSource?: AssignmentSourceResult
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
@@ -967,12 +977,12 @@ export function recordDispatch(input: {
     // team call to attribute.
     if (teamTool && input.teamPresent !== true) return
     // compass D14 — the ledger reads the RESOLVED assignment document, exactly
-    // as the gate did: an `Assignment file: <abs>` pointer resolves against
-    // this record's control harness root, so a pointer dispatch records the
-    // same fields the inline form does. A refused/unresolvable source falls
-    // back to the carrier text (the row still records — identity fields are
-    // simply absent, never fabricated).
-    const assignmentSource = readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
+    // as the gate did: the dispatch's ONE resolution passed in, or (direct
+    // callers) one resolution of the carrier text here — a pointer dispatch
+    // records the same fields the inline form does. A refused/unresolvable
+    // source falls back to the carrier text (the row still records — identity
+    // fields are simply absent, never fabricated).
+    const assignmentSource = input.assignmentSource ?? readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
     const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
     const header = assignmentHeaderRegion(assignmentText)
     const fields = parseAssignmentFields(assignmentText)

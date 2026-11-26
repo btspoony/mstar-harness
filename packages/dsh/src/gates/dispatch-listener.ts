@@ -69,12 +69,12 @@ async function gateAssignmentText(
   // advisory role are derived: an `Assignment file: <abs>` pointer resolves
   // to the document it names, so `enforcement: hard` inside that document
   // hardens exactly as the inline form does, and the advisory names the
-  // document's own Execute as. The resolved text is what the core/lease/
-  // record paths receive below, so every consumer reads the same document
-  // (the core's own re-resolution of an inline document is a passthrough).
-  // A terminal source refusal stays terminal: the adapter still receives the
-  // ORIGINAL pointer prompt, which the core's resolver refuses again — the
-  // one refusal verdict, never a field-violation read of the pointer line.
+  // document's own Execute as. The resolution RESULT threads into the
+  // core/lease/record paths below (`preResolved`), so no downstream stage
+  // ever re-reads the source: success feeds every stage the same document;
+  // a terminal source refusal stays terminal — the one refusal verdict,
+  // never a second read, never a field-violation read of the pointer line,
+  // and never a ledger row for the unresolved input.
   const source = readAssignmentSource(prompt, { harnessDir })
   const text = source.ok ? source.text : prompt
   // The adapter owns the shared dispatch-gate core; the exec context is

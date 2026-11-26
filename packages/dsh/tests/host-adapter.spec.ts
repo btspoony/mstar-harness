@@ -29,10 +29,10 @@
  *   lease — the testable subset now; P3 wires the reservation).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { storeDbPath, type HostAdapter } from '@mstar-harness/engine'
+import { readAssignmentSource, storeDbPath, type HostAdapter } from '@mstar-harness/engine'
 import type { AssignmentFields } from '@mstar-harness/engine'
 import type { IntegrationMergeLease } from '@mstar-harness/engine'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
@@ -653,5 +653,114 @@ describe('dispatchGate — D4 session hint derivation', () => {
     await adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE))
 
     expect(readAgentFlow(join(app.harnessDir, 'workflows/wf-1'), 'wf-1')!.events.map((e) => e.kind)).toEqual(['dispatch'])
+  })
+})
+
+/* ===========================================================================
+ * 5A2-02 — ONE resolution per dispatch: the first read (success OR refusal)
+ * is the only source for every stage. Deterministic regression seam: the
+ * gate chain is microtask-only, so the provable swap lands BETWEEN the
+ * first resolution and the decision via `dispatchGate`'s single-resolution
+ * input — exactly what the `tools/pre-execute` listener threads in.
+ * ========================================================================== */
+
+describe('dispatchGate — ONE resolution per dispatch (5A2-02 swap and first-refusal regressions)', () => {
+  /** An agent carrying the durable identity the binding store is keyed by. */
+  const sessionAgent = (sessionId: string, cwd: string): unknown =>
+    ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
+
+  /** Fully valid writable Assignment for the swap fixture — carrying a
+   * standalone `Assignment file:` line inside a fenced example, so any stage
+   * re-RESOLVING the resolved document (instead of consuming it verbatim)
+   * refuses it `dispatch.assignment.ambiguous`: the regression proves the
+   * resolution RESULT is what flows downstream, never the raw text. */
+  const SWAP_V1 = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-host-adapter
+task_budget: S — one focused implementer round
+---
+
+## Assignment
+
+Do the thing, evidence-first.
+
+\\\`\\\`\\\`text
+Assignment file: /home/example/assignments/example.md
+\\\`\\\`\\\`
+`
+
+  it('a source swapped after the first resolution still yields the FIRST document’s decision and ledger record', async () => {
+    const app = booted = await bootApp()
+    await seedActiveWorkflow(app.harnessDir, 'wf-a')
+    const adapter = makeAdapter()
+
+    // The first read resolves v1: a clean writable assignment. v2 — a
+    // document that can only violate (role swapped AND branch form dropped)
+    // — lands AFTER the resolution, BEFORE the dispatch decides: any stage
+    // re-reading the source would see v2.
+    mkdirSync(join(app.harnessDir, 'assignments'), { recursive: true })
+    const file = join(app.harnessDir, 'assignments', 'swap-after-resolution.md')
+    writeFileSync(file, SWAP_V1)
+    const firstResolution = readAssignmentSource(`Assignment file: ${file}`, { harnessDir: app.harnessDir })
+    expect(firstResolution.ok).toBe(true)
+    writeFileSync(file, SWAP_V1.replace('fullstack-dev', 'qc-specialist').replace('working_branch: feature/dsh-host-adapter\n', ''))
+
+    const result = await adapter.dispatchGate(
+      `Assignment file: ${file}`,
+      subagentExec(`Assignment file: ${file}`, sessionAgent('sess-x', app.root)),
+      undefined,
+      undefined,
+      firstResolution,
+    )
+
+    // The decision is v1's: clean, zero violations — a re-read downstream
+    // would carry v2's missing branch form into the verdict.
+    expect(result.violations).toEqual([])
+    expect(result.ok).toBe(true)
+
+    // The ledger record agrees with the decision: ONE dispatch row, v1's
+    // role, v1's clean verdict — a re-read would carry the swapped role.
+    const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
+    const dispatches = events.filter((event) => event.kind === 'dispatch')
+    expect(dispatches).toHaveLength(1)
+    expect(dispatches[0]).toMatchObject({ role: 'fullstack-dev', verdict: 'ok' })
+  })
+
+  it('a first refusal stays the single verdict when the file is fixed before the decision — nothing records', async () => {
+    const app = booted = await bootApp()
+    await seedActiveWorkflow(app.harnessDir, 'wf-a')
+    const adapter = makeAdapter()
+
+    // The first read CANNOT read the file: it does not exist. It then becomes
+    // a perfectly VALID assignment BEFORE the dispatch decides — a re-read
+    // downstream would succeed and split the verdict, recording a row the
+    // first read refused.
+    mkdirSync(join(app.harnessDir, 'assignments'), { recursive: true })
+    const file = join(app.harnessDir, 'assignments', 'fixed-after-refusal.md')
+    const firstResolution = readAssignmentSource(`Assignment file: ${file}`, { harnessDir: app.harnessDir })
+    expect(firstResolution.ok).toBe(false)
+    if (firstResolution.ok) throw new Error('unreachable')
+    expect(firstResolution.code).toBe('dispatch.assignment.path')
+    writeFileSync(file, VALID_WRITABLE)
+
+    const result = await adapter.dispatchGate(
+      `Assignment file: ${file}`,
+      subagentExec(`Assignment file: ${file}`, sessionAgent('sess-x', app.root)),
+      undefined,
+      undefined,
+      firstResolution,
+    )
+
+    // The verdict is the FIRST refusal alone: the one
+    // `dispatch.assignment.path` violation, nothing else — a re-read would
+    // gate the now-valid file instead.
+    expect(result.ok).toBe(false)
+    expect(result.violations.map((violation) => violation.code)).toEqual(['dispatch.assignment.path'])
+
+    // Nothing records for an unresolved input: no ledger row in any workflow.
+    const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
+    expect(events.filter((event) => event.kind === 'dispatch')).toHaveLength(0)
   })
 })

@@ -9,8 +9,8 @@
  *
  * No barrel: importers name this module by explicit relative path.
  */
-import { assignmentHeaderRegion, executionModeToN, parseAssignmentBranchForms, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
-import type { ValidationResult } from '@mstar-harness/engine'
+import { assignmentHeaderRegion, executionModeToN, parseAssignmentBranchForms, parseAssignmentFields } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, ValidationResult } from '@mstar-harness/engine'
 import { resolve } from 'node:path'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord } from './_shared.ts'
@@ -60,22 +60,28 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
  *   session that is not bound to the lifecycle holding the plan row stops
  *   with `lease.dispatch.plan-not-found` instead of verifying a lease it
  *   does not own.
+ * @param source - the dispatch's ONE source resolution, exactly as the
+ *   calling gate resolved it BEFORE its first asynchronous step. Passed,
+ *   never re-resolved: the lease consumes the same document (or the same
+ *   terminal refusal) the core validated, so a source file swapped
+ *   mid-dispatch cannot split the lease verification from the decision.
  */
 export async function leaseGateViolations(
   harnessDir: string | null,
   exec: ToolExecution,
   writable: boolean | undefined,
   prompt: string,
+  assignmentSource: AssignmentSourceResult,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null || writable === false) return []
-  // compass D14 — the lease reads the resolved assignment document: an
-  // `Assignment file: <abs>` pointer resolves against this gate's control
-  // harness root, exactly as the dispatch core resolves it, so a pointer and
-  // the inline form answer the same row-scope questions. A pointer the
-  // resolver refuses is the core's terminal refusal — the lease adds nothing.
-  const assignmentSource = readAssignmentSource(prompt, { harnessDir })
+  // compass D14 — the lease consumes the dispatch's ONE resolution: the
+  // caller hands its already-resolved `AssignmentSourceResult`; this gate
+  // NEVER reads the source itself, so a pointer and the inline form answer
+  // the same row-scope questions from the SAME document the core validated.
+  // A pointer the resolver refuses is the core's terminal refusal — the
+  // lease adds nothing.
   if (!assignmentSource.ok) return []
   const text = assignmentSource.text
   const header = assignmentHeaderRegion(text)
