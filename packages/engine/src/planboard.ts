@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { openCollaborationStore, type CollaborationStoreHandle } from "./collaboration-store.js";
 import { SWITCHED_NOT_PRESENTED_SQL } from "./cross-authority-move.js";
+import type { RemoteIssueRead, RemoteReadView } from "./collaboration-remote-read.js";
 import type { StoreContext } from "./store-db.js";
 
 export const PLANBOARD_FILE = "planboard.md";
@@ -272,7 +273,6 @@ const LANE_REFUSAL_CODES = new Set([
   "collaboration.unreadable",
   "collaboration.cutover-required",
   "collaboration.not-active",
-  "store.not-active",
   "store.busy",
   "store.corrupt",
   "store.schema-unsupported",
@@ -296,8 +296,8 @@ function refusalOf(error: unknown): IssueAnswer {
  * section cap. One read answers the whole board; after a lane-level refusal the
  * remaining lines are reported with the same code and nothing reopens.
  *
- * A remote selection answers from its admitted snapshot through `showIssue`,
- * which resolves the stable reference the snapshot carries.
+ * A remote selection opens its admitted view once and resolves every id against
+ * it, so the remote cache follows the same one-read rule.
  */
 async function answersFor(context: StoreContext, ids: readonly string[]): Promise<Map<string, IssueAnswer>> {
   const answers = new Map<string, IssueAnswer>();
@@ -313,15 +313,41 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
     return answers;
   }
   if (mode === "remote") {
-    const { showIssue } = await import("./issue.js");
+    // invariant: ONE admitted view answers the whole board: the cache is opened
+    // once, and each id is resolved against the snapshot it already holds. A
+    // lane-level refusal answers every remaining line and never reopens; only a
+    // per-id answer (not-found, scope-refused) is decided line by line.
+    let view: RemoteReadView;
+    let remoteIssueRead: (view: RemoteReadView, id: string) => RemoteIssueRead;
+    try {
+      const remote = await import("./collaboration-remote-read.js");
+      remoteIssueRead = remote.remoteIssueRead;
+      view = await remote.openRemoteReadView(context);
+    } catch (error) {
+      const refusal = refusalOf(error);
+      for (const id of ids) answers.set(id, refusal);
+      return answers;
+    }
     for (const id of ids) {
       try {
-        const issue = await showIssue(context, id);
-        answers.set(id, "disposition" in issue ? { kind: "disposition", disposition: issue.disposition } : { kind: "disposition", disposition: "absent" });
+        const read = remoteIssueRead(view, id);
+        // note: A provider-only answer is no MStar subject, so the line names an
+        // issue this store does not hold.
+        answers.set(id, { kind: "disposition", disposition: read.kind === "native" ? "absent" : read.detail.disposition });
       } catch (error) {
         const code = (error as { code?: unknown } | null)?.code;
-        // A provider-only answer is no MStar subject: this store does not hold it.
-        answers.set(id, code === "issue.not-found" ? { kind: "disposition", disposition: "absent" } : refusalOf(error));
+        if (code === "issue.not-found") {
+          answers.set(id, { kind: "disposition", disposition: "absent" });
+          continue;
+        }
+        if (code === "issue.scope-refused") {
+          answers.set(id, { kind: "refusal", code });
+          continue;
+        }
+        // A lane-level cause: no later id can answer differently.
+        const refusal = refusalOf(error);
+        for (const remaining of ids) if (!answers.has(remaining)) answers.set(remaining, refusal);
+        return answers;
       }
     }
     return answers;
@@ -337,16 +363,9 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
   }
   try {
     const db = handle.db;
-    // invariant: The lane owns issue read authority; a staged or foreign store
-    // never reaches this point (the same gate the ordinary issue verbs assert).
-    const meta = db.prepare("select authority_state from collaboration_meta where id = 1").get() as
-      | { authority_state?: unknown }
-      | undefined;
-    if (meta?.authority_state !== "active") {
-      const refusal: IssueAnswer = { kind: "laneRefusal", code: "store.not-active" };
-      for (const id of ids) answers.set(id, refusal);
-      return answers;
-    }
+    // note: `openCollaborationStore` already refuses a staged, foreign or
+    // otherwise inactive lane (`collaboration.not-active`), so nothing is gated
+    // again here — the handle only ever carries an ACTIVE lane.
     for (const id of ids) {
       // why: The display id is the row's primary key; the stable portable
       // reference is its own column. A board written in `remote` mode carries the

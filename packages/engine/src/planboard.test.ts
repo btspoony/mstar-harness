@@ -405,6 +405,35 @@ describe("planboard findings against a store", () => {
     ]);
   });
 
+  test("a remote lane-level refusal answers every line from one open, without a per-id reopen", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote-once");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    // A published selector with no admitted observation: opening the view refuses.
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        `- ${REMOTE_IDS.issueRef} \u2014 first`,
+        `- ${REMOTE_IDS.secondIssueRef} \u2014 second`,
+        "- I-000001 \u2014 third, a display id no remote snapshot addresses",
+      ].join("\n"),
+    );
+    const findings = (await checkPlanboard(context)).findings;
+    // invariant: The lane-level cause answers all three, so nothing reopened and
+    // no line was re-decided against a cache that never answered.
+    expect(findings.map(({ code, line }) => ({ code, line }))).toEqual([
+      { code: "unverified", line: 3 },
+      { code: "unverified", line: 4 },
+      { code: "unverified", line: 5 },
+    ]);
+    const codes = new Set(findings.map((finding) => finding.storeCode));
+    expect(codes.size).toBe(1);
+    expect([...codes][0]).toMatch(/^remote\.|^collaboration\./);
+  });
+
   test("a remote board line reports stale, missing and open from the admitted snapshot", async () => {
     const fixture = createRemoteScope(ROOT, "planboard-remote");
     const commit = fixture.publish();
