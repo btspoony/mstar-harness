@@ -7,13 +7,15 @@
  * list of `{HARNESS_DIR}` are identical before and after the run. Only a
  * malformed invocation keeps the CLI's usage exit, which the adapter owns.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  bindRemoteAuthority,
   captureIssue,
   closeIssue,
   ensureCollaborationAuthority,
@@ -22,6 +24,7 @@ import {
   type CaptureInput,
   type MutationContext,
 } from "@mstar-harness/engine";
+import { createRemoteScope, REMOTE_IDS } from "../../engine/src/remote-scope.fixture.js";
 import { z } from "zod";
 import { runCli, writeFixtureRepoId } from "./harness";
 
@@ -32,6 +35,8 @@ const reportSchema = z.object({
   data: z.object({
     path: z.string().nullable(),
     reviewAfter: z.string().nullable(),
+    captured: z.array(z.object({ line: z.number(), issueId: z.string(), reason: z.string() })),
+    candidates: z.array(z.object({ line: z.number(), candidate: z.string(), evidence: z.string() })),
     codes: z.array(z.string()),
     findings: z.array(z.object({ code: z.string(), line: z.number().nullable(), storeCode: z.string().optional() })),
   }),
@@ -93,6 +98,19 @@ function fixtureRoot(prefix: string): string {
   return root;
 }
 
+/** why: The collaboration lane is user-level, so the spawned child and this
+ * process must resolve the SAME home; the spy covers this process and `HOME`
+ * reaches the child. */
+const HOME = mkdtempSync(join(tmpdir(), "mstar-planboard-cli-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME, { recursive: true, force: true });
+});
+
 describe("mstar planboard check", () => {
   test("an absent board is a clean, exit-0 report", async () => {
     const root = fixtureRoot("mstar-planboard-cli-");
@@ -101,7 +119,7 @@ describe("mstar planboard check", () => {
       await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
       await ensureCollaborationAuthority({ harnessDir: harness });
       const before = harnessState(harness);
-      const result = runCli(["planboard", "check"], { cwd: root });
+      const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
       const reported = report(result.stdout);
       expect(reported.status).toBe("ok");
@@ -109,6 +127,8 @@ describe("mstar planboard check", () => {
       expect(reported.data).toEqual({
         path: null,
         reviewAfter: null,
+        captured: [],
+        candidates: [],
         codes: ["malformed", "stale", "missing", "overdue", "unverified"],
         findings: [],
       });
@@ -145,7 +165,7 @@ describe("mstar planboard check", () => {
         writeFileSync(join(harness, "planboard.md"), one.board);
         const before = harnessState(harness);
         const revision = storeRevision(root);
-        const result = runCli(["planboard", "check"], { cwd: root });
+        const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
         expect(result.exitCode).toBe(0);
         expect(report(result.stdout).data.findings).toEqual([{ code: one.code, line: one.line }]);
         expect(harnessState(harness)).toBe(before);
@@ -171,7 +191,7 @@ describe("mstar planboard check", () => {
       );
       const before = harnessState(harness);
       const revision = storeRevision(root);
-      const result = runCli(["planboard", "check"], { cwd: root });
+      const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
       expect(report(result.stdout).data.findings).toEqual([
         { code: "stale", line: 5 },
@@ -186,6 +206,48 @@ describe("mstar planboard check", () => {
     }
   });
 
+  test("unverified, malformed and overdue together in one run, exit 0, nothing written", async () => {
+    // why: `unverified` means the one store this run reads refused, and that
+    // refuses EVERY issue line (a refused read is never a stale or missing one).
+    // So the joint run pairs it with the two findings the parser decides alone,
+    // and the store-backed joint run above covers stale+missing+malformed+overdue.
+    const root = fixtureRoot("mstar-planboard-cli-joint-");
+    const harness = join(root, ".mstar");
+    try {
+      const fixture = createRemoteScope(HOME, "planboard-cli-joint");
+      const commit = fixture.publish();
+      // A published selector with no admitted observation: every issue read refuses.
+      await bindRemoteAuthority(fixture.context(), fixture.batch(commit));
+      writeFileSync(join(harness, ".mstarc"), "[collaboration]\nmode=remote\n");
+      writeFileSync(
+        join(harness, "planboard.md"),
+        [
+          "review_after: 2020-01-01",
+          "",
+          "## Captured",
+          `- ${REMOTE_IDS.issueRef} \u2014 an issue this store cannot answer for`,
+          "- [ ] I-000001 \u2014 a checkbox is not a pointer",
+          "",
+          "## Candidates",
+          "- ? an overdue candidate \u2014 docs/specs/example.md",
+        ].join("\n"),
+      );
+      const before = harnessState(harness);
+      const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
+      expect(result.exitCode).toBe(0);
+      const findings = report(result.stdout).data.findings;
+      expect(findings.map(({ code, line }) => ({ code, line }))).toEqual([
+        { code: "unverified", line: 4 },
+        { code: "malformed", line: 5 },
+        { code: "overdue", line: 8 },
+      ]);
+      expect(findings[0]!.storeCode).toMatch(/^remote\.|^collaboration\./);
+      expect(harnessState(harness)).toBe(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a refused issue store reports every issue line as unverified with the store code", () => {
     const root = fixtureRoot("mstar-planboard-cli-refused-");
     try {
@@ -195,7 +257,7 @@ describe("mstar planboard check", () => {
         "review_after: 2099-01-01\n## Captured\n- I-000001 \u2014 first\n- I-000002 \u2014 second\n",
       );
       const before = harnessState(harness);
-      const result = runCli(["planboard", "check"], { cwd: root });
+      const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
       const findings = report(result.stdout).data.findings;
       expect(findings.map((finding) => ({ code: finding.code, line: finding.line }))).toEqual([
@@ -213,7 +275,7 @@ describe("mstar planboard check", () => {
     const root = fixtureRoot("mstar-planboard-cli-usage-");
     try {
       for (const args of [["planboard", "verify"], ["planboard", "check", "--unknown", "x"]]) {
-        const result = runCli(args, { cwd: root });
+        const result = runCli(args, { cwd: root, env: { HOME } });
         expect(result.exitCode).toBe(2);
         expect(usageSchema.parse(JSON.parse(result.stdout)).status).toBe("usage");
       }

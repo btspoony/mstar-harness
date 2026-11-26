@@ -21,7 +21,7 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
       output: commandEnvelopeSchema,
       effects: ["read"],
       description:
-        "Report drift on {HARNESS_DIR}/planboard.md: malformed, stale, missing, overdue and unverified, each with its line. Writes nothing and exits 0 for every finding.",
+        "Read {HARNESS_DIR}/planboard.md and report its pointers and their drift: malformed, stale, missing, overdue and unverified, each with its line. Writes nothing and exits 0 for every finding.",
       async execute(input, context): Promise<CommandEnvelope> {
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot ?? context.cwd;
         const result = await checkPlanboard({ harnessDir });
@@ -34,6 +34,11 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
           data: {
             path: result.path,
             reviewAfter: result.reviewAfter,
+            // why: The pointers are the board's content; findings are its drift.
+            // A report that dropped the clean lines would leave the caller with
+            // no planning order to read, so both travel together.
+            captured: result.captured,
+            candidates: result.candidates,
             codes: PLANBOARD_FINDING_CODES,
             findings: result.findings,
           },
