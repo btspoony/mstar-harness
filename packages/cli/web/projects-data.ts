@@ -113,8 +113,10 @@ export type ProjectMilestonesOutcome =
        * The store revision of the SAME overview read that produced the arm. A
        * write hashes it into its request, so a stale observation is refused
        * (`milestone.revision-conflict`) instead of overwriting another writer.
+       * `null` when the collaboration observation carries no revision — the
+       * forms are read-only then, because there is nothing honest to hash.
        */
-      storeRevision: number;
+      storeRevision: number | null;
     }
   | { kind: "failed"; message: string };
 
@@ -151,7 +153,9 @@ export async function readProjectMilestones(
   fetchImpl: typeof fetch,
   projectId: string,
   signal?: AbortSignal,
-): Promise<{ status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number } | { status: "error"; message: string }> {
+): Promise<
+  { status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number | null } | { status: "error"; message: string }
+> {
   try {
     const response = await fetchImpl(projectOverviewPath(projectId), {
       headers: { accept: "application/json" },
@@ -192,7 +196,7 @@ export function projectsOutcome(
 export function projectMilestonesOutcome(
   result:
     | { status: "loading" }
-    | { status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number }
+    | { status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number | null }
     | { status: "error"; message: string },
 ): ProjectMilestonesOutcome {
   switch (result.status) {

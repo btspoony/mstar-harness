@@ -21,7 +21,7 @@
  */
 import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
 import {
   DISPOSITIONS,
   ISSUE_KINDS,
@@ -122,14 +122,57 @@ export async function readIssues(
 }
 
 /**
+ * The picker's own read: every OPEN issue of one project, independent of the
+ * address-bar filters and of the list's page window.
+ *
+ * `mstar milestone assign` offers the project's open, unassigned issues; a read
+ * inherited from the issue list hid whichever ones the current severity/search
+ * filter excluded or the current page did not cover. The query the API already
+ * accepts is `disposition=open&project=<id>` with a paged window, so the host
+ * pages the whole set through `readAllListPages` — no new view or route.
+ */
+export async function readAssignableIssues(
+  fetchImpl: typeof fetch,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<{ status: "ready"; envelope: ReadEnvelope<IssuePage> } | { status: "error"; message: string }> {
+  const result = await readAllListPages<IssuePage & { total: number }>(
+    fetchImpl,
+    (offset) =>
+      issuesPath({
+        filters: { disposition: "open", project: projectId, kind: "", severity: "", q: "" },
+        offset,
+      }),
+    signal,
+  );
+  if (result.status !== "ready") return result;
+  const gap = requiredCollaborationRefusal(result.envelope);
+  return gap === null ? result : { status: "error", message: gap };
+}
+
+/**
+ * The picker's offer list: the project's OPEN, UNASSIGNED issues, capped at the
+ * host limit. Derived from one read so an assignment's effect is a plain
+ * function of the refreshed rows — an assigned issue drops out, an unassigned
+ * one returns carrying its new revision.
+ */
+export function assignableOptions(
+  items: readonly IssuePage["items"][number][],
+): Array<{ id: string; title: string; severity: string; revision: number }> {
+  return items
+    .filter((issue) => issue.disposition === "open" && issue.milestoneId === null)
+    .slice(0, ASSIGNABLE_ISSUE_LIMIT)
+    .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }));
+}
+
+/**
  * One record read.
  *
  * `404` is `absent`, not a failure: the record is not there. Every other refusal
  * is a failure, and a 200 that is not an envelope is a failure too — never an
  * absence.
  */
-export async function readIssueDetail(
-  fetchImpl: typeof fetch,
+export async function readIssueDetail(  fetchImpl: typeof fetch,
   id: string,
   signal?: AbortSignal,
 ): Promise<

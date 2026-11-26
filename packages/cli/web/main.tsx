@@ -71,6 +71,7 @@ import {
   issuesCopy,
   issuesOutcome,
   issuesPath,
+  readAssignableIssues,
   readIssueDetail,
   readIssues,
   startRead,
@@ -220,7 +221,40 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
 }
 
 /**
- * The Issues list, behind its own read.
+ * The assign picker's own read: every open issue of one project, independent of
+ * the address bar and the list's page. `refreshToken` re-issues it after a write
+ * moves an issue's milestone or revision.
+ */
+function useAssignableIssues(
+  projectId: string | null,
+  refreshToken: number,
+): { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] } {
+  const [outcome, setOutcome] = useState<
+    { kind: "loading" } | { kind: "ready"; model: readonly IssuePage["items"][number][] }
+  >({ kind: "loading" });
+  useEffect(() => {
+    if (projectId === null) return;
+    const controller = new AbortController();
+    let current = true;
+    setOutcome({ kind: "loading" });
+    void readAssignableIssues(fetch, projectId, controller.signal).then((result) => {
+      if (!current) return;
+      setOutcome(
+        result.status === "ready"
+          ? { kind: "ready", model: result.envelope.data.items }
+          : { kind: "loading" },
+      );
+    });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [projectId, refreshToken]);
+  return outcome;
+}
+
+/**
+ * The project's scoped Issues list, behind its own read.
  *
  * The query is the address bar's: the screen reports a whole query change and this
  * destination turns it into history — `replace` for a filter change, so Back steps
@@ -249,7 +283,7 @@ function useIterationsRaw(scope: string | null, enabled = true): Parameters<type
   return raw;
 }
 
-function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
+function useIssues(query: IssueQuery, enabled = true, refreshToken = 0): IssuesOutcome {
   const [outcome, setOutcome] = useState<IssuesOutcome>({ kind: "loading" });
   const key = `${query.filters.disposition}|${query.filters.project}|${query.filters.kind}|${query.filters.severity}|${query.filters.q}|${query.offset}`;
   useEffect(() => {
@@ -269,8 +303,9 @@ function useIssues(query: IssueQuery, enabled = true): IssuesOutcome {
       controller.abort();
     };
     // The key is the request's identity: a new object with the same values must not
-    // refetch on every render.
-  }, [key, enabled]);
+    // refetch on every render. `refreshToken` is the explicit re-issue a write asks
+    // for (the store moved, so the painted rows are stale).
+  }, [key, enabled, refreshToken]);
   return outcome;
 }
 
@@ -721,6 +756,13 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const reloadKey = outcome.kind === "ready" ? outcome.storeRevision : 0;
   const [reloadToken, setReloadToken] = useState(0);
   /**
+   * The scoped Issues list and the assignable read both follow an assignment:
+   * an assigned issue leaves the offer set and its revision moves, so the picker
+   * and the list must re-read after an accepted assign/unassign (and after the
+   * revision-conflict re-read, whose store moved for the same reason).
+   */
+  const [issuesRefreshToken, setIssuesRefreshToken] = useState(0);
+  /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
    * left every control inert while still painting its own value.
@@ -729,6 +771,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const scopedIssues: IssuesOutcome = useIssues(
     { ...query, filters: { ...query.filters, project: projectId } },
     projectId !== "",
+    issuesRefreshToken,
   );
   /**
    * The project's size for the tab and head: the default `open` read over the whole
@@ -772,8 +815,10 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
     };
   }, [projectId, reloadToken]);
 
-  // The assign picker's options: the project's OPEN, unassigned issues, as the
-  // scoped Issues read answers them (id, title, severity, revision for the CAS).
+  // The assign picker's options: the project's OPEN issues, read by its OWN query
+  // (disposition only, every page) so the address bar's filters, search and page
+  // window can never shrink the offer; the unassigned subset is the picker's rule.
+  const assignable = useAssignableIssues(projectId === "" ? null : projectId, issuesRefreshToken);
   const assignableIssues: AssignableIssue[] | undefined =
     scopedIssues.kind === "ready"
       ? scopedIssues.model.rows.kind === "populated"
@@ -823,7 +868,13 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       // unmount the forms mid-edit for no fact; reloading an ambiguous failure would
       // turn the retry into a different request.
       if (ambiguous) return;
-      if (result.status === "ok" || result.code === "milestone.revision-conflict") setReloadToken((token) => token + 1);
+      if (result.status === "ok" || result.code === "milestone.revision-conflict") {
+        setReloadToken((token) => token + 1);
+        // An assignment moves an issue's milestone and revision, so the scoped list
+        // and the picker both re-read — the assigned issue leaves the offer set, and
+        // an unassigned one comes back at its new revision.
+        if (request.verb === "assign") setIssuesRefreshToken((token) => token + 1);
+      }
     });
   }
 
