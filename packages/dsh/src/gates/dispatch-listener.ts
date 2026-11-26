@@ -25,12 +25,14 @@ import {
   isTeamDispatchTool,
 } from './dispatch.ts'
 import { isAssignmentShaped, resolveDispatchHard } from './dispatch-assignment.ts'
+import { hasTerminalRefusal } from './dispatch-core.ts'
 import { gateWorkflow } from './dispatch-workflow-branch.ts'
+import { handOffResolvedCarrier } from './role-persona.ts'
 
 /** The hard-mode veto reason: one line per violation + the refusal channel. */
-function denyReason(tool: string, verdict: GateResult): string {
+function denyReason(tool: string, verdict: GateResult, cause: string): string {
   return [
-    `subagent dispatch (${tool}) blocked by Enforcement: hard — the Assignment fails the dispatch gate`,
+    `subagent dispatch (${tool}) blocked by ${cause} — the dispatch gate refused it`,
     ...verdict.violations.map(formatViolation),
     'refusal channel: tools/pre-execute PreToolDecision { kind: \'deny\' }; skill: mstar-dispatch-gates',
   ].join('\n')
@@ -86,11 +88,17 @@ async function gateAssignmentText(
   const hard = resolveDispatchHard(harnessDir, config, text)
   const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source)
   const verdict = applyEnforcement(result, { hard })
-  if (verdict.hardBlocked) {
+  // A terminal source refusal is a VETO, decided BEFORE enforcement, the
+  // advisory role and the preset channel: the resolver proved there is no
+  // document to dispatch on, so no `hard`/`soft` setting may soften it
+  // (ordinary violations of a resolved document keep their soft behavior).
+  const terminal = hasTerminalRefusal(verdict.violations)
+  if (terminal || verdict.hardBlocked) {
+    const cause = terminal ? 'a terminal assignment-source refusal' : 'Enforcement: hard'
     ctx.logger(DISPATCH_LOGGER).error(
-      `subagent dispatch (${toolName}) vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`,
+      `subagent dispatch (${toolName}) vetoed (${cause}):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    return { kind: 'deny', reason: denyReason(toolName, verdict) }
+    return { kind: 'deny', reason: denyReason(toolName, verdict, cause) }
   }
   if (!verdict.ok) {
     ctx.logger(DISPATCH_LOGGER).warn(
@@ -99,6 +107,10 @@ async function gateAssignmentText(
     const role = parseAssignmentFields(text).executeAs ?? ''
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
+  // The admitted pointer's resolved document is handed to the native start
+  // seam for THIS call, so the child executes the version the gate decided
+  // on instead of reading the file a second time.
+  if (source.ok) handOffResolvedCarrier(exec.agent, prompt, source)
   return undefined
 }
 

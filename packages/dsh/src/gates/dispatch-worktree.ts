@@ -15,6 +15,7 @@ import {
   collectActiveLifecycleBranches,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  parseAssignmentFields,
   probeCheckoutRoot,
   readActiveLifecycleBranchDocs,
   readMainWorktree,
@@ -23,7 +24,7 @@ import type { ValidationResult, WorkflowSnapshot, WorktreeTrack } from '@mstar-h
 import { asRecord } from './_shared.ts'
 import { activeRowsOf, readExecutionWorkflowSource, refusalOf } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead, SessionHint } from './workflow-selection.ts'
-import { assignmentHeaderValue, assignmentHeaderValues, planIdOf } from './dispatch-assignment.ts'
+import { assignmentHeaderValue, planIdOf } from './dispatch-assignment.ts'
 
 /**
  * One worktree-gate violation line (dsh-side codes live in the
@@ -36,42 +37,38 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
 
 /**
  * L2 within-plan track isolation (engine `l2PreDispatchCheck`):
- * when the Assignment declares parallel tracks — ≥2 `Worktree path` header
- * entries, or the documented parallel-tracks marker (`Dispatch mode:
- * parallel independent tracks`, mstar-phase-gates 并行标签 /
- * parallel-writable-pre-dispatch.md step 5) — every declared track must
- * carry an absolute, distinct worktree path whose checkout branch matches
- * its Working branch, BEFORE the first concurrent writable dispatch
+ * when the Assignment declares parallel tracks — a `worktree_path` LIST of
+ * ≥2 entries, the shared schema's own parallel shape — every declared track
+ * must carry an absolute, distinct worktree path whose checkout branch
+ * matches its Working branch, BEFORE the first concurrent writable dispatch
  * (N parallel invokes ≠ isolation).
  *
- * Track pairing follows the Assignment grammar: one `Working branch` entry
- * per `Worktree path`, OR a single `Working branch` line applying to every
+ * Track pairing follows the Assignment grammar: one `working_branch` entry
+ * per `worktree_path`, OR a single `working_branch` value applying to every
  * track (the same-branch multi-dir topology, mstar-branch-worktree
  * 同分支多目录例外 — git forbids one branch in two linked worktrees, so the
  * second checkout is a clone). Any other count mismatch is a violation.
  *
- * Pure over the header + the filesystem; the engine probes
+ * Pure over the parsed fields + the filesystem; the engine probes
  * `git -C <path> branch --show-current` per valid track (bounded, fails
  * closed). compass D14 — the caller passes the RESOLVED assignment document
- * (the `readAssignmentSource` output shared by the gate composition), and
- * this gate slices its own front matter: a pointer and the inline form
- * answer the same track questions.
+ * (the `readAssignmentSource` output shared by the gate composition), so a
+ * pointer and the inline form answer the same track questions.
  * @param assignmentText - the resolved Assignment document.
  */
 export function worktreeL2Violations(assignmentText: string): ValidationResult[] {
-  const header = assignmentHeaderRegion(assignmentText)
-  const worktreePaths = assignmentHeaderValues(header, 'Worktree path')
-  const workingBranches = assignmentHeaderValues(header, 'Working branch')
-  const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
-  // Parallel-track declaration: ≥2 Worktree path entries, or the documented
-  // canonical parallel-tracks marker (`Dispatch mode: parallel independent
-  // tracks`, mstar-phase-gates 并行标签). A single Worktree path is the
-  // serial norm and never triggers the L2 checklist (no track list to verify
-  // against). The marker match is exact (P3 T2 review — no substring
-  // widening): a Dispatch mode merely CONTAINING "parallel" (e.g. a serial
-  // mode with a parallel-flavored name) must not trigger the L2 checklist.
-  const isParallelTracksMarker = dispatchMode?.trim().toLowerCase() === 'parallel independent tracks'
-  if (worktreePaths.length < 2 && !isParallelTracksMarker) return []
+  // The parallel-track declaration is the SHARED schema's own shape: a
+  // `worktree_path` / `working_branch` string list (or a scalar, the serial
+  // norm). Read from the parsed fields — the one projection the field gate,
+  // the branch gate and this check share — never a second decode of the
+  // entries, so no shape this check accepts can be one the schema rejects.
+  const fields = parseAssignmentFields(assignmentText)
+  const worktreePaths = fields.worktreePaths ?? (fields.worktreePath?.trim() ? [fields.worktreePath] : [])
+  const workingBranches = fields.workingBranches ?? (fields.workingBranch?.trim() ? [fields.workingBranch] : [])
+  // ≥2 declared tracks is the parallel declaration; a single Worktree path is
+  // the serial norm and never triggers the L2 checklist (no track list to
+  // verify against).
+  if (worktreePaths.length < 2) return []
 
   const violations: ValidationResult[] = []
   const tracks: WorktreeTrack[] = []

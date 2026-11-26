@@ -42,7 +42,7 @@ import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
 import { assignmentTextFromFields, isAssignmentShaped, planIdOf, resolveDispatchHard } from './dispatch-assignment.ts'
-import { dispatchGateCore } from './dispatch-core.ts'
+import { dispatchGateCore, hasTerminalRefusal } from './dispatch-core.ts'
 import { leaseGateViolations } from './dispatch-lease.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
@@ -442,7 +442,10 @@ export class DshHostAdapter extends Service implements HostAdapter {
     const hookSource = readAssignmentSource(prompt, { harnessDir })
     const hard = resolveDispatchHard(harnessDir, this.config, hookSource.ok ? hookSource.text : prompt)
     const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource)
-    return applyEnforcement(gate, { hard })
+    const applied = applyEnforcement(gate, { hard })
+    // A terminal source refusal is a veto, not an advisory: no enforcement
+    // setting can soften the absence of a verified document.
+    return hasTerminalRefusal(applied.violations) ? { ...applied, hardBlocked: true } : applied
   }
 
   /**

@@ -1148,7 +1148,7 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
     expect(advisories).toHaveLength(0)
   })
 
-  describe('dispatch gate — ONE resolution per dispatch (5A2-02: the source cannot split decision from record)', () => {
+  describe('dispatch gate — ONE resolution per dispatch (the source cannot split decision from record)', () => {
     // The waterfall gate chain is microtask-only (synchronous fs/sqlite reads
     // with promise-skeleton awaits), so no timer can interleave INTO a
     // dispatch — the deterministic mid-dispatch seam is the first resolution
@@ -1429,7 +1429,7 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     expect(violationCodes(pointerAdvisories[0])).toContain('dispatch.anti-recursion.empty-binding')
   })
 
-  it('an out-of-home pointer refuses dispatch.assignment.path', async () => {
+  it('an out-of-home pointer is a terminal refusal — denied in the default mode, no advisory', async () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
     const outside = join(app.root, 'outside-assignment.md')
@@ -1437,9 +1437,11 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${outside}`), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' }) // warn mode: the refusal is advisory
-    expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.path')
+    // A source refusal is not an ordinary violation: there is no verified
+    // document, so no enforcement setting softens it and no advisory path runs.
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(advisories).toHaveLength(0)
   })
 
   it('an out-of-home pointer under Enforcement: hard denies the dispatch', async () => {
@@ -1453,7 +1455,7 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
   })
 
-  it('a gate that cannot resolve the control harness root refuses the pointer (never skips containment)', async () => {
+  it('a gate that cannot resolve the control harness root refuses the pointer in the default mode (never skips containment)', async () => {
     const app = booted = await bootApp()
     // No explicit root AND an agent without a session cwd: the resolver
     // cannot produce ANY harness dir, so containment cannot be proven.
@@ -1464,20 +1466,21 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 
     const decision = await preExecuteListener(app.ctx, resolver, config, adapter, agentless, defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' }) // warn mode: the refusal is advisory on the log
-    // The listener path emits no advisory capture here (the adapter's own ctx
-    // is a bare Context), so the decisive evidence is the absence of a crash
-    // plus the refusal surfaced when the same input runs under hard: rerun
-    // with a hard config through the same unrooted resolver.
-    const hardConfig: Config = { enforcement: 'hard' }
-    const hardAdapter = new DshHostAdapter(new Context(), { resolver, config: hardConfig })
-    const hardDecision = await preExecuteListener(
-      app.ctx, resolver, hardConfig, hardAdapter,
-      toolExec('subagent', { description: 'probe', prompt: `Assignment file: ${join(app.root, 'anywhere.md')}` }),
-      defaultAllow,
-    )
-    expect(hardDecision.kind).toBe('deny')
-    expect(hardDecision.kind === 'deny' && hardDecision.reason).toContain('dispatch.assignment.path')
+    // Terminal source refusal: the default (soft) mode denies it too.
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(decision.kind === 'deny' && decision.reason).toContain('control harness root is unavailable')
+  })
+
+  it('a readable pointer to a non-Assignment file is ONE invalid Assignment, not a silent pass', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = pointerInHome(app.harnessDir, 'ordinary notes, not an assignment document\n')
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' }) // soft mode: the shape refusal is an ordinary violation
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.shape')
   })
 
   it('a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries', async () => {
@@ -1518,10 +1521,10 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
 })
 
 /* ===========================================================================
- * 5a1-F1 — pointer/inline parity under the document's OWN hard enforcement
+ * Pointer/inline parity under the document's OWN hard enforcement
  * ========================================================================= */
 
-describe('dispatch gate — pointer/inline hard-enforcement parity (5a1-F1)', () => {
+describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
   /** Write one assignment file under the accepted harness home and return the pointer prompt. */
   function hardPointerInHome(harnessDir: string, content: string): string {
     const dir = join(harnessDir, 'assignments')
@@ -1576,10 +1579,10 @@ describe('dispatch gate — pointer/inline hard-enforcement parity (5a1-F1)', ()
 })
 
 /* ===========================================================================
- * 5a1-F2 — isolation shapes at the worktree L2 gate (the shared entries API)
+ * Isolation shapes at the worktree L2 gate (the shared entries API)
  * ========================================================================= */
 
-describe('dispatch gate — worktree L2 isolation shapes (5a1-F2)', () => {
+describe('dispatch gate — worktree L2 isolation shapes', () => {
   /** Real git worktrees for the L2 probe (`git -C <path> branch --show-current`). */
   function trackWorktrees(root: string, branches: readonly string[]): Map<string, string> {
     const paths = new Map<string, string>()
@@ -1646,6 +1649,26 @@ Two parallel writable tracks.
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
+  }, 60_000)
+
+  it('a correctly paired two-track list raises no branch-field or track violation', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/ok-a', 'feature/ok-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/ok-a')!, 'feature/ok-a', tracks.get('feature/ok-b')!, 'feature/ok-b', true)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    // The list IS the schema's own parallel shape: the shared field/branch
+    // gate accepts it (no branch presence/multiple row) and the L2 pairing
+    // finds both tracks on their declared branches.
+    const codes = violationCodes(advisories[0])
+    expect(codes.filter((code) => code.startsWith('assignment.field.branch') || code.startsWith('worktree.l2.'))).toEqual([])
+    expect(codes).not.toContain('document.frontmatter.invalid')
   }, 60_000)
 
   it('duplicate worktree_path keys refuse as document.frontmatter.invalid instead of entering isolation', async () => {

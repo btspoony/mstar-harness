@@ -132,7 +132,7 @@ import {
   type LiveConfigRef,
 } from './_shared.ts'
 import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
-import { legacyAssignmentShape } from './dispatch-assignment.ts'
+import { legacyAssignmentShape } from '@mstar-harness/engine'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
 export const ROLE_PERSONA_LOGGER = 'mstar/role-persona'
@@ -604,33 +604,30 @@ export interface RoleGateInput {
   /** The runtime declares `provider`; an unknown provider fails loud its own way (`NO_PROVIDER`). */
   readonly providerKnown: boolean
   /** Declared role ids: `Config.rolePresets` keys ∪ packaged mirror shell stems. */
+  readonly declaredRoleIds: ReadonlySet<string>
   /**
    * The ONE assignment-source resolution for this start (compass D14) — the
    * caller resolves `Assignment file: <abs>` against the applicable control
-   * harness root BEFORE role evaluation. When supplied and refused, the
-   * refusal propagates as the gate verdict under the configured mode: a
-   * pointer the resolver refuses is never silently validated as the inline
-   * text it cannot be (containment bypass). When supplied and resolved, the
-   * caller has already re-carried the resolved document in `request`, so the
-   * scan below reads the same text the dispatch gate would.
+   * harness root BEFORE role evaluation. When supplied and REFUSED the
+   * refusal is terminal: the gate refuses in every mode. When supplied and
+   * resolved, the caller has already re-carried the resolved document in
+   * `request`, so the scan below reads the same text the dispatch gate would.
    */
   readonly assignmentSource?: AssignmentSourceResult
 }
 
 /**
- * The `hard` refusal / `warn` advisory text for a refused assignment-source
- * pointer (compass D14) — the resolver's own refusal text plus the mode
- * recovery. Containment can never be skipped: the pointer document is
- * unknown, so the declaration question has no answer.
+ * The refusal text for a refused assignment-source pointer (compass D14) —
+ * the resolver's own cause plus its recovery. There is no mode recovery to
+ * offer: the refusal is terminal, so no `roleGate` setting softens it.
  *
  * @param cwd - the child's effective start directory, when known.
- * @param mode - the configured mode (`hard` refusal or `warn` advisory).
  * @param refusal - the resolver refusal being propagated.
  */
-function sourceRefusalMessage(cwd: string | undefined, mode: 'warn' | 'hard', refusal: { severity: string; code: string; message: string; fix: string }): string {
+function sourceRefusalMessage(cwd: string | undefined, refusal: { code: string; message: string; fix?: string }): string {
   const cause = `carries an \`Assignment file:\` pointer the source resolver refuses (${refusal.code}): ${refusal.message}`
-  const fix = `Fix: ${refusal.fix}`
-  return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
+  const fix = refusal.fix ?? 'pass the assignment inline as a front-matter document'
+  return `${startLocation(cwd)} ${cause}. Fix: ${fix} The refusal is terminal: no roleGate mode softens it.`
 }
 
 /**
@@ -715,6 +712,12 @@ function declarationScope(unfenced: string): string {
  */
 export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   const { request } = input
+  // (0) compass D14 — a REFUSED assignment source is TERMINAL: the resolver
+  // proved there is no document, so no role exemption (preset, non-harness
+  // project, unknown provider), no preset merge and no `roleGate` mode may
+  // soften it — the start has nothing verified to run.
+  const source = input.assignmentSource
+  if (source !== undefined && !source.ok) return { kind: 'refuse', message: sourceRefusalMessage(input.cwd, source) }
   // (1) An explicit selection is caller intent — never gated.
   if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   const text = promptText(request)
@@ -737,16 +740,6 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // retired body-label grammar is refused on EVERY gate; the role gate is
   // the first gate the subagent-start channel reaches, so it names the same
   // cause the dispatch gate would. `off` stays the documented rollback.
-  // (4b) compass D14 — a refused assignment-source resolution propagates as
-  // the gate verdict: the pointer document is unknown, so the declaration
-  // question has no answer, and validating the pointer line itself would
-  // silently bypass containment. `off` stays the documented rollback.
-  const source = input.assignmentSource
-  if (source !== undefined && !source.ok) {
-    if (input.mode === 'off') return { kind: 'pass', reason: 'off' }
-    const message = sourceRefusalMessage(input.cwd, input.mode, source)
-    return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
-  }
   if (legacyAssignmentShape(text)) {
     if (input.mode !== 'off') {
       const message = legacyDeclarationMessage(input.cwd, input.mode)
@@ -1084,7 +1077,7 @@ function repairRequest(request: SubagentStartRequestView, roleId: string): Subag
  * gate, the preset merge and the child all read the document, never the
  * pointer line.
  */
-function foldPromptText(request: SubagentStartRequestView, text: string): SubagentStartRequestView {
+function foldPromptText(request: SubagentActivationSpecView, text: string): SubagentActivationSpecView {
   const blocks = request.prompt ?? []
   const index = blocks.findIndex((block) => block.type === 'text')
   if (index < 0) return { ...request, prompt: [{ type: 'text', text }] }
@@ -1193,6 +1186,49 @@ function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'har
 }
 
 /**
+ * Pre-execution carrier handoff: the dispatch gate resolves one
+ * `Assignment file:` pointer BEFORE it decides, and the native start seam
+ * must consume THAT document instead of reading the file again — a rewrite
+ * between the two seams would otherwise start the child on a version the
+ * gate never approved or recorded. Keyed by the calling agent (`spec.parent`
+ * IS `exec.agent` on the delegation tool) and the carrier text; an entry is
+ * single-use, so only a start that follows an admitted call consumes one.
+ * A start that did not traverse pre-execution resolves the source itself.
+ */
+const resolvedCarriers = new WeakMap<object, Map<string, AssignmentSourceResult>>()
+
+/** Bound for unmatched handoffs (an admitted pointer whose tool starts nothing). */
+const RESOLVED_CARRIER_LIMIT = 8
+
+/**
+ * Hand one resolved file carrier to the native start seam for the admitted
+ * call. Only a resolved POINTER is handed over: an inline document is
+ * already the text the child receives.
+ * @param caller - the dispatching agent (`exec.agent`, the start's `parent`).
+ * @param carrierText - the tool call's carrier text verbatim.
+ * @param source - the gate's ONE resolution of that carrier.
+ */
+export function handOffResolvedCarrier(caller: unknown, carrierText: string, source: AssignmentSourceResult): void {
+  if (typeof caller !== 'object' || caller === null || !source.ok || source.path === undefined) return
+  const byCarrier = resolvedCarriers.get(caller) ?? new Map<string, AssignmentSourceResult>()
+  resolvedCarriers.set(caller, byCarrier)
+  // shortcut: unmatched entries are bounded, not expired — an admitted
+  // pointer whose tool starts no child is dropped by the next handoff.
+  if (byCarrier.size >= RESOLVED_CARRIER_LIMIT) byCarrier.clear()
+  byCarrier.set(carrierText, source)
+}
+
+/** Consume one handed-off carrier for this start (single use), if any. */
+function takeResolvedCarrier(caller: unknown, carrierText: string): AssignmentSourceResult | undefined {
+  if (typeof caller !== 'object' || caller === null) return undefined
+  const byCarrier = resolvedCarriers.get(caller)
+  const source = byCarrier?.get(carrierText)
+  if (source === undefined) return undefined
+  byCarrier!.delete(carrierText)
+  return source
+}
+
+/**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
  * prototype-delegating object whose OWN `startActivation` merges the role's
@@ -1238,16 +1274,18 @@ function wrapSubagentsService(
       // the harness predicate (an omitted cwd is never a non-harness
       // exemption).
       const startDirectory = effectiveStartDirectory(spec, currentDirectoryOf(spec.parent, ctx))
-      // compass D14 — the ONE assignment-source resolution for this start:
-      // an `Assignment file: <abs>` pointer resolves ONCE against the
-      // applicable control harness root, BEFORE role evaluation and preset
-      // selection. A pointer the resolver refuses propagates through the
-      // evaluator (never a containment bypass); a resolved pointer is
-      // re-carried as the prompt text (the text blocks folded, exactly as
-      // the joined projection the gate reads), so the gate and the preset
-      // merge both read the document — never the pointer line.
-      const assignmentSource = readAssignmentSource(promptText(spec), { harnessDir: harnessRootFor(startDirectory) })
-      carrier = assignmentSource.ok && assignmentSource.text !== promptText(spec)
+      // compass D14 — ONE assignment-source resolution for this start: the
+      // pre-execution gate's own resolution when the call traversed it
+      // (`handOffResolvedCarrier`), else this seam resolves against the
+      // applicable control harness root. A pointer the resolver refuses
+      // propagates through the evaluator (never a containment bypass); a
+      // resolved pointer is re-carried as the prompt text (the text blocks
+      // folded, exactly as the joined projection the gate reads), so the gate
+      // and the preset merge both read the document — never the pointer line.
+      const carrierText = promptText(spec)
+      const assignmentSource = takeResolvedCarrier(spec.parent, carrierText)
+        ?? readAssignmentSource(carrierText, { harnessDir: harnessRootFor(startDirectory) })
+      carrier = assignmentSource.ok && assignmentSource.text !== carrierText
         ? foldPromptText(spec, assignmentSource.text)
         : spec
       decision = evaluateRoleGate({

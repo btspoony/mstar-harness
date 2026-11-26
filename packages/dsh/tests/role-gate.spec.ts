@@ -17,6 +17,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Service, type Context } from '@deepseek-ai/cordis'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -108,6 +109,21 @@ function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void
   expect(typeof write, 'the plugin config must carry a live volatile roleGate reference').toBe('function')
   ;(write as (value: unknown) => void)(mode)
 }
+
+/** The delegation tool call the `tools/pre-execute` listener gates. */
+function subagentCall(prompt: string, agent?: unknown): ToolExecution {
+  return {
+    callId: 'call-1' as ToolExecution['callId'],
+    name: 'subagent',
+    arguments: { description: 'probe', prompt },
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
+    signal: new AbortController().signal,
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
+}
+
+/** The registry's bare default decision (the waterfall's terminal `next()`). */
+const allowNext = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
 /** One activation spec for the fake provider (the non-consumed fields are additive). */
 function specFor(request: RecordedRequest, provider: string = PROVIDER): SubagentActivationSpecView {
@@ -681,6 +697,53 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(0)
   })
+
+  it('(aa) a refused pointer is terminal — no roleGate mode or role exemption softens it', async () => {
+    // `off` is the documented rollback for ordinary gate verdicts; a source
+    // refusal has no verified document, so the start is still refused.
+    const { app, provider, workspace } = await bootWithProvider({ roleGate: 'off' })
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, CANONICAL_PROMPT)
+
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), cwd: workspace }))
+    expect(error.message).toContain('dispatch.assignment.path')
+    expect(error.message).toContain('terminal')
+    expect(provider.starts).toHaveLength(0)
+
+    // A non-harness start directory exempts the ordinary gate, never the
+    // terminal refusal.
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-plain-'))
+    scratchDirs.push(plain)
+    const exempt = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), parent: parentAgent(plain) }))
+    expect(exempt.message).toContain('dispatch.assignment.path')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(ab) a start that traversed pre-execution runs the document the gate decided on, not a second read', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'one-read.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    // The SAME agent object: the delegation tool hands `exec.agent` to the
+    // start seam as `parent`, which is the carrier handoff's key.
+    const caller = parentAgent(workspace)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentCall(pointer, caller), allowNext)
+    expect(decision.kind).toBe('allow')
+
+    // Controlled boundary, no timer: the file is rewritten AFTER the gate's
+    // decision and BEFORE the start seam runs. A second read would start the
+    // child on the rewritten document.
+    writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller }))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
+    expect(sent.agentPreset).toBe(PRESET_ID)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -1067,7 +1130,7 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
     expect(rewritten.endsWith(rest)).toBe(true)
   })
 
-  it('a CRLF document with preceding fields and duplicate role keys repairs without touching unrelated bytes (5A2-03)', () => {
+  it('a CRLF document with preceding fields and duplicate role keys repairs without touching unrelated bytes', () => {
     // `\r\n` line endings through the WHOLE document, with unrelated fields
     // before AND after the role keys: before the span-aware offset fix the
     // rewrite drifted one byte per preceding CRLF line, landing the splice

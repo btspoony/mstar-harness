@@ -1,12 +1,11 @@
 /**
  * The Assignment FRONT MATTER grammar every dispatch-side gate reads: the
- * header-field extractors (`assignmentHeaderValue` / `assignmentHeaderValues`
- * with the shared code-span and first-token normalization), the placeholder
- * guard (`isNaValue`), the plan-id derivation (`planIdOf`), the shape guard
- * (`isAssignmentShaped`), the D16 legacy body-label detection
- * (`legacyAssignmentShape` / `legacyFormatViolation`), the ONE hard-enforcement
- * resolution (`resolveDispatchHard`) and the typed-fields → front-matter-text
- * normalizer (`assignmentTextFromFields`).
+ * header-field extractor (`assignmentHeaderValue` with the shared code-span
+ * and first-token normalization), the placeholder guard (`isNaValue`), the
+ * plan-id derivation (`planIdOf`), the shape guard (`isAssignmentShaped` —
+ * front matter or the engine's ONE D16 legacy recognition), the ONE
+ * hard-enforcement resolution (`resolveDispatchHard`) and the typed-fields →
+ * front-matter-text normalizer (`assignmentTextFromFields`).
  *
  * Module boundary: one responsibility — turn Assignment TEXT (or the host's
  * typed fields) into the front matter values a decision is made from. It makes
@@ -19,80 +18,43 @@
  * re-exports nothing from a sibling and imports no sibling dispatch module.
  */
 import { basename } from 'node:path'
-import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, parseEnforcementFlag } from '@mstar-harness/engine'
-import type { AssignmentFields, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
+import { extractFrontmatterAndBody, legacyAssignmentShape, parseDocumentFrontmatterEntries, parseEnforcementFlag } from '@mstar-harness/engine'
+import type { AssignmentFields, FrontmatterEntry } from '@mstar-harness/engine'
 import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 
-/** `## Assignment` heading marker (shape guard only). */
-const ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m
-
 /** Shape-guard match of one Assignment core front matter key (engine parity:
- * the snake_case key declares the shape; a body-quoted `**Label**` template
- * line never declares it). */
+ * the snake_case key inside the document's own fence declares the shape). */
 const ASSIGNMENT_FM_FIELD_RE = /^[ \t]*(?:execute_as|delegation|task_category)\s*:/m
 
 /**
- * Shape-guard match of a retired body-label core field in ANY of its three
- * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
- * list-prefixed `- **Execute as**:` line (indentation and a numeric or bullet
- * list marker are formatting, never the field; commands validation.ts parity).
+ * True when the document OPENS with a front matter fence that carries a core
+ * key (`execute_as` / `delegation` / `task_category` — the engine
+ * `composeDispatchGate` shape grammar). An unterminated fence counts, so a
+ * malformed document reaches schema validation instead of passing as an
+ * ordinary prompt. The key must live in the FENCE: a `execute_as:` line
+ * quoted in the body is prose, never shape evidence.
+ * @param assignmentText - the carrier text.
  */
-function legacyLabelKey(line: string): string | undefined {
-  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line)
-  return match?.[1]
-}
-
-/**
- * D16 shape detection: true when the document carries its fields in the
- * RETIRED body-label grammar — at least TWO distinct core labels, so a single
- * bolded field line in ordinary prose never shapes a document as an
- * Assignment; the `## Assignment` heading is irrelevant either way (commands
- * `dispatch validate` parity — one detection grammar across every gate).
- */
-export function legacyAssignmentShape(text: string): boolean {
-  if (/^---[ \t]*\r?\n/.test(text)) return false
-  const found = new Set<string>()
-  for (const line of text.split(/\r?\n/)) {
-    const key = legacyLabelKey(line)
-    if (key !== undefined) found.add(key)
-    if (found.size >= 2) return true
-  }
-  return false
-}
-
-/**
- * The D16 legacy-format refusal violation every gate emits for an
- * Assignment-shaped document whose fields live in body lines (the retired
- * format): front matter is the only field contract. The refusal names BOTH
- * recoveries — the front matter rewrite and the `Assignment file:` pointer
- * (compass D14) — so the caller reads the ONE contract out of any gate.
- */
-export function legacyFormatViolation(): ValidationResult {
-  return {
-    ok: false,
-    severity: 'high',
-    code: 'dispatch.assignment.legacy-format',
-    message: 'the Assignment carries its fields as `**Label**` body lines — the retired format; front matter is the only field contract',
-    fix: 'rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home',
-  }
+function frontmatterCarriesCoreKey(assignmentText: string): boolean {
+  if (!assignmentText.startsWith('---\n') && !assignmentText.startsWith('---\r\n')) return false
+  const { frontmatter, fenced } = extractFrontmatterAndBody(assignmentText)
+  return ASSIGNMENT_FM_FIELD_RE.test(fenced ? frontmatter : assignmentText.slice(assignmentText.indexOf('\n') + 1))
 }
 
 /**
  * True when the text is Assignment-shaped for the dispatch gates: front
- * matter carrying a core key (`execute_as` / `delegation` / `task_category`
- * — the engine `composeDispatchGate` shape grammar), a retired body-label
- * shape ({@link legacyAssignmentShape} — the document must be gated, not
- * silently passed), or the `## Assignment` heading of the dsh host-hook
- * record guard.
- *
- * Callers pass whatever text slice suits them: the detection scans the whole
- * input and the fenced/body distinctions are owned inside each leg.
+ * matter carrying a core key ({@link frontmatterCarriesCoreKey}), or the
+ * engine's ONE D16 legacy recognition (`legacyAssignmentShape` — the
+ * document must reach the gate's legacy-format refusal, never pass silently).
+ * A prompt with no front matter is Assignment-shaped ONLY through that
+ * legacy pattern: an `## Assignment` heading or a `**Execute as**:` line in
+ * ordinary prose (a quoted template, a task body) declares nothing, so it
+ * neither records a ledger row nor enters the field gate.
+ * @param assignmentText - the carrier text (whole document).
  */
 export function isAssignmentShaped(assignmentText: string): boolean {
-  if (ASSIGNMENT_FM_FIELD_RE.test(assignmentText)) return true
-  if (legacyAssignmentShape(assignmentText)) return true
-  return ASSIGNMENT_HEADING_RE.test(assignmentText)
+  return frontmatterCarriesCoreKey(assignmentText) || legacyAssignmentShape(assignmentText)
 }
 
 /**
@@ -168,22 +130,6 @@ function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
 }
 
 /**
- * String items of a list-valued front matter entry: flow arrays
- * (`[a, b]`) and `- item` block lists parse to the same string list, so
- * the parallel-track declaration (`worktree_path` / `working_branch` as a
- * list value) is shape-agnostic. A scalar entry yields its single value —
- * one track is the serial norm.
- */
-function listEntryValues(entry: FrontmatterEntry): string[] {
-  if (entry.kind === 'list' && Array.isArray(entry.value)) {
-    return entry.value.filter((item): item is string => typeof item === 'string')
-  }
-  const scalar = scalarEntryValue(entry)
-  return scalar === undefined ? [] : [scalar]
-}
-
-
-/**
  * Parse one Assignment front matter field value by its snake_case key
  * (`parseAssignmentFields` semantics: the fenced front matter block is the
  * only field contract). Returns the trimmed value or undefined when the
@@ -211,30 +157,6 @@ export function assignmentHeaderValue(headerRegion: string, label: string): stri
 export function firstToken(value: string): string | undefined {
   const token = value.split(/\s+/)[0]
   return token === '' ? undefined : token
-}
-
-/**
- * ALL front matter values of one Assignment field key. Parallel tracks
- * declare `worktree_path` / `working_branch` as a LIST value (flow array or
- * block list — the shared parser refuses duplicate keys); empty values are
- * dropped (consistent with {@link assignmentHeaderValue}: an empty value is
- * an absent field, never a malformed track).
- *
- * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
- * slice.
- * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
- * @param label - the field label or snake_case key to read (e.g. `Worktree path`).
- */
-export function assignmentHeaderValues(headerRegion: string, label: string): string[] {
-  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
-  const entry = frontmatterEntriesOf(headerRegion)?.get(key)
-  if (entry === undefined) return []
-  const values: string[] = []
-  for (const item of listEntryValues(entry)) {
-    const value = stripWrappingCodeSpan(item.trim())
-    if (value !== '') values.push(value)
-  }
-  return values
 }
 
 /** A header value that means "no value" (placeholder conventions). Type guard so callers narrow to `string`. Shared with the agent-flow ledger  (one grammar, no copy-paste drift). */

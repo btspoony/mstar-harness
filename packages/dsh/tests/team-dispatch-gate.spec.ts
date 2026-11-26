@@ -22,6 +22,8 @@
  * `PreToolDecision` value: a deny returned WITHOUT `next()` vetoes the call.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { useCleanControlRoot, bootApp, type BootResult } from './harness.ts'
 
@@ -240,6 +242,22 @@ Do the thing.
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(codesOf(advisories[0])).toContain('dispatch.assignment.legacy-format')
+  })
+
+  it('a team carrier naming an out-of-home pointer is denied in the default mode (same terminal refusal)', async () => {
+    // The team carriers route through the SAME core as `subagent`, so a
+    // source refusal is a veto here too — not an advisory.
+    const app = booted = await bootApp()
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, '---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\n---\n\n## Task\n\nDo the thing.\n')
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(`Assignment file: ${outside}`), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(decision.kind === 'deny' && decision.reason).toContain('(team_task_create)')
+    expect(advisories).toHaveLength(0)
   })
 })
 

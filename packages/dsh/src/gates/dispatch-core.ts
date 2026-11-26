@@ -15,17 +15,30 @@ import {
   assignmentHeaderRegion,
   composeDispatchGate,
   isReadOnlyAssignmentRole,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentFields,
 } from '@mstar-harness/engine'
 import type { AssignmentSourceResult, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { legacyAssignmentShape, legacyFormatViolation } from './dispatch-assignment.ts'
 import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isRootLikeAgent } from './steering.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { worktreeL1Violations, worktreeL2Violations } from './dispatch-worktree.ts'
+
+/**
+ * True when any violation is a TERMINAL refusal — a verdict independent of
+ * enforcement (the engine `ValidationResult.terminal` contract, emitted for
+ * every `readAssignmentSource` refusal): there is no verified document to
+ * evaluate, so a caller that can refuse an action MUST refuse it whether or
+ * not the deployment asked for `hard`.
+ * @param violations - the verdict's violation list.
+ */
+export function hasTerminalRefusal(violations: readonly ValidationResult[]): boolean {
+  return violations.some((violation) => violation.terminal === true)
+}
 
 /**
  * The dispatching session's stable id, when the seam exposes it (dsh
@@ -128,7 +141,10 @@ export async function dispatchGateCore(
   // pointer text would report field violations on the wrong body.
   if (!source.ok) {
     return {
-      violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }],
+      // Terminal by contract: every `readAssignmentSource` refusal means no
+      // verified document exists, so the refusal is the verdict — no
+      // enforcement setting and no role exemption may soften it.
+      violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix, terminal: true }],
       writable: undefined,
       text: prompt,
     }
@@ -159,9 +175,15 @@ export async function dispatchGateCore(
   // settings save applies on the next dispatch) — and an explicitly blank
   // value still fails closed.
   violations.push(
-    ...composeDispatchGate(text, { caller: dispatchCallerOf(config, callerAgent), callerRequired: true, writable }).violations.filter(
-      (v) => !(legacy && v.code === 'document.frontmatter.absent'),
-    ),
+    ...composeDispatchGate(text, {
+      caller: dispatchCallerOf(config, callerAgent),
+      callerRequired: true,
+      writable,
+      // Pointer provenance: a resolved `Assignment file:` carrier commits to
+      // the Assignment contract, so empty or unrelated file content is ONE
+      // invalid Assignment — never a silent non-Assignment pass.
+      fileCarrier: source.path !== undefined,
+    }).violations.filter((v) => !(legacy && v.code === 'document.frontmatter.absent')),
   )
   return { violations, writable, text }
 }

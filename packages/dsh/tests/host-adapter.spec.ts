@@ -431,6 +431,21 @@ describe('beforeDispatch — dispatch gate validation path (same codes as tools/
     expect(result.violations.map((v) => v.code)).toContain('assignment.field.branch-missing')
   })
 
+  it('an out-of-home pointer is a terminal refusal at the exec-less hook (hardBlocked with no hard setting)', async () => {
+    booted = await bootApp()
+    const adapter = makeAdapter()
+    const outside = join(booted.root, 'outside-assignment.md')
+    writeFileSync(outside, MAIN_FIELDS_TEXT)
+
+    const result = await adapter.beforeDispatch(`Assignment file: ${outside}`)
+
+    // No enforcement is configured: an ordinary violation would be advisory,
+    // but a source refusal has no verified document to be advisory about.
+    expect(result.ok).toBe(false)
+    expect(result.hardBlocked).toBe(true)
+    expect(result.violations.map((v) => v.code)).toContain('dispatch.assignment.path')
+  })
+
   it('parsed AssignmentFields form → identical codes to the canonical text form', async () => {
     booted = await bootApp()
     const adapter = makeAdapter()
@@ -657,14 +672,14 @@ describe('dispatchGate — D4 session hint derivation', () => {
 })
 
 /* ===========================================================================
- * 5A2-02 — ONE resolution per dispatch: the first read (success OR refusal)
+ * ONE resolution per dispatch: the first read (success OR refusal)
  * is the only source for every stage. Deterministic regression seam: the
  * gate chain is microtask-only, so the provable swap lands BETWEEN the
  * first resolution and the decision via `dispatchGate`'s single-resolution
  * input — exactly what the `tools/pre-execute` listener threads in.
  * ========================================================================== */
 
-describe('dispatchGate — ONE resolution per dispatch (5A2-02 swap and first-refusal regressions)', () => {
+describe('dispatchGate — ONE resolution per dispatch (swap and first-refusal regressions)', () => {
   /** An agent carrying the durable identity the binding store is keyed by. */
   const sessionAgent = (sessionId: string, cwd: string): unknown =>
     ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
