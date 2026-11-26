@@ -22,7 +22,7 @@ import {
   readDashboardView,
   resolveDashboardRoute,
 } from "./store-read.js";
-import type { DashboardView } from "@mstar-harness/engine";
+import type { DashboardView, ProjectListDTO } from "@mstar-harness/engine";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated.js";
 
 /** The exact CSP the plan fixes; identical on every response. */
@@ -113,10 +113,11 @@ function escapeHtmlAttribute(value: string): string {
 async function assertProjectExists(harnessDir: string, projectId: string): Promise<void> {
   const envelope = await readDashboardView({
     context: { harnessDir },
-    view: "roadmap",
-    params: { project: projectId },
+    view: "projects",
+    params: {},
   });
-  if (envelope.data === null) {
+  const projects = envelope.data as ProjectListDTO;
+  if (!projects.items.some((item) => item.project.id === projectId)) {
     throw new Error(`Unknown project ${JSON.stringify(projectId)}: no catalog project row exists. ` + "Check the id with `mstar catalog list` and retry.");
   }
 }

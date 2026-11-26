@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, reviewRoadmapImport, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
+import { captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -400,7 +400,7 @@ describe("API over a real store", () => {
   });
 
   test("traversal and unknown paths are refused without touching the filesystem", async () => {
-    for (const pathname of ["/api/issues/../../etc/passwd", "/api/project", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path"]) {
+    for (const pathname of ["/api/issues/../../etc/passwd", "/api/project", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path", "/api/roadmap"]) {
       const res = await raw(new URL(`http://127.0.0.1:${new URL(server.url).port}${pathname}`));
       expect([400, 404]).toContain(res.status);
       const body = JSON.parse(res.body) as { error: { code: string } };
@@ -419,7 +419,6 @@ describe("API over a real store", () => {
       [`/api/issues?q=${"x".repeat(201)}`, 400, "at most 200 characters"],
       ["/api/issues?limit=201", 400, "limit must be an integer between 1 and 200"],
       ["/api/issues?bogus=1", 400, "not a supported issues query parameter"],
-      ["/api/roadmap", 400, "requires a project query parameter"],
     ];
     for (const [pathname, status, message] of cases) {
       const res = await raw(`http://127.0.0.1:${new URL(server.url).port}${pathname}`);
@@ -546,28 +545,14 @@ describe("dashboard collaboration disclosure", () => {
   });
 });
 
-describe("roadmap authority API", () => {
-  test("serves imported content without a projection or source file", async () => {
-    const { dir, context } = await workspace("roadmap-authority-");
-    await registerCatalogEntity(context, {
-      kind: "project", id: "proj-roadmap", title: "Roadmap", rootKind: "projects", relativePath: "proj-roadmap",
-    }, { operationId: "register-roadmap-api", actor: "dashboard-test" });
-    const source = join(dir, "roadmap.md");
-    writeFileSync(source, "---\nproject_id: proj-roadmap\ntitle: Roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nAuthority survives source removal.\n\n## Notes\n\nVisible explanatory content.\n");
-    const review = await reviewRoadmapImport(context, "proj-roadmap", source);
-    await importRoadmapAuthority(context, review, { operationId: "import-roadmap-api" });
-    unlinkSync(source);
-
-    const server = await start(dir, { project: "proj-roadmap" });
+describe("the retired roadmap route", () => {
+  test("answers an unrouted /api/roadmap with the not-found envelope", async () => {
+    const { dir } = await workspace("roadmap-route-retired-");
+    const server = await start(dir);
     try {
-      const response = await raw(new URL("/api/roadmap?project=proj-roadmap", server.url).href);
-      expect(response.status).toBe(200);
-      const envelope = JSON.parse(response.body) as {
-        data: { authority: { state: string }; content: { contentMarkdown: string; sections: Array<{ heading: string }> } };
-      };
-      expect(envelope.data.authority.state).toBe("present");
-      expect(envelope.data.content.contentMarkdown).toContain("Authority survives source removal.");
-      expect(envelope.data.content.sections.map((section) => section.heading)).toContain("Notes");
+      const response = await raw(new URL("/api/roadmap?project=any", server.url).href);
+      expect(response.status).toBe(404);
+      expect((JSON.parse(response.body) as { error: { code: string } }).error.code).toBe("not-found");
     } finally {
       await server.close();
     }

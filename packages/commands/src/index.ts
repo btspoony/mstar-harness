@@ -26,7 +26,6 @@ export { getWorkflowCommandDefinitions } from "./families/workflow.js";
 export { getIssueCommandDefinitions } from "./families/issue.js";
 export { getIssueSyncCommandDefinitions } from "./families/issue-sync.js";
 export { getCatalogCommandDefinitions } from "./families/catalog.js";
-export { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 export { getStoreCommandDefinitions } from "./families/store.js";
 export { getExecutionCommandDefinitions } from "./families/execution.js";
 export { getSddCommandDefinitions, failed as sddFailed } from "./families/sdd.js";

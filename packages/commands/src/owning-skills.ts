@@ -15,7 +15,6 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   milestone: "mstar-project-governance",
   project: "mstar-project-governance",
   catalog: "mstar-conventions",
-  roadmap: "mstar-project-governance",
   store: "mstar-conventions",
   // why: The remote lane's procedure (provider-authoritative collaboration driven by the host's
   // Linear MCP) is owned by the skill that documents it; other store verbs keep mstar-conventions.
