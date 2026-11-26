@@ -3,8 +3,6 @@
 Status: proposed — recorded before implementation: nothing is removed and `mstar planboard` does not exist until the implementing plan lands.
 Date: 2026-11-26
 
-Supersedes: 2026-10-02-roadmap-content-authority.md
-
 Scope: the roadmap domain — `project_roadmaps` and its Markdown content authority, the `mstar roadmap` family, the dashboard `roadmap` view and the surfaces that read it, the remote snapshot's `project.roadmap` member, the `roadmap.*` codes and the `roadmap` catalog document kind — and its replacement, `{HARNESS_DIR}/planboard.md` with `mstar planboard check`. Milestones, issues, the iteration compass and the `mstar milestone` family keep their authority.
 
 ## Problem
@@ -26,6 +24,8 @@ Keeping it costs about 1,700 lines — engine roadmap-store/content with its tes
 Without a decision the same divergence ships in 5.0: the collaboration cutover, the remote fidelity contract and the projection write point would each carry a document no reader trusts, while iteration start would still open it first to learn what comes next — the one question none of the three records answers. That ordering has no other home: the issue list sorts by severity and project, a milestone orders goals rather than issues, and the compass `## Roadmap Position` belongs to a single iteration.
 
 ## Proposal
+
+This record supersedes the [2026-10-02 record](../../implemented/architecture/2026-10-02-roadmap-content-authority.md) once it is promoted: the same change moves that record to `archived/architecture/` with an `Archived:` line, per the [superseded-records-archive record](../process/2026-11-26-superseded-records-archive.md). While this record is proposed, the 2026-10-02 record stays in `implemented/` untouched.
 
 ### Remove the roadmap domain
 
