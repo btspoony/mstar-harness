@@ -795,7 +795,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               ? first!.message
               : `${failures.length} assignment files declare unreadable front matter \u2014 ${first!.message}`,
             { failures: failures.map(({ code, message }) => ({ code, message })), assignments },
-            "Fix the front matter of the named assignment file (a `---`-fenced block with plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment with every seat assignment file so the pack is compared as a whole.",
+            "Fix the front matter of the named assignment file (a `---`-fenced block with plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file> <assignment-file> with one path per seat so the pack is compared as a whole.",
           );
         }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
@@ -803,7 +803,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         ];
         for (const { file, assignment } of rows) {
           const missing = fields.filter(({ key }) => assignment[key] === "");
-          if (missing.length) return refusal(id, "qc.alignment.field.missing", `${file}: missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), file, assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment with every seat assignment file.");
+          if (missing.length) return refusal(id, "qc.alignment.field.missing", `${file}: missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), file, assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file> <assignment-file> with one path per seat.");
         }
         const gate = assertQcAlignment(assignments);
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");
