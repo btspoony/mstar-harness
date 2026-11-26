@@ -45,6 +45,7 @@ import {
   readAppliedMigrations,
   readCollaborationFence,
   readStoreAuthority,
+  upgradeStore,
   validateAppliedMigrations,
   type StoreContext,
 } from "./store-db.js";
@@ -168,13 +169,14 @@ const ROADMAP_CONTENT =
   "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
 
 /**
- * invariant: A real SCHEMA-21 combined source (the cutover floor): collaboration rows, a catalog
- * pin with its cross-domain foreign key, a recorded session and an execution row. The fence must
- * advance it to the current schema inside its own transaction.
+ * invariant: A real combined source at this iteration's PRE-CUTOVER schema (one below the
+ * current): collaboration rows, a catalog pin with its cross-domain foreign key, a recorded
+ * session and an execution row. It is upgraded through the public `upgradeStore` before
+ * planning, because a source below the cutover floor is refused.
  */
-function seedSchema21Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
+function seedSchemaPreFloorSource(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
   const context = contextAt(repo);
-  const db = historicalStore(context.harnessDir, 21);
+  const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
   try {
     db.exec(`
 insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
@@ -418,6 +420,20 @@ function ids(rows: Array<Record<string, unknown>>, column: string): string[] {
 }
 
 describe("collaboration cutover", () => {
+  test("a combined source below the cutover source floor is refused with the store-upgrade recovery", async () => {
+    // invariant: The source floor is the CURRENT schema: extraction copies the collaboration
+    // tables' exact current columns, so a source one migration behind is not extractable and is
+    // told to run the public `store upgrade` - the fence advances nothing. A source AT the floor
+    // (the current schema, as every seeded cutover source holds) is extractable without one.
+    const repo = makeRepo("https://github.com/acme/cutover-below-floor.git");
+    const context = contextAt(repo);
+    const db = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
+    db.close();
+    const refusal = await refusalOf(() => planCollaborationCutover(context));
+    expect(refusal.code).toBe("collaboration.cutover-required");
+    expect(refusal.message).toContain("store upgrade");
+  });
+
   test("stage copies exact keys, history, foreign keys and revisions without activating", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-stage.git");
     const source = await seedSource(repo);
@@ -1506,11 +1522,14 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
   });
 
   test("the fence advances a schema-20 source and preserves pins, history and execution rows", async () => {
-    const repo = makeRepo("https://github.com/acme/cutover-schema21.git");
-    const source = seedSchema21Source(repo);
+    const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
+    const source = seedSchemaPreFloorSource(repo);
+    // invariant: A source below the cutover floor must reach it through the public upgrade before
+    // planning; the seed's own schema version is derived, never pinned.
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: 21, revision: 7, catalogRevision: 3 });
+    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: MIGRATIONS.length, revision: 7, catalogRevision: 3 });
 
     const pinQuery = `select ${source.pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`;
     const before = await openStore(source.context, "read");
@@ -1532,16 +1551,17 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       cutoverOptions(source.context, manifest.source),
     );
     expect(receipt.phase).toBe("active");
-    expect(receipt.source.schemaVersion).toBe(21);
+    expect(receipt.source.schemaVersion).toBe(MIGRATIONS.length);
 
-    // note: The source advanced through the remaining migration inside the fence transaction.
+    // note: The source reached the current schema through the public upgrade before planning; the
+    // fence validates it and advances nothing.
     const after = await openStore(source.context, "read");
     try {
       const schema = after.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
       expect(schema.v).toBe(MIGRATIONS.length);
       expect(readCollaborationFence(after.db)).toMatchObject({
         manifestId: manifest.manifestId,
-        sourceSchemaVersion: 21,
+        sourceSchemaVersion: MIGRATIONS.length,
         sourceRevision: 7,
         sourceCatalogRevision: 3,
       });
@@ -1571,7 +1591,8 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
 
   test("a fence commit failure is reported as unconfirmed, never as unchanged", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-commit-unconfirmed.git");
-    const source = seedSchema21Source(repo);
+    const source = seedSchemaPreFloorSource(repo);
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1605,8 +1626,9 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
   });
 
   test("a failed fence rolls the schema-20 source back and publishes nothing", async () => {
-    const repo = makeRepo("https://github.com/acme/cutover-schema21-rollback.git");
-    const source = seedSchema21Source(repo);
+    const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
+    const source = seedSchemaPreFloorSource(repo);
+    expect(await upgradeStore(source.context)).toEqual({ schemaVersion: MIGRATIONS.length });
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
@@ -1637,12 +1659,12 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
       activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
     ).rejects.toMatchObject({ code: "store.corrupt" });
 
-    // note: The source is readable, still at schema 21, with every row and the pin's
+    // note: The source is readable, back at its seeded pre-cutover schema, with every row and the pin's
     // foreign key intact and no fence evidence.
     const restored = await openStore(source.context, "read");
     try {
       const schema = restored.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
-      expect(schema.v).toBe(21);
+      expect(schema.v).toBe(MIGRATIONS.length);
       expect(readCollaborationFence(restored.db)).toBeNull();
       expect(restored.db.prepare(pinQuery).all()).toEqual(pinsBefore);
       expect(restored.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toHaveLength(0);
@@ -1665,5 +1687,50 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     expect(
       (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
     ).toBe("active");
+  });
+
+  test("a fenced combined store upgrades past the effort migration the fence's drop left behind", async () => {
+    // invariant: The fence moves every collaboration table to the lane and drops the local copy,
+    // `project_milestones` among them. A combined store fenced by a build that predates the effort
+    // migration therefore records a version whose alter still lies ahead of it, and that alter must
+    // not require the table the fence legitimately removed.
+    const repo = makeRepo("https://github.com/acme/cutover-fenced-upgrade.git");
+    const context = contextAt(repo);
+    const fenced = historicalStore(context.harnessDir, MIGRATIONS.length - 1);
+    try {
+      fenced.exec(
+        "insert into collaboration_cutover(id, manifest_id, manifest_digest, source_store_id, source_epoch, " +
+          "source_schema_version, source_revision, source_catalog_revision, target_store_id, target_epoch, " +
+          "backup_path, fenced_at) values (1, 'manifest-one', 'digest-one', 'source-store', 1, 20, 7, 3, " +
+          "'target-store', 1, '/tmp/pre-fence.db', '2026-11-21T00:00:00.000Z')",
+      );
+      fenced.exec("drop table project_milestones");
+    } finally {
+      fenced.close();
+    }
+
+    expect(await upgradeStore(context)).toMatchObject({ schemaVersion: MIGRATIONS.length });
+
+    const after = new DatabaseSync(join(context.harnessDir, "store.db"));
+    try {
+      // invariant: The migration did not resurrect the table the fence removed: its rows and its
+      // shape belong to the collaboration lane, whose own ladder applies the same alteration.
+      expect(
+        after.prepare("select count(*) as n from sqlite_master where type='table' and name='project_milestones'").get(),
+      ).toEqual({ n: 0 });
+    } finally {
+      after.close();
+    }
+
+    // invariant: The skip is the FENCE's, not a missing table's: the same absence without fence
+    // evidence is damage and still refuses, so the conditional body cannot mask a broken store.
+    const damaged = contextAt(makeRepo("https://github.com/acme/cutover-unfenced-damage.git"));
+    const unfenced = historicalStore(damaged.harnessDir, MIGRATIONS.length - 1);
+    try {
+      unfenced.exec("drop table project_milestones");
+    } finally {
+      unfenced.close();
+    }
+    await expect(upgradeStore(damaged)).rejects.toMatchObject({ code: "store.corrupt" });
   });
 });

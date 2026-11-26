@@ -53,7 +53,7 @@ test("milestone commands use store revision CAS with replay", async () => {
  const list=await call("milestone.list",{project:"proj"}); expect(list.status).toBe("ok"); expect((list.data as {data:{milestones:Array<{name:string}>}}).data.milestones.map(row=>row.name)).toEqual(["First"]);
  const bad=await call("milestone.update",{project:"proj",id:receipt.milestoneId,expectStore:2,operation:"bad"}); expect(bad.exitCode).toBe(2);
 });
-test("name-only update leaves target optional and false clearTarget does not select a patch", async () => {
+test("name-only update leaves effortSessions optional and false clearEffortSessions does not select a patch", async () => {
  const cwd = join(root, "update-patch");
  const harness = join(cwd, ".mstar");
  mkdirSync(cwd, { recursive: true });
@@ -74,7 +74,7 @@ test("name-only update leaves target optional and false clearTarget does not sel
  }, invocation(cwd));
  expect(renamed.status).toBe("ok");
  const noPatch = await executeCommand("milestone.update", {
-  project: "proj-update", id: receipt.milestoneId, clearTarget: false, expectStore: receipt.storeRevision + 1, operation: "false-clear",
+  project: "proj-update", id: receipt.milestoneId, clearEffortSessions: false, expectStore: receipt.storeRevision + 1, operation: "false-clear",
  }, invocation(cwd));
  expect(noPatch.status).toBe("usage");
  const current = await executeCommand("milestone.list", {
@@ -83,7 +83,7 @@ test("name-only update leaves target optional and false clearTarget does not sel
  expect(current.status).toBe("ok");
  if (current.status === "ok") {
   expect(current.data).toMatchObject({
-   data: { milestones: [expect.objectContaining({ name: "After", target: null })] },
+   data: { milestones: [expect.objectContaining({ name: "After", effortSessions: null })] },
   });
  }
 });
@@ -104,14 +104,21 @@ test("shared admission distinguishes zero, false, and true selectors at real mil
  const update=(overrides:Record<string,unknown>)=>executeCommand("milestone.update",{
   project:"proj-admission",id:milestoneId,expectStore:storeRevision,operation:"update-admission",harness,...overrides,
  },invocation(cwd));
- const noPatch=await update({clearTarget:false});
+ const noPatch=await update({clearEffortSessions:false});
  expect(noPatch.details?.diagnostics).toContainEqual(expect.objectContaining({
   code:"alternative-required",expected:expect.stringContaining("at least one of"),
  }));
  const zero=await update({ordinal:0});
  expect(zero.status).toBe("ok");
- const exclusive=await update({target:"2026-10-08",clearTarget:true});
+ const exclusive=await update({effortSessions:3,clearEffortSessions:true});
  expect(exclusive.details?.diagnostics).toContainEqual(expect.objectContaining({code:"exclusive"}));
+
+// why: an invalid value the schema admits (a blank name) reaches the engine's own
+// milestone.invalid-input refusal; its recovery names the effort flag (A-refusal).
+ const blankName=await update({name:"   ",effortSessions:3});
+ expect(blankName).toMatchObject({status:"refused",code:"milestone.invalid-input"});
+ expect(blankName.message).toContain("Name, effort sessions, or ordinal is invalid.");
+ expect((blankName.details as {recovery?:string}|undefined)?.recovery).toContain("--effort-sessions <n>");
 
 /** The grouped admission diagnostics of a usage envelope, or a failed read. */
 const usageDiagnostics=(envelope:{status:string;details?:Record<string,unknown>})=>{

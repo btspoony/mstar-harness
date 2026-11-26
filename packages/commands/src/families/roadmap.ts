@@ -157,7 +157,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number | null): stri
     "",
   ];
   for (const milestone of roadmap.milestones.milestones) {
-    lines.push(`## ${escapeMarkdown(milestone.name)}`, "", `Target: ${escapeMarkdown(milestone.target ?? "no target")} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
+    lines.push(`## ${escapeMarkdown(milestone.name)}`, "", `Effort: ${milestone.effortSessions === null ? "unestimated" : `${milestone.effortSessions} standard sessions`} · Status: ${milestone.status} · Issues: ${milestone.totalIssues} total, ${milestone.openIssues} open, ${milestone.resolvedIssues} resolved, ${milestone.otherRetiredIssues} other retired`, "");
     const issues = roadmap.milestones.issues.filter(issue => issue.milestoneId === milestone.milestoneId);
     if (!issues.length) lines.push("No linked issues.", "");
     for (const issue of issues) lines.push(`- **${escapeMarkdown(issue.id)} — ${escapeMarkdown(issue.title)}** (${issue.disposition}): ${escapeMarkdown(issue.acceptance) || "No acceptance prose."}`);

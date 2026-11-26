@@ -377,7 +377,7 @@ describe("catalog and roadmap command families", () => {
   test("milestone grouped roadmap export retains absent prose and escapes stored text", async () => {
     const { cwd, harness } = await activeFixture("milestone-roadmap-export");
     const add = getMilestoneCommandDefinitions().find(item => item.id === "milestone.add")!;
-    const added = await add.execute({ project: "proj", name: "Build | *[link]<tag>`code`", ordinal: 0, expectStore: 1, operation: "milestone-add", harness }, invocation(cwd));
+    const added = await add.execute({ project: "proj", name: "Build | *[link]<tag>`code`", ordinal: 0, effortSessions: 3, expectStore: 1, operation: "milestone-add", harness }, invocation(cwd));
     expect(added.status).toBe("ok");
     const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "markdown", harness }, invocation(cwd));
     expect(exported.status).toBe("ok");
@@ -386,6 +386,8 @@ describe("catalog and roadmap command families", () => {
       expect(exported.data).toContain('title: "Project"');
       expect(exported.data).toContain('status: "active"');
       expect(exported.data).toContain("created_at: ");
+      expect(exported.data).toContain("Effort: 3 standard sessions");
+      expect(exported.data).not.toContain("Target:");
       const file = join(cwd, "roadmap.md");
       writeFileSync(file, String(exported.data));
       const roundTrip = await roadmap["roadmap.replace"]!.execute({ project: "proj", file, expectProject: 1, expectRoadmap: "absent", operation: "roadmap-export-roundtrip", harness }, invocation(cwd));

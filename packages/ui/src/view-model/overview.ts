@@ -7,7 +7,7 @@
  *    `done/total`, status);
  *  - open residuals by severity: **five rows always**, zeros included, with a
  *    reconciling total;
- *  - **up to three** milestones (status, target, progress, open count);
+ *  - **up to three** milestones (status, effort sessions, progress, open count);
  *  - the latest iteration (id, compass status, plan count, the five gate steps
  *    with the current one marked);
  *  - the issue-flow series: cumulative captured and retired per dated bucket, the
@@ -170,7 +170,7 @@ export type MilestoneRow = {
   status: string | null;
   /** The status dot's tone: the prototype draws the milestone's state as a dot alone. */
   statusTone: Tone;
-  target: string | null;
+  effortSessions: number | null;
   /**
    * `retired of total` — the prototype's numerator is `total - open`, which counts every
    * retired issue (resolved and otherwise), not only the resolved ones.
@@ -276,7 +276,7 @@ export function milestoneRow(milestone: {
   milestoneId: string;
   name: string;
   status: string | null;
-  target: string | null;
+  effortSessions: number | null;
   totalIssues: number;
   resolvedIssues: number;
   openIssues: number;
@@ -286,7 +286,7 @@ export function milestoneRow(milestone: {
     name: milestone.name,
     status: milestone.status,
     statusTone: milestoneStatusTone(milestone.status),
-    target: milestone.target,
+    effortSessions: milestone.effortSessions,
     progress:
       milestone.totalIssues === 0
         ? null

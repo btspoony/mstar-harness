@@ -271,7 +271,7 @@ export class MstarPanelSnapshotClient {
     sessionId: string
     cwd: string
     projectId: string
-    input: { name: string; target: string | null; ordinal: number }
+    input: { name: string; effortSessions: number | null; ordinal: number }
     mutation: { operationId: string; expectedStoreRevision: number }
   }): Promise<MilestoneWriteResult> {
     return this.milestoneWrite(MILESTONE_ADD_ENDPOINT, args as Record<string, unknown>)
@@ -283,7 +283,7 @@ export class MstarPanelSnapshotClient {
     cwd: string
     projectId: string
     milestoneId: string
-    patch: { name?: string; target?: string | null; ordinal?: number; status?: string }
+    patch: { name?: string; effortSessions?: number | null; ordinal?: number; status?: string }
     mutation: { operationId: string; expectedStoreRevision: number }
   }): Promise<MilestoneWriteResult> {
     return this.milestoneWrite(MILESTONE_UPDATE_ENDPOINT, args as Record<string, unknown>)

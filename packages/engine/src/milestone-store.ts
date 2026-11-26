@@ -8,9 +8,9 @@ import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
 
 export type ProjectMilestoneStatus = "planned" | "active" | "delivered" | "dropped";
-export type ProjectMilestoneDTO = { milestoneId: string; projectId: string; name: string; target: string | null; status: ProjectMilestoneStatus; ordinal: number; revision: number; createdAt: string; updatedAt: string; totalIssues: number; openIssues: number; resolvedIssues: number; otherRetiredIssues: number };
-export type MilestoneAdd = { projectId: string; name: string; target: string | null; ordinal: number };
-export type MilestonePatch = { name?: string; target?: string | null; ordinal?: number; status?: ProjectMilestoneStatus };
+export type ProjectMilestoneDTO = { milestoneId: string; projectId: string; name: string; effortSessions: number | null; status: ProjectMilestoneStatus; ordinal: number; revision: number; createdAt: string; updatedAt: string; totalIssues: number; openIssues: number; resolvedIssues: number; otherRetiredIssues: number };
+export type MilestoneAdd = { projectId: string; name: string; effortSessions: number | null; ordinal: number };
+export type MilestonePatch = { name?: string; effortSessions?: number | null; ordinal?: number; status?: ProjectMilestoneStatus };
 export type MilestoneMutation = { operationId: string; expectedStoreRevision: number };
 export type MilestoneReceipt = { projectId: string; milestoneId: string; revision: number; storeRevision: number; changed: boolean };
 export type MilestoneAssignment = { projectId: string; milestoneId: string | null; reason: string };
@@ -35,12 +35,7 @@ const OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => va
 function project(db: StoreDb, projectId: string): void {
   if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId)) fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
 }
-function validTarget(target: unknown): target is string | null {
-  if (target === null) return true;
-  if (typeof target !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(target)) return false;
-  const date = new Date(`${target}T00:00:00.000Z`);
-  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === target;
-}
+function validEffortSessions(value: unknown): value is number | null { return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 1); }
 function validName(name: unknown): name is string { return typeof name === "string" && name.trim().length > 0; }
 function validOrdinal(ordinal: unknown): ordinal is number { return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal >= 0; }
 /** note: The status transitions one milestone update admits, shared by both transports. */
@@ -196,7 +191,7 @@ function requestHash(value: unknown): string { return createHash("sha256").updat
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
   guard(db);
   if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
-  if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+  if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
   const normalizedPatch = { ...patch, ...(patch.name === undefined ? {} : { name: patch.name.trim() }) };
   const hash = requestHash({ domain: "milestone", action: adding ? "add" : "update", projectId, milestoneId: adding ? null : milestoneId, patch: normalizedPatch, expectedStoreRevision: mutation.expectedStoreRevision });
   const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
@@ -204,16 +199,16 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
   project(db, projectId);
   const store = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
   if (store.revision !== mutation.expectedStoreRevision) fail("milestone.revision-conflict", "Store revision changed since it was observed.");
-  if (adding ? !validName(patch.name) || !validOrdinal(patch.ordinal) || !validTarget(patch.target) : (patch.name !== undefined && !validName(patch.name)) || (patch.target !== undefined && !validTarget(patch.target)) || (patch.ordinal !== undefined && !validOrdinal(patch.ordinal))) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+  if (adding ? !validName(patch.name) || !validOrdinal(patch.ordinal) || !validEffortSessions(patch.effortSessions) : (patch.name !== undefined && !validName(patch.name)) || (patch.effortSessions !== undefined && !validEffortSessions(patch.effortSessions)) || (patch.ordinal !== undefined && !validOrdinal(patch.ordinal))) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
   const now = new Date().toISOString();
   let revision = 1;
   let changed = true;
   if (adding) {
     milestoneId = randomUUID();
     const add = patch as MilestoneAdd;
-    db.prepare("insert into project_milestones(milestone_id,project_id,name,target,status,ordinal,revision,created_at,updated_at) values(?,?,?,?,'planned',?,1,?,?)").run(milestoneId, projectId, add.name.trim(), add.target, add.ordinal, now, now);
+    db.prepare("insert into project_milestones(milestone_id,project_id,name,effort_sessions,status,ordinal,revision,created_at,updated_at) values(?,?,?,?,'planned',?,1,?,?)").run(milestoneId, projectId, add.name.trim(), add.effortSessions, add.ordinal, now, now);
   } else {
-    const row = db.prepare("select name,target,status,ordinal,revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { name:string; target:string|null; status:ProjectMilestoneStatus; ordinal:number; revision:number } | undefined;
+    const row = db.prepare("select name,effort_sessions as effortSessions,status,ordinal,revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { name:string; effortSessions:number|null; status:ProjectMilestoneStatus; ordinal:number; revision:number } | undefined;
     if (!row) throw new MilestoneError("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
     const update = patch as MilestonePatch;
     const nextStatus = update.status ?? row.status;
@@ -229,11 +224,11 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
       if (counts.open) fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
     }
     const name = update.name === undefined ? row.name : update.name.trim();
-    const target = update.target === undefined ? row.target : update.target;
+    const effortSessions = update.effortSessions === undefined ? row.effortSessions : update.effortSessions;
     const ordinal = update.ordinal === undefined ? row.ordinal : update.ordinal;
-    changed = name !== row.name || target !== row.target || ordinal !== row.ordinal || nextStatus !== row.status;
+    changed = name !== row.name || effortSessions !== row.effortSessions || ordinal !== row.ordinal || nextStatus !== row.status;
     revision = row.revision + (changed ? 1 : 0);
-    if (changed) db.prepare("update project_milestones set name=?,target=?,ordinal=?,status=?,revision=?,updated_at=? where milestone_id=? and project_id=?").run(name,target,ordinal,nextStatus,revision,now,milestoneId,projectId);
+    if (changed) db.prepare("update project_milestones set name=?,effort_sessions=?,ordinal=?,status=?,revision=?,updated_at=? where milestone_id=? and project_id=?").run(name,effortSessions,ordinal,nextStatus,revision,now,milestoneId,projectId);
   }
   if (changed) db.prepare("update collaboration_meta set revision=revision+1 where id=1").run();
   const current = db.prepare("select revision from collaboration_meta where id=1").get() as {revision:number};
@@ -244,7 +239,7 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
 export async function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
   if (resolveCollaborationLocation(context).mode === "remote") {
     if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
-    if (!validName(input.name) || !validOrdinal(input.ordinal) || !validTarget(input.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (!validName(input.name) || !validOrdinal(input.ordinal) || !validEffortSessions(input.effortSessions)) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
     const at = new Date().toISOString();
     const milestoneId = milestoneIdForOperation(mutation.operationId);
     return queueMilestoneWrite(
@@ -253,12 +248,12 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
       mutation.operationId,
       milestoneId,
       mutation.expectedStoreRevision,
-      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), target: input.target, ordinal: input.ordinal, expectedStoreRevision: mutation.expectedStoreRevision } },
+      { verb: "milestone-add", request: { projectId: input.projectId, name: input.name.trim(), effortSessions: input.effortSessions, ordinal: input.ordinal, expectedStoreRevision: mutation.expectedStoreRevision } },
       (current) => ({
         ...current,
         milestones: [
           ...observedMilestones(current),
-          { milestoneId, name: input.name.trim(), target: input.target, status: "planned", ordinal: input.ordinal, revision: 1, createdAt: at, updatedAt: at },
+          { milestoneId, name: input.name.trim(), effortSessions: input.effortSessions, status: "planned", ordinal: input.ordinal, revision: 1, createdAt: at, updatedAt: at },
         ],
       }),
     );
@@ -266,12 +261,12 @@ export async function addMilestone(context: StoreContext, input: MilestoneAdd, m
   return write(context, db => mutate(db,input.projectId,"",input,mutation,true));
 }
 export async function updateMilestone(context: StoreContext, projectId: string, milestoneId: string, patch: MilestonePatch, mutation: MilestoneMutation): Promise<MilestoneReceipt> {
-  if (!patch || !Object.keys(patch).length || Object.keys(patch).some(key => !["name","target","ordinal","status"].includes(key))) return Promise.reject(new MilestoneError("milestone.invalid-input", "A non-empty milestone patch is required."));
+  if (!patch || !Object.keys(patch).length || Object.keys(patch).some(key => !["name","effortSessions","ordinal","status"].includes(key))) return Promise.reject(new MilestoneError("milestone.invalid-input", "A non-empty milestone patch is required."));
   if (resolveCollaborationLocation(context).mode === "remote") {
     if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim()) fail("milestone.invalid-input", "A non-empty operationId is required.");
-    if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
-    if (patch.target !== undefined && !validTarget(patch.target)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
-    if (patch.ordinal !== undefined && !validOrdinal(patch.ordinal)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
+    if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
+    if (patch.effortSessions !== undefined && !validEffortSessions(patch.effortSessions)) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
+    if (patch.ordinal !== undefined && !validOrdinal(patch.ordinal)) fail("milestone.invalid-input", "Name, effort sessions, or ordinal is invalid.");
     const at = new Date().toISOString();
     return queueMilestoneWrite(
       context,
@@ -293,14 +288,14 @@ export async function updateMilestone(context: StoreContext, projectId: string, 
           fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
         }
         const name = patch.name === undefined ? String(row.name) : patch.name.trim();
-        const target = patch.target === undefined ? (row.target as string | null) : patch.target;
+        const effortSessions = patch.effortSessions === undefined ? (row.effortSessions as number | null) : patch.effortSessions;
         const ordinal = patch.ordinal === undefined ? (row.ordinal as number) : patch.ordinal;
-        const changed = name !== row.name || target !== row.target || ordinal !== row.ordinal || nextStatus !== row.status;
+        const changed = name !== row.name || effortSessions !== row.effortSessions || ordinal !== row.ordinal || nextStatus !== row.status;
         return {
           ...current,
           milestones: rows.map((entry) =>
             entry.milestoneId === milestoneId
-              ? { ...entry, name, target, ordinal, status: nextStatus, revision: (entry.revision as number) + (changed ? 1 : 0), updatedAt: changed ? at : entry.updatedAt }
+              ? { ...entry, name, effortSessions, ordinal, status: nextStatus, revision: (entry.revision as number) + (changed ? 1 : 0), updatedAt: changed ? at : entry.updatedAt }
               : entry,
           ),
         };
@@ -373,8 +368,8 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   }
   const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
   const params = milestoneId === undefined ? [projectId] : [projectId,milestoneId];
-  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in (${OTHER_RETIRED_DISPOSITION_SQL}) then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params) as Array<Record<string,unknown>>;
-  const milestones: ProjectMilestoneDTO[] = rows.map(r => { const resolvedIssues=Number(r.resolved_issues)||0, otherRetiredIssues=Number(r.other_retired_issues)||0, openIssues=Number(r.open_issues)||0; return { milestoneId:String(r.milestone_id),projectId:String(r.project_id),name:String(r.name),target:r.target as string|null,status:r.status as ProjectMilestoneStatus,ordinal:Number(r.ordinal),revision:Number(r.revision),createdAt:String(r.created_at),updatedAt:String(r.updated_at),totalIssues:Number(r.total_issues),openIssues,resolvedIssues,otherRetiredIssues }; });
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.effort_sessions,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in (${OTHER_RETIRED_DISPOSITION_SQL}) then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params) as Array<Record<string,unknown>>;
+  const milestones: ProjectMilestoneDTO[] = rows.map(r => { const resolvedIssues=Number(r.resolved_issues)||0, otherRetiredIssues=Number(r.other_retired_issues)||0, openIssues=Number(r.open_issues)||0; return { milestoneId:String(r.milestone_id),projectId:String(r.project_id),name:String(r.name),effortSessions:r.effort_sessions as number|null,status:r.status as ProjectMilestoneStatus,ordinal:Number(r.ordinal),revision:Number(r.revision),createdAt:String(r.created_at),updatedAt:String(r.updated_at),totalIssues:Number(r.total_issues),openIssues,resolvedIssues,otherRetiredIssues }; });
   const issues = (db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params) as Array<Record<string,unknown>>).map(r => ({ id:String(r.id),title:String(r.title),acceptance:String(r.acceptance),disposition:r.disposition as MilestoneIssueDTO["disposition"],revision:Number(r.revision),milestoneId:String(r.milestone_id) }));
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
