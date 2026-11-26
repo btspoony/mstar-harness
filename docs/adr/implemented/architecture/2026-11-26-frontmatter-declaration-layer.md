@@ -1,11 +1,11 @@
 # Front Matter as the Declaration Layer for Process Documents
 
-Status: Accepted
+Status: implemented — front matter is the declaration layer for process documents
 Date: 2026-11-26
 Supersedes: —
 Superseded-by: —
 
-## Context
+## Problem
 
 Process documents — plans, Assignments, SDD briefs, PM acceptance reports — carried machine-read declarations in body labels. Three parsers read the same bytes differently, and five body heuristics (plan header labels, Assignment header region, task headings, progress lines, ADR status lines) reconstructed fields that a validator then re-checked. Agents with different context reliably produced shapes one consumer accepted and another refused.
 
@@ -18,6 +18,13 @@ Process documents — plans, Assignments, SDD briefs, PM acceptance reports — 
 5. **An Assignment is a file carrier.** The prompt carries `Assignment file: <absolute path>` on its first non-blank line; the resolver accepts three write homes (plan → iteration → workflow) plus the read-only flat `{HARNESS_DIR}/assignments/`, and refuses an out-of-home, non-regular or ambiguous source.
 6. **Retired body-label Assignments are terminal** on every blocking host. A host without a refusal channel reports the same violation as advisory and the limitation is disclosed.
 7. **Producers round-trip through the reader.** A produced header passes the consumer's schema before it is written; values are quoted only when the reader would misread them; one source snapshot feeds every derived field.
+
+## Alternatives considered
+
+- Keep body labels and add a tolerant scanner per consumer: rejected — the three parsers already disagreed, and every new consumer re-implemented the heuristics.
+- Adopt a general YAML parser: rejected — the repository deliberately has no YAML dependency, and every shipped shape fits a strict flat subset.
+- Store declarations in the store only and keep Markdown human-only: rejected — plans and Assignments are reviewed in Git, and a validator must read the same bytes a reviewer reads.
+- Keep a body-label fallback for in-flight documents: rejected — a fallback preserves the drift the change removes; the refusal names both migration forms instead.
 
 ## Consequences
 
