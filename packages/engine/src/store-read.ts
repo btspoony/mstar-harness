@@ -66,6 +66,7 @@ import {
   remoteMilestones,
   remotePlanFindings,
   remoteProjectList,
+  remoteProjectListItem,
   remoteResidualCounts,
   requireRemoteProjects,
   type RemoteCatalogRow,
@@ -169,6 +170,7 @@ export type DashboardView =
   | "iteration-detail"
   | "projects"
   | "issue-flow"
+  | "milestones"
   | "overview";
 
 /**
@@ -430,6 +432,9 @@ export type DashboardViewData = {
   "iteration-detail": IterationDTO | null;
   projects: ProjectListDTO;
   "issue-flow": IssueFlow;
+  /** note: The project's milestone grouping on its own: collaboration data only, so a
+   *  fresh clone (or a remote-only checkout) can render milestones without an execution store. */
+  milestones: MilestoneRead;
   overview: OverviewDTO;
 };
 
@@ -443,6 +448,10 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   "iteration-detail": { needsProjection: true },
   projects: { needsProjection: false },
   "issue-flow": { needsProjection: false },
+  // note: Pure collaboration (the milestone tables and the issue membership they count):
+  // no projection and no execution store, so a fresh clone or a remote checkout still
+  // renders milestones.
+  milestones: { needsProjection: false },
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
   overview: { needsProjection: true },
@@ -891,6 +900,15 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: "projects" }, required: true }, execution: "not-requested" };
     case "issue-flow":
       return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
+    case "milestones": {
+      // invariant: A milestone grouping belongs to one project: without an id there is
+      // nothing to group, so the read refuses rather than answering every project's rows.
+      if (projectId === null) usage("the milestones view requires a project");
+      return {
+        collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+        execution: "not-requested",
+      };
+    }
     case "workflows": {
       const { limit, offset } = page();
       return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
@@ -1095,6 +1113,12 @@ function dashboardView(view: DashboardView, sources: StoreReadSources, filters: 
       return sources.remote === null
         ? readIssueFlow(collaborationSource(sources), text(filters.projectId) ?? undefined)
         : remoteIssueFlow(sources.remote, text(filters.projectId) ?? undefined);
+    case "milestones": {
+      const projectId = text(filters.projectId) as string;
+      return sources.remote === null
+        ? readMilestonesOn(collaborationSource(sources), projectId)
+        : remoteMilestones(sources.remote, projectId);
+    }
     case "overview":
       return readOverview(sources, filters);
   }
@@ -1618,6 +1642,58 @@ function readProjectListOn(db: StoreDb): ProjectListDTO {
 /** invariant: A project filter is catalog data: a required read never lists a project it could not observe. */
 function readProjectList(sources: StoreReadSources): ProjectListDTO {
   return sources.remote === null ? readProjectListOn(collaborationSource(sources)) : remoteProjectList(sources.remote);
+}
+
+/**
+ * One project's catalog row, or `null` when no catalog row backs that id.
+ *
+ * Scoped to the requested id by construction: an unreadable SIBLING project cannot turn
+ * this answer into a refusal, which is what a whole-list lookup would do in remote mode.
+ */
+export async function readProjectCatalogRow(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectListDTO["items"][number] | null> {
+  const envelope = await withStoreRead(context, queryProjectRow(projectId));
+  return envelope.data;
+}
+
+/** note: A single-project catalog read: collaboration only, with no list to page or join. */
+function queryProjectRow(projectId: string): StoreReadQuery<ProjectListDTO["items"][number] | null> {
+  return {
+    view: "projects",
+    needsProjection: false,
+    collaboration: { scope: { kind: "query", key: `project:${projectId}` }, required: true, projectIds: [projectId] },
+    execution: "not-requested",
+    run: (sources) => ({
+      data:
+        sources.remote === null
+          ? projectRowOn(collaborationSource(sources), projectId)
+          : remoteProjectRow(sources.remote, projectId),
+    }),
+  };
+}
+
+/** The catalog-backed row for one id; an issue-only id is `null` (no catalog row exists). */
+function projectRowOn(db: StoreDb, projectId: string): ProjectListDTO["items"][number] | null {
+  const row = db
+    .prepare(
+      `select catalog.id as id, catalog.title as title, catalog.description, catalog.lifecycle,
+              (select count(*) from issues where issues.project_id = catalog.id and issues.disposition = 'open'
+                 and ${SWITCHED_NOT_PRESENTED_SQL}) as open_issues
+       from catalog_entities catalog where catalog.kind = 'project' and catalog.id = ?`,
+    )
+    .get(projectId) as { id: string; title: string; description: string | null; lifecycle: CatalogLifecycle; open_issues: number } | undefined;
+  if (row === undefined) return null;
+  return {
+    project: { id: row.id, title: row.title, description: row.description, lifecycle: row.lifecycle },
+    openIssues: row.open_issues,
+  };
+}
+
+/** The same row from a remote snapshot's portable catalog: identity only, and `null` when absent. */
+function remoteProjectRow(view: RemoteReadView, projectId: string): ProjectListDTO["items"][number] | null {
+  return remoteProjectListItem(view, projectId);
 }
 
 // --- Remote catalog adapters ------------------------------------------------

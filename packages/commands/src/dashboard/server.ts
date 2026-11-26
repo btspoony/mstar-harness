@@ -25,6 +25,7 @@ import {
 import {
   addMilestone,
   assignIssueMilestone,
+  readProjectCatalogRow,
   removeMilestone,
   updateMilestone,
   type IssueReceipt,
@@ -33,7 +34,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { SddScriptError } from "@mstar-harness/engine";
-import type { DashboardView, ProjectListDTO } from "@mstar-harness/engine";
+import type { DashboardView } from "@mstar-harness/engine";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated.js";
 
 /** The exact CSP the plan fixes; identical on every response. */
@@ -69,13 +70,18 @@ function fail(code: string, message: string): ApiFailure {
 function statusForCode(code: string): number {
   if (code === "usage") return 400;
   if (code === "issue.not-found" || code === "not-found") return 404;
+  // invariant: An optimistic-concurrency conflict is a routine outcome of the CAS verbs, not a
+  // server fault: a caller that sees 409 knows to re-read and retry, while 500 would say the
+  // route itself is broken. Every family spells the code the same way (`<domain>.revision-conflict`).
+  if (code.endsWith(".revision-conflict")) return 409;
   // invariant: An unavailable required source is service-unavailable, never a 404 that
   // claims the record does not exist.
   if (
     code.startsWith("store.") ||
     code.startsWith("projection.") ||
     code.startsWith("collaboration.") ||
-    code.startsWith("execution.")
+    code.startsWith("execution.") ||
+    code.startsWith("remote.")
   ) {
     return 503;
   }
@@ -124,16 +130,39 @@ function escapeHtmlAttribute(value: string): string {
 /** The largest milestone request body the route accepts; one small JSON object. */
 const MILESTONE_BODY_LIMIT = 16_384;
 
-/** A request body as JSON, refused as a usage error when absent, oversized or unparsable. */
+/** How long a client may take to finish sending a milestone body before the route stops waiting. */
+const MILESTONE_BODY_DEADLINE_MS = 10_000;
+
+/**
+ * A request body as JSON, refused as a usage error when absent, oversized, slow or
+ * unparsable.
+ *
+ * This runs OUTSIDE the serialized request queue: a paused upload must not hold the
+ * queue every other dashboard read shares. The deadline bounds the wait for the same
+ * reason the byte limit bounds the memory — one stalled client cannot pin a slot.
+ */
 async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    size += buffer.length;
-    if (size > MILESTONE_BODY_LIMIT) throw new SddScriptError("the request body is too large", 2);
-    chunks.push(buffer);
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    req.destroy();
+  }, MILESTONE_BODY_DEADLINE_MS);
+  try {
+    for await (const chunk of req) {
+      const buffer = chunk as Buffer;
+      size += buffer.length;
+      if (size > MILESTONE_BODY_LIMIT) throw new SddScriptError("the request body is too large", 2);
+      chunks.push(buffer);
+    }
+  } catch (error) {
+    if (expired) throw new SddScriptError(`the request body did not arrive within ${MILESTONE_BODY_DEADLINE_MS}ms`, 2);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
+  if (expired) throw new SddScriptError(`the request body did not arrive within ${MILESTONE_BODY_DEADLINE_MS}ms`, 2);
   try {
     const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error("not an object");
@@ -214,18 +243,20 @@ async function writeMilestoneRequest(
   }
 }
 
-async function assertProjectExists(harnessDir: string, projectId: string): Promise<void> {
-  const envelope = await readDashboardView({
-    context: { harnessDir },
-    view: "projects",
-    params: {},
-  });
-  const projects = envelope.data as ProjectListDTO;
-  // invariant: The `projects` view also lists ids inferred from issues and synthesizes an item for them
-  // with `lifecycle: null`. Only a catalog-backed row satisfies `--project`: an issue-only id names no
-  // project the dashboard can read.
-  const found = projects.items.find((item) => item.project.id === projectId);
-  if (found === undefined || found.project.lifecycle === null) {
+/**
+ * Validate the optional project selector against its OWN catalog row before listening.
+ *
+ * The check is scoped to the requested id: reading the whole `projects` list and looking
+ * the id up there would make the dashboard refuse whenever ANY selected project is
+ * unreadable — a remote-mode refusal has to be about the project the reader asked for,
+ * not about a sibling it never named.
+ */
+async function assertProjectExists(context: StoreContext, projectId: string): Promise<void> {
+  const found = await readProjectCatalogRow(context, projectId);
+  // invariant: The `projects` view also infers ids from issues and synthesizes an item for
+  // them with `lifecycle: null`. Only a catalog-backed row satisfies `--project`: an
+  // issue-only id names no project the dashboard can read.
+  if (found === null) {
     throw new Error(`Unknown project ${JSON.stringify(projectId)}: no catalog project row exists. ` + "Check the id with `mstar catalog list` and retry.");
   }
 }
@@ -241,7 +272,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   }
   const context = { harnessDir: options.harnessDir };
   const token = randomUUID();
-  if (options.projectId !== undefined) await assertProjectExists(options.harnessDir, options.projectId);
+  if (options.projectId !== undefined) await assertProjectExists(context, options.projectId);
 
   // Serialized request execution: at most one read transaction runs at a time
   // (plan D2 "serialized request transactions"); new work after close is
@@ -261,13 +292,40 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   };
 
   const server = http.createServer((req, res) => {
-    void enqueue(() => handleRequest(req, res)).catch(() => {
+    // invariant: Only the REQUEST WORK is serialized. The guards (host, origin, token, route) are
+    // pure header comparisons, and a request BODY is drained here, before the queue: a paused or
+    // slow upload must not hold the one slot every unrelated read waits on. `body` is read once,
+    // outside the queue, and handed to the work closure.
+    void (async () => {
+      const admitted = admitRequest(req, res);
+      if (admitted === null) return;
+      const { requestHead, method, pathname, url } = admitted;
+      let body: Record<string, unknown> | null = null;
+      if (pathname === "/api/milestones" && method === "POST") {
+        try {
+          body = await readJsonBody(req);
+        } catch (error) {
+          const failure = dashboardFailure(error);
+          const message = failure.message.split(options.harnessDir).join("{HARNESS_DIR}");
+          sendJson(res, statusForCode(failure.code), fail(failure.code, message), requestHead);
+          return;
+        }
+      }
+      await enqueue(() => handleRequest(res, { requestHead, method, pathname, url, body }));
+    })().catch(() => {
       /* handled in handleRequest; a post-close race just ends the response */
       if (!res.headersSent) res.destroy();
     });
   });
 
-  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  /**
+   * The transport guards, answered before any work is queued: loopback Host, same Origin,
+   * a valid token, and a parseable URL. `null` means the guard already answered the request.
+   */
+  function admitRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): { requestHead: boolean; method: string; pathname: string; url: URL } | null {
     const requestHead = req.method === "HEAD";
     const method = requestHead ? "GET" : req.method ?? "";
     const host = req.headers.host ?? "";
@@ -277,14 +335,14 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // DNS-rebinding guard: the Host header must be the actual loopback origin.
     if (host !== expectedHost) {
       sendJson(res, 403, fail("forbidden", `Host header must be ${expectedHost}`), requestHead);
-      return;
+      return null;
     }
     const origin = req.headers.origin;
     // No CORS ever: a cross-origin browser context is refused outright; an
     // absent Origin (direct navigation, curl) is the same-origin case.
     if (origin !== undefined && origin !== `http://${expectedHost}`) {
       sendJson(res, 403, fail("forbidden", `Origin ${JSON.stringify(origin)} is not the dashboard origin`), requestHead);
-      return;
+      return null;
     }
 
     let url: URL;
@@ -292,7 +350,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       url = new URL(req.url ?? "/", `http://${expectedHost}`);
     } catch {
       sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
-      return;
+      return null;
     }
     const cookieToken = (req.headers.cookie ?? "")
       .split(";")
@@ -302,12 +360,19 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     const queryToken = url.searchParams.get("token");
     if (queryToken !== token && cookieToken !== token) {
       sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
-      return;
+      return null;
     }
     if (queryToken === token) {
       res.setHeader("set-cookie", `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict`);
     }
-    const pathname = url.pathname;
+    return { requestHead, method, pathname: url.pathname, url };
+  }
+
+  async function handleRequest(
+    res: http.ServerResponse,
+    admitted: { requestHead: boolean; method: string; pathname: string; url: URL; body: Record<string, unknown> | null },
+  ): Promise<void> {
+    const { requestHead, method, pathname, url, body } = admitted;
 
     // Fixed static routes only: no filesystem serving, no traversal, no
     // arbitrary Markdown/HTML rendering.
@@ -345,16 +410,17 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // Route resolution (including the encoded-traversal id refusal) happens
     // before any store access, and its usage throws become structured 400s.
     try {
-      // The one write surface: the project page's milestone mutations. It rides
-      // the same loopback/token boundary as the reads, and the engine verbs own
-      // every validation and the optimistic-concurrency guard.
-      if (pathname === "/api/milestones") {
-        if (method !== "POST") {
-          sendJson(res, 405, fail("method-not-allowed", "the milestone route accepts POST only"), requestHead);
+      // `/api/milestones` is the one path that carries BOTH halves: POST is the write
+      // surface (the project page's milestone mutations, with the engine verbs owning
+      // validation and the optimistic-concurrency guard) and GET is the plain milestone
+      // read the project page's body renders. They are separate views of one resource,
+      // not one method with a fallback.
+      if (pathname === "/api/milestones" && method === "POST") {
+        if (body === null) {
+          sendJson(res, 400, fail("usage", "the milestone route requires one JSON object body"), requestHead);
           return;
         }
-        const request = await readJsonBody(req);
-        const receipt = await writeMilestoneRequest(context, request);
+        const receipt = await writeMilestoneRequest(context, body);
         sendJson(res, 200, { data: receipt }, requestHead);
         return;
       }
@@ -365,7 +431,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       }
       // HEAD is accepted for static resources only; the API is GET-only and a
       // HEAD request must not reach the store read.
-      if (req.method !== "GET") {
+      if (requestHead || method !== "GET") {
         sendJson(res, 405, fail("method-not-allowed", "no dashboard read route accepts a write: only GET is accepted here (milestone writes go to POST /api/milestones)"), requestHead);
         return;
       }

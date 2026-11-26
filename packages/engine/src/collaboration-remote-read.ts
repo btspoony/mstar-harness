@@ -1105,6 +1105,28 @@ export function remoteProjectList(view: RemoteReadView): {
   return { items, total: items.length };
 }
 
+/**
+ * One project's list row from the admitted snapshot's portable catalog, or `null` when no
+ * catalog project row backs that id. Scoped by construction: a sibling project being
+ * unreadable cannot turn this answer into a refusal.
+ */
+export function remoteProjectListItem(
+  view: RemoteReadView,
+  projectId: string,
+): { project: { id: string; title: string; description: string | null; lifecycle: "active" | "archived" | "superseded" }; openIssues: number } | null {
+  const identity = remoteCatalogRows(view, [projectId]).find((row) => row.kind === "project" && row.id === projectId);
+  if (identity === undefined) return null;
+  const evidence = view.projects.get(projectId);
+  const openIssues =
+    evidence === undefined
+      ? 0
+      : (evidence.snapshot?.issues ?? []).filter((issue) => issue.mstar !== null && dispositionOf(projectId, issue) === "open").length;
+  return {
+    project: { id: projectId, title: identity.title, description: identity.description, lifecycle: identity.lifecycle },
+    openIssues,
+  };
+}
+
 /** note: One project's milestone grouping and MStar membership from admitted evidence. */
 export function remoteMilestones(view: RemoteReadView, projectId: string, milestoneId?: string): MilestoneRead {
   const evidence = requireRemoteProjects(view, [projectId])[0]!;

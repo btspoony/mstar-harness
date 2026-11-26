@@ -643,7 +643,9 @@ describe("the milestone write route", () => {
       operationId: "op-stale",
       expectedStoreRevision: revision,
     });
-    expect(stale.status).toBe(500);
+    // A CAS conflict is the route's routine outcome: 409 tells the caller to re-read and
+    // retry, where 500 would claim the route itself broke.
+    expect(stale.status).toBe(409);
     const refusal = JSON.parse(stale.body) as { error: { code: string; message: string } };
     expect(refusal.error.code).toBe("milestone.revision-conflict");
 
@@ -882,7 +884,7 @@ describe("the milestone write route", () => {
       operationId: "op-conflict",
       expectedStoreRevision: milestone.storeRevision,
     });
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect((JSON.parse(stale.body) as { error: { code: string } }).error.code).toBe("milestone.revision-conflict");
 
     // The re-read the page performs answers the FRESH revision; the retained draft
@@ -903,6 +905,80 @@ describe("the milestone write route", () => {
     expect(reread).toBeGreaterThan(fresh);
   });
 
+  test("the milestone read answers without an execution store", async () => {
+    // A clone whose checkout holds collaboration data but never initialized `store.db`:
+    // the milestone body must still render, because its facts are collaboration data.
+    const { dir, context } = await workspace("milestone-read-no-execution-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-solo", title: "Solo", rootKind: "projects", relativePath: "proj-solo" },
+      { operationId: "milestone-read-solo", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-solo");
+    await addMilestone(
+      context,
+      { projectId: "proj-solo", name: "Ships alone", effortSessions: null, ordinal: 0 },
+      { operationId: "solo-milestone", expectedStoreRevision: revision },
+    );
+    // Remove the execution authority: nothing about the milestone body may depend on it.
+    rmSync(join(dir, ".mstar", "store.db"), { force: true });
+    const server = await start(dir);
+    try {
+      const read = await raw(new URL("/api/milestones?project=proj-solo", server.url).href);
+      expect(read.status).toBe(200);
+      const body = JSON.parse(read.body) as { data: { milestones: Array<{ name: string }> } };
+      expect(body.data.milestones.map((row) => row.name)).toEqual(["Ships alone"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a project selector is checked against its own row, not the whole list", async () => {
+    const { dir, context } = await workspace("milestone-selector-scope-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-wanted", title: "Wanted", rootKind: "projects", relativePath: "proj-wanted" },
+      { operationId: "selector-scope-wanted", actor: "dashboard-test" },
+    );
+    // The requested project is registered, so the server starts: the check must not
+    // consult a sibling's readability the caller never named.
+    const server = await start(dir, { project: "proj-wanted" });
+    await server.close();
+    // An id with no catalog row is still refused.
+    await expect(start(dir, { project: "proj-never-registered" })).rejects.toThrow(/no catalog project row exists/);
+  });
+
+  test("a slow upload does not hold the queue unrelated reads share", async () => {
+    const { dir } = await workspace("milestone-body-deadline-");
+    const server = await start(dir);
+    const base = new URL(server.url);
+    // Open a POST and never finish its body: the upload is still in flight.
+    const pending = http.request({
+      host: "127.0.0.1",
+      port: Number(base.port),
+      path: `/api/milestones?token=${base.searchParams.get("token")}`,
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${base.port}` },
+    });
+    pending.on("error", () => {
+      /* the deadline or the teardown below closes it; neither is this test's subject */
+    });
+    pending.write("{");
+    try {
+      // An unrelated read must answer WHILE that upload is unfinished. Reading the body
+      // outside the shared queue is what makes this pass; inside it, this read would
+      // wait for the stalled client.
+      const read = await Promise.race([
+        raw(new URL("/api/projects", server.url).href),
+        new Promise<{ status: number }>((resolve) => setTimeout(() => resolve({ status: 0 }), 4_000)),
+      ]);
+      expect(read.status).toBe(200);
+    } finally {
+      pending.destroy();
+      await server.close();
+    }
+  });
+
   test("refuses a body that is not one JSON milestone request", async () => {
     const { dir } = await workspace("milestone-write-bad-body-");
     const notJson = await post(dir, { verb: "nonsense" });
@@ -910,12 +986,24 @@ describe("the milestone write route", () => {
     expect((JSON.parse(notJson.body) as { error: { code: string } }).error.code).toBe("usage");
   });
 
-  test("keeps the read-only refusal for every GET API route", async () => {
-    const { dir } = await workspace("milestone-write-get-");
+  test("milestone reads answer GET while every API write is refused", async () => {
+    const { dir, context } = await workspace("milestone-write-get-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj", title: "Project", rootKind: "projects", relativePath: "proj" },
+      { operationId: "milestone-get-project", actor: "dashboard-test" },
+    );
     const server = await start(dir);
     try {
-      const res = await raw(new URL("/api/milestones", server.url).href);
-      expect(res.status).toBe(405);
+      // GET on the milestone path is the READ half, not a write: it answers the
+      // milestone view like any other dashboard read, and needs no execution store.
+      const read = await raw(new URL("/api/milestones?project=proj", server.url).href);
+      const body = JSON.parse(read.body) as { data?: { projectId?: string } };
+      expect([read.status, body.data?.projectId]).toEqual([200, "proj"]);
+      for (const path of ["/api/issues", "/api/projects", "/api/overview"]) {
+        const res = await raw(new URL(path, server.url).href, { method: "POST" });
+        expect([path, res.status]).toEqual([path, 405]);
+      }
     } finally {
       await server.close();
     }

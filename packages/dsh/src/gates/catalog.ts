@@ -64,13 +64,14 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
+  queryDashboard,
   queryMilestones,
   queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { ProjectListDTO, ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -982,20 +983,22 @@ const UNREAD_STORE_FACTS: StoreFacts = {
   knowledge: null,
 }
 
-/** Read the store-backed milestone rollup once, retaining catalog order. */
+/**
+ * Read the store-backed milestone rollup once, retaining project then ordinal order.
+ *
+ * The project set comes from the `projects` dashboard view, not from `listCatalog`: the
+ * catalog's registered rows carry checkout-relative locations a remote observation does
+ * not have, so `listCatalog` refuses in remote mode and the gate would report milestones
+ * unavailable on every remote checkout. The view answers both modes, and each project's
+ * milestones then come from the one milestone read, which is execution-free.
+ */
 async function readProjectMilestoneFacts(context: StoreContext): Promise<ProjectMilestoneFacts> {
   try {
     const names: string[] = []
-    let offset = 0
-    // Page the whole catalog: one page would present its projects as all of them.
-    for (;;) {
-      const page = await listCatalog(context, { kind: 'project', limit: 200, offset })
-      for (const entity of page.items) {
-        const envelope = await withStoreRead(context, queryMilestones(entity.id))
-        names.push(...envelope.data.milestones.map((milestone) => milestone.name))
-      }
-      offset += page.items.length
-      if (page.items.length === 0 || offset >= page.total) break
+    const projects = await withStoreRead(context, queryDashboard('projects'))
+    for (const item of (projects.data as ProjectListDTO).items) {
+      const envelope = await withStoreRead(context, queryMilestones(item.project.id))
+      names.push(...envelope.data.milestones.map((milestone) => milestone.name))
     }
     return { names, source: { kind: 'present', diagnostic: null } }
   } catch (error) {

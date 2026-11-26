@@ -85,6 +85,7 @@ import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } fro
 import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
   createMilestoneDraftStore,
+  milestoneDraftTargetKey,
   projectDetailCopy,
   projectIdentity,
   projectIdentityFor,
@@ -876,10 +877,23 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
       // transport failure → retain the operation for a replay.
       const followUp = milestoneWriteFollowUp(request, result);
       if (!followUp.retainOperation) operationIds.settled();
+      // why: the accepted draft is cleared HERE, not left to the forms' own verdict effect. An
+      // accepted write re-reads the overview, and that re-read unmounts the forms in the same
+      // batched render the verdict arrives in — their follow-up never observes it, and the
+      // re-mounted create form would re-seed from the draft the save already committed.
+      if (result.status === "ok") drafts.clear(milestoneDraftTargetKey(projectId, draftTargetOf(request)));
       // One pure transition: the reload/refresh tokens, the surface's verdict and the
       // operation's fate are all its output — nothing here decides any of them.
       setPageState((current) => applyMilestoneFollowUp(current, followUp));
     });
+  }
+
+  /**
+   * The draft entry one write targets: the create form's shared key, or the milestone's own.
+   * An assignment moves an issue, so no milestone draft belongs to it.
+   */
+  function draftTargetOf(request: MilestoneMutationRequest): string {
+    return request.verb === "create" ? "create" : request.verb === "assign" ? "assign" : request.milestoneId;
   }
 
   // The head's identity comes from the same list read the Projects destination

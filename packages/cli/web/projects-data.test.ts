@@ -2,8 +2,8 @@
  * The host's envelope handling for the Projects pair, and the two facts this pair
  * is the only place to get wrong:
  *
- *  - the milestone body reads the project-scoped `overview` read's `milestones`
- *    member — a degraded member is its own arm, never a flattened null;
+ *  - the milestone body reads the project-scoped milestone view, which needs no
+ *    execution store — a degraded read is its own arm, never a flattened null;
  *  - the feature set is the fixed two with `Issues` permanently default — never
  *    "the first non-empty" — and no tab, route or label named roadmap survives.
  */
@@ -29,7 +29,7 @@ import {
   milestoneWriteStarted,
   type MilestonePageState,
   projectDetailCopy,
-  projectOverviewPath,
+  projectMilestonesPath,
   projectOptions,
   projectsCopy,
   projectsOutcome,
@@ -130,6 +130,17 @@ const overviewEnvelope = (data: OverviewDTO, extra: Record<string, unknown> = {}
   ...extra,
 });
 
+/** note: The standalone milestone view's envelope: the DTO itself, with no execution block. */
+const milestonesEnvelope = (data: MilestoneRead, extra: Record<string, unknown> = {}) => ({
+  data,
+  projection,
+  storeRevision: 41,
+  catalogRevision: 1,
+  collaboration: null,
+  execution: null,
+  ...extra,
+});
+
 const renderList = (items: ProjectListDTO["items"], total = items.length, generation: number | null = 7): string => {
   const outcome = projectsOutcome({ status: "ready", envelope: listEnvelope(items, total, generation) });
   if (outcome.kind !== "ready") throw new Error("expected a ready list");
@@ -197,14 +208,14 @@ describe("the projects list", () => {
 });
 
 describe("the milestone read", () => {
-  test("the path scopes the aggregated read to one project", () => {
-    expect(projectOverviewPath("engine")).toBe("/api/overview?project=engine");
-    expect(projectOverviewPath("a/b")).toBe("/api/overview?project=a%2Fb");
+  test("the path scopes the milestone read to one project", () => {
+    expect(projectMilestonesPath("engine")).toBe("/api/milestones?project=engine");
+    expect(projectMilestonesPath("a/b")).toBe("/api/milestones?project=a%2Fb");
   });
 
   test("a populated milestones member resolves a populated body", async () => {
     const ok = (async () =>
-      new Response(JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead() }))), {
+      new Response(JSON.stringify(milestonesEnvelope(milestoneRead())), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
@@ -220,7 +231,7 @@ describe("the milestone read", () => {
   test("an empty milestone set is the empty arm, not an absence", async () => {
     const ok = (async () =>
       new Response(
-        JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 }) }))),
+        JSON.stringify(milestonesEnvelope(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 }))),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
     const result = await readProjectMilestones(ok, "engine");
@@ -230,21 +241,19 @@ describe("the milestone read", () => {
   test("a degraded member keeps its own arm and reason", async () => {
     const degraded = (async () =>
       new Response(
-        JSON.stringify(
-          overviewEnvelope(
-            overview({ state: "unavailable", reason: "the milestone read could not be completed" }),
-          ),
-        ),
-        { status: 200, headers: { "content-type": "application/json" } },
+        // A degraded read is the read's own refusal: the route fails, so the body
+        // reports the failure rather than an empty plan.
+        JSON.stringify({ error: { code: "collaboration.not-initialized", message: "the milestone read could not be completed" } }),
+        { status: 503, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
     const result = await readProjectMilestones(degraded, "engine");
-    expect(result).toMatchObject({ status: "ready", milestones: { kind: "unavailable", reason: "the milestone read could not be completed" } });
+    expect(result).toMatchObject({ status: "error", message: "the milestone read could not be completed" });
   });
 
   test("a required collaboration gap is a failure, never an empty board", async () => {
     const gapped = (async () =>
       new Response(
-        JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead() }), { collaboration: partialObservation })),
+        JSON.stringify(milestonesEnvelope(milestoneRead(), { collaboration: partialObservation })),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
     expect(await readProjectMilestones(gapped, "engine")).toMatchObject({ status: "error" });
@@ -281,7 +290,7 @@ describe("the dashboard milestone write channel", () => {
   test("the write posts the verb, the same read's revision and the operation id", async () => {
     const read = recording({
       status: 200,
-      body: overviewEnvelope(overview({ state: "read", data: milestoneRead() })),
+      body: milestonesEnvelope(milestoneRead()),
     });
     const observed = await readProjectMilestones(read.fetchImpl, "engine");
     expect(observed).toMatchObject({ status: "ready", storeRevision: 41 });

@@ -11,7 +11,7 @@
  *    the project-scoped `overview` read's `milestones` member; `milestonesArm`
  *    makes the absence judgement and the host adds nothing to it.
  */
-import type { IssuePage, IterationListDTO, OverviewDTO, ProjectListDTO } from "@mstar-harness/engine";
+import type { IssuePage, IterationListDTO, MilestoneRead as MilestoneReadDTO, ProjectListDTO } from "@mstar-harness/engine";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
   createMilestoneDraftStore,
@@ -40,6 +40,9 @@ export const PROJECTS_PATH = "/api/projects";
 /** The one milestone write route; the verb rides the request body. */
 export const MILESTONE_WRITE_PATH = "/api/milestones";
 
+/** The project-scoped milestone read: the milestone body's own source, execution-free. */
+export const MILESTONES_PATH = "/api/milestones";
+
 /**
  * The C1 retry policy, host-local: one id — and the whole request it was minted
  * for — per LOGICAL write, retained across a transport-ambiguous failure so the
@@ -66,6 +69,18 @@ export function milestoneWriteIds(): {
 /** The project-scoped aggregated read the milestone body answers from. */
 export function projectOverviewPath(projectId: string): string {
   return `${OVERVIEW_PATH}?project=${encodeURIComponent(projectId)}`;
+}
+
+/**
+ * The project's milestone grouping on its own.
+ *
+ * The aggregated `overview` read joins projected execution rows, so it needs an
+ * execution store; the milestone body has none of that (its facts are the milestone
+ * tables and the issue membership they count), and a fresh clone or a remote-only
+ * checkout would otherwise hide milestones the engine can still read.
+ */
+export function projectMilestonesPath(projectId: string): string {
+  return `${MILESTONES_PATH}?project=${encodeURIComponent(projectId)}`;
 }
 
 /**
@@ -144,11 +159,11 @@ export async function readProjects(
 }
 
 /**
- * One project-scoped overview read, resolved to the milestone body's arm.
+ * One project-scoped milestone read, resolved to the milestone body's arm.
  *
- * The milestone rollup rides the aggregated read's `milestones` member; a
- * degraded member is the arm the shared resolver makes of it, never a
- * flattened null.
+ * Reads the milestone view, not the aggregated `overview`: the milestone body's facts
+ * are collaboration data, so this read must not require an execution store. A degraded
+ * member is the arm the shared resolver makes of it, never a flattened null.
  */
 export async function readProjectMilestones(
   fetchImpl: typeof fetch,
@@ -158,19 +173,25 @@ export async function readProjectMilestones(
   { status: "ready"; milestones: Resolved<MilestonesModel>; storeRevision: number | null } | { status: "error"; message: string }
 > {
   try {
-    const response = await fetchImpl(projectOverviewPath(projectId), {
+    const response = await fetchImpl(projectMilestonesPath(projectId), {
       headers: { accept: "application/json" },
       ...(signal === undefined ? {} : { signal }),
     });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
-    const envelope = asEnvelope<OverviewDTO>(body);
-    if (envelope === null) return { status: "error", message: "The overview read answered with something that is not a read envelope." };
+    const envelope = asEnvelope<MilestoneReadDTO>(body);
+    if (envelope === null) return { status: "error", message: "The milestone read answered with something that is not a read envelope." };
     // why: A gap is not an empty milestone set: the authority could not establish
     // what the project owns, so the read fails rather than claiming nothing is there.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };
-    return { status: "ready", milestones: milestonesArm(envelope.data.milestones), storeRevision: envelope.storeRevision };
+    // note: The read answers the grouping directly; the arm resolves it as the
+    // `read` member the overview used to carry.
+    return {
+      status: "ready",
+      milestones: milestonesArm({ state: "read", data: envelope.data }),
+      storeRevision: envelope.storeRevision,
+    };
   } catch {
     return { status: "error", message: UNREACHABLE };
   }
@@ -348,4 +369,4 @@ export {
   type AssignableIssuesRead,
   type MilestoneWriteSurface,
 };
-export type { IssuePage, IterationListDTO, ProjectFeature };
+export type { IssuePage, IterationListDTO, MilestoneRead as MilestoneReadDTO, ProjectFeature };

@@ -46,6 +46,8 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   // `project` scopes milestones, latestIteration and issueFlow; the view reads
   // no page window and no issue filter, so both keep refusing.
   overview: ["project"],
+  // note: The standalone milestone read takes the same single project selector.
+  milestones: ["project"],
 };
 
 const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);

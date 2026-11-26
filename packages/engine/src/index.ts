@@ -1223,6 +1223,7 @@ export {
   queryIssueFlow,
   queryOpenIssueRollup,
   readExecutionSource,
+  readProjectCatalogRow,
   resolveCurrentAuthority,
   resolveExecutionReadRoute,
   withStoreRead,
