@@ -66,13 +66,13 @@ describe("planboard grammar", () => {
       "",
       "## Captured",
       "",
-      "- I-000001 — unblocks the cutover",
-      "- I-000002 — ordering reason",
+      "- I-000001 \u2014 unblocks the cutover",
+      "- I-000002 \u2014 ordering reason",
       "",
       "## Candidates",
       "",
-      "- ? planboard gate — docs/adr/implemented/architecture/2026-11-26-retire-project-roadmap.md",
-      "- ? another candidate — I-000004",
+      "- ? planboard gate \u2014 docs/adr/implemented/architecture/2026-11-26-retire-project-roadmap.md",
+      "- ? another candidate \u2014 I-000004",
       "",
     ]);
     expect(parsed.findings).toEqual([]);
@@ -88,20 +88,20 @@ describe("planboard grammar", () => {
     const parsed = parse([
       "review_after: 2026-12-10",
       "## Captured",
-      `- ${REMOTE_IDS.issueRef} — adopted finding`,
+      `- ${REMOTE_IDS.issueRef} \u2014 adopted finding`,
     ]);
     expect(parsed.findings).toEqual([]);
     expect(parsed.issues[0]!.id).toBe(REMOTE_IDS.issueRef);
   });
 
   test("a checkbox line is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- [ ] I-000001 — todo"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- [ ] I-000001 \u2014 todo"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
 
   test("a second issue id on one line is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- I-000001 — unblocks I-000002"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- I-000001 \u2014 unblocks I-000002"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
@@ -113,23 +113,23 @@ describe("planboard grammar", () => {
   });
 
   test("an empty candidate evidence is malformed", () => {
-    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ? unnamed — "]).findings)).toEqual(["malformed"]);
+    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ? unnamed \u2014 "]).findings)).toEqual(["malformed"]);
   });
 
   test("a candidate naming prose instead of evidence is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? a candidate — not evidence"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? a candidate \u2014 not evidence"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
 
   test("a candidate with whitespace-only text is malformed", () => {
-    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ?    — docs/specs/example.md"]).findings)).toEqual([
+    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ?    \u2014 docs/specs/example.md"]).findings)).toEqual([
       "malformed",
     ]);
   });
 
   test("a candidate line carrying a second issue id is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? I-000001 — I-000002"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? I-000001 \u2014 I-000002"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
@@ -152,14 +152,14 @@ describe("planboard grammar", () => {
       parse([
         "review_after: 2026-12-10",
         "## Candidates",
-        "- ? first — 2026-11-26-retire-project-roadmap",
-        "- ? second — I-000004",
+        "- ? first \u2014 2026-11-26-retire-project-roadmap",
+        "- ? second \u2014 I-000004",
       ]).findings,
     ).toEqual([]);
   });
 
   test("a 21st entry in a section is malformed and the first twenty are kept", () => {
-    const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} — order ${index}`);
+    const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} \u2014 order ${index}`);
     const parsed = parse(["review_after: 2026-12-10", "## Captured", ...entries]);
     expect(parsed.issues).toHaveLength(20);
     // One section-level finding, not one per excess line.
@@ -167,7 +167,7 @@ describe("planboard grammar", () => {
   });
 
   test("an unknown heading is malformed and closes the open section", () => {
-    const parsed = parse(["review_after: 2026-12-10", "## Captured", "## History", "- I-000001 — mislaid pointer"]);
+    const parsed = parse(["review_after: 2026-12-10", "## Captured", "## History", "- I-000001 \u2014 mislaid pointer"]);
     expect(pairs(parsed.findings)).toEqual([
       { code: "malformed", line: 3 },
       { code: "malformed", line: 4 },
@@ -183,13 +183,13 @@ describe("planboard grammar", () => {
   });
 
   test("an issue line under `## Candidates` is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- I-000001 — wrong section"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- I-000001 \u2014 wrong section"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
 
   test("a candidate line under `## Captured` is malformed", () => {
-    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- ? candidate — docs/specs/example.md"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-12-10", "## Captured", "- ? candidate \u2014 docs/specs/example.md"]).findings)).toEqual([
       { code: "malformed", line: 3 },
     ]);
   });
@@ -201,11 +201,11 @@ describe("planboard grammar", () => {
   });
 
   test("a missing `review_after` is one file-level malformed finding", () => {
-    expect(pairs(parse(["## Captured", "- I-000001 — order"]).findings)).toEqual([{ code: "malformed", line: null }]);
+    expect(pairs(parse(["## Captured", "- I-000001 \u2014 order"]).findings)).toEqual([{ code: "malformed", line: null }]);
   });
 
   test("an unparsable `review_after` is one file-level malformed finding", () => {
-    expect(pairs(parse(["review_after: 2026-13-40", "## Candidates", "- ? c — docs/specs/example.md"]).findings)).toEqual([
+    expect(pairs(parse(["review_after: 2026-13-40", "## Candidates", "- ? c \u2014 docs/specs/example.md"]).findings)).toEqual([
       { code: "malformed", line: null },
     ]);
   });
@@ -215,7 +215,7 @@ describe("planboard grammar", () => {
       "review_after: 2026-01-01",
       "review_after: 2026-12-11",
       "## Candidates",
-      "- ? a candidate — docs/specs/example.md",
+      "- ? a candidate \u2014 docs/specs/example.md",
     ]);
     expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: null }]);
     // invariant: No valid date, so nothing is overdue.
@@ -261,9 +261,9 @@ describe("planboard findings against a store", () => {
       [
         "review_after: 2099-01-01",
         "## Captured",
-        `- ${open.issueId} — the order the PM intends`,
+        `- ${open.issueId} \u2014 the order the PM intends`,
         "## Candidates",
-        "- ? a later candidate — docs/specs/example.md",
+        "- ? a later candidate \u2014 docs/specs/example.md",
       ].join("\n"),
     );
     const result = await checkPlanboard(context, { today: "2026-06-01" });
@@ -277,7 +277,7 @@ describe("planboard findings against a store", () => {
     const context = board(join(ROOT, "malformed", ".mstar"), [
       "review_after: 2099-01-01",
       "## Captured",
-      "- [ ] I-000001 — todo",
+      "- [ ] I-000001 \u2014 todo",
     ].join("\n"));
     expect(pairs((await checkPlanboard(context)).findings)).toEqual([{ code: "malformed", line: 3 }]);
   });
@@ -286,8 +286,8 @@ describe("planboard findings against a store", () => {
     const context = board(join(ROOT, "refused", ".mstar"), [
       "review_after: 2099-01-01",
       "## Captured",
-      "- I-000001 — first",
-      "- I-000002 — second",
+      "- I-000001 \u2014 first",
+      "- I-000002 \u2014 second",
     ].join("\n"));
     const result = await checkPlanboard(context);
     expect(codes(result.findings)).toEqual(["unverified", "unverified"]);
@@ -313,12 +313,12 @@ describe("planboard findings against a store", () => {
         "review_after: 2026-01-01",
         "",
         "## Captured",
-        `- ${open.issueId} — still open`,
-        `- ${closed.issueId} — already closed`,
-        "- I-999999 — never captured",
+        `- ${open.issueId} \u2014 still open`,
+        `- ${closed.issueId} \u2014 already closed`,
+        "- I-999999 \u2014 never captured",
         "",
         "## Candidates",
-        "- ? an overdue candidate — docs/specs/example.md",
+        "- ? an overdue candidate \u2014 docs/specs/example.md",
       ].join("\n"),
     );
     const result = await checkPlanboard(context, { today: "2026-06-01" });
@@ -333,7 +333,7 @@ describe("planboard findings against a store", () => {
     const context = board(join(ROOT, "future", ".mstar"), [
       "review_after: 2099-01-01",
       "## Candidates",
-      "- ? a candidate — docs/specs/example.md",
+      "- ? a candidate \u2014 docs/specs/example.md",
     ].join("\n"));
     expect((await checkPlanboard(context, { today: "2026-06-01" })).findings).toEqual([]);
   });
@@ -447,7 +447,7 @@ describe("planboard findings against a store", () => {
       [
         "review_after: 2099-01-01",
         "## Captured",
-        `- ${REMOTE_IDS.issueRef} — open in the admitted snapshot`,
+        `- ${REMOTE_IDS.issueRef} \u2014 open in the admitted snapshot`,
       ].join("\n"),
     );
     // The admitted issue is open, so the line reports nothing — not `unverified`.
@@ -456,7 +456,7 @@ describe("planboard findings against a store", () => {
     // A reference the snapshot does not carry is a completed answer: missing.
     board(
       context.harnessDir,
-      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} — absent from this snapshot`].join("\n"),
+      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} \u2014 absent from this snapshot`].join("\n"),
     );
     expect(pairs((await checkPlanboard(context)).findings)).toEqual([{ code: "missing", line: 3 }]);
   });
@@ -475,7 +475,7 @@ describe("planboard findings against a store", () => {
 
     board(
       context.harnessDir,
-      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.issueRef} — delivered already`].join("\n"),
+      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.issueRef} \u2014 delivered already`].join("\n"),
     );
     const findings = (await checkPlanboard(context)).findings;
     expect(pairs(findings)).toEqual([{ code: "stale", line: 3 }]);

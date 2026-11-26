@@ -2083,6 +2083,15 @@ describe("collaboration remote schema ladder", () => {
   });
 
   test("a copy of the lane taken inside its own upgrade transaction recovers as v6 and replays to v7", async () => {
+    // note: This case owns a FRESH home and its own synthetic origin, so the lane path it opens is
+    // shared with no other case: the snapshot's identity, the replay's target and every probe below
+    // name that one path. A lane shared with the rest of the shard would let a concurrent writer
+    // hold the copy's target past the bounded wait, which is exactly the flake this isolates.
+    const previousHome = resolvedHome;
+    const crashHome = join(ROOT, `crash-home-${sequence++}`);
+    mkdirSync(crashHome, { recursive: true });
+    resolvedHome = crashHome;
+    try {
     const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
@@ -2096,13 +2105,22 @@ describe("collaboration remote schema ladder", () => {
     activate(location.dbPath);
     const v6Tables = tableNames(location.dbPath);
     const v6Ledger = ledgerRows(location.dbPath);
+    // note: The identity the replay must carry: the interrupted lane keeps its metadata row, so the
+    // copy's own `store_id` / `authority_epoch` is what the fresh binding below is proved against.
+    const v6Meta = metaRecord(location.dbPath);
 
     // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
     // seam runs inside the ladder's own `BEGIN IMMEDIATE`, after the v7 rebuild and before its ledger
     // row. Everything the recovery proof needs is copied HERE, so the proof never depends on this
     // process's rollback.
     const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
+    // note: Start from an empty directory: a sidecar left by an earlier run of this case would be
+    // opened beside the fresh copy and would answer for bytes this run never captured.
+    rmSync(snapshotDir, { recursive: true, force: true });
     mkdirSync(snapshotDir, { recursive: true });
+    // note: The copy is taken once, into a path of its own; the replay below reads that copy and never
+    // the live lane again.
+    const snapshotPath = join(snapshotDir, "collaboration.db");
     const captured: string[] = [];
     let journalBytes = 0;
     let journalHasDroppedTable = false;
@@ -2146,7 +2164,7 @@ describe("collaboration remote schema ladder", () => {
     // note: The database file itself is not asserted to differ from the pristine bytes: in a DELETE
     // journal the predecessor's pages may stay in place, so the journal - not the file - is the
     // pre-image, and the recovery proof below is what establishes that the copy is mid-transaction.
-    expect(captured).toContain(join(snapshotDir, "collaboration.db"));
+    expect(captured).toContain(snapshotPath);
     expect(journalBytes).toBeGreaterThan(0);
     expect(journalHasDroppedTable).toBe(true);
     // invariant: Uncommitted work was never visible outside the transaction.
@@ -2155,7 +2173,7 @@ describe("collaboration remote schema ladder", () => {
     // note: Recover from the COPY, not from the interrupted lane: a fresh connection opened on the
     // captured pair must roll the hot journal back and answer the v6 predecessor, with no half-applied
     // v7 (no rebuilt catalog_entities, no dropped roadmap table).
-    const recovered = new DatabaseSync(join(snapshotDir, "collaboration.db"));
+    const recovered = new DatabaseSync(snapshotPath);
     try {
       const tables = (recovered.prepare("select name from sqlite_master where type='table'").all() as Array<{ name: string }>).map(
         (row) => row.name,
@@ -2174,11 +2192,23 @@ describe("collaboration remote schema ladder", () => {
       recovered.close();
     }
 
-    // note: Replaying the same verb over the recovered copy completes the upgrade.
-    rmSync(location.dbPath, { force: true });
-    rmSync(`${location.dbPath}-journal`, { force: true });
-    copyFileSync(join(snapshotDir, "collaboration.db"), location.dbPath);
+    // invariant: The replay starts from the recovered snapshot ALONE. The interrupted lane's files are
+    // abandoned rather than reused: every one of them is removed, the recovered copy is restored onto
+    // the lane path, and only then is the same verb run - so the replay proves the copy, not whatever
+    // the aborted call left behind (a surviving sidecar is a second writer, which is the `store.busy`
+    // this case used to race).
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+    copyFileSync(snapshotPath, location.dbPath);
     chmodSync(location.dbPath, 0o600);
+    // note: The recovered copy is the same generation the interrupted call held, so the binding this
+    // checkout holds is the one its own metadata row proves: store id and epoch come from the copy.
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: v6Meta.store_id,
+      epoch: v6Meta.authority_epoch,
+      binding: "active",
+    });
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
     expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
@@ -2193,6 +2223,9 @@ describe("collaboration remote schema ladder", () => {
       });
     } finally {
       db.close();
+    }
+    } finally {
+      resolvedHome = previousHome;
     }
   });
 

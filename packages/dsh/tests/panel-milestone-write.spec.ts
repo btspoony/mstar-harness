@@ -1112,7 +1112,10 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
     const revisions: number[] = []
-    let restartAt: number | null = null
+    // note: The reload restarts the walk at offset 0. Record each restart in an array rather than
+    // assigning a `let` from inside the closure, so the assertion reads a value the compiler can
+    // widen (a closure-only assignment narrows a `let` to its initializer's literal type).
+    const restartOffsets: number[] = []
     const channel = createMilestoneWrites({
       client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
       sessionId: 'ses_walk_restart',
@@ -1120,7 +1123,7 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
       projectId: '_default',
       expectedStoreRevision: await observedRevision(endpoint, 'ses_walk_restart', app.root),
       // What the seat's reload does for the walk: restart from page 0.
-      reload: () => { restartAt = 0; revisions.push(revisions.length + 1) },
+      reload: () => { restartOffsets.push(0); revisions.push(revisions.length + 1) },
       onState: () => {},
       ids: writeOperationIds<{ expectedStoreRevision: number }>(),
       draftsProject: '_default',
@@ -1128,7 +1131,7 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     channel.create({ name: 'Walk restart', effortSessions: null, ordinal: 0 })
     for (let i = 0; i < 100 && channel.busy; i++) await new Promise((resolve) => setTimeout(resolve, 0))
     // The accepted write reloaded once, and that reload restarts the walk at offset 0.
-    expect(restartAt).toBe(0)
+    expect(restartOffsets).toEqual([0])
     expect(revisions).toHaveLength(1)
     // The restart is a NEW walk whose offset is zero again — the accumulated pages
     // are not carried across the write's observation.

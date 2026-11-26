@@ -888,7 +888,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "persist.get": "root", "persist.list": "root", "persist.write": "root",
   "plan.bind": "root", "plan.complete": "root", "plan.issue-add": "root",
   "plan.issue-close": "root", "plan.prepare": "root", "plan.progress": "root",
-  "plan.show": "root", "plugin.validate": "none", "pr.merge-gate": "none", "pr-review.budget": "none",
+  "plan.show": "root", "planboard.check": "root", "plugin.validate": "none", "pr.merge-gate": "none", "pr-review.budget": "none",
   "pr-review.post": "none", "pr-review.report-path": "root", "pr-review.seat-prompt": "none",
   "pr-review.size": "none", "pr-review.tally": "none", "pr-review.validate-report": "none",
   "pr-review.worktree-cleanup": "none", "pr-review.worktree-setup": "root", "qc.validate-report": "none",
