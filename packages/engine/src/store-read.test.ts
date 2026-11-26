@@ -36,8 +36,9 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { initializeCollaborationStore, mintIssueRef, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
-import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteSnapshot } from "./collaboration-remote.js";
+import { bindRemoteAuthority, ingestRemoteObservation, prepareRemoteAdoption, type RemoteMilestone, type RemoteSnapshot } from "./collaboration-remote.js";
 import { openRemoteReadView, setRemoteReadSampleGapForTest } from "./collaboration-remote-read.js";
+import { remoteObserveDocumentSchema } from "./remote-documents.js";
 import { closeIssue, getIssue, listIssues, showIssue, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, observePlanFindings, readProjectBinding } from "./project.js";
@@ -442,16 +443,16 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
 /** A project's milestone row, inserted directly: the read side is what this suite proves. */
 function seedMilestone(
   db: StoreDb,
-  seed: { id: string; name: string; projectId?: string; target?: string | null; status?: string; ordinal?: number },
+  seed: { id: string; name: string; projectId?: string; effortSessions?: number | null; status?: string; ordinal?: number },
 ): void {
   db.prepare(
-    "insert into project_milestones(milestone_id, project_id, name, target, status, ordinal, revision, created_at, updated_at) " +
+    "insert into project_milestones(milestone_id, project_id, name, effort_sessions, status, ordinal, revision, created_at, updated_at) " +
       "values (?, ?, ?, ?, ?, ?, 1, ?, ?)",
   ).run(
     seed.id,
     seed.projectId ?? "proj-a",
     seed.name,
-    seed.target ?? null,
+    seed.effortSessions ?? null,
     seed.status ?? "planned",
     seed.ordinal ?? 0,
     RECORDED_AT,
@@ -489,7 +490,7 @@ describe("milestone views", () => {
     await registerProject(context, "proj-b");
     await withWrite(context, (db) => {
       seedMilestone(db, { id: "M-A1", name: "A first", ordinal: 0 });
-      seedMilestone(db, { id: "M-A2", name: "A second", ordinal: 1, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-A2", name: "A second", ordinal: 1, effortSessions: 3, status: "active" });
       seedMilestone(db, { id: "M-B1", name: "B only", projectId: "proj-b", ordinal: 0 });
       // Three issues on one milestone: the join must multiply neither the
       // milestone rows nor the counts.
@@ -671,7 +672,7 @@ describe("milestone views", () => {
   test("the roadmap view carries the milestone grouping even with absent Markdown, and answers null for an unknown project", async () => {
     const { context, harness } = await projectedWorkspace("milestone-roadmap-");
     await withWrite(context, (db) => {
-      seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, target: "2026-10-01", status: "active" });
+      seedMilestone(db, { id: "M-1", name: "Read boundary", ordinal: 0, effortSessions: 3, status: "active" });
       seedMilestone(db, { id: "M-2", name: "Dashboard", ordinal: 1 });
       seedIssue(db, { id: "I-1", title: "read store", milestoneId: "M-1", acceptance: "read proof" });
       seedIssue(db, { id: "I-2", title: "render", milestoneId: "M-2" });
@@ -679,8 +680,8 @@ describe("milestone views", () => {
     });
     const present = await withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }));
     expect(present.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
-    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.target, milestone.status, milestone.ordinal])).toEqual([
-      ["Read boundary", "2026-10-01", "active", 0],
+    expect(present.data?.milestones.milestones.map((milestone) => [milestone.name, milestone.effortSessions, milestone.status, milestone.ordinal])).toEqual([
+      ["Read boundary", 3, "active", 0],
       ["Dashboard", null, "planned", 1],
     ]);
     expect(present.data?.milestones.issues.map((issue) => [issue.id, issue.milestoneId])).toEqual([
@@ -1852,6 +1853,87 @@ describe("remote read boundary", () => {
     await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
     return { fixture, context, commit, check };
   }
+
+  test("the published observation document is the shape the runtime accepts", async () => {
+    // invariant: the schema command derives its inputDocument descriptor from
+    // remoteObserveDocumentSchema, so an agent builds its submission from that published shape.
+    // The advertised shape must be the accepted shape: a document the descriptor validates must pass
+    // the runtime parser, and the retired milestone target member must be absent from both.
+    const { context, commit, check } = await boundScope("remote-milestone-published-shape");
+    const document = JSON.parse(
+      JSON.stringify(submission(commit, check, completeSnapshot(check), 1)),
+    ) as Record<string, unknown>;
+    // note: The published descriptor validates the exact document the runtime is about to receive.
+    const published = remoteObserveDocumentSchema.safeParse(document);
+    expect(published.success).toBe(true);
+    const milestone = (document.snapshot as { project: { milestones: Record<string, unknown>[] } }).project.milestones[0]!;
+    expect(Object.keys(milestone).sort()).toEqual(
+      ["createdAt", "effortSessions", "milestoneId", "name", "ordinal", "revision", "status", "updatedAt"].sort(),
+    );
+    // invariant: The runtime parser accepts the document the published shape produced.
+    expect(await ingestRemoteObservation(context, document as never)).toBeDefined();
+    // invariant: A document still carrying the retired member is refused at the milestone path -
+    // by the descriptor (strict members) and by the runtime parser alike.
+    const withTarget = JSON.parse(JSON.stringify(document)) as {
+      snapshot: { project: { milestones: Record<string, unknown>[] } };
+    };
+    delete (withTarget.snapshot.project.milestones[0] as Record<string, unknown>).effortSessions;
+    withTarget.snapshot.project.milestones[0]!.target = "2026-12-01";
+    expect(remoteObserveDocumentSchema.safeParse(withTarget).success).toBe(false);
+    await expect(ingestRemoteObservation(context, withTarget as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining("submission.snapshot.project.milestones[0].target:"),
+    });
+  });
+
+  test("a milestone document carrying target or an invalid effortSessions is refused, and a valid effortSessions is admitted", async () => {
+    const { context, commit, check } = await boundScope("remote-milestone-effort");
+    // note: The snapshot's milestone row is readonly, so a case that changes it submits a whole
+    // replacement row instead of writing through the declared shape.
+    const withMilestone = (snapshot: RemoteSnapshot, row: RemoteMilestone): RemoteSnapshot => ({
+      ...snapshot,
+      project: { ...snapshot.project, milestones: [row] },
+    });
+    const refusal = async (label: string, mutate: (snapshot: RemoteSnapshot) => RemoteSnapshot) => {
+      const snapshot = mutate(structuredClone(completeSnapshot(check)));
+      try {
+        await ingestRemoteObservation(context, submission(commit, check, snapshot, 1));
+        throw new Error(`expected ${label} to be refused`);
+      } catch (error) {
+        return error as { code?: string; message?: string };
+      }
+    };
+
+    const retired = await refusal("a target field", (snapshot) =>
+      // note: A retired field is exactly what a host document may still arrive carrying.
+      withMilestone(snapshot, Object.assign({}, snapshot.project.milestones[0]!, { target: "2026-12-01" })),
+    );
+    expect(retired.code).toBe("remote.input-invalid");
+    expect(retired.message).toBe(
+      `[${retired.code}] submission.snapshot.project.milestones[0].target: \"target\" is retired; submit \"effortSessions\" as null or an integer of at least 1 (a count of standard sessions). Nothing was written.`,
+    );
+
+    for (const [label, mutate] of [
+      ["a missing effortSessions", (s: RemoteSnapshot) => { delete (s.project.milestones[0] as Record<string, unknown>).effortSessions; return s; }],
+      ["a non-integer effortSessions", (s: RemoteSnapshot) => withMilestone(s, { ...s.project.milestones[0]!, effortSessions: 1.5 })],
+      ["a below-1 effortSessions", (s: RemoteSnapshot) => withMilestone(s, { ...s.project.milestones[0]!, effortSessions: 0 })],
+    ] as const) {
+      const error = await refusal(label, mutate);
+      expect(error.code).toBe("remote.input-invalid");
+      expect(error.message).toContain("submission.snapshot.project.milestones[0].effortSessions:");
+    }
+
+    // note: The fixture row already carries a valid count of 3, which this admission accepts as-is.
+    const admitted = structuredClone(completeSnapshot(check));
+    expect(await ingestRemoteObservation(context, submission(commit, check, admitted, 1))).toBeDefined();
+    const cleared = structuredClone(completeSnapshot(check));
+    expect(
+      await ingestRemoteObservation(
+        context,
+        submission(commit, check, withMilestone(cleared, { ...cleared.project.milestones[0]!, effortSessions: null }), 2),
+      ),
+    ).toBeDefined();
+  });
 
   /** note: Two selected projects bound; only A is observed, so a test chooses B's evidence. */
   async function twoProjectBind(name: string) {

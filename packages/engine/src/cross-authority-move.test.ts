@@ -61,7 +61,7 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** note: A freshly published v4 lane under the real initializer, with one issue row to fence. */
+/** note: A freshly published lane at the current schema generation under the real initializer, with one issue row to fence. */
 async function freshLane(): Promise<{ db: StoreDb; dbPath: string }> {
   const location = collaborationLocationOfRepoKey(`github.com/acme/move-fixture-${sequence++}`, "local");
   mkdirSync(join(location.dbPath, ".."), { recursive: true, mode: 0o700 });
@@ -391,10 +391,13 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
     }
   });
 
-  test("a lane is current and a v3 lane reaches it through the ladder, gaining the recorded route", async () => {
+  test("a lane is at the registry's top generation and a v3 lane reaches it through the ladder, gaining the recorded route", async () => {
+    // note: The top generation is read from the migration registry, never pinned: the merge that
+    // appends the next migration reddens a literal while the ladder itself still works.
+    const TOP_GENERATION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
     const { db } = await freshLane();
     try {
-      expect((db.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(5);
+      expect((db.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(TOP_GENERATION);
       expect(
         (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name: string }>).map((column) => column.name),
       ).toEqual(expect.arrayContaining(["operation_id", "route"]));
@@ -432,8 +435,10 @@ values ('linear:p-one', 'push', 'I-000001', 'pending', 1, '2026-11-21T00:00:00.0
       const receipt = applyCollaborationLadder(upgraded, legacy.dbPath);
       upgraded.exec("commit");
       expect(receipt.fromVersion).toBe(3);
-      expect((upgraded.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(5);
-      // invariant: the v5 column is the one the ladder adds in place, with the closed vocabulary.
+      expect((upgraded.prepare("select max(version) as v from schema_version").get() as { v: number }).v).toBe(
+        TOP_GENERATION,
+      );
+      // invariant: the route column is the one the ladder adds in place, with the closed vocabulary.
       expect(
         upgraded.prepare("pragma table_info(issue_moves)").all().map((column) => (column as { name: string }).name),
       ).toContain("route");

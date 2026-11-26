@@ -77,7 +77,7 @@ describe("issue milestone association", () => {
     expect((await getIssue(context, "milestone-assignment-issue")).milestoneId).toBeNull();
   });
   test("successful assignment authorizes by the project-manager seat and advances both revisions once", async () => {
-    const made = await addMilestone(context, { projectId, name: `Milestone ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const made = await addMilestone(context, { projectId, name: `Milestone ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     milestoneId = made.milestoneId;
     const before = revision();
     const receipt = await assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId, reason: "roadmap" }, mutation("milestone-assign", 1));
@@ -105,7 +105,7 @@ describe("issue milestone association", () => {
     expect(revision()).toBe(before + 1);
   });
   test("rejects milestone from another project", async () => {
-    const other = await addMilestone(context, { projectId: "other-project", name: "Other project milestone", target: null, ordinal: 0 }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const other = await addMilestone(context, { projectId: "other-project", name: "Other project milestone", effortSessions: null, ordinal: 0 }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: other.milestoneId, reason: "wrong project" }, mutation("milestone-cross-project", 3))).rejects.toMatchObject({ code: "milestone.project-mismatch" });
   });
   test("invalid input and absent milestones use distinct refusal codes", async () => {
@@ -116,7 +116,7 @@ describe("issue milestone association", () => {
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, milestoneId: "missing-milestone" }, mutation("milestone-not-found", 3))).rejects.toMatchObject({ code: "milestone.not-found" });
   });
   test("supports explicit move and clear", async () => {
-    const another = await addMilestone(context, { projectId, name: `Move target ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const another = await addMilestone(context, { projectId, name: `Move target ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     otherMilestoneId = another.milestoneId;
     const moved = await assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: otherMilestoneId, reason: "reassign" }, mutation("milestone-move", 3));
     expect(moved.revision).toBe(4);
@@ -126,17 +126,17 @@ describe("issue milestone association", () => {
     expect((await getIssue(context, moved.issueId)).milestoneId).toBeNull();
   });
   test("delivered and dropped milestones refuse assignments", async () => {
-    const delivered = await addMilestone(context, { projectId, name: "Terminal delivered", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const delivered = await addMilestone(context, { projectId, name: "Terminal delivered", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     makeIssue("milestone-terminal-closed");
     const seated = await assignIssueMilestone(context, "milestone-terminal-closed", { projectId, milestoneId: delivered.milestoneId, reason: "prepare delivery" }, mutation("milestone-terminal-prepare", 1));
     await closeIssue(context, seated.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", operationId: "milestone-terminal-close", expectedRevision: seated.revision });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "active" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "delivered" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: delivered.milestoneId, reason: "delivered" }, mutation("milestone-terminal-delivered", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
-    const dropped = await addMilestone(context, { projectId, name: "Terminal dropped", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const dropped = await addMilestone(context, { projectId, name: "Terminal dropped", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, dropped.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: dropped.milestoneId, reason: "dropped" }, mutation("milestone-terminal-dropped", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
-    const source = await addMilestone(context, { projectId, name: "Terminal source", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const source = await addMilestone(context, { projectId, name: "Terminal source", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     makeIssue("milestone-terminal-source-issue");
     const sourceAssigned = await assignIssueMilestone(context, "milestone-terminal-source-issue", { projectId, milestoneId: source.milestoneId, reason: "source guard" }, mutation("milestone-terminal-source-assign", 1));
     await updateMilestone(context, projectId, source.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
@@ -150,7 +150,7 @@ describe("issue milestone association", () => {
     expect(issueRevision("milestone-assignment-issue")).toBe(issueBefore);
   });
   test("capture and close paths preserve existing milestone membership", async () => {
-    const made = await addMilestone(context, { projectId, name: `Membership ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const made = await addMilestone(context, { projectId, name: `Membership ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     const assigned = await assignIssueMilestone(context, "milestone-membership-issue", { projectId, milestoneId: made.milestoneId, reason: "associate" }, mutation("milestone-membership-assign", 1));
     const capture = await captureIssue(context, { projectId, title: "Captured", kind: "bug", severity: "low", impact: "impact", acceptance: "acceptance", sourceIdentity: "milestone", rootCauseKey: "capture", acceptanceKey: "capture", occurrenceKey: "milestone-capture", sourceKind: "test", location: "test", observedBehavior: "observed", evidence: [], discoveredAt: "2026-09-29T00:00:00Z" }, { actor: "project-manager", operationId: "milestone-capture-op" });
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);
@@ -163,7 +163,7 @@ describe("issue milestone association", () => {
 
 describe("removeMilestone", () => {
   test("removes an empty milestone and refuses a milestone that still holds issues", async () => {
-    const empty = await addMilestone(context, { projectId, name: "Removable", target: null, ordinal: 90 }, { operationId: "remove-empty-add", expectedStoreRevision: revision() });
+    const empty = await addMilestone(context, { projectId, name: "Removable", effortSessions: null, ordinal: 90 }, { operationId: "remove-empty-add", expectedStoreRevision: revision() });
     // The replay identity covers the caller's revision expectation, so the
     // retry re-presents the revision its first attempt was judged against.
     const removalRevision = revision();
@@ -172,7 +172,7 @@ describe("removeMilestone", () => {
     // Idempotent replay through the shared operation ledger.
     expect(await removeMilestone(context, projectId, empty.milestoneId, { operationId: "remove-empty", expectedStoreRevision: removalRevision })).toEqual(receipt);
 
-    const held = await addMilestone(context, { projectId, name: "Holding", target: null, ordinal: 91 }, { operationId: "remove-held-add", expectedStoreRevision: revision() });
+    const held = await addMilestone(context, { projectId, name: "Holding", effortSessions: null, ordinal: 91 }, { operationId: "remove-held-add", expectedStoreRevision: revision() });
     await assignIssueMilestone(
       context,
       "milestone-assignment-issue",
@@ -204,7 +204,7 @@ describe("removeMilestone", () => {
   });
 
   test("a stale expectedStoreRevision removal is refused and removes nothing", async () => {
-    const milestone = await addMilestone(context, { projectId, name: "Stale guard", target: null, ordinal: 92 }, { operationId: "remove-stale-add", expectedStoreRevision: revision() });
+    const milestone = await addMilestone(context, { projectId, name: "Stale guard", effortSessions: null, ordinal: 92 }, { operationId: "remove-stale-add", expectedStoreRevision: revision() });
     const current = revision();
     await expect(
       removeMilestone(context, projectId, milestone.milestoneId, { operationId: "remove-stale", expectedStoreRevision: current - 1 }),

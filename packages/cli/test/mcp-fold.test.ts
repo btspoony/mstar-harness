@@ -37,9 +37,21 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * because `issue move` publishes four new fields (`toAuthority`, `discard`,
  * `input`, `out`) for its staged move and the two-checkout exchange. Every other
  * family is byte-identical, the fold's own source is untouched, and the growth
- * is the shipped command contract, so the surface measures 34_047.
+ * is the shipped command contract, so the surface measures 34_047. The ceiling
+ * is an upper bound: a later contract shrinkage does not re-take it.
+ *
+ * Re-taken for the milestone effort contract: `mstar_milestone` grows 14 chars, because
+ * `milestone add` and `milestone update` publish `--effort-sessions` in place of the retired date
+ * flags and `milestone update` publishes `--clear-effort-sessions`. The fold's own source is
+ * untouched and every other family is unchanged, so the growth is the shipped command contract and
+ * the surface measures 34_061.
+ *
+ * Re-taken after merging the two-checkout move exchange into the milestone-effort branch: the
+ * exchange widened the `issue move` contract further (the `input`/`out` payload pair of the
+ * staged move), so the surface measures 34_103 against the same unchanged fold source. The growth
+ * is the shipped command contract, not a publication-rule change.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 34_047;
+const PUBLISHED_SURFACE_CEILING_CHARS = 34_103;
 
 type PublishedTool = Readonly<{
   name: string;

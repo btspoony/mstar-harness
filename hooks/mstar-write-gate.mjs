@@ -8880,6 +8880,8 @@ var init_collaboration_remote_read = __esm(() => {
   SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
   TERMINAL = new Set(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
 });
+var ISSUE_MOVE_ROUTES;
+var PROVIDER_ISSUE_ID2;
 var MOVE_TRANSITIONS;
 var MOVE_COLUMNS;
 var CARRIED_ISSUE_COLUMNS;
@@ -8889,6 +8891,13 @@ var init_cross_authority_move = __esm(() => {
   init_collaboration_store();
   init_issue();
   init_store_db();
+  ISSUE_MOVE_ROUTES = [
+    "local-local",
+    "local-remote",
+    "remote-local",
+    "remote-unknown"
+  ];
+  PROVIDER_ISSUE_ID2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   MOVE_TRANSITIONS = {
     staged: ["verified", "discarded"],
     verified: ["switched", "discarded"],
@@ -8896,7 +8905,7 @@ var init_cross_authority_move = __esm(() => {
     published: [],
     discarded: []
   };
-  MOVE_COLUMNS = "operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, source_authority, " + "destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, staged_counts, " + "source_store_id, source_epoch, removed_sync_rows, created_at, updated_at";
+  MOVE_COLUMNS = "operation_id, role, route, request_hash, issue_ref, source_issue_id, destination_issue_id, source_authority, " + "destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, staged_counts, " + "source_store_id, source_epoch, removed_sync_rows, created_at, updated_at";
   CARRIED_ISSUE_COLUMNS = [
     "project_id",
     "title",
@@ -9090,14 +9099,13 @@ var init_collaboration_cutover = __esm(() => {
   init_store_db();
   init_core();
   init_store_activation();
-  SOURCE_SCHEMA_FLOOR = MIGRATIONS[MIGRATIONS.length - 2].version;
+  SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions").version;
   LIVE_SESSION_STATES = { active: true, suspended: true };
   LEDGER_COLUMNS = ["operation_id", "request_hash", "result_json", "committed_at"];
 });
 var RCF3339;
 var SHA256;
 var GIT_OBJECT_ID2;
-var CALENDAR_DATE;
 var LINEAR_ID2;
 var UUID;
 var CAPABILITY_KEYS;
@@ -9122,6 +9130,7 @@ var PROVENANCE_KEYS;
 var PROJECT_MOVE_KEYS;
 var ADOPTION_CAPTURE_KEYS;
 var ADOPTION_RETAIN_KEYS;
+var REMOTE_UNSETTLED_STATES;
 var REMOTE_CHANGE_KINDS;
 var REMOTE_INTENT_STATES;
 var INTENT_STATES;
@@ -9139,7 +9148,6 @@ var init_collaboration_remote = __esm(() => {
   RCF3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
   SHA256 = /^[0-9a-f]{64}$/;
   GIT_OBJECT_ID2 = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-  CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
   LINEAR_ID2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   UUID = LINEAR_ID2;
   CAPABILITY_KEYS = ["fullRead", "appendOnly", "exactLookup", "fieldFidelity", "privateAudience"];
@@ -9261,6 +9269,7 @@ var init_collaboration_remote = __esm(() => {
     "discoveredAt"
   ];
   ADOPTION_RETAIN_KEYS = ["issueRef", "fields", "occurrences", "transitions", "relations", "provenance", "projectMoves"];
+  REMOTE_UNSETTLED_STATES = ["enqueued", "unconfirmed", "conflict"];
   REMOTE_CHANGE_KINDS = ["issue-create", "issue-adopt", "issue-replace", "project-replace"];
   REMOTE_INTENT_STATES = [
     "enqueued",
@@ -10464,7 +10473,7 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
     throw new SettlementAttestationNeeded(holders, holders.map((holder) => pendingStoppedBySessionId.get(holder)), at);
   }
 }
-function migrationChecksum(migration) {
+function migrationChecksum2(migration) {
   return createHash17("sha256").update(migration.sql, "utf8").digest("hex");
 }
 function readAppliedMigrations(db, tolerateMissingTable) {
@@ -11495,6 +11504,13 @@ create unique index execution_collaboration_intents_pending_plan
   on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
   where phase = 'prepared' and plan_id is not null;
 `;
+var MIGRATION_23_SQL = `
+alter table project_milestones add column effort_sessions integer check (
+  effort_sessions is null or
+  (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
+);
+alter table project_milestones drop column target;
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -11553,7 +11569,8 @@ var init_store_db = __esm(() => {
     { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
     { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
     { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
-    { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL }
+    { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL },
+    { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL, requiresTable: "project_milestones" }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -11688,9 +11705,39 @@ function assertCurrentSchema(db, dbPath) {
   assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
+function assertRemoteCacheSchema(db, dbPath) {
+  assertInventory(db, dbPath, COLLABORATION_V2_TABLES, COLLABORATION_V2_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
+}
 function assertOutboxSchema(db, dbPath) {
   assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V3_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
+}
+function assertMoveSchema(db, dbPath) {
+  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_V4_COLUMNS, true);
+  assertKeyLayout(db, dbPath, [...COLLABORATION_KEY_LAYOUT, ...COLLABORATION_KEY_LAYOUT_MOVE]);
+}
+function assertLegacySchema(db, dbPath) {
+  assertInventory(db, dbPath, COLLABORATION_V1_TABLES, COLLABORATION_V1_COLUMNS, false);
+}
+function assertMoveRouteSchema(db, dbPath) {
+  assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_V5_ROUTE_COLUMNS, true);
+  assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
+}
+function assertVersionInventory(db, dbPath, version) {
+  const inventory = collaborationInventoryOf(version);
+  if (inventory === COLLABORATION_CURRENT_COLUMNS)
+    assertCurrentSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V5_ROUTE_COLUMNS)
+    assertMoveRouteSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V4_COLUMNS)
+    assertMoveSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V3_COLUMNS)
+    assertOutboxSchema(db, dbPath);
+  else if (inventory === COLLABORATION_V2_COLUMNS)
+    assertRemoteCacheSchema(db, dbPath);
+  else
+    assertLegacySchema(db, dbPath);
 }
 function assertInventory(db, dbPath, tablesWanted, columnsWanted, exactColumns) {
   const rows = db.prepare("select name from sqlite_master where type = 'table'").all();
@@ -11811,8 +11858,8 @@ function validateCollaborationMigrations(applied) {
   const version = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
   for (const row of applied) {
     const compiled = COLLABORATION_MIGRATIONS.find((migration) => migration.version === row.version);
-    if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
-      throw new StoreError("store.corrupt", `The collaboration store records a v${String(row.version)} "${row.name}" migration that is not this build's ` + `compiled "${compiled.name}" migration; the lane is refused rather than trusted on unknown bytes. ` + `Nothing was modified.`, { migration: row.version, recordedChecksum: row.checksum, compiledChecksum: migrationChecksum(compiled) });
+    if (row.name !== compiled.name || row.checksum !== migrationChecksum2(compiled)) {
+      throw new StoreError("store.corrupt", `The collaboration store records a v${String(row.version)} "${row.name}" migration that is not this build's ` + `compiled "${compiled.name}" migration; the lane is refused rather than trusted on unknown bytes. ` + `Nothing was modified.`, { migration: row.version, recordedChecksum: row.checksum, compiledChecksum: migrationChecksum2(compiled) });
     }
   }
   return version;
@@ -11821,11 +11868,11 @@ function admit(db, location, expected, requirement, options = {}) {
   try {
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1].version;
-    const settlesOutbox = options.settleOutbox === true && location.mode === "remote" && schemaVersion === COLLABORATION_OUTBOX_SCHEMA.version;
+    const settlesOutbox = options.settleOutbox === true && location.mode === "remote" && schemaVersion >= COLLABORATION_OUTBOX_SCHEMA.version && schemaVersion < current;
     if (schemaVersion < current && !settlesOutbox)
       throw upgradeRequired(location, schemaVersion);
     if (settlesOutbox)
-      assertOutboxSchema(db, location.dbPath);
+      assertVersionInventory(db, location.dbPath, schemaVersion);
     else
       assertCurrentSchema(db, location.dbPath);
     const meta = readMeta2(db);
@@ -11892,6 +11939,19 @@ async function openAdmission(location, requirement, expected, timeout, options =
     db.close();
     throw error;
   }
+}
+function collaborationInventoryOf(version) {
+  if (version <= 1)
+    return COLLABORATION_V1_COLUMNS;
+  if (version < COLLABORATION_OUTBOX_SCHEMA.version)
+    return COLLABORATION_V2_COLUMNS;
+  if (version < COLLABORATION_MOVE_SCHEMA.version)
+    return COLLABORATION_V3_COLUMNS;
+  if (version < COLLABORATION_MOVE_ROUTE_SCHEMA.version)
+    return COLLABORATION_V4_COLUMNS;
+  if (version < COLLABORATION_MILESTONE_EFFORT_SCHEMA.version)
+    return COLLABORATION_V5_ROUTE_COLUMNS;
+  return COLLABORATION_CURRENT_COLUMNS;
 }
 function bindingPath(context) {
   return join24(context.harnessDir, COLLABORATION_BINDING_FILE);
@@ -12621,6 +12681,12 @@ when exists (
   where m.role = 'source' and m.phase in ('staged','verified','switched')
     and m.source_issue_id in (old.from_issue, old.to_issue, new.from_issue, new.to_issue)
 )
+-- note: the publisher's own edge rewrite is the one admitted exception: its row committed
+-- 'published' in this same transaction before the rewrite, which the 'published' probe sees.
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.to_issue
+)
 begin
   select raise(abort, 'issue.move-in-progress');
 end;
@@ -12643,22 +12709,73 @@ when exists (
 begin
   select raise(abort, 'issue.move-in-progress');
 end;
+create trigger issue_sync_state_move_guard_delete before delete on issue_sync_state
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id = old.local_id
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
+
+-- invariant: A publication delete must not strip a frozen record's links early: the relation rows
+-- are the copy the destination admitted, and only the ledger's terminal phase may remove them.
+-- The publication's own delete of its OUTGOING edges is the one admitted exception, visible the
+-- same way: the row committed 'published' in this same transaction before the children go.
+create trigger relations_move_guard_delete before delete on relations
+when exists (
+  select 1 from issue_moves m
+  where m.role = 'source' and m.phase in ('staged','verified','switched')
+    and m.source_issue_id in (old.from_issue, old.to_issue)
+)
+and not exists (
+  select 1 from issue_moves p
+  where p.role = 'source' and p.phase = 'published' and p.source_issue_id = old.from_issue
+)
+begin
+  select raise(abort, 'issue.move-in-progress');
+end;
 `;
 var COLLABORATION_MOVE_SCHEMA;
+var COLLABORATION_MOVE_ROUTE_SQL = `
+alter table issue_moves add column route text not null default 'local-local'
+  check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'));
+update issue_moves set route = case
+  when issue_moves.role = 'source' then
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'remote-unknown' else 'local-remote' end
+  else
+    case when (select mode from collaboration_meta where id = 1) = 'remote' then 'local-remote' else 'remote-local' end
+end;
+`;
+var COLLABORATION_MOVE_ROUTE_SCHEMA;
+var COLLABORATION_MILESTONE_EFFORT_V6_SQL = `
+alter table project_milestones add column effort_sessions integer check (
+  effort_sessions is null or
+  (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
+);
+alter table project_milestones drop column target;
+`;
+var COLLABORATION_MILESTONE_EFFORT_SCHEMA;
 var COLLABORATION_MIGRATIONS;
 var COLLABORATION_REMOTE_TABLES;
 var COLLABORATION_OUTBOX_TABLES;
 var COLLABORATION_TABLES;
+var COLLABORATION_V1_COLUMNS;
 var COLLABORATION_COLUMNS;
 var COLLABORATION_V2_COLUMNS;
 var COLLABORATION_OUTBOX_COLUMNS;
 var COLLABORATION_MOVE_COLUMNS;
+var COLLABORATION_ROUTE_COLUMNS;
 var COLLABORATION_V3_COLUMNS;
+var COLLABORATION_V4_COLUMNS;
+var COLLABORATION_V5_ROUTE_COLUMNS;
 var COLLABORATION_CURRENT_COLUMNS;
 var COLLABORATION_KEY_LAYOUT_V2;
 var COLLABORATION_KEY_LAYOUT_OUTBOX;
 var COLLABORATION_KEY_LAYOUT;
 var COLLABORATION_KEY_LAYOUT_MOVE;
+var COLLABORATION_KEY_LAYOUT_ROUTE;
 var COLLABORATION_KEY_LAYOUT_CURRENT;
 var COLLABORATION_MOVE_TABLES;
 var COLLABORATION_V3_TABLES;
@@ -12669,7 +12786,11 @@ var PASS_THROUGH_STORE_CODES;
 var TRANSACTION_CONTROL_KEYWORDS;
 var CARRIED_BINDING_COLUMNS;
 var CARRIED_INTENT_COLUMNS;
+var REMOTE_CACHE_REBUILD_ROUTE;
 var SELECTOR_COMMIT;
+var REMOTE_CACHE_RECOVERY_TABLES;
+var RECOVERY_FORBIDDEN_FORM;
+var RECOVERY_FORBIDDEN_REPLACE;
 var init_collaboration_store = __esm(() => {
   init_collaboration_identity();
   init_store_db();
@@ -12693,11 +12814,23 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     name: "collaboration-cross-authority",
     sql: COLLABORATION_MOVE_V4_SQL
   };
+  COLLABORATION_MOVE_ROUTE_SCHEMA = {
+    version: 5,
+    name: "collaboration-move-route",
+    sql: COLLABORATION_MOVE_ROUTE_SQL
+  };
+  COLLABORATION_MILESTONE_EFFORT_SCHEMA = {
+    version: 6,
+    name: "collaboration-milestone-effort",
+    sql: COLLABORATION_MILESTONE_EFFORT_V6_SQL
+  };
   COLLABORATION_MIGRATIONS = [
     COLLABORATION_SCHEMA,
     COLLABORATION_REMOTE_SCHEMA,
     COLLABORATION_OUTBOX_SCHEMA,
-    COLLABORATION_MOVE_SCHEMA
+    COLLABORATION_MOVE_SCHEMA,
+    COLLABORATION_MOVE_ROUTE_SCHEMA,
+    COLLABORATION_MILESTONE_EFFORT_SCHEMA
   ];
   COLLABORATION_REMOTE_TABLES = [
     "remote_bindings",
@@ -12733,7 +12866,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     "sync_cursor",
     "sync_runs"
   ];
-  COLLABORATION_COLUMNS = {
+  COLLABORATION_V1_COLUMNS = {
     catalog_entities: [
       "kind",
       "id",
@@ -12907,9 +13040,24 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     sync_cursor: ["binding_id", "direction", "cursor", "updated_at"],
     sync_runs: ["binding_id", "direction", "run_id", "holder_pid", "holder_host", "started_at", "reason"]
   };
+  COLLABORATION_COLUMNS = {
+    ...COLLABORATION_V1_COLUMNS,
+    project_milestones: [
+      "milestone_id",
+      "project_id",
+      "project_kind",
+      "name",
+      "effort_sessions",
+      "status",
+      "ordinal",
+      "revision",
+      "created_at",
+      "updated_at"
+    ]
+  };
   COLLABORATION_V2_COLUMNS = {
-    ...COLLABORATION_COLUMNS,
-    issues: [...COLLABORATION_COLUMNS.issues, "issue_ref"],
+    ...COLLABORATION_V1_COLUMNS,
+    issues: [...COLLABORATION_V1_COLUMNS.issues, "issue_ref"],
     remote_bindings: [
       "generation",
       "project_key",
@@ -12978,13 +13126,35 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       "updated_at"
     ]
   };
+  COLLABORATION_ROUTE_COLUMNS = {
+    issue_moves: [...COLLABORATION_MOVE_COLUMNS.issue_moves, "route"]
+  };
   COLLABORATION_V3_COLUMNS = {
     ...COLLABORATION_V2_COLUMNS,
     ...COLLABORATION_OUTBOX_COLUMNS
   };
-  COLLABORATION_CURRENT_COLUMNS = {
+  COLLABORATION_V4_COLUMNS = {
     ...COLLABORATION_V3_COLUMNS,
     ...COLLABORATION_MOVE_COLUMNS
+  };
+  COLLABORATION_V5_ROUTE_COLUMNS = {
+    ...COLLABORATION_V4_COLUMNS,
+    ...COLLABORATION_ROUTE_COLUMNS
+  };
+  COLLABORATION_CURRENT_COLUMNS = {
+    ...COLLABORATION_V5_ROUTE_COLUMNS,
+    project_milestones: [
+      "milestone_id",
+      "project_id",
+      "project_kind",
+      "name",
+      "effort_sessions",
+      "status",
+      "ordinal",
+      "revision",
+      "created_at",
+      "updated_at"
+    ]
   };
   COLLABORATION_KEY_LAYOUT_V2 = [
     {
@@ -13148,9 +13318,20 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       ]
     }
   ];
+  COLLABORATION_KEY_LAYOUT_ROUTE = [
+    COLLABORATION_KEY_LAYOUT_MOVE[0],
+    {
+      ...COLLABORATION_KEY_LAYOUT_MOVE[1],
+      notNull: [...COLLABORATION_KEY_LAYOUT_MOVE[1].notNull, "route"],
+      checks: [
+        ...COLLABORATION_KEY_LAYOUT_MOVE[1].checks,
+        "check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'))"
+      ]
+    }
+  ];
   COLLABORATION_KEY_LAYOUT_CURRENT = [
     ...COLLABORATION_KEY_LAYOUT,
-    ...COLLABORATION_KEY_LAYOUT_MOVE
+    ...COLLABORATION_KEY_LAYOUT_ROUTE
   ];
   COLLABORATION_MOVE_TABLES = ["issue_moves"];
   COLLABORATION_V3_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_MOVE_TABLES.includes(table));
@@ -13189,7 +13370,14 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   };
   CARRIED_BINDING_COLUMNS = "generation, project_key, selector_commit, provider, workspace_id, team_id, provider_project_id, " + "journal_issue_id, writer_id, verified_at, verification_json";
   CARRIED_INTENT_COLUMNS = "operation_id, generation, project_key, request_hash, request_json, execution_key_json, state, attempt_id, " + "created_at, updated_at, abandon_reason, resolves, resolved_by";
+  REMOTE_CACHE_REBUILD_ROUTE = "rebuild the derived cache through the ordinary bootstrap - stop every checkout of this repository that has " + "the cache bound (the cache is user-level, not per checkout); settle every other unsettled intent that cache " + "holds through the outbox verbs its own state line names, before anything is removed, because stopping a " + "checkout proves nothing about a permitted send whose outcome is unknown at the provider, and the file holds " + "the only attempt ids, frozen requests and receipts that settling such an intent needs; for anything still " + "unsettled or unreadable, keep the cache file as evidence - move it aside under a retained name instead of " + "deleting it, since it is the only record of an effect that may already have happened at the provider and a " + "fresh bind never restores it; then confirm the checked selector and this checkout's binding satisfy a fresh " + "reviewed bind, and if they do not, correct the selector and keep the retained copy until they do, deleting " + "nothing; only then remove the name the checkout " + "reads (or confirm it is gone), run `mstar store collaboration remote status`, and perform a fresh reviewed " + "remote bind - and the pending intent's record is not preserved by the rebuild itself: the retained copy " + "preserves it, and an operator can inspect it later.";
   SELECTOR_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  REMOTE_CACHE_RECOVERY_TABLES = new Set([
+    ...COLLABORATION_REMOTE_TABLES,
+    ...COLLABORATION_OUTBOX_TABLES
+  ]);
+  RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|temp)\b/;
+  RECOVERY_FORBIDDEN_REPLACE = /(?:^|;)\s*replace\s+into\b/;
 });
 var RoadmapError;
 var init_roadmap_store = __esm(() => {
@@ -19377,7 +19565,7 @@ var remoteIssue2 = object({
 var milestoneDocument = object({
   milestoneId: string4(),
   name: string4(),
-  target: string4().regex(/^\d{4}-\d{2}-\d{2}$/, "a YYYY-MM-DD date").nullable(),
+  effortSessions: number2().int().min(1).nullable().describe("null or an integer of at least 1 (a count of standard sessions)"),
   status: _enum(["planned", "active", "delivered", "dropped"]),
   ordinal: number2().int().nonnegative(),
   revision: number2().int().positive(),
@@ -19521,6 +19709,36 @@ var remoteForkObservationDocumentSchema = object({
   asOf: rfc3339,
   coverage: literal("complete"),
   heads: array(object({ recordId: providerId2, issueRef, head: sha256Digest }).strict()).min(1)
+}).strict();
+var moveHandoffDocumentSchema = object({
+  version: literal(1),
+  phase: _enum(["request", "staged", "switch", "admission"]),
+  route: _enum(["local-local", "local-remote", "remote-local", "remote-unknown"]),
+  operationId: providerId2,
+  issueRef,
+  sourceAuthority: string4(),
+  destinationAuthority: string4(),
+  destinationProject: string4(),
+  actor: string4(),
+  reason: string4(),
+  payloadJson: string4(),
+  payloadDigest: sha256Digest,
+  stagedCounts: string4(),
+  sourceStoreId: string4(),
+  sourceEpoch: number2().int().positive(),
+  sourceIssueId: string4().nullable(),
+  destinationIssueId: providerId2.nullable(),
+  confirmation: object({
+    operationId: providerId2,
+    providerIssueId: providerId2,
+    counts: object({
+      occurrences: number2().int().nonnegative(),
+      issueTransitions: number2().int().nonnegative(),
+      provenance: number2().int().nonnegative(),
+      relations: number2().int().nonnegative(),
+      issueProjectMoves: number2().int().nonnegative()
+    }).strict()
+  }).strict().nullable()
 }).strict();
 init_collaboration_store();
 init_issue();

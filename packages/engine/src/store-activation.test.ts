@@ -3011,6 +3011,86 @@ describe("repository backup pair", () => {
     }
   });
 
+  test("a verified version-3 collaboration image restores by advancing the staged copy", async () => {
+    const fixture = await pairedWorkspace("pair-v3-image-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const location = resolveCollaborationLocation(fixture.context);
+    const migrations = collaborationStore.COLLABORATION_MIGRATIONS;
+    const current = migrations[migrations.length - 1]!.version;
+    const generation = receipt.collaboration.authority;
+
+    // note: An earlier release verified this pair against the v3 inventory - today's admitted v3
+    // shape, before the effort migration appended. The images and manifest move together.
+    const imagePath = pairImage(receipt, "collaboration");
+    rmSync(imagePath, { force: true });
+    const image = new DatabaseSync(imagePath);
+    try {
+      image.exec(SCHEMA_VERSION_TABLE_SQL);
+      for (const migration of migrations.slice(0, 3)) {
+        image.exec(migration.sql);
+        image
+          .prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
+          .run(migration.version, migration.name, migrationChecksum(migration), "2026-11-20T00:00:00.000Z");
+      }
+      image
+        .prepare(
+          "insert into collaboration_meta(id, repository_key, mode, store_id, authority_state, authority_epoch, revision, " +
+            "catalog_revision, created_at, activated_at) values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          location.repoKey,
+          generation.mode,
+          generation.storeId,
+          generation.state,
+          generation.epoch,
+          generation.revision,
+          generation.catalogRevision,
+          "2026-11-20T00:00:00.000Z",
+          "2026-11-20T00:00:00.000Z",
+        );
+      image
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+            "updated_at, identity_key, issue_ref) values ('I-000001', '_default', 'Version three finding', 'bug', " +
+            "'high', 'resolved', 'impact', 'acceptance', ?, ?, 'v3-identity', 'mstar:issue:00000000-0000-4000-8000-0000000000ff1')",
+        )
+        .run("2026-11-20T00:00:00.000Z", "2026-11-20T00:00:00.000Z");
+    } finally {
+      image.close();
+    }
+    const earlier = {
+      ...receipt,
+      collaboration: { ...receipt.collaboration, counts: v1ImageCounts(imagePath) },
+    };
+    writeFileSync(receipt.manifestPath, `${JSON.stringify(earlier, null, 2)}\n`);
+
+    // note: Reads of the image's OWN bytes: a restore that advanced the SOURCE in place would show
+    // another ledger here.
+    const source = readCollaborationSource(imagePath);
+    expect(source.versions).toEqual(migrations.slice(0, 3).map(({ version }) => version));
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+    const restored = await restoreCollaborationBackup(fixture.context, earlier, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    // invariant: The published authority is THIS build's current schema; the v3 history survived.
+    expect(restored).toMatchObject({ state: "active", schemaVersion: current });
+    expect(readCollaborationSource(imagePath)).toEqual(source);
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.db.prepare("select id, issue_ref from issues order by id").all()).toEqual([
+        { id: "I-000001", issue_ref: expect.stringMatching(/^mstar:issue:/) },
+      ]);
+      expect(handle.db.prepare("select max(version) as n from schema_version").get()).toEqual({ n: current });
+      expect(
+        (handle.db.prepare("pragma table_info(project_milestones)").all() as Array<{ name?: string }>).map((c) => c.name),
+      ).toContain("effort_sessions");
+    } finally {
+      handle.close();
+    }
+  });
+
   test("an image from a newer schema names the build or another pair as its recovery", async () => {
     const fixture = await pairedWorkspace("pair-newer-schema-");
     const out = join(fixture.harness, "archived", "recovery", "pair.json");

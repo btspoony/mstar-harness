@@ -229,7 +229,7 @@ const remoteIssue = z
 const milestoneDocument = z.object({
   milestoneId: z.string(),
   name: z.string(),
-  target: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a YYYY-MM-DD date").nullable(),
+  effortSessions: z.number().int().min(1).nullable().describe("null or an integer of at least 1 (a count of standard sessions)"),
   status: z.enum(["planned", "active", "delivered", "dropped"]),
   ordinal: z.number().int().nonnegative(),
   revision: z.number().int().positive(),
