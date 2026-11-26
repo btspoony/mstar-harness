@@ -12,10 +12,10 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 ## Scope（摘要）
 
 - **仅 PM 决定分支**（唯一例外见 § 唯一分支决策者）；其他可写角色不得自行新开分支或切回 `main`。
-- **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
+- **Assignment 须含其一（front matter 键）**：`working_branch: <existing>` | `working_branch: create <new> from <base>` | `branch_policy: direct on <branch> — <reason>`。
 - **L1:** Git-derived main/control root + separate recorded integration checkout + distinct row metadata.worktree_path/source branch. Atomic coordination and serial integration remain; no per-row execution lease.
-- **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。
-- **Before QC / PM Acceptance:** integrate reviewed changes into one `Working branch` HEAD; QC and acceptance use text-identical `Review cwd`, `plan_id`, `Review range / Diff basis` and branch fields.
+- **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`worktree_path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。
+- **Before QC / PM Acceptance:** integrate reviewed changes into one `working_branch` HEAD; QC and acceptance use text-identical `review_cwd`, `plan_id`, `review_range` / `diff_basis` and branch fields.
 
 ## Git 功能分支、同仓并发与 Worktree 对齐
 
@@ -26,25 +26,25 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 ### 默认规则
 
 - 不得在**默认保护分支**（常见名：`main`、`master`；以项目约定为准）上直接实现功能改动，除非 Assignment 含显式例外。
-- 例外须在 Assignment 中写明一行：**`Branch policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
+- 例外须在 Assignment front matter 中写明一行：**`branch_policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
 
-### 控制域写入（`Write domain: control`）
+### 控制域写入（`write_domain: control`）
 
-仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`Write domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`Control write paths: <path>[, <path>…]`** 列出实际要写的目标（绝对路径，或相对 `Worktree path` 解析；结尾的 `/` **显式声明目录**，适用 Git 目录规则如 `!.mstar/notes/`；不带 `/` 的条目**同时**按文件与目录两条规则核验，**两种形状都必须被忽略**——任一形状会被提交即拒绝（`dispatch.control-write.target-committable`）。例：`.mstar/**` 下 `.mstar/plans/run.md` 两种形状都被忽略因而通过；`.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**` 下 `.mstar/notes` 的文件路径被忽略、目录内容却仍会提交，因此被拒）。这类单子可写 **`Worktree path`** = 控制根、**`Working branch`** = 控制检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例，不是字面指令），**豁免**默认保护分支门禁；三种分支写法仍全部有效（`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`），声明值须与控制检出实际检出的分支一致。
+仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`write_domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`control_write_paths: [<path>, …]`** 列出实际要写的目标（绝对路径，或相对 `worktree_path` 解析；结尾的 `/` **显式声明目录**，适用 Git 目录规则如 `!.mstar/notes/`；不带 `/` 的条目**同时**按文件与目录两条规则核验，**两种形状都必须被忽略**——任一形状会被提交即拒绝（`dispatch.control-write.target-committable`）。例：`.mstar/**` 下 `.mstar/plans/run.md` 两种形状都被忽略因而通过；`.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**` 下 `.mstar/notes` 的文件路径被忽略、目录内容却仍会提交，因此被拒）。这类单子可写 **`worktree_path`** = 控制根、**`working_branch`** = 控制检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例，不是字面指令），**豁免**默认保护分支门禁；三种分支写法仍全部有效（`working_branch: <existing>` | `create <new> from <base>` | `branch_policy: direct on <branch> — <reason>`），声明值须与控制检出实际检出的分支一致。
 
-引擎核验（`mstar dispatch validate`；同一个控制域写入 validator 也被宿主 dispatch 门禁复用）：`Worktree path`（按 Assignment 所在目录解析后 realpath）等于控制根、声明的分支（三种写法任一，含 `Branch policy: direct on <branch> — <reason>`）等于控制根当前检出分支，且**逐个探测声明的目标**——结尾带 `/` 的目标只按目录核验，其余目标须在文件**与**目录两种形状下都被 Git 忽略（任一形状会被提交即拒），全部目标还须位于控制根内。核验的是真实声明目标而非整个 harness：仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.agents/specs/…`）被拒。拒绝码：`dispatch.control-write.control-root-unresolved`（从本仓库的检出运行）、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`（该目标会被提交 ⇒ 改用工作分支/PR）、`dispatch.control-write.target-outside-control`、`dispatch.control-write.target-unverifiable`。字段层另有 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch`、`assignment.field.control-write-paths-missing`（`control` 域必须写 `Worktree path`、`Working branch` 与 `Control write paths`）。同一个控制域写入 validator 也在共享宿主 dispatch 门禁（`composeDispatchGate`，OpenCode v2 / dsh / omp 的 hard enforcement）内运行：控制域文本只在控制根可解析且 worktree、分支、逐目标全部通过时放行——宿主无法靠声明该字段绕过硬门禁；控制根不可核验（无控制根、git 探测失败）一律保持拒绝并附修复路径，绝不静默放行。
+引擎核验（`mstar dispatch validate`；同一个控制域写入 validator 也被宿主 dispatch 门禁复用）：`worktree_path`（按 Assignment 所在目录解析后 realpath）等于控制根、声明的分支（三种写法任一，含 `branch_policy: direct on <branch> — <reason>`）等于控制根当前检出分支，且**逐个探测声明的目标**——结尾带 `/` 的目标只按目录核验，其余目标须在文件**与**目录两种形状下都被 Git 忽略（任一形状会被提交即拒），全部目标还须位于控制根内。核验的是真实声明目标而非整个 harness：仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.agents/specs/…`）被拒。拒绝码：`dispatch.control-write.control-root-unresolved`（从本仓库的检出运行）、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`（该目标会被提交 ⇒ 改用工作分支/PR）、`dispatch.control-write.target-outside-control`、`dispatch.control-write.target-unverifiable`。字段层另有 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch`、`assignment.field.control-write-paths-missing`（`control` 域必须写 `worktree_path`、`working_branch` 与 `control_write_paths`）。同一个控制域写入 validator 也在共享宿主 dispatch 门禁（`composeDispatchGate`，OpenCode v2 / dsh / omp 的 hard enforcement）内运行：控制域文本只在控制根可解析且 worktree、分支、逐目标全部通过时放行——宿主无法靠声明该字段绕过硬门禁；控制根不可核验（无控制根、git 探测失败）一律保持拒绝并附修复路径，绝不静默放行。
 
 ### `<base>` 与叠分支（stacked branches）
 
 - 门禁的目标是**不在未授权的默认分支上直接提交**，不是「只能从 `main` 开新分支」。
 - 当需要**从已有功能分支继续拆新分支**时，Assignment 应写清**祖先分支** `<base>`，例如：`create feature/foo-part2 from feature/foo`。
 - **`<base>` 可取**：`main` / `master`（或项目默认分支名）、任意已存在的 `feature/*` / `fix/*`、远程跟踪分支名、或 **`current`**（表示以执行者检出时的 `HEAD` 为祖先，用于「就在当前分支上再拉一枝」）。
-- 若只写 **`Working branch`: `feature/foo`且无「create … from …」**：表示**沿用 / 切到**该已存在分支上开发，不要求新建。
+- 若只写 **`working_branch`: `feature/foo`且无「create … from …」**：表示**沿用 / 切到**该已存在分支上开发，不要求新建。
 - 若写新建但未写 `<base>`：实现侧应**停下问** `project-manager`（或按项目 `AGENTS.md` 的默认 base）；**禁止**擅自假设「一定是 `main`」。
 
 ### 角色职责
 
-- **Primary PM alone selects branches:** before dispatching any repo-writing product/architecture/dev/ops/prompt role, record `Working branch` (existing or `create <new> from <base>`) and preserve explicit user branch/base instructions (direct `ops-engineer` exception → § 唯一分支决策者).
+- **Primary PM alone selects branches:** before dispatching any repo-writing product/architecture/dev/ops/prompt role, record `working_branch` (existing or `create <new> from <base>`) and preserve explicit user branch/base instructions (direct `ops-engineer` exception → § 唯一分支决策者).
 - **Repo-writing leaves:** verify the actual checkout/branch before the first edit or commit; report the used branch. Never invent a new branch or restart on `main` / `master`; unresolved Assignment mismatch returns to PM.
 
 ## 分支协作契约（Branch Collaboration Contract）
@@ -59,7 +59,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 - 只有 `project-manager` 可以决定分支策略：
   - 继续在现有分支开发，或
   - 使用 `create <new-branch> from <base>` 新开分支，或
-  - 使用 `Branch policy: direct on <branch> — <reason>`。
+  - 使用 `branch_policy: direct on <branch> — <reason>`。
 - 其他可写角色不得自行决定开分支。唯一例外：直接调用（无 PM Assignment）且会产生可合并 diff 的 `ops-engineer`，由调用方声明上述三式之一 → `mstar-roles/references/ops-engineer.md` § Direct invocation。
 
 ### PM 必须先与用户确认
@@ -83,21 +83,21 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 ### Assignment 要求（PM）
 
-每个可写 Assignment 必须且只能包含以下之一：
+每个可写 Assignment 的 front matter 必须且只能包含以下之一：
 
-- `Working branch: <existing-branch>`
-- `Working branch: create <new-branch> from <base>`
-- `Branch policy: direct on <branch> — <reason>`
+- `working_branch: <existing-branch>`
+- `working_branch: create <new-branch> from <base>`
+- `branch_policy: direct on <branch> — <reason>`
 
 若是新开分支但缺少 `<base>`，必须暂停并向用户澄清，不能猜测。
 
-控制域写入（只写控制根 gitignored harness）另须声明 `Write domain: control`，见「控制域写入」。
+控制域写入（只写控制根 gitignored harness）另须声明 `write_domain: control`，见「控制域写入」。
 
 ### 可写角色执行规则
 
 在首次写仓库或 `commit` 之前：
 
-1. 若 Assignment 含 `Worktree path`，先 `cd` 到该目录，并通过 `git rev-parse --show-toplevel` 校验当前检出根目录与该路径一致；不一致则停下并回报 PM，不得写入。分支校验必须在该目录内进行，避免在 primary checkout 上校验分支而误报冲突。
+1. 若 Assignment 含 `worktree_path`，先 `cd` 到该目录，并通过 `git rev-parse --show-toplevel` 校验当前检出根目录与该路径一致；不一致则停下并回报 PM，不得写入。分支校验必须在该目录内进行，避免在 primary checkout 上校验分支而误报冲突。
 2. 在上一步校验过的检出目录内校验当前分支与 Assignment 是否一致。
 3. 只能执行 PM 在 Assignment 中定义的分支策略。
 4. 禁止自行切回 `main`/`master` 再重开分支流程。
@@ -109,7 +109,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 可写角色在 Completion Report 中必须明确当前工作分支，例如：
 
 - `Working branch used: <branch-name>`
-- 若 Assignment 含 `Worktree path`，还须明确实际使用的绝对检出路径：`Worktree path used: <absolute>`。
+- 若 Assignment 含 `worktree_path`，还须明确实际使用的绝对检出路径：`Worktree path used: <absolute>`。
 
 ## Worktree isolation layers (L1 vs L2)
 
@@ -118,7 +118,7 @@ Two complementary **worktree** isolation layers coexist. Do **not** conflate the
 | Layer | Scope | When | Mechanism |
 |-------|-------|------|-----------|
 | **L1** | Cross-plan (iteration Phase 2) | Ready rows implement concurrently | **Main-worktree control root** (process SSOT) + **integration worktree** (`integration_worktree_path`) + distinct **feature worktrees** from ordinary row source metadata; atomic coordination |
-| **L2** | Within-plan | Same `plan_id`, same business repo, **≥2 concurrent writable implement tracks** | **`references/parallel-writable-pre-dispatch.md`** — distinct absolute **`Worktree path`** per track |
+| **L2** | Within-plan | Same `plan_id`, same business repo, **≥2 concurrent writable implement tracks** | **`references/parallel-writable-pre-dispatch.md`** — distinct absolute **`worktree_path`** per track |
 
 **Stacking rules**
 
@@ -142,7 +142,7 @@ The integration checkout is established at Phase 2 entry; the bounded Phase 1 un
 
 Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not** categorically non-writable — writability is decided per domain. This is the **sole** three-domain statement in the skill corpus; other skills point here instead of restating it.
 
-**Process SSOT** (gitignored: `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/`; `status.json` / workflow snapshots / legacy session JSON are read-only import/history) lives at the control root = the **primary checkout** (main worktree) and is **never** writable from a worktree: address it only through absolute control-root paths, and never bootstrap a second process-SSOT copy under any worktree. **Tracked results** (Git-following: `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md`) are readable from any worktree and written where the target branch is checked out (per-plan compound and Phase 3 specs/ADR promotion → the integration worktree), then committed on that branch. **Product source** (repository code) is writable in the feature worktree on `Working branch` only.
+**Process SSOT** (gitignored: `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/`; `status.json` / workflow snapshots / legacy session JSON are read-only import/history) lives at the control root = the **primary checkout** (main worktree) and is **never** writable from a worktree: address it only through absolute control-root paths, and never bootstrap a second process-SSOT copy under any worktree. **Tracked results** (Git-following: `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md`) are readable from any worktree and written where the target branch is checked out (per-plan compound and Phase 3 specs/ADR promotion → the integration worktree), then committed on that branch. **Product source** (repository code) is writable in the feature worktree on `working_branch` only.
 
 **Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a recorded state field. Discover it instead of guessing: `mstar path resolve` reports `controlRoot` / `controlHarnessDir` / `linkedWorktree` (resolution order → **`mstar-conventions`**「`{HARNESS_DIR}` 解析顺序」). A linked checkout without `.mstar/` is **not** an uninitialized harness.
 
@@ -161,10 +161,10 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 
 **Naming conventions (PM / ops; examples only — paths MUST be canonical absolute)**
 
-1. **Control root** — always the **primary checkout** (main worktree), derived from Git (`readMainWorktree`); never a PM-designated alternative checkout, never a recorded state field; PM passes the recorded **`Main worktree branch`** unchanged in writable Assignments.
+1. **Control root** — always the **primary checkout** (main worktree), derived from Git (`readMainWorktree`); never a PM-designated alternative checkout, never a recorded state field; PM passes the recorded **`main_worktree_branch`** unchanged in writable Assignments.
 2. **Integration worktree** — one dedicated linked checkout on `spec_integration_branch`, distinct from the main worktree, recorded once as registered `integration_worktree_path` (ACTIVE store-backed workflow view); sole merge cwd for the iteration.
-3. **Feature worktree (per plan)** — one distinct subdirectory under the sibling root **`../<repo>.worktrees/`**, outside the checkout, per active `plan_id` (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). The root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. From that repo root, create with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. This keeps linked checkouts out of the repository scan/edit surface. In-repo `.worktrees/` remains a legal explicit override; registered absolute source and cleanup paths are location-agnostic. Assignment `Worktree path` / `Working branch` must match row `metadata.worktree_path` / `metadata.working_branch` and actual checkout facts; missing/corrected source scope uses ordinary prepare, never a holder or claim.
-4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
+3. **Feature worktree (per plan)** — one distinct subdirectory under the sibling root **`../<repo>.worktrees/`**, outside the checkout, per active `plan_id` (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). The root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. From that repo root, create with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. This keeps linked checkouts out of the repository scan/edit surface. In-repo `.worktrees/` remains a legal explicit override; registered absolute source and cleanup paths are location-agnostic. Assignment `worktree_path` / `working_branch` must match row `metadata.worktree_path` / `metadata.working_branch` and actual checkout facts; missing/corrected source scope uses ordinary prepare, never a holder or claim.
+4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`working_branch`**.
 
 > **Engine check:** `mstar worktree check` owns the engine-enforced checkout facts — workflow entry (`--workflow <id> --entry`: branch metadata, main residency, recorded integration checkout exists on its branch and clean, merge-lease state), per-plan L1 (`--workflow <id> --plan <plan-id>`: main residency; main/control, source-metadata and integration checkouts pairwise distinct; actual branch alignment; plus the workflow's merge-lease fact) and L2 (`--l2 --tracks <json>`: parallel writable tracks). These are factual isolation checks scoped to that engine-enforced subset, not per-row session/lease/seal admission, and not clearance of the full pre-dispatch checklist. `--control-clean` checks the control root's tracked-change gate: run it before a writable dispatch and before compound/close commits — it refuses with `worktree.main.tracked-changes` while the main worktree carries committable changes, refuses every other selector (`--plan`, the plan-id argument, `--workflow`, `--l2`, `--tracks`, `--entry`, `--integration`, `--main-branch`, `--control`) instead of silently skipping it, and only `--harness` combines (it names the harness asked about). A control root that resolves no `{HARNESS_DIR}` (`.mstarc` `harness_dir` → `.mstar/` → `.agents/` → `.plans/`/`plans/`) has no control-root contract and skips. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
@@ -175,52 +175,52 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 当 **`project-manager` 在同一调度轮次内并发启动多个** subagent（含宿主侧「并行 Task / 并行 subagent」），且 **≥2 个承接方**可能对 **同一 Git 仓库的同一工作区（同一 cwd 检出目录）**产生写文件或 `git commit` 级改动时：
 
 - **必须**为每条并发写流使用 **独立检出目录**：优先使用宿主原生 worktree/checkout 隔离能力；没有原生能力时使用 `git worktree`，并按本 skill 的目录、分支和 QC/PM Acceptance 对齐规则执行。
-- **必须**与既有分支门禁一致：每个可写承接方的 Assignment 仍须含 PM 已批准的 **`Working branch`** / **`Branch policy`**；在某一 worktree 内 **不得**擅自 `checkout` 到未授权分支或私自新建分支。
-- **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`Worktree path`** / 命名规则，或「由承接方创建/使用隔离 worktree 并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
-- **同仓、同一 plan、≥2 可写并行轨**：派发各轨实现 Assignment **之前** 确认 **`Branch policy`** 与 plan 集成分支 / topic 分支关系（见下节 **「默认编排」**），并完成 reference 清单中的 worktree 步骤。
+- **必须**与既有分支门禁一致：每个可写承接方的 Assignment 仍须含 PM 已批准的 **`working_branch`** / **`branch_policy`**；在某一 worktree 内 **不得**擅自 `checkout` 到未授权分支或私自新建分支。
+- **PM 须在 Assignment 中写清**各并发写流的 **检出约定**（例如预期 **`worktree_path`** / 命名规则，或「由承接方创建/使用隔离 worktree 并在 Completion Report 回报路径」），避免多代理默认共享同一目录导致互相覆盖、冲突或半写入状态。
+- **同仓、同一 plan、≥2 可写并行轨**：派发各轨实现 Assignment **之前** 确认 **`branch_policy`** 与 plan 集成分支 / topic 分支关系（见下节 **「默认编排」**），并完成 reference 清单中的 worktree 步骤。
 
 **串行不豁免**：并发流全部为只读、或各写入者针对**不同 Git 仓库根**时不存在共享写入面；但**写入串行**（同一时刻仅一个代理持有该仓工作区）**不**豁免隔离——只要本轮存在对同一仓库工作区的可写改动，每条写流都使用独立检出目录（主 checkout 可能被链接的技能/命令消费者读取，任何生命周期分支都不得落到主 worktree）。worktree 默认的唯一豁免通道：本轮显式 **`Worktree mode: waived`** 与 Phase 1 Review & Edit 链的未提交文档例外（`mstar-iteration` §1.6 / §6）。
 
 ### 并发 subagent 与同仓工作树（对齐）
 
-当多个可写 subagent **并发**修改 **同一仓库** 时，**不得**共用同一检出目录作为写入 cwd。PM 在分派前应规划 worktree/checkout 隔离，并在各承接方 Assignment 中写明 **`Working branch`** / **`Branch policy`** 及 **检出路径约定**（或要求回报实际 worktree 路径）。单分支决策权仍仅属 PM；worktree 只解决「目录与工作区隔离」，不替代分支授权。
+当多个可写 subagent **并发**修改 **同一仓库** 时，**不得**共用同一检出目录作为写入 cwd。PM 在分派前应规划 worktree/checkout 隔离，并在各承接方 Assignment 中写明 **`working_branch`** / **`branch_policy`** 及 **检出路径约定**（或要求回报实际 worktree 路径）。单分支决策权仍仅属 PM；worktree 只解决「目录与工作区隔离」，不替代分支授权。
 
-**同仓、同一 plan、多可写并行轨**：挂齐各轨 worktree **之前** 先确认 plan 集成分支与各轨 topic 分支及 merge 靶；QC 前归并到单一 **`Working branch` `HEAD`**。分步见下节 **「默认编排」**。
+**同仓、同一 plan、多可写并行轨**：挂齐各轨 worktree **之前** 先确认 plan 集成分支与各轨 topic 分支及 merge 靶；QC 前归并到单一 **`working_branch` `HEAD`**。分步见下节 **「默认编排」**。
 
-**QC and PM Acceptance share one feature scope:** before review, PM records the integrated `Review cwd / Worktree path`, `Working branch`, `plan_id` (or unambiguous scope label) and `Review range / Diff basis`. QC Assignments and the acceptance record keep these fields text-identical; acceptance is not a leaf Assignment.
+**QC and PM Acceptance share one feature scope:** before review, PM records the integrated `review_cwd` / `worktree_path`, `working_branch`, `plan_id` (or unambiguous scope label) and `review_range` / `diff_basis`. QC Assignments and the acceptance record keep these fields text-identical; acceptance is not a leaf Assignment.
 
 ## QC / PM Acceptance 检出对齐与多 worktree 门禁衔接（强制；避免误派）
 
 ### 对齐字段契约（canonical · Evidence）
 
-Before QC dispatch and PM Acceptance, record implementation-aligned `Review cwd / Worktree path`, `Working branch`, `plan_id` and `Review range / Diff basis`. The scope is the integrated feature, never an arbitrary default cwd.
+Before QC dispatch and PM Acceptance, record implementation-aligned `review_cwd` / `worktree_path`, `working_branch`, `plan_id` and `review_range` / `diff_basis`. The scope is the integrated feature, never an arbitrary default cwd.
 
-- **`Review cwd` / `Worktree path`**：**优先**沿用开发 Completion Report 回报的业务仓实现检出路径（该 feature 的 worktree）**当且仅当**该路径检出分支 `HEAD` 已含本轮待审全部提交（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则**必须**改用集成完成后的 `Working branch` 与对应检出路径（或在该分支上**另开**只读审查 worktree）。开发未用 worktree → 写明单一业务仓根路径。
-- **`Working branch`**：含全部待审提交的那条分支（常见 plan 集成分支）。
+- **`review_cwd` / `worktree_path`**：**优先**沿用开发 Completion Report 回报的业务仓实现检出路径（该 feature 的 worktree）**当且仅当**该路径检出分支 `HEAD` 已含本轮待审全部提交（含曾发生在其他并行 worktree、现已归并到该分支的变更）。否则**必须**改用集成完成后的 `working_branch` 与对应检出路径（或在该分支上**另开**只读审查 worktree）。开发未用 worktree → 写明单一业务仓根路径。
+- **`working_branch`**：含全部待审提交的那条分支（常见 plan 集成分支）。
 - **`plan_id`**：与 `{SDD_DIR}` `<plan-id>` 段、主 Plan Path、当前执行权威的 plan id 一致（ACTIVE：store 执行行）；无 `{PLAN_DIR}` 流程时写 **`plan_id: N/A`** + 一行 **`Feature / scope label`**（不可歧义，足以与并行其它 feature 区分）。
-- **`Review range` / `Diff basis`**：审查的 diff/提交范围（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。
+- **`review_range` / `diff_basis`**：审查的 diff/提交范围（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`；或 `rev-range: <full-40>..<full-40>`；或一句 `equivalent to: git diff <merge-base>...HEAD`，以团队可复现为准）。
 - **Text-identical alignment:** QC Assignments and PM Acceptance reuse the same `plan_id`, review range, cwd and branch for the same scope. Inline/single-seat review keeps these same fields; only seat count differs.
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-> **Engine check:** run `mstar worktree qc-alignment <assignment-file>...`（engine `assertQcAlignment`, `singleReviewSnapshot`）以断言上述 QC/PM Acceptance 对齐字段（tri + PM Acceptance 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar worktree qc-alignment <assignment-file>...`（engine `assertQcAlignment`, `singleReviewSnapshot`）以断言上述 QC/PM Acceptance 对齐字段（tri + PM Acceptance 间 `plan_id` 与 `review_range` / `diff_basis` 逐字相同；派发前 single review snapshot）。On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
-**语义区分（必须理解）**：开发阶段可存在 **多个** `Worktree path`（每条流一条检出目录）；**一轮**正式 QC 三审 + 对齐 PM Acceptance 只对应 **一套**对齐字段（上文）。**不要**把「多个开发 worktree」误解成「QC 应轮流进多个目录各审一半」。
+**语义区分（必须理解）**：开发阶段可存在 **多个** `worktree_path`（每条流一条检出目录）；**一轮**正式 QC 三审 + 对齐 PM Acceptance 只对应 **一套**对齐字段（上文）。**不要**把「多个开发 worktree」误解成「QC 应轮流进多个目录各审一半」。
 
-**单一待审 Git 快照（派 QC 前置条件）**：若本 plan 下多条**可写**并行轨落在**同一业务仓**且成果分布在**不同分支**、或**未合并进同一条分支 `HEAD`**，则派发 QC 三审（及同范围 PM Acceptance）**之前**，**必须**先在 Git 完成**归并**（merge / rebase / 按团队集成方式），使**全部**待审提交出现在同一条 PM 指定的 **`Working branch`** `HEAD` 上；然后填 **一个** `Review cwd`（可为该分支上新开的只读审查 worktree）+ **一个**可复现的 **`Review range` / `Diff basis`**。**禁止**仅填并行轨 **A** 的开发用 `Worktree path` 作 `Review cwd`，却期望审查覆盖仍只存在于并行轨 **B** 分支或提交上的变更（该变更**未进入**轨 A 所检出分支 `HEAD` 时，Git 上不可复现，属 **Assignment 错误**）。
+**单一待审 Git 快照（派 QC 前置条件）**：若本 plan 下多条**可写**并行轨落在**同一业务仓**且成果分布在**不同分支**、或**未合并进同一条分支 `HEAD`**，则派发 QC 三审（及同范围 PM Acceptance）**之前**，**必须**先在 Git 完成**归并**（merge / rebase / 按团队集成方式），使**全部**待审提交出现在同一条 PM 指定的 **`working_branch`** `HEAD` 上；然后填 **一个** `review_cwd`（可为该分支上新开的只读审查 worktree）+ **一个**可复现的 **`review_range` / `diff_basis`**。**禁止**仅填并行轨 **A** 的开发用 `worktree_path` 作 `review_cwd`，却期望审查覆盖仍只存在于并行轨 **B** 分支或提交上的变更（该变更**未进入**轨 A 所检出分支 `HEAD` 时，Git 上不可复现，属 **Assignment 错误**）。
 
 **推荐默认编排（plan 集成分支先行）**——同仓、同一 plan、**≥2 条可写并行轨**时降低 QC/PM Acceptance 误用单一开发目录风险。**不是唯一合法 Git 拓扑**；其它拓扑仍须满足上文对齐字段 + 本节**强制**条款（派发前 worktree 隔离 + 派 QC 前**单一**待审 `HEAD` + 一套对齐字段）：
 
-1. **先起集成分支（再挂 worktree）**：派发各轨**实现** Assignment 前，PM 与用户确认 **`Branch policy`**，建立 **plan 集成分支**（Assignment 用 **`Working branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须 PM 明确记录，例如当前执行权威的 `branch.base`（`iteration_base_branch`；ACTIVE：store workflow 执行行）、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**（`feature/<plan-id>-integrate`、`integrate/<plan-id>` 仅为命名示例，**非强制**）。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支语义即 **Spec 集成分支**；各 Plan feature 线 merge 回此线，**全部 Plans 完成后**向显式 `target_branch` **走 PR**（见 `mstar-conventions` SKILL.md「Spec 驱动的分支模型」）。
-2. **再挂各轨 worktree**：每条并行轨分配**独立** `git worktree` + **`Worktree path`**；各轨 `Working branch` 一般为**从集成分支出**的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定等价结构（例如从同一 `<base>` 出 topic、但**书面指定**合并时**以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
-3. **进 QC 之前**：将全部**须同一轮三审覆盖**的提交**归并**（merge / rebase / cherry-pick，以 PM 指定团队方式）到同一条将作 QC **`Working branch`** 的分支 **`HEAD`**（**通常即 plan 集成分支**；PM 已重命名/快进为最终 `feature/*` 则以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」旧 `HEAD` 时派三审。
-4. **QC/PM Acceptance 的 `Working branch` 与合并主线**：`Working branch` 即上一步**已含全部待审提交**的那条分支（常见 plan 集成分支）。`Review range` / `Diff basis` 通常相对**尚未合并 feature 的**显式目标/base 参照（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`），审的是 **「feature 线 vs 目标线」** 差异；**默认不要求** QC **通过前**已把该分支 merge 进目标分支（除非 **`Branch policy`** 或用户明确 trunk 式例外）。
-5. **本推荐不适用时**：单轨、多仓库、或 plan 已**拆 scope / 多轮增量三审**（见 `mstar-conventions`）— 仍须**逐轮**满足**强制**条款：每轮 QC 对应**一条**快照、**一套**逐字相同的 `plan_id` + `Review range` / `Diff basis`。
+1. **先起集成分支（再挂 worktree）**：派发各轨**实现** Assignment 前，PM 与用户确认 **`branch_policy`**，建立 **plan 集成分支**（Assignment 用 **`working_branch: create <plan-integration-branch> from <base>`** 或等价明确写法；`<base>` 必须 PM 明确记录，例如当前执行权威的 `branch.base`（`iteration_base_branch`；ACTIVE：store workflow 执行行）、现有 feature 分支、远程跟踪分支或团队既定主线，**不得**未授权假设）。**分支名由 PM 指定**（`feature/<plan-id>-integrate`、`integrate/<plan-id>` 仅为命名示例，**非强制**）。**多 `plan_id` 同源一条 `primary_spec`（Spec 文档）时**：该集成分支语义即 **Spec 集成分支**；各 Plan feature 线 merge 回此线，**全部 Plans 完成后**向显式 `target_branch` **走 PR**（见 `mstar-conventions` SKILL.md「Spec 驱动的分支模型」）。
+2. **再挂各轨 worktree**：每条并行轨分配**独立** `git worktree` + **`worktree_path`**；各轨 `working_branch` 一般为**从集成分支出**的 topic 分支（`create <topic-i> from <plan-integration-branch>`）或 PM 书面约定等价结构（例如从同一 `<base>` 出 topic、但**书面指定**合并时**以集成分支为靶**）。**禁止**承接方擅自把未授权功能提交直接堆在 `main`/`master`。
+3. **进 QC 之前**：将全部**须同一轮三审覆盖**的提交**归并**（merge / rebase / cherry-pick，以 PM 指定团队方式）到同一条将作 QC **`working_branch`** 的分支 **`HEAD`**（**通常即 plan 集成分支**；PM 已重命名/快进为最终 `feature/*` 则以 Assignment 为准）。**在此**解决冲突；**勿**在 QC Assignment 仍指向「只含部分轨」旧 `HEAD` 时派三审。
+4. **QC/PM Acceptance 的 `working_branch` 与合并主线**：`working_branch` 即上一步**已含全部待审提交**的那条分支（常见 plan 集成分支）。`review_range` / `diff_basis` 通常相对**尚未合并 feature 的**显式目标/base 参照（例如 `merge-base: <target_branch-or-base-ref>` + `tip: HEAD`），审的是 **「feature 线 vs 目标线」** 差异；**默认不要求** QC **通过前**已把该分支 merge 进目标分支（除非 **`branch_policy`** 或用户明确 trunk 式例外）。
+5. **本推荐不适用时**：单轨、多仓库、或 plan 已**拆 scope / 多轮增量三审**（见 `mstar-conventions`）— 仍须**逐轮**满足**强制**条款：每轮 QC 对应**一条**快照、**一套**逐字相同的 `plan_id` + `review_range` / `diff_basis`。
 
-**不应合并为一次审时**：若两轨**有意**保持独立可合并单元（例如两条独立 PR），**不得**共用**同一套** `plan_id` + `Review range` / `Diff basis` 假装「一轮三审覆盖全部」。应**拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-conventions` 写明的**显式增量三审**例外，使每轮 QC 各对应**一条**分支快照与**一套**对齐字段。
+**不应合并为一次审时**：若两轨**有意**保持独立可合并单元（例如两条独立 PR），**不得**共用**同一套** `plan_id` + `review_range` / `diff_basis` 假装「一轮三审覆盖全部」。应**拆分 scope**：分轮次审查、不同 **`Feature / scope label`**、不同 `plan_id`、或按 `mstar-conventions` 写明的**显式增量三审**例外，使每轮 QC 各对应**一条**分支快照与**一套**对齐字段。
 
-**同分支多目录例外**：若所有并行轨**始终**在同一条已授权 **`Working branch`** 上协作（每流仅目录不同、提交已互相 `pull`/推送收敛），则任一该分支检出目录在**更新到含全部提交 `HEAD`** 后均可作 `Review cwd`；**不得**使用仍停留在旧提交的 worktree 路径。
+**同分支多目录例外**：若所有并行轨**始终**在同一条已授权 **`working_branch`** 上协作（每流仅目录不同、提交已互相 `pull`/推送收敛），则任一该分支检出目录在**更新到含全部提交 `HEAD`** 后均可作 `review_cwd`；**不得**使用仍停留在旧提交的 worktree 路径。
 
 ### QC / PM Acceptance 执行约束
 

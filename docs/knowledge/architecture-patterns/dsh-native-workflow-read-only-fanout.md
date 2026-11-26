@@ -18,7 +18,7 @@ source_plans:
   - <plan-id>
   - <plan-id>
 status: active
-last_updated: 2026-11-09
+last_updated: 2026-11-26
 ---
 
 # Native `workflow` tool for read-only fan-out: authoring rules
@@ -30,7 +30,7 @@ mstar orchestration on dsh wanted its parallel read-only seats (QC tri, audit ca
 ## Guidance
 
 - **Authoring layer only**: skills/commands tell the operator to pass a `script` + `meta` to the native `workflow` tool; `meta.name` from a small allowlist (`workflowNames`; default `workflowGate: 'warn'`, production overlay `'hard'`). Never mount a second engine, never fold rows into the mstar patch.
-- **Role delivery is prompt-shaped**: every `agent(prompt, { label, phase, schema })` prompt starts with an Assignment header — plain `Execute as: <id>` / `Delegation: forbidden` (the engine's field grammar reads the plain fallback; `**Execute as**: x` with the colon OUTSIDE the bold parses too, but `**Execute as:**` — colon inside — parses as nothing). The mstar `role-persona` seam parses that header out of the prompt and, on dsh ≥0.2.1, merges the role's agent-preset selection (`Config.rolePresets` → `SubagentStartRequest.agentPreset`; the persona slot the channel once decorated was removed upstream) into `startActivation`. Writable-seam authority is impossible by construction: children inherit parent sandbox and `approval: 'never'` — read-only seats only.
+- **Role delivery is prompt-shaped**: every `agent(prompt, { label, phase, schema })` prompt opens with the Assignment's front matter — `execute_as: <id>` / `delegation: forbidden` — or, on dsh, one unambiguous `Role:` / `Act as:` / `Execute as:` field line that the gate repairs into `execute_as` before the binding seam proves it (free prose is never mined; a document carrying `**Execute as**:` body labels is refused terminally with `dispatch.assignment.legacy-format`). The mstar `role-persona` seam parses that header out of the prompt and, on dsh ≥0.2.1, merges the role's agent-preset selection (`Config.rolePresets` → `SubagentStartRequest.agentPreset`; the persona slot the channel once decorated was removed upstream) into `startActivation`. Writable-seam authority is impossible by construction: children inherit parent sandbox and `approval: 'never'` — read-only seats only.
 - **Durable evidence**: the ledger cold-scan must walk the real Session via `seq` + `eventAt(i)` (a real Session has no `.events` own property); capture `endSeq` once, start at `max(success cursor, exclusion floor, session.inheritedEventCount)` — the fork cut stops a forked child from re-recording its parent's `tool-workflow/*` prefix.
 - **Script templates are code**: they live in `skills/mstar-host/references/dsh-workflow-scripts.md` as copy-pasteable `script` + `meta` (plain JS, `return`, no `export const meta`); commands name the slash → tool → script → `meta.name` chain, dsh-conditional only.
 
