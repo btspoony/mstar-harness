@@ -757,6 +757,20 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     }
   });
 
+  test("a plan without a declared plan_id does not create the default SDD directory", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const sddDir = join(dir, "missing", "sdd");
+      withEnv(SDD_DIR, sddDir, () => {
+        const err = errOf(() => taskBrief(plan, 1));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(sddDir)).toBe(false);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a plan_id that reads as another scalar shape round-trips as its own text", () => {
     const { dir, plan } = writePlan(`---\nplan_id: "null"\n---\n\n### Task 1: only\n\n- [ ] step\n`);
     try {
