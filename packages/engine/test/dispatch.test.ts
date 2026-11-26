@@ -1812,7 +1812,7 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
 
   test("a pointer plus an inline body refuses as ambiguous", () => {
     const file = writeHomeFile([".mstar", "assignments"]);
-    const text = `${VALID_ASSIGNMENT}\nAssignment file: ${file}\n`;
+    const text = `Assignment file: ${file}\n\n${VALID_ASSIGNMENT}\n`;
     const result = readAssignmentSource(text, { harnessDir });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -2229,9 +2229,27 @@ describe("readAssignmentSource — provenance, terminal refusals, file-type guar
     expect(result.path).toBeUndefined();
   });
 
-  test("a pointer alongside a real inline Assignment document stays ambiguous", () => {
+  test("an inline front-matter document quoting a pointer line in a blockquote is parsed inline", () => {
+    const file = homeFile([".mstar", "sdd", "plan-quoted", "assignments"]);
+    const quoted = `${FILE_ASSIGNMENT}\n> Assignment file: ${file}\n`;
+    const result = readAssignmentSource(quoted, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(quoted);
+    expect(result.path).toBeUndefined();
+  });
+
+  test("a pointer as the FIRST non-blank line plus any body refuses as ambiguous", () => {
+    const file = homeFile([".mstar", "sdd", "plan-first", "assignments"]);
+    const result = readAssignmentSource(`\n\n  Assignment file: ${file}\n\nsome inline body\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.ambiguous");
+  });
+
+  test("a pointer plus a real inline Assignment document refuses as ambiguous", () => {
     const file = homeFile([".mstar", "sdd", "plan-both", "assignments"]);
-    const result = readAssignmentSource(`${VALID_ASSIGNMENT}\nAssignment file: ${file}\n`, { harnessDir });
+    const result = readAssignmentSource(`Assignment file: ${file}\n${VALID_ASSIGNMENT}\n`, { harnessDir });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.code).toBe("dispatch.assignment.ambiguous");

@@ -1403,8 +1403,13 @@ export type AssignmentSourceResult =
   | { ok: true; text: string; path?: string }
   | (ValidationResult & { ok: false });
 
-/** The ONE pointer-line grammar: `Assignment file: <abs>` on a line of its own. */
-const ASSIGNMENT_POINTER_RE = /^[ \t]*Assignment file:[ \t]*(\S[^\r\n]*?)[ \t]*$/m;
+/**
+ * The ONE pointer-line grammar: `Assignment file: <abs>` on a line of its own.
+ * A pointer INVOKES the file-source semantics only as the input's first
+ * non-blank line — any later occurrence is a mention (prose, a quoted block,
+ * a fenced example) inside an inline document, so it carries no semantics.
+ */
+const ASSIGNMENT_POINTER_RE = /^[ \t]*Assignment file:[ \t]*(\S[^\r\n]*?)[ \t]*$/;
 
 /** Shared recovery text of the two refusals: home placement OR the inline form. */
 const ASSIGNMENT_SOURCE_RECOVERY =
@@ -1446,35 +1451,35 @@ function assignmentHomeContains(file: string, home: { root: string; write: boole
 /**
  * Resolve one Assignment source (compass D14 — the single resolver every
  * consumer shares). An inline front-matter document passes through verbatim
- * without any filesystem access. A pointer line `Assignment file: <abs>` is
- * the whole input: any other non-whitespace content alongside it refuses
- * `dispatch.assignment.ambiguous`. The pointer must be absolute and, after
- * canonicalization with `canonicalizeNearestExisting` (a symlink landing
- * outside the home is outside), contained in one of the four homes from
- * `assignmentSourceHomes` — a `null` harness root refuses
+ * without any filesystem access. A pointer line `Assignment file: <abs>` as
+ * the FIRST non-blank line is the whole input: any non-whitespace content
+ * alongside it refuses `dispatch.assignment.ambiguous`. A pointer line
+ * anywhere else is a mention inside an inline document (prose, a quoted
+ * block, a fenced example) and carries no semantics. The pointer must be
+ * absolute and, after canonicalization with `canonicalizeNearestExisting`
+ * (a symlink landing outside the home is outside), contained in one of the
+ * four homes from `assignmentSourceHomes` — a `null` harness root refuses
  * `dispatch.assignment.path` rather than skipping containment. An
  * unreadable or out-of-home pointer refuses `dispatch.assignment.path` with
  * both recoveries (place under an accepted home OR pass the assignment
  * inline).
  */
 export function readAssignmentSource(text: string, opts: { harnessDir: string | null }): AssignmentSourceResult {
-  const pointerMatch = ASSIGNMENT_POINTER_RE.exec(text);
+  // The pointer form is the input's FIRST non-blank line; a pointer line
+  // further down is a mention inside an inline document and stays inert.
+  const lines = text.split("\n");
+  const first = lines.findIndex((line) => line.trim() !== "");
+  const pointerMatch = first === -1 ? null : ASSIGNMENT_POINTER_RE.exec(lines[first]!);
   if (pointerMatch === null) return { ok: true, text };
-  // Ambiguity narrowing: a body line starting with `Assignment file:` makes
-  // the input ambiguous ONLY when the input is itself that pointer form —
-  // the remainder must be whitespace or an Assignment-shaped inline body.
-  // A pointer line merely quoted inside ordinary inline content (prose, an
-  // example) never invokes the pointer semantics: the input passes through
-  // as the inline text it is.
-  if (text.replace(pointerMatch[0], "").trim() !== "") {
-    if (!isAssignmentShaped(text.replace(pointerMatch[0], ""))) return { ok: true, text };
+  // Pointer plus anything else is two sources in one dispatch: refuse.
+  if (lines.slice(first + 1).some((line) => line.trim() !== "")) {
     return assignmentSourceRefusal(
       "dispatch.assignment.ambiguous",
       `assignment source is ambiguous: an \`Assignment file:\` pointer appears alongside an inline assignment document`,
       "choose ONE source form \u2014 drop the inline body and keep the pointer, or drop the pointer and pass the assignment inline (a pointer line quoted inside ordinary inline content is inert and needs no action)",
     );
   }
-  const pointer = pointerMatch[1];
+  const pointer = pointerMatch[1]!;
   if (!isAbsolute(pointer)) {
     return assignmentSourceRefusal(
       "dispatch.assignment.path",
