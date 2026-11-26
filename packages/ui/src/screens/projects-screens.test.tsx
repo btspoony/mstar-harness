@@ -801,15 +801,34 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("the host's keepDraft verdict WINS over the refusal string (a conflict keeps the draft)", () => {
-    // THE wiring assertion: a revision conflict carries a refusal message AND must
-    // keep the draft. Reading only `refusal` would clear it; the surface must read
-    // the host's `keepDraft`. Dropping that field from the host's writes state makes
-    // this case fall back to `refusal !== null` and FAIL.
+    // A revision conflict carries a refusal message AND must keep the draft; an
+    // accepted write carries neither and clears it. These two inputs agree with the
+    // refusal string, so they pin the ordinary path — the divergent cases below pin
+    // that the FIELD is the one being read.
     const typed = { name: "Typed before the conflict", effort: "4" };
     const conflict = { refusal: "[milestone.revision-conflict] the store moved", keepDraft: true };
     expect(draftAfterWrite(typed, conflict)).toEqual(typed);
     const accepted = { refusal: null, keepDraft: false };
     expect(draftAfterWrite(typed, accepted)).toBeNull();
+  });
+
+  test("keepDraft:true with NO refusal keeps the draft — the field is read, not derived", () => {
+    // Divergent input 1: the refusal string says nothing, yet the host states the
+    // draft survives. A consumer that dropped the `keepDraft` read would fall back to
+    // `refusal !== null` → `false` → clear, and this fails.
+    const typed = { name: "Still mine", effort: "9", status: "active" };
+    expect(draftAfterWrite(typed, { refusal: null, keepDraft: true })).toEqual(typed);
+  });
+
+  test("keepDraft:false WITH a terminal refusal clears the draft — keepDraft beats refusal !== null", () => {
+    // Divergent input 2: a terminal refusal string is present (which the old rule read
+    // as "keep") while the host states the draft does not survive. Reading the refusal
+    // string would keep it; reading `keepDraft` clears it — so this fails if the field
+    // is ignored.
+    const typed = { name: "Typed", effort: "4" };
+    expect(
+      draftAfterWrite(typed, { refusal: "[milestone.invalid-input] Name must not be blank.", keepDraft: false }),
+    ).toBeNull();
   });
 
 });
