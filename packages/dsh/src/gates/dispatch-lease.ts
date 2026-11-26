@@ -9,14 +9,14 @@
  *
  * No barrel: importers name this module by explicit relative path.
  */
-import { assignmentHeaderRegion, executionModeToN, parseAssignmentBranchForms } from '@mstar-harness/engine'
-import type { ValidationResult } from '@mstar-harness/engine'
+import { assignmentBranchFormsOf, executionModeToN, parseAssignmentFieldsFromFrontmatter } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import { resolve } from 'node:path'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord } from './_shared.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead, SessionHint } from './workflow-selection.ts'
-import { assignmentHeaderValue, firstToken, isNaValue, planIdOf } from './dispatch-assignment.ts'
+import { assignmentEntriesValue, firstToken, isNaValue } from './dispatch-assignment.ts'
 
 /**
  * One lease-gate violation line (dsh-side codes live in the `lease.dispatch.*`
@@ -60,20 +60,39 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
  *   session that is not bound to the lifecycle holding the plan row stops
  *   with `lease.dispatch.plan-not-found` instead of verifying a lease it
  *   does not own.
+ * @param source - the dispatch's ONE source resolution, exactly as the
+ *   calling gate resolved it BEFORE its first asynchronous step. Passed,
+ *   never re-resolved: the lease consumes the same document (or the same
+ *   terminal refusal) the core validated, so a source file swapped
+ *   mid-dispatch cannot split the lease verification from the decision.
+ * @param decision - the dispatch's ONE front matter parse and the plan id it
+ *   resolved (the adapter made both for workflow selection): the lease reads
+ *   that parse instead of reparsing the document for its own scope checks.
  */
 export async function leaseGateViolations(
   harnessDir: string | null,
   exec: ToolExecution,
   writable: boolean | undefined,
-  prompt: string,
+  assignmentSource: AssignmentSourceResult,
+  decision: { entries: Map<string, FrontmatterEntry> | null; planId: string | undefined },
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null || writable === false) return []
-  const header = assignmentHeaderRegion(prompt)
-  const mode = assignmentHeaderValue(header, 'Execution mode')
-  const sdd = executionModeToN(mode ?? '').n === 3
-  const planId = planIdOf(header)
+  // compass D14 — the lease consumes the dispatch's ONE resolution: the
+  // caller hands its already-resolved `AssignmentSourceResult`; this gate
+  // NEVER reads the source itself, so a pointer and the inline form answer
+  // the same row-scope questions from the SAME document the core validated.
+  // A pointer the resolver refuses is the core's terminal refusal — the
+  // lease adds nothing.
+  if (!assignmentSource.ok) return []
+  // One parse per dispatch: the caller's already-parsed entries and the plan
+  // id they resolved — the lease reads the SAME parse the decision used and
+  // never reparses the document. `execution_mode` is the engine parsed field
+  // (the front matter scalar key is the single declaration contract).
+  const { entries, planId } = decision
+  const fields = parseAssignmentFieldsFromFrontmatter(entries)
+  const sdd = executionModeToN(fields.executionMode ?? '').n === 3
   if (planId === undefined || planId === '') return []
   let source: ExecutionWorkflowSourceRead
   try {
@@ -103,10 +122,10 @@ export async function leaseGateViolations(
   if (rowWorktreePath === '' || rowWorkingBranch === '') {
     violations.push(leaseViolation('lease.dispatch.unverifiable', `plan ${planId} has no recorded worktree/branch scope in ACTIVE workflow ${source.workflowId}`, 'record the row scope through `mstar plan prepare --worktree-path <abs> --working-branch <name>` before writable dispatch'))
   } else {
-    const worktree = assignmentHeaderValue(header, 'Worktree path')
+    const worktree = assignmentEntriesValue(entries, 'worktree_path')
     const wt = worktree === undefined ? undefined : firstToken(worktree)
     if (isNaValue(wt) || resolve(wt) !== resolve(rowWorktreePath)) violations.push(leaseViolation('lease.dispatch.worktree-mismatch', 'Assignment Worktree path does not match the ACTIVE plan row scope', 'set the absolute Worktree path to the row metadata worktree_path'))
-    const forms = parseAssignmentBranchForms(header)
+    const forms = assignmentBranchFormsOf(fields)
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch
     if (branch !== undefined && branch !== rowWorkingBranch) violations.push(leaseViolation('lease.dispatch.branch-mismatch', 'Assignment Working branch does not match the ACTIVE plan row scope', 'set Working branch to the row metadata working_branch'))
   }

@@ -41,6 +41,14 @@ export type ValidationResult = {
    * namespace see exactly ONE violation per missing field.
    */
   aliases?: readonly string[];
+  /**
+   * Terminal refusal flag: when `true`, this result is a veto independent of
+   * enforcement — there is no verified input to evaluate, so a caller that
+   * can refuse an action MUST refuse without consulting `applyEnforcement`
+   * or any hard/soft setting. Emitted by `readAssignmentSource` for its
+   * source-resolution refusals.
+   */
+  terminal?: boolean;
 };
 
 /**

@@ -73,7 +73,7 @@ describe('parseCompassFrontmatter — structural errors (file path in the messag
     const file = join(dir, 'broken.md')
     writeFileSync(file, '---\niteration_id: v1\n- dangling\n---\n')
     try {
-      expect(() => parseCompassFrontmatter(file)).toThrow(/unsupported frontmatter line/)
+      expect(() => parseCompassFrontmatter(file)).toThrow(/broken\.md:3: list item outside a list key: "- dangling"/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -84,7 +84,7 @@ describe('parseCompassFrontmatter — structural errors (file path in the messag
     const file = join(dir, 'broken.md')
     writeFileSync(file, '---\nplans: [[a]]\n---\n')
     try {
-      expect(() => parseCompassFrontmatter(file)).toThrow(/nested flow-style array/)
+      expect(() => parseCompassFrontmatter(file)).toThrow(/broken\.md:2: unsupported flow array: "plans: \[\[a\]\]"/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -95,7 +95,7 @@ describe('parseCompassFrontmatter — structural errors (file path in the messag
     const file = join(dir, 'broken.md')
     writeFileSync(file, '---\nplans: ["a, b"]\n---\n')
     try {
-      expect(() => parseCompassFrontmatter(file)).toThrow(/ambiguous flow-style array/)
+      expect(() => parseCompassFrontmatter(file)).toThrow(/broken\.md:2: unsupported flow array: "plans: \[\\"a, b\\"\]"/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -106,7 +106,7 @@ describe('parseCompassFrontmatter — structural errors (file path in the messag
     const file = join(dir, 'broken.md')
     writeFileSync(file, '---\nplans: ["a]\n---\n')
     try {
-      expect(() => parseCompassFrontmatter(file)).toThrow(/unterminated " quote/)
+      expect(() => parseCompassFrontmatter(file)).toThrow(/broken\.md:2: unsupported flow array: "plans: \[\\"a\]"/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

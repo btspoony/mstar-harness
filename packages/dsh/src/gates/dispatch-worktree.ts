@@ -14,15 +14,16 @@ import {
   collectActiveLifecycleBranches,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
+  parseAssignmentFieldsFromFrontmatter,
   probeCheckoutRoot,
   readActiveLifecycleBranchDocs,
   readMainWorktree,
 } from '@mstar-harness/engine'
-import type { ValidationResult, WorkflowSnapshot, WorktreeTrack } from '@mstar-harness/engine'
+import type { FrontmatterEntry, ValidationResult, WorkflowSnapshot, WorktreeTrack } from '@mstar-harness/engine'
 import { asRecord } from './_shared.ts'
 import { activeRowsOf, readExecutionWorkflowSource, refusalOf } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead, SessionHint } from './workflow-selection.ts'
-import { assignmentHeaderValue, assignmentHeaderValues, planIdOf } from './dispatch-assignment.ts'
+import { assignmentEntriesValue } from './dispatch-assignment.ts'
 
 /**
  * One worktree-gate violation line (dsh-side codes live in the
@@ -35,39 +36,39 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
 
 /**
  * L2 within-plan track isolation (engine `l2PreDispatchCheck`):
- * when the Assignment declares parallel tracks — ≥2 `Worktree path` header
- * entries, or the documented parallel-tracks marker (`Dispatch mode:
- * parallel independent tracks`, mstar-phase-gates 并行标签 /
- * parallel-writable-pre-dispatch.md step 5) — every declared track must
- * carry an absolute, distinct worktree path whose checkout branch matches
- * its Working branch, BEFORE the first concurrent writable dispatch
+ * when the Assignment declares parallel tracks — a `worktree_path` LIST of
+ * ≥2 entries, the shared schema's own parallel shape — every declared track
+ * must carry an absolute, distinct worktree path whose checkout branch
+ * matches its Working branch, BEFORE the first concurrent writable dispatch
  * (N parallel invokes ≠ isolation).
  *
- * Track pairing follows the Assignment grammar: one `Working branch` entry
- * per `Worktree path`, OR a single `Working branch` line applying to every
+ * Track pairing follows the Assignment grammar: one `working_branch` entry
+ * per `worktree_path`, OR a single `working_branch` value applying to every
  * track (the same-branch multi-dir topology, mstar-branch-worktree
  * 同分支多目录例外 — git forbids one branch in two linked worktrees, so the
  * second checkout is a clone). Any other count mismatch is a violation.
  *
- * Pure over the header + the filesystem; the engine probes
+ * Pure over the parsed fields + the filesystem; the engine probes
  * `git -C <path> branch --show-current` per valid track (bounded, fails
- * closed). Header-region scoping: the caller passes the engine
- * `assignmentHeaderRegion` slice only.
- * @param header - `assignmentHeaderRegion(assignmentText)`.
+ * closed). compass D14 — the caller passes the parse it already made of the
+ * RESOLVED assignment document (`assignmentFrontmatterEntries`), so a pointer
+ * and the inline form answer the same track questions and no leg reparses the
+ * document.
+ * @param entries - the decision's ONE front-matter parse (`null` = unparseable).
  */
-export function worktreeL2Violations(header: string): ValidationResult[] {
-  const worktreePaths = assignmentHeaderValues(header, 'Worktree path')
-  const workingBranches = assignmentHeaderValues(header, 'Working branch')
-  const dispatchMode = assignmentHeaderValue(header, 'Dispatch mode')
-  // Parallel-track declaration: ≥2 Worktree path entries, or the documented
-  // canonical parallel-tracks marker (`Dispatch mode: parallel independent
-  // tracks`, mstar-phase-gates 并行标签). A single Worktree path is the
-  // serial norm and never triggers the L2 checklist (no track list to verify
-  // against). The marker match is exact (P3 T2 review — no substring
-  // widening): a Dispatch mode merely CONTAINING "parallel" (e.g. a serial
-  // mode with a parallel-flavored name) must not trigger the L2 checklist.
-  const isParallelTracksMarker = dispatchMode?.trim().toLowerCase() === 'parallel independent tracks'
-  if (worktreePaths.length < 2 && !isParallelTracksMarker) return []
+export function worktreeL2Violations(entries: Map<string, FrontmatterEntry> | null): ValidationResult[] {
+  // The parallel-track declaration is the SHARED schema's own shape: a
+  // `worktree_path` / `working_branch` string list (or a scalar, the serial
+  // norm). Read from the parsed fields — the one projection the field gate,
+  // the branch gate and this check share — never a second decode of the
+  // entries, so no shape this check accepts can be one the schema rejects.
+  const fields = parseAssignmentFieldsFromFrontmatter(entries)
+  const worktreePaths = fields.worktreePaths ?? (fields.worktreePath?.trim() ? [fields.worktreePath] : [])
+  const workingBranches = fields.workingBranches ?? (fields.workingBranch?.trim() ? [fields.workingBranch] : [])
+  // ≥2 declared tracks is the parallel declaration; a single Worktree path is
+  // the serial norm and never triggers the L2 checklist (no track list to
+  // verify against).
+  if (worktreePaths.length < 2) return []
 
   const violations: ValidationResult[] = []
   const tracks: WorktreeTrack[] = []
@@ -173,18 +174,21 @@ async function activeSnapshotRows(harnessDir: string, hint?: SessionHint, active
  * engine owns that distinction). The engine probes are subprocess-based
  * and fail closed.
  * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
- * @param header - `assignmentHeaderRegion(assignmentText)`.
+ * @param entries - the decision's ONE front matter parse (the caller already
+ *   made it for plan selection; this check never parses the document again).
+ * @param planId - the plan id that same parse resolved (undefined = no plan
+ *   row to compare against).
  * @param hint - the carrying session's selection hint (which lifecycle's
  *   snapshot carries the L1 metadata to compare against).
  */
 export async function worktreeL1Violations(
   harnessDir: string | null,
-  header: string,
+  entries: Map<string, FrontmatterEntry> | null,
+  planId: string | undefined,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null) return []
-  const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
   const read = await activeSnapshotRows(harnessDir, hint, activeSource)
   if (read.rows === null || read.snapshot === null) return []
@@ -196,7 +200,7 @@ export async function worktreeL1Violations(
   const snapshot = read.snapshot
   try {
     const lifecycleBranches = collectActiveLifecycleBranches(await readActiveLifecycleBranchDocs({ harnessDir }))
-    const expectedMainBranch = assignmentHeaderValue(header, 'Main worktree branch')
+    const expectedMainBranch = assignmentEntriesValue(entries, 'Main worktree branch')
       ?? (typeof snapshot.branch?.base === 'string' ? snapshot.branch.base : '')
     return l1PreDispatchCheck({
       workflowType: snapshot.type,

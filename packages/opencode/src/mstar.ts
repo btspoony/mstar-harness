@@ -61,6 +61,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
+  assignmentFrontmatterEntries,
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   composeDispatchGate,
@@ -70,9 +71,10 @@ import {
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseSimpleFrontmatter,
   probeCollaborationAuthority,
+  readAssignmentSource,
   readJson,
   resolveExecutionReadRoute,
   resolveHarnessDir,
@@ -82,7 +84,7 @@ import {
   validateStatus,
   validateWorkflowSnapshot,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -664,23 +666,74 @@ export function validateDispatchAssignment(
     if (typeof assignmentText !== "string") {
       return { ok: true, violations: [] };
     }
+// compass D14 — resolve the Assignment source ONCE through the engine
+// resolver (inline front-matter passthrough or the `Assignment file:
+// <abs>` pointer, containment-checked against the control harness root).
+// A refusal is itself the verdict: validating the pointer text would
+// report field violations on the wrong body. A null root refuses the
+// pointer (`dispatch.assignment.path`) — containment is never skipped.
+// A source-resolution refusal is CRITICAL by contract (unreadable /
+// out-of-home / unrooted / ambiguous pointer): there is no verified
+// assignment to dispatch on, so it is hard independently of document or
+// repo enforcement — every refusing-capable caller fails closed.
+    const harnessDir = resolveHarnessDir();
+    const source = readAssignmentSource(assignmentText, { harnessDir });
+    let violations: ValidationResult[];
+    let enforcementHard = false;
+    let terminal = false;
+    if (!source.ok) {
+      // Terminal by contract: no verified assignment to dispatch on. This
+      // host has no refusal channel (I-001258, advisory), so the terminal
+      // refusal is surfaced as the error line + `hardBlocked` for any
+      // refusal-capable caller.
+      violations = [source];
+      terminal = source.terminal === true;
+    } else {
+      const text = source.text;
+      // File provenance (compass D14): a resolved `Assignment file:`
+      // pointer commits to the Assignment contract, so its bytes validate
+      // as one even without a recognized core key. Inline prompts keep the
+      // silent path.
+      const carrier = source.path;
+      const fileCarrier = carrier !== undefined;
+ // One parse per decision: the role read and the composition share this
+ // parse (the composition also owns the D16 legacy refusal).
+      const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
-    const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
-    const composed = composeDispatchGate(assignmentText, { writable });
- // Header flag, else repo-level hard (`.mstarc` → compass) — the same
- // precedence the status-write gate and dsh dispatches honor.
-    const harnessDir = resolveHarnessDir();
-    const hard = composed.enforcement.hard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
-    const gated: GateResult = applyEnforcement(composed, { hard });
+      const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
+      const composed = composeDispatchGate(text, {
+        writable,
+        entries,
+        fileCarrier,
+        // Source-relative `worktree_path` resolves from the pointed file's
+        // own directory (CLI parity); Git discovery stays on the checkout
+        // (`cwd` unset), so an out-of-repo assignment home never changes the
+        // inspected repository.
+        assignmentDir: carrier === undefined ? undefined : path.dirname(carrier),
+      });
+      violations = composed.violations;
+      enforcementHard = composed.enforcement.hard;
+      // A TERMINAL violation (source refusal or the retired-format one) is
+      // a veto enforcement cannot soften. This host has no refusal channel
+      // (`I-001258`), so it is surfaced through `hardBlocked` + the error
+      // log for any refusal-capable caller — never downgraded to a warning.
+      terminal = violations.some((violation) => violation.terminal === true);
+    }
+ // Header flag, a terminal refusal, else repo-level hard (`.mstarc` →
+ // compass) — the same precedence the status-write gate and dsh dispatches
+ // honor.
+    const hard = terminal || enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
+    const gated: GateResult = applyEnforcement({ ok: violations.length === 0, violations }, { hard });
 
     if (!gated.ok) {
       for (const violation of gated.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (hard) {
+          const reason = terminal ? "a terminal refusal" : "Enforcement: hard";
           log(
             "error",
-            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
+            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per ${reason}; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
           );
         } else {
           log(

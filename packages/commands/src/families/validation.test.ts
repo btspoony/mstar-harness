@@ -149,6 +149,91 @@ describe("lint --type specs", () => {
   });
 });
 
+/** Run any validation verb with an explicit control root (the resolver's harness anchor). */
+async function runVerb(id: string, cwd: string, input: Record<string, unknown>, controlRoot: string | null = null) {
+  const definition = getCommandDefinitions().find((command) => command.id === id);
+  if (definition === undefined) throw new Error(`missing ${id} definition`);
+  return definition.execute(definition.input.parse(input), { ...invocation(cwd), controlRoot });
+}
+
+const EXECUTION_MODE_DOC = `---
+execute_as: qc-specialist
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+---
+
+## Task
+
+Review the diff.
+`;
+
+const alignmentDoc = (planId: string): string => `---
+plan_id: ${planId}
+review_range: ac6bda660..HEAD
+diff_basis: git
+---
+
+## Task
+
+Review.
+`;
+
+describe("assignment files resolve through the ONE source resolver", () => {
+  test("review seats reads the POINTED document's execution_mode (a pointer is not an empty mode)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-source-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      const document = join(harness, "assignments", "exec.md");
+      writeFileSync(document, EXECUTION_MODE_DOC);
+      const input = join(root, "input.md");
+      writeFileSync(input, `Assignment file: ${document}\n`);
+
+      const envelope = await runVerb("review.seats", root, { assignmentFile: input }, harness);
+      expect(envelope.status).toBe("ok");
+      if (envelope.status !== "ok") return;
+      expect((envelope.data as { mode: string }).mode).toBe("sdd");
+      expect((envelope.data as { n: number }).n).toBe(3);
+
+      // The pointer line itself declares no execution mode: reading the file
+      // bytes without the resolver answers "" and refuses the verb.
+      const bare = await runVerb("review.seats", root, { assignmentFile: input }, null);
+      expect(bare.status).toBe("refused");
+      expect(bare.code).toBe("dispatch.assignment.path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree qc-alignment aligns the POINTED documents", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-align-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      const writePointer = (name: string, text: string): string => {
+        const document = join(harness, "assignments", `${name}.md`);
+        writeFileSync(document, text);
+        const input = join(root, `${name}-input.md`);
+        writeFileSync(input, `Assignment file: ${document}\n`);
+        return input;
+      };
+      const first = writePointer("qc1", alignmentDoc("20261125-demo"));
+      const second = writePointer("qc2", alignmentDoc("20261125-demo"));
+
+      const aligned = await runVerb("worktree.qc-alignment", root, { files: [first, second] }, harness);
+      expect(aligned.status).toBe("ok");
+
+      const divergent = writePointer("qc3", alignmentDoc("20261125-other"));
+      const mismatch = await runVerb("worktree.qc-alignment", root, { files: [first, divergent] }, harness);
+      expect(mismatch.status).toBe("refused");
+      expect(JSON.stringify(mismatch.details)).toContain("qc.alignment.mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("lint --type adr", () => {
   test("a directory target runs the tree check and passes on a valid tree", async () => {
     const result = await withTree(

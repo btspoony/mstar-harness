@@ -37,13 +37,18 @@ type GateCallback = (event: ExecuteBeforeEvent) => Effect.Effect<void, Tool.Erro
 type GateLogger = (level: "info" | "warn" | "error", message: string) => void;
 
 const validAssignment = (executeAs = "fullstack-dev", enforcement = ""): string => [
-  "## Assignment",
-  `Execute as: ${executeAs}`,
-  "Delegation: forbidden",
-  "Task category: logic",
-  "**Task budget (implement / ops rounds)**: one implementer round",
-  "Working branch: feature/opencode-v2-dispatch-test",
+  "---",
+  `execute_as: ${executeAs}`,
+  "delegation: forbidden",
+  "task_category: logic",
+  "task_budget: one implementer round",
+  "working_branch: feature/opencode-v2-dispatch-test",
   enforcement,
+  "---",
+  "",
+  "## Assignment",
+  "",
+  "Do the thing, evidence-first.",
 ].filter(Boolean).join("\n");
 
 function makeEvent(caller: string, target: string, prompt: unknown): ExecuteBeforeEvent {
@@ -82,8 +87,8 @@ async function fixture(logger?: GateLogger) {
   };
 }
 
-function withEnforcement(text: string, enforcement: "hard" | "soft"): string {
-  return text.replace("## Assignment\n", `## Assignment\nEnforcement: ${enforcement}\n`);
+function withEnforcement(text: string, enforcement: "hard"): string {
+  return text.replace("---\n", `---\nenforcement: ${enforcement}\n`);
 }
 
 describe("OpenCode V2 subagent dispatch gate", () => {
@@ -97,15 +102,15 @@ describe("OpenCode V2 subagent dispatch gate", () => {
   test("warn mode logs missing core-field violations and still reaches the tool body", async () => {
     const logs: string[] = [];
     const harness = await fixture((_level, message) => logs.push(message));
-    const prompt = validAssignment().replace("Execute as: fullstack-dev\n", "");
+    const prompt = validAssignment().replace("execute_as: fullstack-dev\n", "");
     await harness.invoke(makeEvent("project-manager", "fullstack-dev", prompt));
     expect(harness.bodyCalls()).toBe(1);
-    expect(logs.join("\n")).toContain("assignment.field.missing-execute-as");
+    expect(logs.join("\n")).toContain("assignment.field.execute-as");
   });
 
   test("hard mode returns typed Tool.Error before the body for missing core fields", async () => {
     const harness = await fixture();
-    const prompt = withEnforcement(validAssignment().replace("Execute as: fullstack-dev\n", ""), "hard");
+    const prompt = withEnforcement(validAssignment().replace("execute_as: fullstack-dev\n", ""), "hard");
     await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", prompt))).rejects.toBeInstanceOf(Tool.Error);
     expect(harness.bodyCalls()).toBe(0);
   });
@@ -113,7 +118,7 @@ describe("OpenCode V2 subagent dispatch gate", () => {
   test("warn mode proceeds on missing branch form and hard mode refuses it", async () => {
     const logs: string[] = [];
     const warn = await fixture((_level, message) => logs.push(message));
-    const missingBranch = validAssignment().replace("Working branch: feature/opencode-v2-dispatch-test", "");
+    const missingBranch = validAssignment().replace("working_branch: feature/opencode-v2-dispatch-test", "");
     expect(Engine.parseAssignmentFields(missingBranch).workingBranch).toBeUndefined();
     expect(Engine.composeDispatchGate(missingBranch, { caller: "project-manager", callerRequired: true }).violations.map((violation) => violation.code)).toContain("assignment.field.branch-missing");
     await warn.invoke(makeEvent("project-manager", "fullstack-dev", missingBranch));
@@ -148,7 +153,7 @@ describe("OpenCode V2 subagent dispatch gate", () => {
 
   test("uses event.agent as caller rather than input.agent target", async () => {
     const harness = await fixture();
-    await harness.invoke(makeEvent("project-manager", "fullstack-dev", validAssignment("fullstack-dev", "Enforcement: hard")));
+    await harness.invoke(makeEvent("project-manager", "fullstack-dev", validAssignment("fullstack-dev", "enforcement: hard")));
     expect(harness.bodyCalls()).toBe(1);
   });
 
@@ -228,5 +233,147 @@ describe("OpenCode V2 subagent dispatch gate", () => {
       message: expect.stringContaining("input.prompt"),
     });
     expect(harness.bodyCalls()).toBe(0);
+  });
+});
+
+/** The retired body-label format of the same dispatch — same fields as
+ * `**Label**` body lines (the format front matter replaced). */
+const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/opencode-v2-dispatch-test
+**Task budget (implement / ops rounds)**: one implementer round
+
+Do the thing, evidence-first.
+`;
+
+describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => {
+  test("a pointer under an accepted assignment home produces the SAME decision as the inline form", async () => {
+    const logs: string[] = [];
+    // Inline: missing-branch violations in warn mode.
+    const inlineBranchless = validAssignment().replace("working_branch: feature/opencode-v2-dispatch-test", "");
+    const warnInline = await fixture((_level, message) => logs.push("inline: " + message));
+    await warnInline.invoke(makeEvent("project-manager", "fullstack-dev", inlineBranchless));
+    const inlineCodes = logs.filter((l) => l.startsWith("inline: ")).join("\n");
+
+    const logs2: string[] = [];
+    const warnPointer = await fixture((_level, message) => logs2.push(message));
+    mkdirSync(join(controlRoot, ".mstar", "assignments"), { recursive: true });
+    const file = join(controlRoot, ".mstar", "assignments", "pointer-target.md");
+    writeFileSync(file, inlineBranchless);
+    await warnPointer.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${file}`));
+    expect(warnPointer.bodyCalls()).toBe(1);
+    expect(logs2.join("\n")).toContain("assignment.field.branch-missing");
+    // Same decision as inline: the one violation code matches.
+    expect(inlineCodes).toContain("assignment.field.branch-missing");
+  });
+
+  test("an out-of-home pointer refuses dispatch.assignment.path — fail-closed before the tool body under SOFT enforcement", async () => {
+    const harness = await fixture();
+    const outside = join(controlRoot, "outside-assignment.md");
+    writeFileSync(outside, validAssignment());
+ // Critical source-resolution refusal: hard independent of document/repo
+ // enforcement — the typed Tool.Error refuses even on the soft tree, and
+ // the tool body is never reached.
+    await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${outside}`))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.assignment.path"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("a null control harness root refuses the pointer — the tool body is never reached", async () => {
+ // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
+ // answer a root, so the pointer can never be containment-checked.
+    const bare = mkdtempSync(join(tmpdir(), "opencode-v2-null-root-"));
+    writeFileSync(join(bare, "a.md"), validAssignment());
+    process.chdir(bare);
+    try {
+      const harness = await fixture();
+      await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${join(bare, "a.md")}`))).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("dispatch.assignment.path"),
+      });
+      expect(harness.bodyCalls()).toBe(0);
+    } finally {
+      process.chdir(controlRoot);
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("an out-of-home pointer under repo-level hard refuses the dispatch", async () => {
+    writeFileSync(join(controlRoot, ".mstarc"), "[config]\nenforcement=hard\n");
+    try {
+      const harness = await fixture();
+      const outside = join(controlRoot, "outside-hard-assignment.md");
+      writeFileSync(outside, validAssignment());
+      await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${outside}`))).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("dispatch.assignment.path"),
+      });
+      expect(harness.bodyCalls()).toBe(0);
+    } finally {
+      writeFileSync(join(controlRoot, ".mstarc"), "[config]\n");
+    }
+  });
+
+  test("a body-label prompt refuses dispatch.assignment.legacy-format in the soft default (terminal)", async () => {
+    const harness = await fixture();
+    // No repo hard setting, no document enforcement: the retired format has
+    // no verified declaration, so the subagent is never spawned.
+    await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", LEGACY_BODY_LABEL))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.assignment.legacy-format"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
+  });
+
+  test("an empty pointed file is validated as an invalid Assignment, not a silent prompt", async () => {
+    mkdirSync(join(controlRoot, ".mstar", "assignments"), { recursive: true });
+    const file = join(controlRoot, ".mstar", "assignments", "empty-target.md");
+    writeFileSync(file, "");
+    const logs: string[] = [];
+    const soft = await fixture((_level, message) => logs.push(message));
+    await soft.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${file}`));
+    expect(soft.bodyCalls()).toBe(1);
+    // The pointer named an Assignment: an empty file is that Assignment's
+    // shape violation, never the silent non-Assignment prompt path.
+    expect(logs.join("\n")).toContain("dispatch.assignment.shape");
+  });
+
+  test("a pointed document that declares hard enforcement refuses like the inline form", async () => {
+    // Missing every declaration but `execute_as`: both forms carry the same
+    // front matter, so both must refuse with the same field code.
+    const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
+    const inline = await fixture();
+    const inlineError = await inline.invoke(makeEvent("project-manager", "fullstack-dev", unshapedHard)).catch((error: unknown) => error);
+    expect(inlineError).toBeInstanceOf(Tool.Error);
+    expect((inlineError as Tool.Error).message).toContain("assignment.field.delegation");
+    expect(inline.bodyCalls()).toBe(0);
+
+    mkdirSync(join(controlRoot, ".mstar", "assignments"), { recursive: true });
+    const file = join(controlRoot, ".mstar", "assignments", "hard-parity.md");
+    writeFileSync(file, unshapedHard);
+    const pointer = await fixture();
+    const pointerError = await pointer.invoke(makeEvent("project-manager", "fullstack-dev", `Assignment file: ${file}`)).catch((error: unknown) => error);
+    expect(pointerError).toBeInstanceOf(Tool.Error);
+    expect((pointerError as Tool.Error).message).toContain("assignment.field.delegation");
+    expect(pointer.bodyCalls()).toBe(0);
+  });
+
+  test("the legacy refusal under repo-level hard refuses the dispatch", async () => {
+    writeFileSync(join(controlRoot, ".mstarc"), "[config]\nenforcement=hard\n");
+    try {
+      const harness = await fixture();
+      await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", LEGACY_BODY_LABEL))).rejects.toMatchObject({
+        _tag: "Tool.Error",
+        message: expect.stringContaining("dispatch.assignment.legacy-format"),
+      });
+      expect(harness.bodyCalls()).toBe(0);
+    } finally {
+      writeFileSync(join(controlRoot, ".mstarc"), "[config]\n");
+    }
   });
 });

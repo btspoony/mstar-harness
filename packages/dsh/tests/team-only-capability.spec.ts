@@ -42,23 +42,23 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Assignment-shaped with a field-gate violation (`Execute as` missing): vetoes under hard. */
-const MISSING_EXECUTE_AS = `## Assignment
-
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/team-only-fixture
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/team-only-fixture
+---
 
 Do the thing.
 `
 
 /** Fully valid writable Assignment — the allow control on the same surface. */
-const VALID_WRITABLE = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/team-only-fixture
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/team-only-fixture
+task_budget: S — one focused implementer round
+---
 
 Do the thing, evidence-first.
 `
@@ -168,7 +168,7 @@ describe('team dispatch gate — name-keyed before tool resolution, so absence i
     // CALL NAME, so an absent carrier is refused by policy — naming the
     // carrier, never the registry's unknown-tool error.
     if (!denied.isError) throw new Error('expected the dispatch gate to deny the call')
-    expect(denied.error.message).toContain('assignment.field.missing-execute-as')
+    expect(denied.error.message).toContain('assignment.field.execute-as')
     expect(denied.error.message).toContain('(team_task_create)')
     expect(advisories).toHaveLength(0)
   })
@@ -193,13 +193,41 @@ describe('team dispatch gate — name-keyed before tool resolution, so absence i
     bodyRan = 0
     const denied = await callTool(app, 'team_task_create', { subject: 'Review the change', description: MISSING_EXECUTE_AS })
     expect(denied.isError).toBe(true)
-    expect(textOf(denied)).toContain('assignment.field.missing-execute-as')
+    expect(textOf(denied)).toContain('assignment.field.execute-as')
     expect(textOf(denied)).toContain('(team_task_create)')
     expect(bodyRan).toBe(0)
 
     const allowed = await callTool(app, 'team_task_create', { subject: 'Review the change', description: VALID_WRITABLE })
     expect(allowed.isError).toBe(false)
     expect(bodyRan).toBe(1)
+    expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ------------------- D16 legacy body-label regression ------------------- */
+
+describe('team dispatch gate — the retired body-label grammar refuses on the board carrier too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a board
+    // carrier shaped like an Assignment whose fields live in the retired
+    // `**Label**` grammar reaches the terminal legacy-format refusal.
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp({ enforcement: 'hard' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const denied = await callTool(app, 'team_task_create', { subject: 'Review the change', description: LEGACY_BODY_LABEL })
+
+    if (!denied.isError) throw new Error('expected the dispatch gate to deny the call')
+    expect(denied.error.message).toContain('dispatch.assignment.legacy-format')
+    expect(denied.error.message).toContain('(team_task_create)')
     expect(advisories).toHaveLength(0)
   })
 })

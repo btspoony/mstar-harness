@@ -68,77 +68,101 @@ afterAll(() => {
   rmSync(fixtureRepo, { recursive: true, force: true });
 });
 
-const completeAssignment = `## Assignment
+const completeAssignment = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/example
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/example
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `;
 
-const missingExecuteAs = `## Assignment
+const missingExecuteAs = `---
+execute_as: fullstack-dev
+delegation: allowed (reviewer)
+task_category: docs
+---
 
-**Delegation**: allowed (reviewer)
-**Task category**: docs
+## Assignment
 
 Review the doc.
-`;
+`.replace("execute_as: fullstack-dev\n", "");
 
-const missingDelegation = `## Assignment
+const missingDelegation = `---
+execute_as: architect
+task_category: audit
+working_branch: feature/example
+task_budget: XS — one survey round
+---
 
-**Execute as**: architect
-**Task category**: audit
+## Assignment
 
 Survey the codebase.
 `;
 
-const missingTaskCategory = `## Assignment
+const missingTaskCategory = `---
+execute_as: fullstack-dev
+delegation: forbidden
+working_branch: feature/example
+task_budget: XS — one implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
+## Assignment
 
 Ship the module.
 `;
 
-/** Assignment-shaped (heading present) but none of the three core fields. */
-const missingAllFields = `## Assignment
+/** Assignment-shaped (core key present but empty) — the remaining core
+ * fields are missing, the working branch keeps the branch-form gates quiet. */
+const missingAllFields = `---
+execute_as:
+working_branch: feature/example
+plan_path: .mstar/plans/20260808-example.md
+---
 
-**Working branch**: feature/example
-**Plan Path**: .mstar/plans/20260808-example.md
+## Assignment
 `;
 
 /** Core fields but no branch form — engine `branch-missing` (writable default). */
-const noBranchForm = `## Assignment
+const noBranchForm = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: XS — one implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `;
 
 /** Existing-branch form on a default protected branch without an exception. */
-const workingBranchMain = `## Assignment
+const workingBranchMain = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 Ship directly on main.
 `;
 
 /** `Branch policy: direct on main — <reason>` — the exception matches the gate branch. */
-const directOnMainPolicy = `## Assignment
+const directOnMainPolicy = `---
+execute_as: fullstack-dev
+delegation: allowed (hotfix)
+task_category: logic
+branch_policy: direct on main — urgent user-authorized hotfix
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: allowed (hotfix)
-**Task category**: logic
-**Branch policy**: direct on main — urgent user-authorized hotfix
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Ship the hotfix.
 `;
@@ -148,44 +172,53 @@ Ship the hotfix.
  * the direct-on exception must not be honored for `main` (CLI ea010f1
  * semantics: `parseBranchPolicyDirectOnBranch(text) === checked branch`).
  */
-const exceptionBranchMismatch = `## Assignment
+const exceptionBranchMismatch = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+branch_policy: direct on main-tmp — other work
+task_budget: XS — one implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
-**Branch policy**: direct on main-tmp — other work
+## Assignment
 
 Conflicting branch forms.
 `;
 
 /** Create-form Working branch without `<base>` — engine `branch-missing-base`. */
-const createWithoutBase = `## Assignment
+const createWithoutBase = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: create feature/x
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: create feature/x
-
-Create the branch.
-`;
-
-/** Dangling create form — trailing `from`, no base */const createDanglingFrom = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: create feature/x from
+## Assignment
 
 Create the branch.
 `;
 
-/** Read-only orientation assignment — no branch form is legitimate */const scoutAssignment = `## Assignment
+/** Dangling create form — trailing `from`, no base */const createDanglingFrom = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: create feature/x from
+---
 
-**Execute as**: scout
-**Delegation**: forbidden
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
+
+Create the branch.
+`;
+
+/** Read-only orientation assignment — no branch form is legitimate */const scoutAssignment = `---
+execute_as: scout
+delegation: forbidden
+task_category: deep
+task_budget: XS — one orientation round
+---
+
+## Assignment
 
 Survey the codebase.
 `;
@@ -199,37 +232,53 @@ No harness structure anywhere.
 `;
 
 /** Invalid assignment (missing Execute as) with `**Enforcement**: hard` — must hard-block. */
-const hardMissingExecuteAs = `## Assignment
+const hardMissingExecuteAs = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: allowed (reviewer)
+task_category: docs
+task_budget: XS — one docs round
+working_branch: feature/example
+---
 
-**Enforcement**: hard
-**Delegation**: allowed (reviewer)
-**Task category**: docs
+## Assignment
 
 Review the doc.
-`;
+`.replace("execute_as: fullstack-dev\n", "");
 
 /** Fully valid assignment carrying `**Enforcement**: hard` — nothing to block. */
-const hardCompleteAssignment = `## Assignment
+const hardCompleteAssignment = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/example
+task_budget: S — one focused implementer round
+---
 
-**Enforcement**: hard
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/example
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `;
 
 /** Explicit non-hard value — warn-only, never blocks (rollback = unset flag). */
-const softEnforcementAssignment = `## Assignment
+/** Explicit non-hard value — warn-only, never blocks (rollback = unset flag).
+ * `soft` is not an accepted `enforcement` enum value (hard-only contract), so
+ * the soft case is modeled by an unenforceable stray key pair — the engine
+ * reads the flag as present-but-non-hard and the schema rows stay advisory. */
+const softEnforcementAssignment = `---
+enforcement: soft
+execute_as: fullstack-dev
+delegation: allowed (reviewer)
+task_category: docs
+task_budget: XS — one docs round
+working_branch: feature/example
+---
 
-**Enforcement**: soft
-**Delegation**: allowed (reviewer)
-**Task category**: docs
+## Assignment
 
 Review the doc.
-`;
+`.replace("execute_as: fullstack-dev\n", "");
 
 const captureWarnings = (): { warnings: string[]; log: StatusLogger } => {
   const warnings: string[] = [];
@@ -255,10 +304,10 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
  // Single parser: NO stacked presence warning — one violation per missing field.
  // 2 field/branch violations + the new task-budget gate = 3.
     expect(warnings).toHaveLength(3);
-    expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.execute-as"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
     expect(warnings.some((w) => w.includes("assignment.presence.missing-execute-as"))).toBe(false);
-    const executeAs = result!.violations.find((v) => v.code === "assignment.field.missing-execute-as");
+    const executeAs = result!.violations.find((v) => v.code === "assignment.field.execute-as");
     expect(executeAs?.aliases).toContain("assignment.presence.missing-execute-as");
     expect(warnings.some((w) => w.includes("[high]"))).toBe(true);
     expect(warnings.some((w) => w.includes("(fix:"))).toBe(true);
@@ -266,8 +315,8 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
 
   test("missing Delegation / Task category → single engine field code each (presence alias on the violation)", () => {
     for (const [fixture, fieldCode, presenceCode] of [
-      [missingDelegation, "assignment.field.missing-delegation", "assignment.presence.missing-delegation"],
-      [missingTaskCategory, "assignment.field.missing-task-category", "assignment.presence.missing-task-category"],
+      [missingDelegation, "assignment.field.delegation", "assignment.presence.missing-delegation"],
+      [missingTaskCategory, "assignment.field.task-category", "assignment.presence.missing-task-category"],
     ] as const) {
       const { warnings, log } = captureWarnings();
       const result = validateDispatchAssignment(fixture, { log });
@@ -286,19 +335,31 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
  // The fixture still carries a Working branch — no branch-missing.
     expect(warnings).toHaveLength(4);
     for (const code of [
-      "assignment.field.missing-execute-as",
-      "assignment.field.missing-delegation",
-      "assignment.field.missing-task-category",
+      "assignment.field.execute-as",
+      "assignment.field.delegation",
+      "assignment.field.task-category",
     ]) {
       expect(warnings.some((w) => w.includes(code))).toBe(true);
     }
- // Every core-field violation carries its legacy presence alias.
-    for (const v of result!.violations) {
-      if (v.code.startsWith("assignment.field.missing-")) {
-        expect(v.aliases).toHaveLength(1);
-        expect(v.aliases![0]).toMatch(/^assignment\.presence\.missing-/);
-      }
+ // Every core-field violation carries its legacy presence alias: select
+ // the three actual field codes (not the retired `missing-` infix), find
+ // each violation, and assert all three were checked.
+    const checked: string[] = [];
+    for (const [fieldCode, presenceCode] of [
+      ["assignment.field.execute-as", "assignment.presence.missing-execute-as"],
+      ["assignment.field.delegation", "assignment.presence.missing-delegation"],
+      ["assignment.field.task-category", "assignment.presence.missing-task-category"],
+    ] as const) {
+      const violation = result!.violations.find((v) => v.code === fieldCode);
+      expect(violation).toBeDefined();
+      expect(violation?.aliases).toContain(presenceCode);
+      checked.push(fieldCode);
     }
+    expect(checked).toEqual([
+      "assignment.field.execute-as",
+      "assignment.field.delegation",
+      "assignment.field.task-category",
+    ]);
   });
 
   test("garbage text → no warnings, ok result", () => {
@@ -331,18 +392,24 @@ describe("validateDispatchAssignment (warn-only wrapper, full validation)", () =
     expect(entries.filter(([, msg]) => msg.includes("assignment validation aborted"))).toEqual([]);
   });
 
-  test("field fragment without heading is linted, not silent", () => {
- // A bare `Execute as:` line is Assignment-shaped — the other two fields
- // still warn (engine field codes only; presence codes are aliases).
+  test("unterminated front matter with a core key is linted, not silent", () => {
+ // An unterminated fence counts as Assignment evidence (fail-closed shape
+ // guard): the schema absent-fence row and the missing-field rows warn;
+ // unfenced key: value body text (the retired grammar) is D16 instead.
     const { warnings, log } = captureWarnings();
-    const result = validateDispatchAssignment("Execute as: [unbalanced", { log });
+    const result = validateDispatchAssignment("---\nexecute_as: fullstack-dev\ntask_budget: XS — one implementer round\n", { log });
     expect(result!.ok).toBe(false);
- // 3 pre-existing warnings + the task-budget gate = 4.
-    expect(warnings).toHaveLength(4);
-    expect(warnings.some((w) => w.includes("assignment.field.missing-delegation"))).toBe(true);
-    expect(warnings.some((w) => w.includes("assignment.field.missing-task-category"))).toBe(true);
-    expect(warnings.some((w) => w.includes("assignment.field.branch-missing"))).toBe(true);
-    expect(warnings.some((w) => w.includes("assignment.presence."))).toBe(false);
+    expect(warnings.some((w) => w.includes("document.frontmatter.absent"))).toBe(true);
+  });
+
+  test("a bare unfenced key: value body text is NOT an Assignment declaration", () => {
+ // Unfenced `execute_as: x` body prose declares nothing (front matter is the
+ // only field contract); a single label is not legacy-shaped either — the
+ // prompt passes silently.
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment("execute_as: fullstack-dev\n", { log });
+    expect(result!.ok).toBe(true);
+    expect(warnings).toEqual([]);
   });
 });
 
@@ -384,7 +451,7 @@ describe("validateDispatchAssignment full-validation matrix (Slice 3)", () => {
 
   test("read-only role match is case-insensitive (Execute as: Scout)", () => {
     const { warnings, log } = captureWarnings();
-    const text = scoutAssignment.replace("**Execute as**: scout", "**Execute as**: Scout");
+    const text = scoutAssignment.replace("execute_as: scout", "execute_as: Scout");
     const result = validateDispatchAssignment(text, { log });
     expect(result!.ok).toBe(true);
     expect(warnings).toEqual([]);
@@ -474,7 +541,7 @@ describe("anti-recursion in validateDispatchAssignment (caller-scoped, issue #15
     const result = validateDispatchAssignment(missingExecuteAs, { log });
     expect(result!.violations.some((v) => v.code.startsWith("dispatch.anti-recursion."))).toBe(false);
  // Field + branch warnings still fire.
-    expect(warnings.some((w) => w.includes("assignment.field.missing-execute-as"))).toBe(true);
+    expect(warnings.some((w) => w.includes("assignment.field.execute-as"))).toBe(true);
   });
 
   test("repo-level hard (`.mstarc`) hardens a flag-less Assignment (dsh resolveDispatchHard parity)", () => {
@@ -535,7 +602,7 @@ describe("plugin wiring (tool.execute.before)", () => {
     }
     expect(
       warnings.some(
-        (w) => w.includes("[mstar-harness]") && w.includes("assignment.field.missing-execute-as"),
+        (w) => w.includes("[mstar-harness]") && w.includes("assignment.field.execute-as"),
       ),
     ).toBe(true);
 
@@ -693,16 +760,16 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
  // Missing Execute as (branch form absent too — no Working branch field).
-    expect(entries.some(([level, text]) => level === "error" && text.includes("assignment.field.missing-execute-as"))).toBe(true);
+    expect(entries.some(([level, text]) => level === "error" && text.includes("assignment.field.execute-as"))).toBe(true);
  // Hard mode must not emit warn-level lines for the same violations.
     expect(entries.some(([level]) => level === "warn")).toBe(false);
  // Skill-text pointer present in the error.
     expect(entries.some(([, text]) => text.includes("Enforcement: hard"))).toBe(true);
   });
 
-  test("invalid assignment + plain-form Enforcement: hard → hardBlocked true", () => {
+  test("invalid assignment + plain-form enforcement: hard → hardBlocked true", () => {
     const { entries, log } = capture();
-    const result = validateDispatchAssignment(hardMissingExecuteAs.replace("**Enforcement**: hard", "Enforcement: hard"), { log });
+    const result = validateDispatchAssignment(hardMissingExecuteAs.replace("enforcement: hard", 'enforcement: "hard"'), { log });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
     expect(entries.some(([level]) => level === "error")).toBe(true);
@@ -737,21 +804,26 @@ describe("hard mode (Enforcement: hard flag — Slice 5, roadmap §8.5 C4/D2)", 
   test("hard mode never suppresses the violation codes — the structured result stays complete", () => {
     const { log } = capture();
     const result = validateDispatchAssignment(hardMissingExecuteAs, { log });
-    expect(result!.violations.some((v) => v.code === "assignment.field.missing-execute-as")).toBe(true);
-    expect(result!.violations.some((v) => v.code === "assignment.field.missing-delegation")).toBe(false);
+    expect(result!.violations.some((v) => v.code === "assignment.field.execute-as")).toBe(true);
+    expect(result!.violations.some((v) => v.code === "assignment.field.delegation")).toBe(false);
   });
 
   test("body example **Enforcement**: hard after `# Change` does NOT harden", () => {
     const { entries, log } = capture();
-    const text = `## Assignment
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: docs
+task_budget: XS — one docs round
+working_branch: feature/example
+---
 
-**Delegation**: forbidden
-**Task category**: docs
+## Assignment
 
 # Change
 
 An example Assignment template line: **Enforcement**: hard
-`;
+`.replace("execute_as: fullstack-dev\n", "");
     const result = validateDispatchAssignment(text, { log });
  // Missing Execute as is a real violation — but the flag lives in the
  // BODY, so the gate stays warn-only (no hardBlocked, no error lines).
@@ -761,18 +833,23 @@ An example Assignment template line: **Enforcement**: hard
     expect(entries.some(([level]) => level === "error")).toBe(false);
   });
 
-  test("header **Enforcement**: hard hardens even when the body quotes a soft example", () => {
+  test("front matter enforcement: hard hardens even when the body quotes a soft example", () => {
     const { entries, log } = capture();
-    const text = `## Assignment
+    const text = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: docs
+task_budget: XS — one docs round
+working_branch: feature/example
+---
 
-**Enforcement**: hard
-**Delegation**: forbidden
-**Task category**: docs
+## Assignment
 
 # Change
 
 **Enforcement**: soft (example only)
-`;
+`.replace("execute_as: fullstack-dev\n", "");
     const result = validateDispatchAssignment(text, { log });
     expect(result!.ok).toBe(false);
     expect(result!.hardBlocked).toBe(true);
@@ -816,7 +893,7 @@ An example Assignment template line: **Enforcement**: hard
  // branch form) may harden the gate — never the empty target binding.
       await beforeExecute!(
         { tool: "task", sessionID: "s1", callID: "c1" },
-        { args: { prompt: hardCompleteAssignment.replace("**Working branch**: feature/example", "") } },
+        { args: { prompt: hardCompleteAssignment.replace("working_branch: feature/example", "") } },
       );
     } finally {
       console.error = original;
@@ -843,5 +920,166 @@ An example Assignment template line: **Enforcement**: hard
       console.error = original;
     }
     expect(errors.filter((e) => e.includes("[mstar-harness]"))).toEqual([]);
+  });
+});
+
+/** The retired body-label format of the complete assignment — same fields as
+ * `**Label**` body lines (the format front matter replaced). */
+const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/example
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`;
+
+describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => {
+  test("a pointer under an accepted assignment home produces the SAME decision as the inline form", () => {
+    const inlineLog = captureWarnings();
+    validateDispatchAssignment(noBranchForm, { log: inlineLog.log });
+
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "pointer-target.md");
+    writeFileSync(file, noBranchForm);
+    const pointerLog = captureWarnings();
+    const result = validateDispatchAssignment(`Assignment file: ${file}`, { log: pointerLog.log });
+
+    expect(result!.ok).toBe(false);
+    const inlineCodes = inlineLog.warnings.map((w) => w.match(/(assignment\.[\w.-]+|dispatch\.[\w.-]+)/)?.[1]).sort();
+    const pointerCodes = pointerLog.warnings.map((w) => w.match(/(assignment\.[\w.-]+|dispatch\.[\w.-]+)/)?.[1]).sort();
+    expect(pointerCodes).toEqual(inlineCodes);
+    expect(pointerCodes).toContain("assignment.field.branch-missing");
+  });
+
+  test("an out-of-home pointer refuses dispatch.assignment.path — fail-closed hardBlocked under SOFT repo enforcement", () => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    const outside = join(fixtureRepo, "outside-assignment.md");
+    writeFileSync(outside, completeAssignment);
+ // Critical source-resolution refusal: hard independent of document/repo
+ // enforcement (the fixture tree is soft) — error-level lines, no warn lines.
+    const result = validateDispatchAssignment(`Assignment file: ${outside}`, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
+    expect(entries.some(([level]) => level === "warn")).toBe(false);
+  });
+
+  test("a null control harness root refuses the pointer — fail-closed hardBlocked", () => {
+ // A bare non-git directory: no checkout, no `.mstar` — the resolver cannot
+ // answer a root, so the pointer can never be containment-checked. Fail-closed
+ // hard enforcement applies independently of any document or repo flag.
+    const bare = mkdtempSync(join(tmpdir(), "mstar-null-root-"));
+    writeFileSync(join(bare, "a.md"), completeAssignment);
+    process.chdir(bare);
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    try {
+      const result = validateDispatchAssignment(`Assignment file: ${join(bare, "a.md")}`, { log });
+      expect(result!.ok).toBe(false);
+      expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
+      expect(result!.violations.some((v) => v.message.includes("control harness root"))).toBe(true);
+      expect(result!.hardBlocked).toBe(true);
+      expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
+    } finally {
+      process.chdir(fixtureRepo);
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable pointer under an accepted home refuses fail-closed", () => {
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const missing = join(fixtureRepo, ".mstar", "assignments", "absent-file.md");
+    const result = validateDispatchAssignment(`Assignment file: ${missing}`, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.violations.some((v) => v.code === "dispatch.assignment.path")).toBe(true);
+    expect(result!.hardBlocked).toBe(true);
+    expect(entries.some(([level, msg]) => level === "error" && msg.includes("dispatch.assignment.path"))).toBe(true);
+  });
+
+  test("an empty pointed file is refused as an invalid Assignment instead of passing as a prompt", () => {
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "empty-target.md");
+    writeFileSync(file, "");
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(`Assignment file: ${file}`, { log });
+    expect(result!.ok).toBe(false);
+    expect(result!.violations.some((violation) => violation.code === "dispatch.assignment.shape")).toBe(true);
+    expect(warnings.some((warning) => warning.includes("dispatch.assignment.shape"))).toBe(true);
+  });
+
+  test("a pointed document that declares hard enforcement hardens like the inline form", () => {
+    // Missing every declaration but `execute_as`: the same front matter in
+    // either form must produce the same hard refusal.
+    const unshapedHard = "---\nenforcement: hard\nexecute_as: fullstack-dev\n---\n\nMissing the rest.\n";
+    const inline = validateDispatchAssignment(unshapedHard, { log: () => undefined });
+    expect(inline!.ok).toBe(false);
+    expect(inline!.hardBlocked).toBe(true);
+    expect(inline!.violations.some((violation) => violation.code === "assignment.field.delegation")).toBe(true);
+
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "hard-parity.md");
+    writeFileSync(file, unshapedHard);
+    const pointer = validateDispatchAssignment(`Assignment file: ${file}`, { log: () => undefined });
+    expect(pointer!.ok).toBe(false);
+    expect(pointer!.hardBlocked).toBe(true);
+    expect(pointer!.violations.some((violation) => violation.code === "assignment.field.delegation")).toBe(true);
+  });
+
+  test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", () => {
+    const { warnings, log } = captureWarnings();
+    const result = validateDispatchAssignment(LEGACY_BODY_LABEL, { log });
+    expect(result!.ok).toBe(false);
+    const legacy = result!.violations.find((v) => v.code === "dispatch.assignment.legacy-format");
+    expect(legacy).toBeDefined();
+    expect(legacy!.terminal).toBe(true);
+    expect(legacy!.fix).toContain("front-matter document");
+    expect(legacy!.fix).toContain("Assignment file:");
+    // The schema's generic absent-fence row is superseded — one defect, one message.
+    expect(result!.violations.some((v) => v.code === "document.frontmatter.absent")).toBe(false);
+    // No refusal channel on this host (`I-001258`): the terminal refusal is
+    // surfaced through `hardBlocked` (the error log), never a warn-only line.
+    expect(result!.hardBlocked).toBe(true);
+    expect(warnings.some((w) => w.includes("dispatch.assignment.legacy-format"))).toBe(false);
+  });
+
+  test("a pointer resolving to a legacy body-label file refuses dispatch.assignment.legacy-format too", () => {
+    mkdirSync(join(fixtureRepo, ".mstar", "assignments"), { recursive: true });
+    const file = join(fixtureRepo, ".mstar", "assignments", "legacy-pointer.md");
+    writeFileSync(file, LEGACY_BODY_LABEL);
+    const { log } = captureWarnings();
+    const result = validateDispatchAssignment(`Assignment file: ${file}`, { log });
+    expect(result!.violations.some((v) => v.code === "dispatch.assignment.legacy-format")).toBe(true);
+  });
+
+  test("the legacy refusal hardens under repo-level enforcement", () => {
+    writeFileSync(join(fixtureRepo, ".mstarc"), "[config]\nenforcement=hard\n");
+    execFileSync("git", ["add", ".mstarc"], { cwd: fixtureRepo, stdio: "ignore" });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qm", "hard"], { cwd: fixtureRepo, stdio: "ignore" });
+    const entries: Array<[string, string]> = [];
+    const log: StatusLogger = (level, message) => {
+      entries.push([level, message]);
+    };
+    try {
+      const result = validateDispatchAssignment(LEGACY_BODY_LABEL, { log });
+      expect(result!.ok).toBe(false);
+      expect(result!.hardBlocked).toBe(true);
+      expect(entries.some(([level]) => level === "error")).toBe(true);
+    } finally {
+      rmSync(join(fixtureRepo, ".mstarc"));
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-aqm", "soft again"], { cwd: fixtureRepo, stdio: "ignore" });
+    }
   });
 });

@@ -42,7 +42,8 @@ import { dirname, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
-import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
+import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries } from "./document-frontmatter.js";
+import { parseEnforcementFlagFromFrontmatter, type EnforcementFlag } from "./dispatch.js";
 import { ISSUE_DISPOSITIONS } from "./issue.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
@@ -752,15 +753,25 @@ export function resolveCompassEnforcement(harnessDir: string): EnforcementFlag {
     } catch {
       continue;
     }
- // Frontmatter only: leading `---` fence through the closing fence.
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const fm = frontmatter !== null ? frontmatter[1]! : "";
- // Sticky-hard guard : only `status: active` /
- // `status: locked` compasses count toward hardening. Completed and
- // status-less compasses are skipped — fail-soft (an archive must never
- // keep the repo hardened).
-    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm)) continue;
-    const flag = parseEnforcementFlag(fm);
+    // Front matter only, read by the shared parser: the fence boundary comes
+    // from the one extractor and both declarations from the one reader, so a
+    // YAML comment or a quoted value never hides them.
+    const extraction = extractFrontmatterAndBody(content);
+    if (!extraction.fenced) continue;
+    let status: unknown;
+    try {
+      status = parseDocumentFrontmatterEntries(extraction.frontmatter, compassPath, "flat").get("status")?.value;
+    } catch {
+      // A front matter line outside the accepted subset steers nothing
+      // (fail-soft: the compass is unreadable, not silently non-hard).
+      continue;
+    }
+    // Sticky-hard guard : only `status: active` /
+    // `status: locked` compasses count toward hardening. Completed and
+    // status-less compasses are skipped — fail-soft (an archive must never
+    // keep the repo hardened).
+    if (status !== "active" && status !== "locked") continue;
+    const flag = parseEnforcementFlagFromFrontmatter(extraction.frontmatter, "flat");
     if (flag.hard) return flag;
   }
   return { hard: false, source: "none" };

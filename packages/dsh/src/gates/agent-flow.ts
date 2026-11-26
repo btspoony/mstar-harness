@@ -37,9 +37,9 @@
 import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
-import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
+import { assignmentFrontmatterEntries, assignmentHeaderRegion, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
-import type { DshSelectedGeneration } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, DshSelectedGeneration, FrontmatterEntry } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowContinuationEventView, AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
 
@@ -48,7 +48,7 @@ export type { AgentFlowContinuationEventView }
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
-import { isNaValue, planIdOf } from './dispatch-assignment.ts'
+import { isNaValue, planIdOfEntries } from './dispatch-assignment.ts'
 import { sessionIdOf } from './dispatch-core.ts'
 import {
   isTeamDispatchToolName,
@@ -927,6 +927,26 @@ export function recordDispatch(input: {
   harnessDir: string
   exec?: unknown
   prompt: string
+  /**
+   * The dispatch's ONE source resolution, shared by the gate composition
+   * (compass D14): the ledger extracts its fields from the SAME resolved
+   * document the decision used and NEVER re-reads the source — a file
+   * swapped mid-dispatch cannot split the record from the decision, and a
+   * resolved document carrying a standalone `Assignment file:` line is
+   * never reparsed as another pointer. Omitted (direct callers) → the
+   * record resolves the prompt itself, the pre-fix behavior.
+   */
+  assignmentSource?: AssignmentSourceResult
+  /**
+   * The decision's ONE front matter parse (compass D14) — the SAME entries
+   * the gate composition consumed. `null` is a FAILED parse and stays FINAL:
+   * the rejected block is never read again (its structured diagnostic remains
+   * with the gate's schema layer). Omitted (direct callers) → the record
+   * parses the resolved document once here.
+   */
+  entries?: Map<string, FrontmatterEntry> | null
+  /** The plan id the decision derived from those entries; absent stays absent. */
+  planId?: string | undefined
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
@@ -966,10 +986,23 @@ export function recordDispatch(input: {
     // inbox are that service's surface, so a composition without it has no
     // team call to attribute.
     if (teamTool && input.teamPresent !== true) return
-    const header = assignmentHeaderRegion(input.prompt)
-    const fields = parseAssignmentFields(header)
-    const planId = planIdOf(header)
-    const taskId = taskIdOf(input.prompt)
+    // compass D14 — the ledger reads the RESOLVED assignment document, exactly
+    // as the gate did: the dispatch's ONE resolution passed in, or (direct
+    // callers) one resolution of the carrier text here — a pointer dispatch
+    // records the same fields the inline form does. A refused/unresolvable
+    // source falls back to the carrier text (the row still records — identity
+    // fields are simply absent, never fabricated).
+    const assignmentSource = input.assignmentSource ?? readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
+    const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
+    // ONE parse serves the decision, the handoff and the ledger (QC3-04): the
+    // gate's entries when handed in — a failed parse (`null`) and a derived
+    // absent plan id are FINAL, never a reason to read the text again — else
+    // one local parse for direct callers. taskIdOf scans the body slice only
+    // (no front matter parse).
+    const entries = input.entries !== undefined ? input.entries : assignmentFrontmatterEntries(assignmentText)
+    const fields = parseAssignmentFieldsFromFrontmatter(entries)
+    const planId = input.planId ?? planIdOfEntries(entries)
+    const taskId = taskIdOf(assignmentText)
     const taskCategory = fields.taskCategory
     // ONE canonical role for every row this dispatch produces: the row itself
     // and its pairing ref (which the settle / link boundaries then agree

@@ -32,8 +32,8 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
 - **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
-  - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**）。
-- **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `Execution mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
+  - **并行标签**：≥2 条实现轨同时分派 → Assignment front matter 的 `worktree_path` / `working_branch` 写 flat string list（每轨一项；`working_branch` 也可单值共用于所有轨）——≥2 条 `worktree_path` 就是 gate 读取的并行声明，没有 marker key。同仓可写并发在此声明之上还须 worktree 隔离，清单与 L2 自检 → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**。
+- **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `execution_mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
 ### 可验证编辑与上下文纪律
 
@@ -52,7 +52,7 @@ Playbook 与 Hotfix 完整对照 → **`references/playbook-vs-hotfix.md`**。
 ## 角色职责
 
 - `@project-manager`
-  - 负责门禁判定与 Assignment 中的 `Phase Gate Checklist`。
+  - 负责门禁判定与 Assignment front matter 中的 `phase_gate_checklist`。
   - 在 `Status Update` 汇报当前 gate 状态。
 - 开发角色（`@frontend-dev` / `@fullstack-dev` / `@fullstack-dev-2`）
   - 仅在 Execute gate 放行后开始实现。
@@ -85,7 +85,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development pl
 5. 若 plan 涉及 UI 工作：`DESIGN.md` 是否存在且满足声明的 completeness level（见 `mstar-design-md`）？
 6. 若分批/暂缓/临时绕行，roadmap 是否落在 plan / store.db `project_roadmaps` 中，而不是只在对话里？
 7. `tasks` 是否完成？
-8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
+8. Assignment front matter 是否含 **`task_category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
 10. 实现说明中是否体现"最小耐久切片 + 手术式改动 + 可验证检查"？
 11. 每个任务是否满足容量判据：声明 Effort band、单轮闭合其 Files 与验证门、写明 split point（Task shape / session fit → `mstar-artifacts/references/plan-quality-bar.md` item 7）？
@@ -112,6 +112,6 @@ Prepare（specify→clarify→plan，意图/clarify/Roadmap/Recall）→ lock �
 ## References
 
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
-- 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
+- 多 task 默认 `execution_mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**
 - Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**：选 Spec-Driven playbook 还是 Hotfix 例外路径、或读 Execute 阶段补充时打开

@@ -356,8 +356,10 @@ export { planWorktreeCleanup } from "./cleanup.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,
+  AssignmentSourceResult,
   ComposeDispatchGateOptions,
   ComposeDispatchGateResult,
+  AssignmentFrontmatterParse,
   DefaultBranchOptions,
   EnforcementFlag,
   EnforcementSource,
@@ -373,16 +375,24 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  assignmentBranchFormsOf,
+  assignmentFrontmatterEntries,
+  assignmentFrontmatterParse,
   classifyReviewOrAuditRound,
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentBranchForms,
   parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
+  parseEnforcementFlagFromFrontmatter,
   validateAssignmentFields,
   validateControlWriteAssignment,
+  readAssignmentSource,
 } from "./dispatch.js";
 export type {
   BranchProbeOptions,
@@ -498,10 +508,11 @@ export {
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
-export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
+export type { FrontmatterAndBody, FrontmatterEntry, JsonObject } from "./document-frontmatter.js";
 export {
   DocumentFrontmatterError,
   extractFrontmatterAndBody,
+  parseDocumentFrontmatterEntries,
   parseDocumentFrontmatter,
   parseSimpleFrontmatter,
 } from "./document-frontmatter.js";

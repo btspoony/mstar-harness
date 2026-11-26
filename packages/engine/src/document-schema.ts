@@ -46,18 +46,24 @@ export type DocumentSchema = {
   optional: readonly DocumentField[];
 };
 
-const PLAN_SCHEMA: DocumentSchema = {
-  kind: "plan",
-  required: [
-    { name: "plan_id" },
-    { name: "execution", enum: ["sdd", "inline"] },
-    { name: "working_branch" },
-    { name: "main_worktree_branch" },
-    { name: "delivery_kind", enum: WORKFLOW_DELIVERY_KINDS },
-    { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
-  ],
-  optional: [{ name: "title" }],
-};
+/** The plan table is a FUNCTION: its `delivery_kind` enum reads
+ * `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`, which imports back into this
+ * module (`workflow` → `status` → `dispatch` → here), so building it at
+ * module eval hits the const TDZ when `workflow.ts` is the cycle's entry. */
+function planSchema(): DocumentSchema {
+  return {
+    kind: "plan",
+    required: [
+      { name: "plan_id" },
+      { name: "execution", enum: ["sdd", "inline"] },
+      { name: "working_branch" },
+      { name: "main_worktree_branch" },
+      { name: "delivery_kind", enum: WORKFLOW_DELIVERY_KINDS },
+      { name: "status", enum: ["Todo", "InProgress", "InReview", "Done", "Blocked"] },
+    ],
+    optional: [{ name: "title" }],
+  };
+}
 
 /** Review/audit trigger: the dispatch-owned final round-bounding decision
  * ({@link classifyReviewOrAuditRound} `roundBounded`) — the role
@@ -152,17 +158,23 @@ const ACCEPTANCE_SCHEMA: DocumentSchema = {
   optional: [],
 };
 
-const SCHEMAS: Record<DocumentKind, DocumentSchema> = {
-  plan: PLAN_SCHEMA,
-  assignment: ASSIGNMENT_SCHEMA,
-  "sdd-brief": BRIEF_SCHEMA,
-  "pm-acceptance": ACCEPTANCE_SCHEMA,
-};
+/** Built on FIRST USE, never at module eval: the plan table's
+ * `delivery_kind` enum reads `WORKFLOW_DELIVERY_KINDS` from `workflow.ts`,
+ * and that module imports back into this one (`workflow` → `status` →
+ * `dispatch` → here), so a module-eval table hits the const TDZ whenever
+ * `workflow.ts` is the entry module of the cycle. */
+let schemas: Record<DocumentKind, DocumentSchema> | undefined;
 
 /** The field table for one document kind: required and optional rows with
  * their enum / type declarations. */
 export function documentSchema(kind: DocumentKind): DocumentSchema {
-  return SCHEMAS[kind];
+  schemas ??= {
+    plan: planSchema(),
+    assignment: ASSIGNMENT_SCHEMA,
+    "sdd-brief": BRIEF_SCHEMA,
+    "pm-acceptance": ACCEPTANCE_SCHEMA,
+  };
+  return schemas[kind];
 }
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
@@ -218,7 +230,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
  * exactly once (`extractFrontmatterAndBody`) and shares that split with the
  * validation instead of re-walking the document.
  */
-export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extraction: FrontmatterAndBody, source: string): GateResult {
+export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extraction: FrontmatterAndBody, source: string, opts: { entries?: Map<string, FrontmatterEntry> | null; parseError?: DocumentFrontmatterError | null } = {}): GateResult {
   const { frontmatter, fenced } = extraction;
   const schema = documentSchema(kind);
   const violations: ValidationResult[] = [];
@@ -230,9 +242,19 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     };
   }
 
+  // One parse per decision: entries parsed by the caller are reused as-is;
+  // the caller's structured parse refusal is carried in (`parseError`) and
+  // reported WITHOUT re-parsing the rejected block; only a caller that kept
+  // neither (`entries` omitted, `parseError` null) makes the schema parse its
+  // own line-numbered refusal.
   let entries: Map<string, FrontmatterEntry>;
   try {
-    entries = parseDocumentFrontmatterEntries(frontmatter, source);
+    if (opts.parseError !== undefined && opts.parseError !== null) throw opts.parseError;
+    // `??` deliberately treats caller-supplied `null` (invalid YAML, no
+    // diagnostic handed over) like an absent reuse: the schema's own parse
+    // then refuses with the precise line-numbered diagnostic — one parse
+    // per decision, no skipped refusal.
+    entries = opts.entries ?? parseDocumentFrontmatterEntries(frontmatter, source);
   } catch (error) {
     if (error instanceof DocumentFrontmatterError) {
       violations.push(violation("high", "document.frontmatter.invalid",
@@ -349,8 +371,31 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
   if (kind === "assignment") {
     const branchEntry = entries.get("working_branch");
     const policyEntry = entries.get("branch_policy");
-    const hasBranch = branchEntry !== undefined && typeof branchEntry.value === "string" && branchEntry.value.trim() !== "";
+    // The schema-owned parallel-track shape (dsh L2): `working_branch` and
+    // `worktree_path` accept a scalar OR a flat string list (flow array /
+    // `- item` block list). A non-empty string list is a valid branch
+    // declaration; mixed-content lists are invalid. `dispatch_mode` is NOT
+    // a schema key — the list shape is the only parallel representation.
+    const branchList = Array.isArray(branchEntry?.value) ? branchEntry!.value as unknown[] : null;
+    const hasBranchList = branchList !== null && branchList.length > 0 && branchList.every((item) => typeof item === "string" && item.trim() !== "");
+    // A present list is a declaration even when its content is refused below —
+    // one defect, one violation (no second "carries one declaration" row).
+    const hasBranch = branchEntry !== undefined && (typeof branchEntry.value === "string" ? branchEntry.value.trim() !== "" : branchList !== null);
     const hasPolicy = policyEntry !== undefined && typeof policyEntry.value === "string" && policyEntry.value.trim() !== "";
+    if (branchList !== null && !hasBranchList) {
+      violations.push(violation("high", "document.frontmatter.invalid",
+        `${source}:${branchEntry!.line}: invalid working_branch \u2014 accepted values: a non-blank scalar or a flat list of non-blank strings`,
+        "write working_branch as a single scalar or a string list (parallel tracks)"));
+    }
+    const worktreeEntry = entries.get("worktree_path");
+    if (Array.isArray(worktreeEntry?.value)) {
+      const worktreeList = worktreeEntry!.value as unknown[];
+      if (!(worktreeList.length > 0 && worktreeList.every((item) => typeof item === "string" && item.trim() !== ""))) {
+        violations.push(violation("high", "document.frontmatter.invalid",
+          `${source}:${worktreeEntry!.line}: invalid worktree_path \u2014 accepted values: a non-blank scalar or a flat list of non-blank strings`,
+          "write worktree_path as a single scalar or a string list (parallel tracks)"));
+      }
+    }
     if (hasBranch && hasPolicy) {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}:${policyEntry!.line}: invalid branch declaration \u2014 accepted values: exactly one of working_branch or branch_policy, not both`,

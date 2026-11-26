@@ -17,10 +17,12 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { Service, type Context } from '@deepseek-ai/cordis'
+import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
+import { parseAssignmentFields } from '@mstar-harness/engine'
 import {
   FakeSubagentProvider,
   FakeSubagentService,
@@ -108,6 +110,35 @@ function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void
   ;(write as (value: unknown) => void)(mode)
 }
 
+/** The delegation tool call the `tools/pre-execute` listener gates. */
+function subagentCall(prompt: string, agent?: unknown, callId = 'call-1'): ToolExecution {
+  return {
+    callId: callId as ToolExecution['callId'],
+    name: 'subagent',
+    arguments: { description: 'probe', prompt },
+    ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
+    signal: new AbortController().signal,
+    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
+  } as unknown as ToolExecution
+}
+
+/** The registry's bare default decision (the waterfall's terminal `next()`). */
+const allowNext = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
+
+/** A successful dispatch outcome (the around-dispatch waterfall's terminal value). */
+const okResult = { isError: false as const, value: null, content: [] }
+
+/**
+ * Run one tool call's body inside the `tools/execute` scope the plugin
+ * registers — the seam that lets a start consume THAT call's carrier handoff.
+ */
+async function runInCall(app: BootResult, exec: ToolExecution, body: () => Promise<unknown>): Promise<void> {
+  await app.ctx.waterfall('tools/execute', exec, async () => {
+    await body()
+    return okResult
+  })
+}
+
 /** One activation spec for the fake provider (the non-consumed fields are additive). */
 function specFor(request: RecordedRequest, provider: string = PROVIDER): SubagentActivationSpecView {
   // Boundary cast: the view types only the consumed fields; the signal is the
@@ -159,9 +190,6 @@ async function startAndCatch(app: BootResult, spec: SubagentActivationSpecView):
 const FIELD_ROLE_PROMPT = [
   '## Assignment',
   '',
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
-  '',
   'Role: `fullstack-dev`',
   '',
   '## Task',
@@ -169,22 +197,37 @@ const FIELD_ROLE_PROMPT = [
   'Implement the assigned work.',
 ].join('\n')
 
+/** A fully valid front-matter Assignment missing ONLY the role declaration. */
 const NO_DECLARATION_PROMPT = [
-  '## Assignment',
-  '',
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   '## Task',
   '',
   'Implement the assigned work.',
 ].join('\n')
 
+/** The canonical declaration: `execute_as` in the front matter block. */
 const CANONICAL_PROMPT = [
+  '---',
+  'execute_as: fullstack-dev',
+  'delegation: forbidden',
+  '---',
+  '',
+  '## Task',
+  '',
+  'Implement the assigned work.',
+].join('\n')
+
+/** The D16 regression — the ONE legacy body-label fixture of this spec. */
+const LEGACY_BODY_LABEL_PROMPT = [
   '## Assignment',
   '',
-  'Execute as: fullstack-dev',
+  '**Execute as**: fullstack-dev',
   '**Delegation**: forbidden',
+  '**Task category**: logic',
   '',
   '## Task',
   '',
@@ -202,8 +245,8 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       expect(provider.starts).toHaveLength(1)
       const sent = provider.starts[0]!.request as RecordedRequest
       const text = promptTextOf(sent)
-      // The canonical declaration is the FIRST field line of the Assignment.
-      expect(text.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+      // The canonical front matter block is prepended.
+      expect(text.startsWith('---\nexecute_as: fullstack-dev\n---\n')).toBe(true)
       // The rest of the prompt is preserved byte-for-byte.
       expect(text).toContain('Role: `fullstack-dev`\n\n## Task\n\nImplement the assigned work.')
       // The rewritten request reached the INNER consumer: the preset channel
@@ -236,7 +279,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
       const text = promptTextOf(provider.starts[0]!.request as RecordedRequest)
-      expect(text).toContain('Execute as: writing-specialist')
+      expect(text).toContain('execute_as: writing-specialist')
       expect(text).toContain('You are the **writing-specialist** for this task.')
       // Evidence kind is the lower-confidence token tier.
       expect(captured.some(([, message]) => message.includes('role gate repaired') && message.includes('role-id token'))).toBe(true)
@@ -250,7 +293,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const prompt = ['## Assignment', '', 'Take the `writing-specialist` seat.', '', '## Task', '', 'Write.'].join('\n')
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
-    expect(promptTextOf(provider.starts[0]!.request as RecordedRequest)).toContain('Execute as: writing-specialist')
+    expect(promptTextOf(provider.starts[0]!.request as RecordedRequest)).toContain('execute_as: writing-specialist')
   })
 
   it('(d) ambiguous (two distinct candidates) is NOT repaired → hard refuses', async () => {
@@ -267,7 +310,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     ].join('\n')
     const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
-    expect(error.message).toContain('Execute as')
+    expect(error.message).toContain('execute_as')
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(0)
   })
@@ -276,7 +319,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const { app, provider, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: workspace }))
 
-    expect(error.message).toContain('Execute as')
+    expect(error.message).toContain('execute_as')
     expect(error.message).toContain('roleGate')
     expect(error.message).toContain(workspace)
     expect(provider.starts).toHaveLength(0)
@@ -292,7 +335,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
       expect(provider.starts).toHaveLength(2)
       const warnings = captured.filter(([level]) => level === 'warn')
       expect(warnings).toHaveLength(1)
-      expect(warnings[0]![1]).toContain('Execute as')
+      expect(warnings[0]![1]).toContain('execute_as')
       expect(warnings[0]![1]).toContain('roleGate')
     } finally {
       restore()
@@ -343,6 +386,20 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(sent.prompt).toBe(request.prompt)
   })
 
+  it('(j2) an explicit `agentPreset` does not bypass the terminal D16 refusal (recognized retired Assignment)', async () => {
+    // The preset exemption is caller intent for the ROLE preset — it never
+    // hands a recognized retired body-label Assignment to a provider: the
+    // terminal D16 check sits AHEAD of the preset exemption, so the same
+    // request without a preset ((p20)) and with one are refused identically.
+    const { app, provider, workspace } = await bootWithProvider()
+    const error = await startAndCatch(app, specFor({ ...textPrompt(LEGACY_BODY_LABEL_PROMPT), cwd: workspace, agentPreset: 'caller-preset' }))
+
+    expect(error.message).toContain('legacy-format')
+    expect(error.message).toContain('execute_as')
+    expect(error.message).toContain('terminal')
+    expect(provider.starts).toHaveLength(0)
+  })
+
   it('(k) an unknown provider does not produce a role-gate error (the service fails its own way)', async () => {
     const { app, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: workspace }, 'ghost-provider'))
@@ -357,7 +414,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(FIELD_ROLE_PROMPT), parent: parentAgent(workspace) }))
 
     const sent = provider.starts[0]!.request as RecordedRequest
-    expect(promptTextOf(sent).startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    expect(promptTextOf(sent).startsWith('---\nexecute_as: fullstack-dev\n---\n')).toBe(true)
     expect(sent.agentPreset).toBe(PRESET_ID)
   })
 
@@ -365,7 +422,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const { app, provider, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), parent: parentAgent(workspace) }))
 
-    expect(error.message).toContain('Execute as')
+    expect(error.message).toContain('execute_as')
     expect(error.message).toContain('roleGate')
     expect(error.message).toContain(workspace)
     expect(provider.starts).toHaveLength(0)
@@ -375,7 +432,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const { app, provider, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '.', parent: parentAgent(workspace) }))
 
-    expect(error.message).toContain('Execute as')
+    expect(error.message).toContain('execute_as')
     expect(provider.starts).toHaveLength(0)
   })
 
@@ -401,7 +458,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(FIELD_ROLE_PROMPT), parent: parentAgent(plain) }))
 
     expect(provider.starts).toHaveLength(1)
-    expect(promptTextOf(provider.starts[0]!.request as RecordedRequest).startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    expect(promptTextOf(provider.starts[0]!.request as RecordedRequest).startsWith('---\nexecute_as: fullstack-dev\n---\n')).toBe(true)
   })
 
   it('(o2) an omitted cwd with NO declaration is refused against the projection (names the child directory)', async () => {
@@ -470,14 +527,14 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
   it('(q) a repair over MULTIPLE text blocks resolves to the target role, and a second pass is a no-op', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const blocks = [
-      { type: 'text', text: '## Assignment\n\n' },
-      { type: 'text', text: 'Execute as: `fullstack-dev`\n' },
+      { type: 'text', text: '---\nexecute_as: `fullstack-dev`\n' },
+      { type: 'text', text: '---\n' },
     ]
     await startActivationViaNativeChannel(app, specFor({ prompt: blocks, cwd: workspace }))
 
     const sent = provider.starts[0]!.request as RecordedRequest
     const text = promptTextOf(sent)
-    expect(text).toContain('Execute as: fullstack-dev')
+    expect(text).toContain('execute_as: fullstack-dev')
     expect(text).not.toContain('`fullstack-dev`')
     // The inner consumer parses the joined text: the canonical field bound the preset.
     expect(sent.agentPreset).toBe(PRESET_ID)
@@ -485,13 +542,13 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(rewritePromptWithExecuteAs(text, EXECUTE_AS)).toBe(text)
   })
 
-  it('(r) a lowercase `execute as` is normalized to the canonical label on the DELEGATED request', async () => {
+  it('(r) a case-variant front matter key is normalized to `execute_as` on the DELEGATED request', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const prompt = [
-      '## Assignment',
-      '',
-      '**Delegation**: forbidden',
-      'execute as: `fullstack-dev`',
+      '---',
+      'delegation: forbidden',
+      'Execute_As: `fullstack-dev`',
+      '---',
       '',
       '## Task',
       '',
@@ -501,19 +558,19 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
 
     const sent = provider.starts[0]!.request as RecordedRequest
     const text = promptTextOf(sent)
-    expect(text).toContain('\nExecute as: fullstack-dev\n')
-    expect(text).not.toContain('execute as:')
-    // The case-sensitive downstream parser reads the repaired field.
+    expect(text).toContain('\nexecute_as: fullstack-dev\n')
+    expect(text).not.toContain('Execute_As')
+    // The downstream parser reads the repaired key.
     expect(sent.agentPreset).toBe(PRESET_ID)
   })
 
-  it('(s) two same-value `Execute as` lines: every line is repaired (the parser binds the last)', async () => {
+  it('(s) duplicate front matter role keys collapse to ONE canonical line (the strict parser refuses duplicates)', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const prompt = [
-      '## Assignment',
-      '',
-      'Execute as: `fullstack-dev`',
-      'Execute as: **fullstack-dev**',
+      '---',
+      'role: `fullstack-dev`',
+      'act_as: **fullstack-dev**',
+      '---',
       '',
       '## Task',
       '',
@@ -522,8 +579,9 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
     const text = promptTextOf(provider.starts[0]!.request as RecordedRequest)
-    expect(text.match(/^Execute as: fullstack-dev$/gm)).toHaveLength(2)
-    // The wrapper's own consumer read the LAST line and selected the preset.
+    expect(text.match(/^execute_as: fullstack-dev$/gm)).toHaveLength(1)
+    expect(text).not.toContain('act_as')
+    // The collapsed key parses, so the inner consumer selected the preset.
     expect((provider.starts[0]!.request as RecordedRequest).agentPreset).toBe(PRESET_ID)
   })
 
@@ -541,13 +599,13 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(provider.starts).toHaveLength(1)
   })
 
-  it('(u) a canonical declaration inside a fence is REFUSED under hard (the seam would bind a quote)', async () => {
+  it('(u) a fenced `execute_as` quote is never a candidate — hard refuses the missing declaration', async () => {
     const { app, provider, workspace } = await bootWithProvider()
     const prompt = [
       '## Assignment',
       '',
       '````markdown',
-      'Execute as: fullstack-dev',
+      'execute_as: fullstack-dev',
       '````',
       '',
       '## Task',
@@ -556,11 +614,11 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     ].join('\n')
     const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
-    // The seam binds the quoted line, so a silent pass would arm a role the
-    // dispatcher only pasted; the refusal names the real cause and the fix.
-    expect(error.message).toContain('fenced code block')
-    expect(error.message).toContain(EXECUTE_AS)
-    expect(error.message).not.toContain('carries no role declaration')
+    // A quoted example is evidence, not a declaration: the fence masks it in
+    // both the candidate scan and the rewrite, so the verdict is the missing-
+    // declaration refusal.
+    expect(error.message).toContain('carries no role declaration')
+    expect(error.message).toContain('execute_as')
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(0)
   })
@@ -586,25 +644,25 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const text = promptTextOf(sent)
     // The canonical line lands before the fenced `## Task` — inside the raw
     // header the binding seam parses, not merely somewhere in the prompt.
-    expect(text.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
+    expect(text.startsWith('---\nexecute_as: fullstack-dev\n---\n')).toBe(true)
     // The FINAL selection on the delegated request (not just the verdict kind).
     expect(sent.agentPreset).toBe(PRESET_ID)
   })
 
   it('(w) a repair the seam would NOT bind is never claimed — hard refuses, nothing starts', async () => {
     const { app, provider, workspace } = await bootWithProvider()
-    // The masked scan finds the real declaration past the fenced `## Task`, so
-    // the rewrite inserts the canonical line BEFORE the wrapped field that
-    // still wins the raw header read — "repaired" would leave the child
-    // unbound.
+    // The front matter declares the role but the block is not valid YAML:
+    // replacing the role key cannot make the strict parser read it, so the
+    // proof fails and "repaired" is never claimed.
     const prompt = [
-      '## Assignment',
+      '---',
+      'role: `fullstack-dev`',
+      'broken: {',
+      '---',
       '',
-      '```',
-      'Execute as: `fullstack-dev`',
       '## Task',
-      '```',
-      'Execute as: fullstack-dev',
+      '',
+      'Implement.',
     ].join('\n')
     const error = await startAndCatch(app, specFor({ ...textPrompt(prompt), cwd: workspace }))
 
@@ -612,10 +670,197 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(error.message).toContain(`declares the role '${EXECUTE_AS}'`)
     expect(error.message).not.toContain('carries no role declaration')
     // The fix names the form that always binds, and the escape hatch stays.
-    expect(error.message).toContain(`'Execute as: ${EXECUTE_AS}' as the ONLY role declaration`)
+    expect(error.message).toContain(`'execute_as: ${EXECUTE_AS}' as the ONLY role declaration`)
     expect(error.message).toContain('above any fenced block')
     expect(error.message).toContain('roleGate')
     expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(x) an `Assignment file:` pointer binds the gate and the preset exactly as the inline form (compass D14)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    // Inline control: the canonical document selects the role's preset.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(CANONICAL_PROMPT), cwd: workspace }))
+    expect(provider.starts).toHaveLength(1)
+    const inline = provider.starts[0]!.request as RecordedRequest
+    expect(inline.agentPreset).toBe(PRESET_ID)
+    expect(promptTextOf(inline)).toBe(CANONICAL_PROMPT)
+
+    // The SAME document passed as a pointer under the accepted harness home:
+    // the gate resolves it before role evaluation, and the preset merge reads
+    // the document — never the pointer line.
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'pointer-assignment.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(`Assignment file: ${file}`), cwd: workspace }))
+
+    expect(provider.starts).toHaveLength(2)
+    const sent = provider.starts[1]!.request as RecordedRequest
+    expect(sent.agentPreset).toBe(PRESET_ID)
+    // The child receives the RESOLVED document (the re-carried inline form),
+    // so the pointer and inline starts deliver the same prompt content.
+    expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
+  })
+
+  it('(y) a pointer OUTSIDE every accepted assignment home propagates the resolver refusal (no containment bypass)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, CANONICAL_PROMPT)
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), cwd: workspace }))
+
+    expect(error.message).toContain('dispatch.assignment.path')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(z) a MISSING declaration inside the pointer document is refused exactly as the inline form (hard)', async () => {
+    const { app, provider, workspace } = await bootWithProvider()
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'no-declaration.md')
+    writeFileSync(file, NO_DECLARATION_PROMPT)
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${file}`), cwd: workspace }))
+
+    expect(error.message).toContain('execute_as')
+    expect(error.message).toContain('roleGate')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(aa) a refused pointer is terminal — no roleGate mode or role exemption softens it', async () => {
+    // `off` is the documented rollback for ordinary gate verdicts; a source
+    // refusal has no verified document, so the start is still refused.
+    const { app, provider, workspace } = await bootWithProvider({ roleGate: 'off' })
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, CANONICAL_PROMPT)
+
+    const error = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), cwd: workspace }))
+    expect(error.message).toContain('dispatch.assignment.path')
+    expect(error.message).toContain('terminal')
+    expect(provider.starts).toHaveLength(0)
+
+    // A non-harness start directory exempts the ordinary gate, never the
+    // terminal refusal.
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-plain-'))
+    scratchDirs.push(plain)
+    const exempt = await startAndCatch(app, specFor({ ...textPrompt(`Assignment file: ${outside}`), parent: parentAgent(plain) }))
+    expect(exempt.message).toContain('dispatch.assignment.path')
+    expect(provider.starts).toHaveLength(0)
+  })
+
+  it('(ab) a start that traversed pre-execution runs the document the gate decided on, not a second read', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'one-read.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+    const exec = subagentCall(pointer, caller, 'call-one-read')
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', exec, allowNext)
+    expect(decision.kind).toBe('allow')
+
+    // Controlled boundary, no timer: the file is rewritten AFTER the gate's
+    // decision and BEFORE the start seam runs. A second read would start the
+    // child on the rewritten document.
+    writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
+    await runInCall(app, exec, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
+    expect(sent.agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(ac) overlapping admitted calls from one parent each consume their OWN resolved document', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'overlap.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+    const rewritten = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+
+    // Two calls on the SAME pointer text and parent: the second admission
+    // resolves the rewritten document. A handoff keyed by parent + text would
+    // let the second overwrite the first's snapshot.
+    const first = subagentCall(pointer, caller, 'call-overlap-a')
+    const second = subagentCall(pointer, caller, 'call-overlap-b')
+    expect((await app.ctx.waterfall('tools/pre-execute', first, allowNext)).kind).toBe('allow')
+    writeFileSync(file, rewritten)
+    expect((await app.ctx.waterfall('tools/pre-execute', second, allowNext)).kind).toBe('allow')
+
+    await runInCall(app, first, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
+    await runInCall(app, second, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
+
+    expect(provider.starts).toHaveLength(2)
+    const startedFirst = provider.starts[0]!.request as RecordedRequest
+    const startedSecond = provider.starts[1]!.request as RecordedRequest
+    expect(promptTextOf(startedFirst)).toBe(CANONICAL_PROMPT)
+    expect(startedFirst.agentPreset).toBe(PRESET_ID)
+    expect(promptTextOf(startedSecond)).toBe(rewritten)
+  })
+
+  it('(ad) an admitted call that starts nothing leaves no snapshot for a later start', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'orphan.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+    const rewritten = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+
+    const exec = subagentCall(pointer, caller, 'call-orphan')
+    expect((await app.ctx.waterfall('tools/pre-execute', exec, allowNext)).kind).toBe('allow')
+    // The call runs without an activation (a downstream denial or a carrier
+    // that starts no child): its handoff must die with the call.
+    await runInCall(app, exec, async () => {})
+    writeFileSync(file, rewritten)
+
+    // A later direct start resolves the source ITSELF — never the dropped
+    // snapshot of an earlier call.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller }))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(rewritten)
+  })
+
+  it('(ae) a preflight denial leaves no snapshot for a later call that reuses the caller id', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'denied.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+
+    // A downstream listener denies AFTER this gate admitted the call: the
+    // preflight publishes its carrier, then the call never reaches
+    // `tools/execute` (no body, no settle).
+    let denyNext = true
+    app.ctx.on('tools/pre-execute', (_exec, next) => {
+      if (!denyNext) return next()
+      denyNext = false
+      return Promise.resolve<PreToolDecision>({ kind: 'deny', reason: 'downstream denial' })
+    })
+    const denied = subagentCall(pointer, caller, 'call-reused')
+    expect((await app.ctx.waterfall('tools/pre-execute', denied, allowNext)).kind).toBe('deny')
+
+    // The file is rewritten; the later invocation is a DIFFERENT execution that
+    // happens to spell the same caller id and carries its own inline document.
+    // The denied call's document must not surface as this call's carrier.
+    writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
+    const inline = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+    const later = subagentCall(inline, caller, 'call-reused')
+    expect((await app.ctx.waterfall('tools/pre-execute', later, allowNext)).kind).toBe('allow')
+    await runInCall(app, later, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(inline), cwd: workspace, parent: caller })))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(inline)
   })
 })
 
@@ -640,8 +885,8 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       'Role: `fullstack-dev`',
       '**Role**: fullstack-dev',
       '- **Role**: fullstack-dev',
-      // A wrapped `Execute as` value is not usable as-is (the parsers keep it
-      // raw) — it is repaired in place, not treated as canonical.
+      // A wrapped legacy `Execute as` label value is not usable as-is — it is
+      // repaired into front matter, not treated as canonical.
       'Execute as: `fullstack-dev`',
       'Execute as: "fullstack-dev"',
     ]) {
@@ -653,36 +898,36 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       // The repaired request — not only its metadata — carries a header the
       // binding seam's own reader resolves to the target role.
       const repaired = (decision.request.prompt ?? []).map((block) => block.text ?? '').join('\n')
-      expect(parseAssignmentFields(assignmentHeaderRegion(repaired)).executeAs, line).toBe(EXECUTE_AS)
+      expect(parseAssignmentFields(repaired).executeAs, line).toBe(EXECUTE_AS)
     }
   })
 
   it('(p2) a present-but-unusable role value names that value (never a missing declaration)', () => {
-    for (const [line, raw] of [
-      ['Role: inherit', 'inherit'],
-      ['Role: FullStack-Dev', 'FullStack-Dev'],
-      ['Role: fullstack dev', 'fullstack dev'],
-      ['Role: ', ''],
-      ['Execute as:', ''],
-      ['Execute as: FullStack-Dev', 'FullStack-Dev'],
+    for (const [text, raw] of [
+      ['## Assignment\n\nRole: inherit\n', 'inherit'],
+      ['## Assignment\n\nRole: FullStack-Dev\n', 'FullStack-Dev'],
+      ['## Assignment\n\nRole: fullstack dev\n', 'fullstack dev'],
+      ['## Assignment\n\nRole: \n', ''],
+      ['---\nexecute_as:\n---\n', ''],
+      ['---\nexecute_as: FullStack-Dev\n---\n', 'FullStack-Dev'],
     ] as const) {
-      const decision = evaluateRoleGate(gateInput(`## Assignment\n\n${line}\n`))
-      expect(decision.kind, line).toBe('refuse')
+      const decision = evaluateRoleGate(gateInput(text))
+      expect(decision.kind, text).toBe('refuse')
       if (decision.kind !== 'refuse') continue
       // The field IS there: the cause must be its value, with the requirement.
-      expect(decision.message, line).not.toContain('carries no role declaration')
-      expect(decision.message, line).toContain('lowercase role id')
-      expect(decision.message, line).toContain(raw === '' ? 'an empty value' : raw)
-      expect(decision.message, line).toContain('roleGate')
+      expect(decision.message, text).not.toContain('carries no role declaration')
+      expect(decision.message, text).toContain('lowercase role id')
+      expect(decision.message, text).toContain(raw === '' ? 'an empty value' : raw)
+      expect(decision.message, text).toContain('roleGate')
     }
     // warn advises with the same cause; off stays the rollback.
-    const warn = evaluateRoleGate(gateInput('## Assignment\n\nExecute as: FullStack-Dev\n', { mode: 'warn' }))
+    const warn = evaluateRoleGate(gateInput('---\nexecute_as: FullStack-Dev\n---\n', { mode: 'warn' }))
     expect(warn.kind).toBe('warn')
     if (warn.kind === 'warn') {
       expect(warn.message).toContain('FullStack-Dev')
       expect(warn.message).not.toContain('carries no role declaration')
     }
-    expect(evaluateRoleGate(gateInput('## Assignment\n\nExecute as:\n', { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
+    expect(evaluateRoleGate(gateInput('---\nexecute_as:\n---\n', { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
   })
 
   it('(p3) a bold/backticked DECLARED id is the lower-confidence token tier', () => {
@@ -737,7 +982,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(evaluateRoleGate(gateInput('Implement.', { request: { prompt: [], agentPreset: 'caller-preset' } })))
       .toEqual({ kind: 'pass', reason: 'agent-preset' })
     expect(evaluateRoleGate(gateInput(CANONICAL_PROMPT))).toEqual({ kind: 'pass', reason: 'canonical' })
-    expect(evaluateRoleGate(gateInput('## Assignment\n\n- **Execute as**: fullstack-dev\n')))
+    expect(evaluateRoleGate(gateInput('---\nexecute_as: inherit\n---\n')))
       .toEqual({ kind: 'pass', reason: 'canonical' })
     expect(evaluateRoleGate(gateInput('Implement.', { harnessProject: false }))).toEqual({ kind: 'pass', reason: 'non-harness' })
     expect(evaluateRoleGate(gateInput('Implement.', { providerKnown: false }))).toEqual({ kind: 'pass', reason: 'provider-unknown' })
@@ -748,7 +993,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     const decision = evaluateRoleGate(gateInput('Implement.', { mode: 'warn' }))
     expect(decision.kind).toBe('warn')
     if (decision.kind !== 'warn') return
-    expect(decision.message).toContain('Execute as')
+    expect(decision.message).toContain('execute_as')
     expect(decision.message).toContain('roleGate')
   })
 
@@ -771,6 +1016,30 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(missing.message).not.toContain('exactly one')
   })
 
+
+  it('(p20) the retired body-label Assignment grammar is refused with the legacy-format cause (D16) in every mode', () => {
+    // Terminal, exactly like the shared `dispatch.assignment.legacy-format`
+    // violation: the retired document declares no front matter, so a mode that
+    // only softens ordinary role-declaration verdicts cannot admit the start.
+    for (const mode of ['hard', 'warn', 'off'] as const) {
+      const decision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, { mode }))
+      expect(decision.kind, mode).toBe('refuse')
+      if (decision.kind !== 'refuse') continue
+      expect(decision.message).toContain('legacy-format')
+      expect(decision.message).toContain('execute_as')
+      expect(decision.message).toContain('terminal')
+      // An explicit `agentPreset` bypasses nothing: the terminal D16 check
+      // sits ahead of the preset exemption, so every mode refuses the same
+      // retired document with a caller-supplied preset selection too.
+      const presetDecision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, {
+        mode,
+        request: { ...gateInput(LEGACY_BODY_LABEL_PROMPT).request, agentPreset: 'caller-preset' },
+      }))
+      expect(presetDecision.kind, `${mode} + agentPreset`).toBe('refuse')
+      if (presetDecision.kind !== 'refuse') continue
+      expect(presetDecision.message).toBe(decision.message)
+    }
+  })
   it('(p12) the warn advisory does not tell a warn-mode operator to set warn', () => {
     const warn = evaluateRoleGate(gateInput('Implement.', { mode: 'warn' }))
     expect(warn.kind).toBe('warn')
@@ -826,7 +1095,7 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     ).toBe('refuse')
     // An unterminated fence keeps its body: its declaration is never a candidate.
     expect(
-      evaluateRoleGate(gateInput('## Assignment\n\n```\nExecute as: `fullstack-dev`\nTake the `writing-specialist` seat.\n'))
+      evaluateRoleGate(gateInput('## Assignment\n\n```\nrole: `fullstack-dev`\nTake the `writing-specialist` seat.\n'))
         .kind,
     ).toBe('refuse')
     // After the real closer, the same token outside the fence is a candidate again.
@@ -837,41 +1106,37 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     if (decision.kind === 'repair') expect(decision.roleId).toBe(WRITING)
   })
 
-  it('(p16) a fully fenced `Execute as:` line is not a canonical pass: hard refuses, warn advises, off passes', () => {
+  it('(p16) a fully fenced `execute_as` line is never a declaration: hard refuses, warn advises, off passes', () => {
     const text = [
-      '## Assignment',
-      '',
+      '---',
       '```text',
-      'Execute as: fullstack-dev',
+      'execute_as: fullstack-dev',
       '```',
-      '',
-      '**Delegation**: forbidden',
+      '---',
       '',
       '## Task',
       '',
       'Do it.',
     ].join('\n')
-    // The binding seam's header slice does not know fences, so it parses the
-    // quoted line as the declaration and binds `fullstack-dev`; a silent pass
-    // would let a pasted template arm that role's whole composition.
+    // The front matter contract is fence-aware at the scan level: a quoted
+    // example masks out of the candidate scan, so the verdict is the missing-
+    // declaration refusal — never a silent pass that arms a pasted template.
     const hard = evaluateRoleGate(gateInput(text))
     expect(hard.kind).toBe('refuse')
     if (hard.kind === 'refuse') {
-      expect(hard.message).toContain('fenced code block')
-      expect(hard.message).toContain(EXECUTE_AS)
-      expect(hard.message).not.toContain('carries no role declaration')
+      expect(hard.message).toContain('carries no role declaration')
+      expect(hard.message).toContain('execute_as')
       expect(hard.message).toContain('roleGate')
     }
     // `warn` / `off` stay the documented rollbacks.
     const warn = evaluateRoleGate(gateInput(text, { mode: 'warn' }))
     expect(warn.kind).toBe('warn')
-    if (warn.kind === 'warn') expect(warn.message).toContain('fenced code block')
     expect(evaluateRoleGate(gateInput(text, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
-    // The rewrite still never edits fenced content: the canonical line is
-    // inserted after the heading and the quoted block stays intact.
+    // The rewrite still never edits fenced content: a fresh front matter
+    // block is prepended and the quoted key lines inside it stay intact.
     const rewritten = rewritePromptWithExecuteAs(text, EXECUTE_AS)
-    expect(rewritten.startsWith('## Assignment\n\nExecute as: fullstack-dev\n')).toBe(true)
-    expect(rewritten).toContain('```text\nExecute as: fullstack-dev\n```')
+    expect(rewritten.startsWith('---\nexecute_as: fullstack-dev\n')).toBe(true)
+    expect(rewritten).toContain('```text\nexecute_as: fullstack-dev\n```')
   })
 
   it('(p17) a CRLF prompt masks its fences (a fenced declaration is refused, not repaired)', () => {
@@ -891,25 +1156,26 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     // no-op and this quoted field line came back as a repair candidate.
     expect(evaluateRoleGate(gateInput(prompt)).kind).toBe('refuse')
     // The rest of the gate is CRLF-agnostic: a real declaration still passes.
-    expect(evaluateRoleGate(gateInput('## Assignment\r\n\r\nExecute as: fullstack-dev\r\n'))).toEqual({
+    expect(evaluateRoleGate(gateInput('---\r\nexecute_as: fullstack-dev\r\n---\r\n'))).toEqual({
       kind: 'pass',
       reason: 'canonical',
     })
   })
 
-  it('(p18) a repair the seam would NOT bind is never `repair` — the configured mode decides', () => {
-    // The masked scan finds the declaration past the fenced `## Task`, so the
-    // canonical line is inserted BEFORE the wrapped field that keeps winning
-    // the raw header read: the rewrite cannot be proven, so the verdict is the
-    // configured mode — never a "repaired" claim that leaves the child unbound.
+  it('(p18) a repair that cannot parse is never `repair` — the configured mode decides', () => {
+    // The front matter declares the role but the block is not valid YAML:
+    // replacing the role key cannot make the strict parser read it, so the
+    // proof fails and "repaired" is never claimed — the verdict is the
+    // configured mode, never a "repaired" claim that leaves the child unbound.
     const text = [
-      '## Assignment',
+      '---',
+      'role: `fullstack-dev`',
+      'broken: {',
+      '---',
       '',
-      '```',
-      'Execute as: `fullstack-dev`',
       '## Task',
-      '```',
-      'Execute as: fullstack-dev',
+      '',
+      'Implement.',
     ].join('\n')
     const hard = evaluateRoleGate(gateInput(text))
     expect(hard.kind).toBe('refuse')
@@ -925,17 +1191,12 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(evaluateRoleGate(gateInput(text, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
   })
 
-  it('(p19) a fenced `## Task` whose inserted line DOES win the raw header still repairs', () => {
-    // The insertion lands before the truncation point, so the binding seam's
-    // own reader resolves the canonical value — the proof accepts the repair.
+  it('(p19) a valid front matter whose role key is repaired in place proves the rewrite', () => {
     const text = [
-      '## Assignment',
-      '',
-      '```',
-      '## Task',
-      '```',
-      '',
-      'Execute as: fullstack-dev',
+      '---',
+      'delegation: forbidden',
+      'role: `fullstack-dev`',
+      '---',
       '',
       '## Task',
       '',
@@ -945,50 +1206,84 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
     expect(decision.kind).toBe('repair')
     if (decision.kind !== 'repair') return
     expect(decision.roleId).toBe(EXECUTE_AS)
-    expect((decision.request.prompt ?? []).map((block) => block.text ?? '').join('\n'))
-      .toContain(`\nExecute as: ${EXECUTE_AS}\n`)
+    const rewritten = (decision.request.prompt ?? []).map((block) => block.text ?? '').join('\n')
+    expect(rewritten).toContain(`\nexecute_as: ${EXECUTE_AS}\n`)
+    expect(rewritten).toContain('delegation: forbidden')
   })
+
 })
 
-describe('dispatch-role gate — canonical header rewrite', () => {
-  it('inserts the declaration as the first field line of an opening Assignment section', () => {
-    expect(rewritePromptWithExecuteAs('## Assignment\n\n**Delegation**: forbidden\n', EXECUTE_AS)).toBe(
-      '## Assignment\n\nExecute as: fullstack-dev\n**Delegation**: forbidden\n',
-    )
-  })
-
-  it('prepends the canonical header block when the prompt opens otherwise', () => {
+describe('dispatch-role gate — canonical front matter rewrite', () => {
+  it('prepends a front matter block when the prompt opens otherwise', () => {
     expect(rewritePromptWithExecuteAs('Implement the work.', EXECUTE_AS)).toBe(
-      '## Assignment\n\nExecute as: fullstack-dev\n\nImplement the work.',
+      '---\nexecute_as: fullstack-dev\n---\n\nImplement the work.',
+    )
+    expect(rewritePromptWithExecuteAs('## Assignment\n\nSome prose.\n', EXECUTE_AS)).toBe(
+      '---\nexecute_as: fullstack-dev\n---\n\n## Assignment\n\nSome prose.\n',
     )
   })
 
-  it('replaces an unusable existing `Execute as` value in place (no duplicate field)', () => {
-    const rewritten = rewritePromptWithExecuteAs('## Assignment\n\nExecute as: `fullstack-dev`\n**Delegation**: forbidden\n', EXECUTE_AS)
-    expect(rewritten).toBe('## Assignment\n\nExecute as: fullstack-dev\n**Delegation**: forbidden\n')
-    expect(rewritten.match(/Execute as/g)).toHaveLength(1)
+  it('replaces an unusable existing `execute_as` scalar in place (no duplicate key)', () => {
+    const rewritten = rewritePromptWithExecuteAs('---\nexecute_as: `fullstack-dev`\ndelegation: forbidden\n---\n', EXECUTE_AS)
+    expect(rewritten).toBe('---\nexecute_as: fullstack-dev\ndelegation: forbidden\n---\n')
+    expect(rewritten.match(/execute_as/g)).toHaveLength(1)
   })
 
-  it('repairs EVERY `Execute as` line — the engine parser binds the last one', () => {
+  it('collapses duplicate role-family keys to ONE canonical line (the strict parser refuses duplicates)', () => {
     const rewritten = rewritePromptWithExecuteAs(
-      '## Assignment\n\nExecute as: `fullstack-dev`\nExecute as: **fullstack-dev**\n',
+      '---\nrole: `fullstack-dev`\nact_as: **fullstack-dev**\n---\n',
       EXECUTE_AS,
     )
-    expect(rewritten).toBe('## Assignment\n\nExecute as: fullstack-dev\nExecute as: fullstack-dev\n')
+    expect(rewritten).toBe('---\nexecute_as: fullstack-dev\n---\n')
   })
 
-  it('normalizes the label of a case-variant declaration to `Execute as`', () => {
-    expect(rewritePromptWithExecuteAs('## Assignment\n\nexecute as: `fullstack-dev`\n', EXECUTE_AS)).toBe(
-      '## Assignment\n\nExecute as: fullstack-dev\n',
+  it('normalizes the key of a case-variant declaration to `execute_as`', () => {
+    expect(rewritePromptWithExecuteAs('---\nExecute_As: `fullstack-dev`\n---\n', EXECUTE_AS)).toBe(
+      '---\nexecute_as: fullstack-dev\n---\n',
     )
-    expect(rewritePromptWithExecuteAs('## Assignment\n\n**EXECUTE AS**: fullstack-dev\n', EXECUTE_AS)).toBe(
-      '## Assignment\n\nExecute as: fullstack-dev\n',
+    expect(rewritePromptWithExecuteAs('---\nROLE: fullstack-dev\n---\n', EXECUTE_AS)).toBe(
+      '---\nexecute_as: fullstack-dev\n---\n',
+    )
+  })
+
+  it('splices `execute_as` as the first line of an existing front matter block without a role key', () => {
+    expect(rewritePromptWithExecuteAs('---\ndelegation: forbidden\n---\n\n## Task\n', EXECUTE_AS)).toBe(
+      '---\nexecute_as: fullstack-dev\ndelegation: forbidden\n---\n\n## Task\n',
     )
   })
 
   it('preserves the rest of the prompt byte-for-byte', () => {
-    const rest = '**Delegation**: forbidden\n\n## Task\n\n- keep `this`  \n- and this\n'
-    const rewritten = rewritePromptWithExecuteAs(`## Assignment\n${rest}`, EXECUTE_AS)
+    const rest = '## Assignment\n\nSome prose.\n\n## Task\n\n- keep `this`  \n- and this\n'
+    const rewritten = rewritePromptWithExecuteAs(rest, EXECUTE_AS)
     expect(rewritten.endsWith(rest)).toBe(true)
+  })
+
+  it('a CRLF document with preceding fields and duplicate role keys repairs without touching unrelated bytes', () => {
+    // `\r\n` line endings through the WHOLE document, with unrelated fields
+    // before AND after the role keys: before the span-aware offset fix the
+    // rewrite drifted one byte per preceding CRLF line, landing the splice
+    // inside `task_category` and leaving `\r` fragments around the drop.
+    const unrelatedBefore = ['---', 'delegation: forbidden', 'task_category: logic'].join('\r\n')
+    const unrelatedAfter = ['---', '', '## Task', '', 'Do it.', '- keep this  ', ''].join('\r\n')
+    const document = [unrelatedBefore, 'role: `fullstack-dev`', 'act_as: fullstack-dev', unrelatedAfter].join('\r\n')
+
+    const rewritten = rewritePromptWithExecuteAs(document, EXECUTE_AS)
+
+    // The repaired document parses to the role (the proof the gate claims).
+    expect(parseAssignmentFields(rewritten).executeAs).toBe(EXECUTE_AS)
+    // The unrelated preceding fields are byte-identical: the canonical line
+    // follows them with the document's own CRLF ending.
+    expect(rewritten.startsWith(`${unrelatedBefore}\r\nexecute_as: fullstack-dev`)).toBe(true)
+    // The duplicate was dropped WITH its real ending — no orphan `\r`.
+    expect(rewritten).not.toContain('act_as')
+    expect(rewritten).not.toMatch(/\r[^\n]/)
+    // Everything after the role family is byte-identical (the closing fence,
+    // the body, trailing whitespace).
+    expect(rewritten.endsWith(`\r\n${unrelatedAfter}`)).toBe(true)
+  })
+
+  it('a CRLF single role key replaces in place, keeping the line ending intact', () => {
+    const rewritten = rewritePromptWithExecuteAs('---\r\nexecute_as: `fullstack-dev`\r\ndelegation: forbidden\r\n---\r\n', EXECUTE_AS)
+    expect(rewritten).toBe('---\r\nexecute_as: fullstack-dev\r\ndelegation: forbidden\r\n---\r\n')
   })
 })

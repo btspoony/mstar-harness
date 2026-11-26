@@ -1,5 +1,5 @@
 /**
- * Task 2 — iteration gate at agent/pre-step + worktree L1/L2 dispatch check
+ * Iteration gate at agent/pre-step + worktree L1/L2 dispatch check
  *. *
  * Two seams under test:
  *
@@ -17,16 +17,16 @@
  * (`catalogPayload.state === null`) and records no digest.
  *
  * (b) tools/pre-execute worktree checks — when the Assignment declares
- * parallel tracks (≥2 `Worktree path` header entries, or the documented
- * `Dispatch mode: parallel independent tracks` marker), the gate runs the
- * engine `l2PreDispatchCheck` over the declared tracks (absolute + distinct
- * paths, dir exists, `git branch --show-current` matches the Working
- * branch; duplicate/relative paths → `worktree.l2.*` violations); with an
- * ACTIVE workflow snapshot + a plan's recorded row scope present, the gate
- * assembles the FULL engine `l1PreDispatchInput` — Git-derived main
+ * parallel tracks (a `worktree_path` front-matter list of ≥2 entries, with
+ * one `working_branch` entry per track or one shared value), the gate runs
+ * the engine `l2PreDispatchCheck` over the declared tracks (absolute +
+ * distinct paths, dir exists, `git branch --show-current` matches the
+ * declared branch; duplicate/relative paths → `worktree.l2.*` violations);
+ * with an ACTIVE workflow snapshot + a plan's recorded row scope present,
+ * the gate assembles the FULL engine `l1PreDispatchInput` — Git-derived main
  * worktree, the snapshot's canonical `integration_worktree_path` +
  * `branch.integration`, the recorded residency expectation (Assignment
- * header `Main worktree branch` else `branch.base`), and lifecycle-owned
+ * `main_worktree_branch` else `branch.base`), and lifecycle-owned
  * branches collected from all active workflow snapshots (CLI parity,
  * fail-closed on unreadable sibling state) — and verifies the topology.
  * Violations flow through the existing enforcement path: advisory + allow
@@ -173,18 +173,22 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
 const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
   advisory?.result.violations.map((v) => v.code) ?? []
 
-/** A writable Assignment header with the core fields (track lines are appended). */
-const TRACK_ASSIGNMENT_HEADER = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+/** A writable Assignment front matter with the core fields (track declarations are appended). */
+const TRACK_ASSIGNMENT_HEADER = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — one focused implementer round
 `
 
-/** Build an Assignment with a set of extra header lines (track declarations). */
+/** Build an Assignment whose front matter appends the given YAML lines (track declarations). */
 function trackAssignment(extraLines: string[]): string {
-  return `${TRACK_ASSIGNMENT_HEADER}${extraLines.join('\n')}\n\nDo the thing, evidence-first.\n`
+  return `${TRACK_ASSIGNMENT_HEADER}${extraLines.join('\n')}\n---\n\nDo the thing, evidence-first.\n`
+}
+
+/** One front-matter block list — the schema's parallel-track shape per track. */
+function yamlList(key: string, values: readonly string[]): string[] {
+  return [`${key}:`, ...values.map((value) => `  - ${value}`)]
 }
 
 /* ------------------------------ git worktree fixtures ------------------------------ */
@@ -253,7 +257,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
       iterationId: 'iter-00000808-wt',
       compassPath: join(app.harnessDir, 'iterations/iter-00000808-wt/delivery-compass.md'),
     })
-    // The cached view reuses the Task 1 tool result shape (transition /
+    // The cached view reuses the catalog tool result shape (transition /
     // all_plans_done / ok / entry / exit / violations).
     expect(payload.iteration!.gate).toMatchObject({
       transition: 'phase-2-execute',
@@ -393,10 +397,8 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      `**Worktree path**: ${shared}`,
-      '**Working branch**: feature/a',
-      `**Worktree path**: ${shared}`,
-      '**Working branch**: feature/b',
+      ...yamlList('worktree_path', [shared, shared]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -416,10 +418,8 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      '**Worktree path**: wt/relative-a',
-      '**Working branch**: feature/a',
-      `**Worktree path**: ${absolute}`,
-      '**Working branch**: feature/b',
+      ...yamlList('worktree_path', ['wt/relative-a', absolute]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -434,10 +434,8 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      `**Worktree path**: ${wts.get('feature/track-a')}`,
-      '**Working branch**: feature/track-a',
-      `**Worktree path**: ${wts.get('feature/track-b')}`,
-      '**Working branch**: feature/track-b',
+      ...yamlList('worktree_path', [wts.get('feature/track-a')!, wts.get('feature/track-b')!]),
+      ...yamlList('working_branch', ['feature/track-a', 'feature/track-b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -446,7 +444,7 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     expect(advisories).toHaveLength(0)
   }, 60_000)
 
-  it('two tracks sharing ONE Working branch (same-branch multi-dir topology) → silent pass', async () => {
+  it('two tracks sharing ONE working_branch (same-branch multi-dir topology) → silent pass', async () => {
     const root = tmpRoot('dsh-wt-l2-sharedbranch-')
     const wts = worktreeFixture(root, ['feature/shared'])
     // Second checkout on the SAME branch — a git clone (git forbids the same
@@ -458,9 +456,8 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     // One `Working branch` line applies to every track (mstar-branch-worktree
     // 同分支多目录例外) — no count-mismatch, both checkouts probe on the branch.
     const prompt = trackAssignment([
-      `**Worktree path**: ${wts.get('feature/shared')}`,
-      `**Worktree path**: ${clone}`,
-      '**Working branch**: feature/shared',
+      ...yamlList('worktree_path', [wts.get('feature/shared')!, clone]),
+      'working_branch: feature/shared',
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -469,18 +466,15 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     expect(advisories).toHaveLength(0)
   }, 60_000)
 
-  it('track count mismatch (2 Worktree path vs 3 Working branch entries) → worktree.l2.track-count-mismatch', async () => {
+  it('track count mismatch (2 worktree_path vs 3 working_branch entries) → worktree.l2.track-count-mismatch', async () => {
     const root = tmpRoot('dsh-wt-l2-count-')
     const a = join(root, 'wt-a')
     mkdirSync(a, { recursive: true })
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      `**Worktree path**: ${a}`,
-      '**Working branch**: feature/a',
-      `**Worktree path**: ${join(root, 'wt-b')}`,
-      '**Working branch**: feature/b',
-      '**Working branch**: feature/c',
+      ...yamlList('worktree_path', [a, join(root, 'wt-b')]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b', 'feature/c']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -489,15 +483,14 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     expect(violationCodes(advisories[0])).toContain('worktree.l2.track-count-mismatch')
   })
 
-  it('Dispatch mode: parallel independent tracks marker with a single track → L2 runs (valid track passes)', async () => {
-    const root = tmpRoot('dsh-wt-l2-marker-')
-    const wts = worktreeFixture(root, ['feature/marker-a'])
+  it('a one-entry worktree_path list is the serial norm → L2 does not run (valid track passes)', async () => {
+    const root = tmpRoot('dsh-wt-l2-single-')
+    const wts = worktreeFixture(root, ['feature/single-a'])
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      '**Dispatch mode**: parallel independent tracks',
-      `**Worktree path**: ${wts.get('feature/marker-a')}`,
-      '**Working branch**: feature/marker-a',
+      ...yamlList('worktree_path', [wts.get('feature/single-a')!]),
+      'working_branch: feature/single-a',
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -506,37 +499,31 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
     expect(advisories).toHaveLength(0)
   }, 60_000)
 
-  it('parallel marker with NO Worktree path → advisory worktree.l2.no-tracks (declared parallel, no isolation)', async () => {
+  it('a working_branch list with no worktree_path list declares no tracks → L2 does not run', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      '**Dispatch mode**: parallel independent tracks',
-      '**Working branch**: feature/a',
-    ])
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(violationCodes(advisories[0])).toContain('worktree.l2.no-tracks')
-  })
-
-  it('serial single-track with a parallel-CONTAINING Dispatch mode → L2 does NOT run (canonical-marker match, P3 T2 review)', async () => {
-    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
-    const advisories = captureAdvisories(app.ctx)
-    // Substring "parallel" present, but NOT the canonical
-    // `parallel independent tracks` marker — the serial norm must stay inert.
-    const prompt = trackAssignment([
-      '**Dispatch mode**: serial (parallel-flavored naming)',
-      '**Worktree path**: wt/relative-serial',
-      '**Working branch**: feature/a',
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
-    // Even a RELATIVE single-track path is untouched: no track list to verify.
-    expect(violationCodes(advisories[0])).toEqual([])
+  })
+
+  it('scalar worktree_path / working_branch (serial norm) → L2 does not run, relative path untouched', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const advisories = captureAdvisories(app.ctx)
+    const prompt = trackAssignment([
+      'worktree_path: wt/relative-serial',
+      'working_branch: feature/a',
+    ])
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
   })
 })
 
@@ -557,9 +544,8 @@ describe('dispatch gate — worktree L2 hard mode', () => {
         return Promise.resolve<PreToolDecision>({ kind: 'allow' })
       })
       const prompt = trackAssignment([
-        `**Worktree path**: ${worktree}`,
-        `**Worktree path**: ${alias}`,
-        '**Working branch**: feature/shared',
+        ...yamlList('worktree_path', [worktree, alias]),
+        'working_branch: feature/shared',
       ])
       const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
       expect(decision.kind).toBe('deny')
@@ -568,8 +554,8 @@ describe('dispatch gate — worktree L2 hard mode', () => {
     }, 60_000)
   }
 
-  it('distinct writable tracks with code-span paths and branches dispatch under hard enforcement', async () => {
-    const root = tmpRoot('dsh-wt-l2-code-spans-')
+  it('distinct writable tracks dispatch under hard enforcement', async () => {
+    const root = tmpRoot('dsh-wt-l2-hard-valid-')
     const wts = worktreeFixture(root, ['feature/track-a', 'feature/track-b'])
     const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
     let dispatched = false
@@ -578,10 +564,8 @@ describe('dispatch gate — worktree L2 hard mode', () => {
       return Promise.resolve<PreToolDecision>({ kind: 'allow' })
     })
     const prompt = trackAssignment([
-      `**Worktree path**: \`${wts.get('feature/track-a')}\``,
-      '**Working branch**: `feature/track-a`',
-      `**Worktree path**: \`${wts.get('feature/track-b')}\``,
-      '**Working branch**: `feature/track-b`',
+      ...yamlList('worktree_path', [wts.get('feature/track-a')!, wts.get('feature/track-b')!]),
+      ...yamlList('working_branch', ['feature/track-a', 'feature/track-b']),
     ])
     expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)).toEqual({ kind: 'allow' })
     expect(dispatched).toBe(true)
@@ -598,10 +582,8 @@ describe('dispatch gate — worktree L2 hard mode', () => {
       return Promise.resolve<PreToolDecision>({ kind: 'allow' })
     })
     const prompt = trackAssignment([
-      `**Worktree path**: ${shared}`,
-      '**Working branch**: feature/a',
-      `**Worktree path**: ${shared}`,
-      '**Working branch**: feature/b',
+      ...yamlList('worktree_path', [shared, shared]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -615,10 +597,8 @@ describe('dispatch gate — worktree L2 hard mode', () => {
   it('relative track path under hard → deny with worktree.l2.track-path-relative', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const prompt = trackAssignment([
-      '**Worktree path**: wt/relative-a',
-      '**Working branch**: feature/a',
-      `**Worktree path**: ${join(tmpRoot('dsh-wt-l2-hard-rel-'), 'wt-b')}`,
-      '**Working branch**: feature/b',
+      ...yamlList('worktree_path', ['wt/relative-a', join(tmpRoot('dsh-wt-l2-hard-rel-'), 'wt-b')]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -673,16 +653,16 @@ describe('dispatch gate — worktree L1 integration topology (canonical reader +
     integration_worktree_path: integration,
   })
 
-  const l1Assignment = (worktree: string): string => `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Plan Path**: plans/l1-plan.md
-**Worktree path**: ${worktree}
-**Working branch**: feature/a
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+  const l1Assignment = (worktree: string): string => `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+plan_path: plans/l1-plan.md
+worktree_path: ${worktree}
+working_branch: feature/a
+task_budget: S — one focused implementer round
+---
 
 Do the thing, evidence-first.
 `
@@ -816,30 +796,24 @@ Do the thing, evidence-first.
   // Disposition — removed hostile workflow-id register fixture; ACTIVE workflow ids are owned and validated by database producers, not joined from status.json paths.
 })
 
-describe('dispatch gate — worktree hostile inputs + header-region scoping', () => {
-  it('body-quoted Worktree path lines after ## Task do not form tracks (header-region discipline)', async () => {
+describe('dispatch gate — worktree hostile inputs + front-matter scoping', () => {
+  it('track lines quoted in the task body declare nothing (front matter is the only field contract)', async () => {
     const root = tmpRoot('dsh-wt-l2-body-')
-    const a = join(root, 'wt-a')
-    mkdirSync(a, { recursive: true })
+    const wts = worktreeFixture(root, ['feature/a', 'feature/b'])
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
-    // ONE header track + a second track quoted in the task body — the body
-    // entry must not pair into an L2 declaration (the engine header boundary
-    // is the single grammar).
-    const prompt = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/a
-**Worktree path**: ${a}
-**Task budget (implement / ops rounds)**: S — one focused implementer round
-
+    // Two valid front-matter tracks + a relative track quoted in the task
+    // body — the quoted lines are prose; if they were read, the relative
+    // path would add a third track and trip the L2 checklist.
+    const prompt = `${trackAssignment([
+      ...yamlList('worktree_path', [wts.get('feature/a')!, wts.get('feature/b')!]),
+      ...yamlList('working_branch', ['feature/a', 'feature/b']),
+    ])}
 ## Task
 
-Quoted example of a parallel-track header:
-**Worktree path**: ${join(root, 'wt-b')}
-**Working branch**: feature/b
+Quoted example of a parallel-track declaration:
+worktree_path: wt/relative-body
+working_branch: feature/c
 `
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
@@ -848,23 +822,25 @@ Quoted example of a parallel-track header:
     expect(advisories).toHaveLength(0)
   })
 
-  it('empty Worktree path value lines are dropped — a malformed entry does not fabricate a track', async () => {
+  it('a blank worktree_path list entry is refused by the schema, not read as a track', async () => {
     const root = tmpRoot('dsh-wt-l2-empty-')
     const a = join(root, 'wt-a')
     mkdirSync(a, { recursive: true })
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
     const prompt = trackAssignment([
-      '**Worktree path**:',
-      `**Worktree path**: ${a}`,
-      '**Working branch**: feature/a',
+      'worktree_path:',
+      '  -',
+      `  - ${a}`,
+      'working_branch: feature/a',
     ])
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
 
-    // One non-empty entry → no parallel-track declaration → silent.
+    // The malformed entry is a schema refusal — it never becomes a track.
     expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
   })
 
   it('garbage non-Assignment prompt stays silent under hard (shape guard, no false positives)', async () => {

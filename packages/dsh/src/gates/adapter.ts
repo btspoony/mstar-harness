@@ -20,11 +20,15 @@ import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
-  assignmentHeaderRegion,
+  assignmentFrontmatterParse,
+  readAssignmentSource,
   validateIntegrationMergeLease,
 } from '@mstar-harness/engine'
 import type {
+  AssignmentSourceResult,
   AssignmentFields,
+  DocumentFrontmatterError,
+  FrontmatterEntry,
   GateResult,
   HostAdapter,
   IntegrationMergeLease,
@@ -39,8 +43,8 @@ import { storeAuthorityRefusals } from './store-authority.ts'
 import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
-import { assignmentTextFromFields, isAssignmentShaped, planIdOf, resolveDispatchHard } from './dispatch-assignment.ts'
-import { dispatchGateCore } from './dispatch-core.ts'
+import { assignmentTextFromFields, isAssignmentShaped, planIdOfEntries, resolveDispatchHard } from './dispatch-assignment.ts'
+import { dispatchGateCore, hasTerminalRefusal } from './dispatch-core.ts'
 import { leaseGateViolations } from './dispatch-lease.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
@@ -266,24 +270,59 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * @param hintRead - the caller's already-derived hint read (the
    * `tools/pre-execute` listener derives it once and shares it with the
    * workflow branch); omitted → derived here from `exec.agent`.
+   * @param preResolved - the caller's ONE source resolution for this dispatch;
+   * omitted → resolved here.
+   * @param preEntries - the caller's ONE parse of that resolved document
+   * ({@link assignmentFrontmatterEntries}), reused by the plan-id hint, the
+   * worktree checks, the read-only-role read and the composition;
+   * `null` (unparseable block) is a reuse too — the schema layer reports the
+   * refusal. Omitted → parsed here.
+   * @param preParseError - the structured refusal behind `preEntries: null`
+   * ({@link assignmentFrontmatterParse}), carried into the composition so the
+   * schema layer reports the line-numbered cause WITHOUT re-parsing the
+   * rejected block. Omitted with a caller-supplied `null` → the schema layer
+   * re-parses, as a host that kept no diagnostic always has.
    */
-  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): Promise<GateResult> {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult, preEntries?: Map<string, FrontmatterEntry> | null, preParseError?: DocumentFrontmatterError | null): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    // The Assignment names its plan row, and that row belongs to exactly one
-    // ACTIVE lifecycle — evidence the shared source must be resolved WITH, not
-    // ahead of: several active lifecycles with no discriminating cwd is the
-    // ordinary parallel-worktree case, not an unverifiable dispatch.
-    const headerRegion = assignmentHeaderRegion(prompt)
-    const planId = planIdOf(headerRegion)
+    // compass D14 — the ONE resolution PER DISPATCH: an `Assignment file:
+    // <abs>` pointer resolves exactly once, HERE (or at the caller, which
+    // hands its own result in via `preResolved`), BEFORE the first
+    // asynchronous step. The resolution RESULT — never a re-read of the
+    // source — is what the plan-id hint, the workflow selection, the
+    // enforcement resolution, the core, the lease gate and the ledger
+    // record consume, so a source file swapped mid-dispatch cannot split
+    // the decision from the record. On success the resolved document feeds
+    // every stage verbatim (never the raw carrier: a document containing a
+    // standalone `Assignment file:` line would reparse as another pointer
+    // or an ambiguous input downstream); on refusal the same refusal is
+    // the single verdict — the core reports it terminal, the lease adds
+    // nothing, no workflow selection runs, and no ledger row is written
+    // for the unresolved input. The Assignment names its plan row, and
+    // that row belongs to exactly one ACTIVE lifecycle — evidence the
+    // shared source must be resolved WITH, not ahead of: several active
+    // lifecycles with no discriminating cwd is the ordinary
+    // parallel-worktree case, not an unverifiable dispatch.
+    const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
+    const text = assignmentSource.ok ? assignmentSource.text : prompt
+    // ONE parse per dispatch: the caller's (the listener parses before it
+    // resolves enforcement), else this method's — the plan id needs it before
+    // the core runs. The same entries then feed the plan id, the L1/L2
+    // worktree checks, the read-only-role read and every composition leg
+    // downstream; a failed parse keeps ITS diagnostic (`parseError`) instead
+    // of a second read of the rejected block.
+    const parse = preEntries === undefined ? assignmentFrontmatterParse(text) : { entries: preEntries, parseError: preParseError ?? null }
+    const entries = parse.entries
+    const planId = assignmentSource.ok ? planIdOfEntries(entries) : undefined
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
-    const activeSource = harnessDir !== null && isAssignmentShaped(headerRegion)
+    const activeSource = harnessDir !== null && assignmentSource.ok && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, exec?.agent, hint, activeSource)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource, { entries, planId, parseError: parse.parseError })
     if (exec !== undefined) {
-      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, selectionHint, activeSource))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, assignmentSource, { entries, planId }, selectionHint, activeSource))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -303,16 +342,31 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // still gates, but no row is attributed to a session whose record cannot
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
-    if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
+    // The parsed document must also DECLARE its front matter: an opening
+    // fence that never closes is refused by the schema
+    // (`document.frontmatter.absent`), so nothing in it is a declaration —
+    // recording the role/category the entries parser read from that
+    // undeclared block would attribute the row to fields no document
+    // declared (QC3-08). The verdict is the evidence; the ledger re-reads
+    // nothing.
+    if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)
+      && !violations.some((violation) => violation.code === 'document.frontmatter.absent')) {
       const source = activeSource
       if (source?.kind === 'active') {
         try {
           recordDispatch({
             harnessDir,
             exec,
-            prompt,
+            prompt: text,
+            assignmentSource,
+            // The dispatch's ONE parse and its derived plan id (QC3-04): the
+            // ledger reads the decision's map — entries `null` (malformed
+            // YAML) stays final and the gate's schema layer keeps carrying
+            // the structured diagnostic.
+            entries,
+            planId,
             violations,
-            hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+            hard: hard ?? resolveDispatchHard(harnessDir, this.config, text, entries),
             pairing: this.pairing,
             workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
@@ -416,12 +470,19 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // The hook contract carries no exec/session context, so the harness dir
     // resolves to the explicit config or null (never a process-cwd probe) —
     // the exec-bound `tools/pre-execute` listener is the per-workspace path.
-    // `hard` resolves ONCE  and is
-    // shared by the record block (via dispatchGate) and this enforcement
-    // decision — no duplicate compass read per dispatch.
-    const hard = resolveDispatchHard(harnessDir, this.config, prompt)
-    const gate = await this.dispatchGate(prompt, undefined, hard)
-    return applyEnforcement(gate, { hard })
+    // `hard` resolves ONCE off the RESOLVED document (a pointer's file
+    // declares its own enforcement flag) and is shared by the record block
+    // (via dispatchGate) and this enforcement decision — no duplicate compass
+    // read per dispatch, and the same parse feeds both.
+    const hookSource = readAssignmentSource(prompt, { harnessDir })
+    const hookText = hookSource.ok ? hookSource.text : prompt
+    const hookParse = assignmentFrontmatterParse(hookText)
+    const hard = resolveDispatchHard(harnessDir, this.config, hookText, hookParse.entries)
+    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource, hookParse.entries, hookParse.parseError)
+    const applied = applyEnforcement(gate, { hard })
+    // A terminal source refusal is a veto, not an advisory: no enforcement
+    // setting can soften the absence of a verified document.
+    return hasTerminalRefusal(applied.violations) ? { ...applied, hardBlocked: true } : applied
   }
 
   /**
