@@ -1850,6 +1850,7 @@ export type AdrLintFailure = {
     | "lint.adr.section-banned"
     | "lint.adr.index-forbidden"
     | "lint.adr.name-shape"
+    | "lint.adr.implemented-superseded"
     | "lint.adr.fence-unclosed";
   message: string;
   recovery: string;
@@ -1966,6 +1967,23 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
         code: "lint.adr.status-mismatch",
         message: `${relPath}: Status says ${match[1]} but the record sits under ${bucket}/`,
         recovery: `move the record to docs/adr/${match[1]}/${relPath.split("/").at(-2)}/ or change the Status line to "Status: ${expected} \u2014 <one-line why>"`,
+      });
+    }
+  }
+
+  if (bucket === "implemented") {
+    // `implemented/` is the live bucket: a record carrying `Superseded-by:`
+    // is already demoted and must move to `archived/`, whatever the state of
+    // its replacement. Single-file rule - no cross-file lookup.
+    const supersededBy = header.find((line) => line.startsWith("Superseded-by:"));
+    if (supersededBy !== undefined) {
+      const cls = relPath.split("/").at(-2);
+      const filename = basename(relPath);
+      push({
+        file: relPath,
+        code: "lint.adr.implemented-superseded",
+        message: `${relPath}: an implemented record carrying "${supersededBy}" no longer guides future work and must move to docs/adr/archived/${cls}/${filename}`,
+        recovery: `move the record to docs/adr/archived/${cls}/${filename}, add one bare header line "Archived: <yyyy-mm-dd> \u2014 superseded by ${supersededBy.slice("Superseded-by:".length).trim()}" right after the Status line, and keep the Superseded-by: line`,
       });
     }
   }
