@@ -372,6 +372,7 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("folded")!.value).toBe(">");
     // One boundary quote pair strips so a consumer compares the written
     // declaration; `rawText` keeps the source lexeme.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
     expect(entries.get("status")).toEqual({ value: "active", rawText: '"active"', line: 7, kind: "scalar" });
     expect(entries.get("name")).toEqual({ value: "locked", rawText: "'locked'", line: 8, kind: "scalar" });
   });
