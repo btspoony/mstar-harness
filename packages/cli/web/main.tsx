@@ -43,6 +43,8 @@ import {
   DEFAULT_ITERATION_FILTERS,
   DEFAULT_WORKFLOW_FILTERS,
   parseIssueQuery,
+  projectIdentity,
+  projectIdentityFor,
   useCopy,
   type IterationFilters,
   type WorkflowFilters,
@@ -85,11 +87,11 @@ import {
   projectOptions,
   projectsCopy,
   projectsOutcome,
+  readProjectMilestones,
   readProjects,
-  readRoadmap,
-  roadmapOutcome,
+  projectMilestonesOutcome,
+  type ProjectMilestonesOutcome,
   type ProjectsOutcome,
-  type RoadmapOutcome,
 } from "./projects-data";
 import {
   readWorkflowDetail,
@@ -685,7 +687,7 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
       model={props.outcome.model}
       copy={projectsCopy(copy)}
       onOpen={(projectId) => {
-        // The default feature is the route model's: `#project/<id>` means Roadmap.
+        // The default feature is the route model's: `#project/<id>` means the default.
         navigate({ name: "project", id: projectId, feature: DEFAULT_PROJECT_FEATURE }, "", "push");
       }}
     />
@@ -693,13 +695,13 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
 }
 
 /**
- * One project: the identity head, the three fixed features, and the selected
- * feature's content. `Roadmap` is the route's default and never "the first
+ * One project: the identity head, the milestone rollup as the default body, and
+ * the two list features. `Issues` is the route's default and never "the first
  * feature with data".
  */
-function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[] }) {
+function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
-  const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
+  const [outcome, setOutcome] = useState<ProjectMilestonesOutcome>({ kind: "loading" });
   /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
@@ -741,9 +743,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
     const controller = new AbortController();
     let current = true;
     setOutcome({ kind: "loading" });
-    void readRoadmap(fetch, projectId, controller.signal).then((result) => {
+    void readProjectMilestones(fetch, projectId, controller.signal).then((result) => {
       if (!current) return;
-      const next = roadmapOutcome(result, projectId);
+      const next = projectMilestonesOutcome(result);
       setOutcome(next);
     });
     return () => {
@@ -751,6 +753,17 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       controller.abort();
     };
   }, [projectId]);
+
+  // The head's identity comes from the same list read the Projects destination
+  // renders, so the two can never disagree; a project the list does not carry
+  // gets the route's own id and nothing invented beside it.
+  const identity = (() => {
+    if (props.projects.kind === "ready" && props.projects.model.rows.kind === "populated") {
+      const row = props.projects.model.rows.value.find((candidate) => candidate.projectId === projectId);
+      if (row !== undefined) return projectIdentity(row);
+    }
+    return projectIdentityFor(projectId);
+  })();
 
   if (outcome.kind === "loading") return null;
   if (outcome.kind === "failed") {
@@ -767,12 +780,12 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
 
   return (
     <ProjectDetail
-      identity={outcome.identity}
+      identity={identity}
       feature={props.feature}
       onFeatureChange={(feature) => {
         navigate({ name: "project", id: projectId, feature }, "", "push");
       }}
-      roadmap={outcome.roadmap}
+      milestones={outcome.milestones}
       issues={
         <IssueListScreen
           // The route carries the feature's own filter state; the table reads it, not
@@ -1009,6 +1022,7 @@ function Shell(props: {
             address={address}
             feature={(address.route as Extract<Route, { name: "project" }>).feature}
             projectIds={projectIds}
+            projects={projects}
           />
         ) : null}
       </main>

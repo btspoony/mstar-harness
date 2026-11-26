@@ -2,35 +2,34 @@
  * The host's envelope handling for the Projects pair, and the two facts this pair
  * is the only place to get wrong:
  *
- *  - the feature set is the fixed three with `Roadmap` permanently default — never
- *    "the first non-empty";
- *  - a project with no roadmap authority row is `absent`: not an empty board, not a
- *    hidden row, and `_default` is a real row that can carry it.
+ *  - the milestone body reads the project-scoped `overview` read's `milestones`
+ *    member — a degraded member is its own arm, never a flattened null;
+ *  - the feature set is the fixed two with `Issues` permanently default — never
+ *    "the first non-empty" — and no tab, route or label named roadmap survives.
  */
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ProjectListDTO, RoadmapDTO } from "@mstar-harness/engine";
+import type { MilestoneRead, OverviewDTO, ProjectListDTO } from "@mstar-harness/engine";
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,
   ProjectDetail,
   Projects,
   copyFor,
+  milestonesArm,
   projectIdentity,
-  roadmapBody,
-  roadmapFeatureArm,
+  projectListModel,
 } from "@mstar-harness/ui";
 
 import {
   projectDetailCopy,
-  projectRoadmapPath,
+  projectOverviewPath,
   projectOptions,
   projectsCopy,
   projectsOutcome,
+  readProjectMilestones,
   readProjects,
-  readRoadmap,
-  roadmapOutcome,
 } from "./projects-data";
 
 const projection = {
@@ -80,26 +79,50 @@ const partialObservation = {
   code: "collaboration.observation-incomplete",
 };
 
-const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
+const milestoneRead = (over: Partial<MilestoneRead> = {}): MilestoneRead => ({
   projectId: "engine",
-  catalog: catalogEntry() as unknown as RoadmapDTO["catalog"],
-  authority: { state: "present", revision: 7, contentHash: "sha256:abcd1234" },
-  content: {
-    contentMarkdown: "## Direction\n\nOne product, two hosts.",
-    frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-    direction: "One product, two hosts.",
-    goals: [{ ordinal: 1, parentOrdinal: null, checked: true, title: "One design system", body: "" }],
-    milestones: [],
-    sections: [],
-  } as unknown as RoadmapDTO["content"],
-  milestones: {
-    projectId: "engine",
-    milestones: [],
-    issues: [],
-    unassignedIssues: 0,
-  },
+  milestones: [
+    {
+      milestoneId: "9f2c4a10",
+      projectId: "engine",
+      name: "Release the shared layer",
+      effortSessions: 12,
+      status: "active",
+      ordinal: 0,
+      revision: 2,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-02T00:00:00.000Z",
+      totalIssues: 10,
+      openIssues: 4,
+      resolvedIssues: 6,
+      otherRetiredIssues: 0,
+    },
+  ],
+  issues: [
+    { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
+  ],
+  unassignedIssues: 3,
   ...over,
-}) as RoadmapDTO;
+});
+
+const overview = (milestones: OverviewDTO["milestones"]): OverviewDTO => ({
+  projectId: "engine",
+  workflows: { state: "read", data: { items: [], total: 0 } },
+  residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
+  milestones,
+  latestIteration: { state: "read", data: null },
+  issueFlow: { state: "read", data: { buckets: [], incompleteHistory: false } },
+});
+
+const overviewEnvelope = (data: OverviewDTO, extra: Record<string, unknown> = {}) => ({
+  data,
+  projection,
+  storeRevision: 41,
+  catalogRevision: 1,
+  collaboration: null,
+  execution: null,
+  ...extra,
+});
 
 const renderList = (items: ProjectListDTO["items"], total = items.length, generation: number | null = 7): string => {
   const outcome = projectsOutcome({ status: "ready", envelope: listEnvelope(items, total, generation) });
@@ -167,99 +190,58 @@ describe("the projects list", () => {
   });
 });
 
-describe("the roadmap read", () => {
-  test("the path scopes to one project", () => {
-    expect(projectRoadmapPath("engine")).toBe("/api/roadmap?project=engine");
-    expect(projectRoadmapPath("a/b")).toBe("/api/roadmap?project=a%2Fb");
+describe("the milestone read", () => {
+  test("the path scopes the aggregated read to one project", () => {
+    expect(projectOverviewPath("engine")).toBe("/api/overview?project=engine");
+    expect(projectOverviewPath("a/b")).toBe("/api/overview?project=a%2Fb");
   });
 
-  test("a project with a roadmap row resolves a populated body", async () => {
+  test("a populated milestones member resolves a populated body", async () => {
     const ok = (async () =>
-      new Response(JSON.stringify({ data: roadmap(), projection }), {
+      new Response(JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead() }))), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    const result = await readRoadmap(ok, "engine");
+    const result = await readProjectMilestones(ok, "engine");
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
-    expect(result.identity.projectId).toBe("engine");
-    expect(result.roadmap.kind).toBe("populated");
+    expect(result.milestones.kind).toBe("populated");
+    if (result.milestones.kind !== "populated") return;
+    expect(result.milestones.value.milestones.map((milestone) => milestone.name)).toEqual(["Release the shared layer"]);
+    expect(result.milestones.value.unassignedIssues).toBe(3);
   });
 
-  test("no roadmap authority row is ABSENT — and the head keeps the store's own facts", async () => {
-    // An absent authority row still ships a catalog entry. The head must be built
-    // from it: a synthesised title, `lifecycle: "unknown"` and a guessed path would
-    // be three invented facts on a page whose subject is what the store knows.
-    const absent = (async () =>
+  test("an empty milestone set is the empty arm, not an absence", async () => {
+    const ok = (async () =>
       new Response(
-        JSON.stringify({
-          data: roadmap({
-            catalog: catalogEntry({ id: "_default", title: "Default", lifecycle: "staging" }) as never,
-            authority: { state: "absent" } as never,
-          }),
-          projection,
-        }),
+        JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 }) }))),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
-    const result = await readRoadmap(absent, "_default");
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") return;
-    expect(result.roadmap.kind).toBe("absent");
-    // From the catalog, not from the route id.
-    expect(result.identity.projectId).toBe("_default");
-    expect(result.identity.title).toBe("Default");
-    expect(result.identity.lifecycle).toBe("staging");
-    expect(result.identity.path).toBe("projects:engine");
+    const result = await readProjectMilestones(ok, "engine");
+    expect(result).toMatchObject({ status: "ready", milestones: { kind: "empty" } });
   });
 
-  test("a required collaboration gap is a failure, never an absent roadmap", async () => {
+  test("a degraded member keeps its own arm and reason", async () => {
+    const degraded = (async () =>
+      new Response(
+        JSON.stringify(
+          overviewEnvelope(
+            overview({ state: "unavailable", reason: "the milestone read could not be completed" }),
+          ),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readProjectMilestones(degraded, "engine");
+    expect(result).toMatchObject({ status: "ready", milestones: { kind: "unavailable", reason: "the milestone read could not be completed" } });
+  });
+
+  test("a required collaboration gap is a failure, never an empty board", async () => {
     const gapped = (async () =>
       new Response(
-        JSON.stringify({
-          data: roadmap(),
-          storeRevision: 1,
-          catalogRevision: 1,
-          projection,
-          collaboration: partialObservation,
-          execution: null,
-        }),
+        JSON.stringify(overviewEnvelope(overview({ state: "read", data: milestoneRead() }), { collaboration: partialObservation })),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
-    expect(await readRoadmap(gapped, "engine")).toMatchObject({ status: "error" });
-  });
-
-  test("a roadmap with no content at all is empty, a different arm", () => {
-    // Nothing to act on: no direction, no goals, no milestones, no stored markdown.
-    const bare = roadmap({ content: null } as Partial<RoadmapDTO>);
-    expect(roadmapBody(roadmapFeatureArm({ data: bare, projection })).kind).toBe("empty");
-  });
-
-  test("a roadmap that reads but is unprojected is still absent, not unavailable", async () => {
-    // `data: null` is an absence whether or not a projection exists; the roadmap is
-    // not a projected view, so a null generation must not turn absence into failure.
-    const unprojected = (async () =>
-      new Response(JSON.stringify({ data: null, projection: { ...projection, generation: null } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as unknown as typeof fetch;
-    const result = await readRoadmap(unprojected, "engine");
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") return;
-    expect(result.roadmap.kind).toBe("absent");
-  });
-
-  test("a 404 is absent, through the same outcome", async () => {
-    const notFound = (async () =>
-      new Response(JSON.stringify({ error: { code: "not-found", message: "no such project" } }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      })) as unknown as typeof fetch;
-    const result = await readRoadmap(notFound, "gone");
-    expect(result.status).toBe("absent");
-    const outcome = roadmapOutcome(result, "gone");
-    expect(outcome.kind).toBe("ready");
-    if (outcome.kind !== "ready") return;
-    expect(outcome.roadmap.kind).toBe("absent");
+    expect(await readProjectMilestones(gapped, "engine")).toMatchObject({ status: "error" });
   });
 
   test("a refusal is a failure, not an absence", async () => {
@@ -268,19 +250,21 @@ describe("the roadmap read", () => {
         status: 503,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    expect(await readRoadmap(refused, "engine")).toEqual({ status: "error", message: "the store is staged" });
+    expect(await readProjectMilestones(refused, "engine")).toEqual({ status: "error", message: "the store is staged" });
   });
 });
 
 describe("the detail's fixed feature set", () => {
+  const listModel = () => projectListModel(listEnvelope([project()]));
   const render = (feature: (typeof PROJECT_FEATURES)[number] = DEFAULT_PROJECT_FEATURE): string => {
-    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
+    const rows = listModel().rows;
+    if (rows.kind !== "populated") throw new Error("expected populated rows");
     return renderToStaticMarkup(
       createElement(ProjectDetail, {
-        identity: projectIdentity(roadmap().catalog),
+        identity: projectIdentity(rows.value[0]!),
         feature,
         onFeatureChange: () => {},
-        roadmap: arm,
+        milestones: milestonesArm({ state: "read", data: milestoneRead() }),
         onBack: () => {},
         issues: createElement("div", { "data-ms-scoped-list": "issues" }),
         iterations: createElement("div", { "data-ms-scoped-list": "iterations" }),
@@ -289,46 +273,42 @@ describe("the detail's fixed feature set", () => {
     );
   };
 
-  test("three tabs, in the product's fixed order", () => {
-    expect(PROJECT_FEATURES).toEqual(["roadmap", "issues", "iterations"]);
+  test("two tabs, in the product's fixed order, and no roadmap label", () => {
+    expect(PROJECT_FEATURES).toEqual(["issues", "iterations"]);
     const html = render();
-    const order = ["Roadmap", "Issues", "Iterations"].map((label) => html.indexOf(label));
+    const order = ["Issues", "Iterations"].map((label) => html.indexOf(label));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order.every((index) => index >= 0)).toBe(true);
+    expect(html.match(/role="tab"/g)?.length).toBe(2);
+    // No tab, route or label named roadmap survives.
+    expect(html).not.toContain("Roadmap");
+    expect(html).not.toContain("roadmap");
   });
 
-  test("Roadmap is the permanent default", () => {
-    expect(DEFAULT_PROJECT_FEATURE).toBe("roadmap");
+  test("Issues is the permanent default", () => {
+    expect(DEFAULT_PROJECT_FEATURE).toBe("issues");
     // The default is a constant, not "the first tab that has content": selecting
-    // `issues` moves the selection and leaves the default where it was.
+    // `iterations` moves the selection and leaves the default where it was.
+    const iterations = render("iterations");
+    expect(iterations).toContain('data-ms-feature="iterations"');
     const issues = render("issues");
     expect(issues).toContain('data-ms-feature="issues"');
-    const roadmapTab = render("roadmap");
-    expect(roadmapTab).toContain('data-ms-feature="roadmap"');
-    expect(roadmapTab).not.toContain('data-ms-feature="issues"');
+    expect(issues).not.toContain('data-ms-feature="iterations"');
+  });
+
+  test("the milestone body renders from the rollup on every feature", () => {
+    const html = render();
+    expect(html).toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-milestone-timeline=""');
+    expect(html).toContain("Release the shared layer");
+    // The body is not a tab: it is present whichever feature is selected.
+    expect(render("iterations")).toContain('data-ms-milestones=""');
   });
 
   test("the breadcrumb names the trail and the project", () => {
     const html = render();
     expect(html).toContain("Projects");
     expect(html).toContain("engine");
-  });
-
-  test("a project with no roadmap renders the absent arm, with a next step", () => {
-    const html = renderToStaticMarkup(
-      createElement(ProjectDetail, {
-        identity: projectIdentity(roadmap().catalog),
-        feature: "roadmap",
-        onFeatureChange: () => {},
-        roadmap: { kind: "absent" },
-        onBack: () => {},
-        issues: createElement("div", {}),
-        iterations: createElement("div", {}),
-        copy: projectDetailCopy(copyFor("en")),
-      }),
-    );
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-absence="empty"');
   });
 
   test("no envelope counter, timestamp or catalog revision reaches the detail", () => {

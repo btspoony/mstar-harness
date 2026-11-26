@@ -9,9 +9,9 @@
  * Three rules carry the semantics, and each is a decision rather than a parsing
  * detail:
  *
- *  - **`#roadmap` is removed, not aliased.** The roadmap is a project feature now
- *    (D8); an alias would keep a dead vocabulary alive. The route is absent from
- *    the model, so unrecognised input — including it — lands on `#overview`.
+ *  - **`#roadmap` is removed, not aliased.** The roadmap domain is retired; an
+ *    alias would keep a dead vocabulary alive. The route is absent from the
+ *    model, so unrecognised input — including it — lands on `#overview`.
  *  - **The query string belongs to the filters.** The screens never see a URL, so
  *    this module is where the filter keys are read and written; it delegates to the
  *    shared `parseIssueQuery` / `issueQuery` pair rather than re-deriving keys, and
@@ -271,8 +271,9 @@ export function routeFilters(address: Address): IssueQuery {
  * The parent a detail returns to — Escape and the breadcrumb — or `null` at the
  * landing destination.
  *
- * A project feature goes back to its project's roadmap before leaving the project,
- * so leaving is always one step further out rather than one step sideways.
+ * A project feature goes back to the project's default feature before leaving
+ * the project, so leaving is always one step further out rather than one step
+ * sideways.
  */
 export function parentOf(route: Route): Route | null {
   switch (route.name) {
