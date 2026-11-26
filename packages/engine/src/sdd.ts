@@ -316,7 +316,12 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
 
 /**
  * Extract the `## Task N` section of a plan into a file (default
- * `{SDD_DIR}/task-N-brief.md`). Line state machine: ``` fences toggle
+ * `{SDD_DIR}/task-N-brief.md`). The written brief opens with a front matter
+ * block carrying `plan_id` (the plan's own front matter, read through the
+ * shared reader), `task` and — when the task declares file entries — `files`
+ * as an unquoted block list of its Create/Modify/Test/Delete/Rename entry
+ * paths, in order, duplicates removed. The slice follows byte-identically.
+ * Line state machine: ``` fences toggle
  * `infence`; headings inside fences are ignored; printing starts at the
  * heading for `taskN` and continues until the NEXT `## Task` heading (or
  * EOF for the last task) — a later Task heading resets the section. A
@@ -404,7 +409,24 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   if (mkdirAfterGate !== null || (!bound && !outFile)) {
     mkdirSync(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR)!, { recursive: true });
   }
-  writeFileSync(out, `${printed.join("\n")}\n`);
+ // The brief's declaration header: `plan_id` from the plan's own front
+ // matter (shared reader, never a body label), the task number, and the
+ // task's own file entries in order without duplicates. The slice below it
+ // stays byte-identical.
+  const planId = planDeclaredHeaders(planFile).get("plan_id");
+  const files: string[] = [];
+  for (const line of printed) {
+    const entry = /^- (?:Create|Modify|Test|Delete|Rename): `(.+)`$/.exec(line);
+    if (entry !== null && !files.includes(entry[1]!)) files.push(entry[1]!);
+  }
+  const header = [
+    "---",
+    ...(planId === undefined ? [] : [`plan_id: ${planId}`]),
+    `task: ${taskN}`,
+    ...(files.length === 0 ? [] : ["files:", ...files.map((file) => `- ${file}`)]),
+    "---",
+  ];
+  writeFileSync(out, `${header.join("\n")}\n${printed.join("\n")}\n`);
 
  // Bound mode emits absolute paths (A3: handoff producers carry absolute
  // destinations); unbound keeps the legacy literal return.

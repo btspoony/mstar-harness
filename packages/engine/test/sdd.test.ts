@@ -54,6 +54,7 @@ import {
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
 import { DocumentFrontmatterError } from "../src/document-frontmatter.js";
+import { validateDocumentFrontmatter } from "../src/document-schema.js";
 import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
@@ -551,7 +552,7 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
       const written = taskBrief(SAMPLE_PLAN, 2, file);
       expect(written).toBe(file);
       const content = readFileSync(file, "utf8");
-      expect(content.startsWith("### Task 2: second task\n")).toBe(true);
+      expect(content).toContain("---\ntask: 2\n---\n### Task 2: second task\n");
       expect(content).not.toContain("hidden behind a fence");
       expect(content).not.toContain("Task 1: first task");
       const task10 = join(out, "task-10-brief.md");
@@ -611,6 +612,96 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
       });
     } finally {
       rmSync(out, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("taskBrief — brief front matter (plan_id / task / files)", () => {
+  const PLAN = [
+    "---",
+    "plan_id: plan-brief-fixture",
+    "execution: sdd",
+    "working_branch: main",
+    "main_worktree_branch: main",
+    "delivery_kind: development",
+    "status: InProgress",
+    "---",
+    "",
+    "### Task 1: first",
+    "",
+    "No file entries in this task.",
+    "",
+    "### Task 2: second",
+    "",
+    "**Files:**",
+    "- Create: `src/b.ts`",
+    "- Modify: `src/a.ts`",
+    "- Create: `src/b.ts`",
+    "- Check: `not-a-file.md`",
+    "",
+    "Body of task two.",
+    "",
+  ].join("\n");
+
+  function writePlan(): { dir: string; plan: string } {
+    const dir = tmpRoot("sdd-brief-fm-");
+    const plan = join(dir, "plan.md");
+    writeFileSync(plan, PLAN);
+    return { dir, plan };
+  }
+
+  test("Task 2 brief declares plan_id and task, and its own files in order without duplicates", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const content = readFileSync(file, "utf8");
+      const header = content.slice(0, content.indexOf("---\n", 4) + 4);
+      expect(header).toBe("---\nplan_id: plan-brief-fixture\ntask: 2\nfiles:\n- src/b.ts\n- src/a.ts\n---\n");
+      expect(header).not.toContain("not-a-file.md");
+      expect(header).not.toContain("src/a.test.ts");
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-2-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the body after the header is byte-identical to the task slice", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const content = readFileSync(file, "utf8");
+      const body = content.slice(content.indexOf("---\n", 4) + 4);
+      expect(body).toBe(
+        [
+          "### Task 2: second",
+          "",
+          "**Files:**",
+          "- Create: `src/b.ts`",
+          "- Modify: `src/a.ts`",
+          "- Create: `src/b.ts`",
+          "- Check: `not-a-file.md`",
+          "",
+          "Body of task two.",
+          "",
+        ].join("\n"),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task without Files entries writes no files key", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      expect(content.startsWith("---\nplan_id: plan-brief-fixture\ntask: 1\n---\n")).toBe(true);
+      expect(content).not.toContain("files:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
