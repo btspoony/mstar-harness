@@ -302,6 +302,18 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     }
   })
 
+  it('(c7) roleGate off still bridges a role the gate repaired', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', {}, { roleGate: 'off' })
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    const repairPrompt = `Role: \`${EXECUTE_AS}\`\n\nImplement the assigned work.`
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(repairPrompt), cwd: app.root }))
+
+    const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
+    expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
+  })
+
   const agentsRoot = packagedAgentsDir()
   const realReaderSkip = agentsRoot === undefined
     ? 'harness-agents mirror not synced — run `bun run --cwd packages/dsh bundle-assets`'

@@ -1316,20 +1316,22 @@ function bridgedRoleIdOf(prompt: string): string | undefined {
 }
 
 /**
- * The role id the fallbacks bridge may deliver for one gate verdict: only a
- * role this channel itself normalized (`repair`) or confirmed canonical
- * (`pass`/`canonical`). Every exemption the gate grants — non-harness
- * project, caller `agentPreset`, unknown provider, degraded read, `off` — is
- * left EXACTLY as the caller wrote it, so a deployment the gate does not
- * police never gets a rewritten prompt.
+ * The role id the fallbacks bridge may deliver for one gate verdict: a role
+ * this channel itself NORMALIZED (`repair`) always bridges — the prompt was
+ * already rewritten, so leaving the fallbacks reader blind would only split
+ * the two role consumers — while a `pass`/`canonical` declaration bridges
+ * only on a start the gate POLICED (`canonicalBridge`), so `roleGate: off`
+ * and the harness/provider exemptions keep the caller prompt byte-identical.
  * see packages/dsh/README.md (Fallbacks dispatch-role bridge)
  *
  * @param decision - the gate verdict for this start.
  * @param prompt - the resolved prompt text.
+ * @param canonicalBridge - the gate policed this start (harness, known
+ *   provider, mode not `off`).
  */
-function bridgeableRoleId(decision: RoleGateDecision, prompt: string): string | undefined {
+function bridgeableRoleId(decision: RoleGateDecision, prompt: string, canonicalBridge: boolean): string | undefined {
   if (decision.kind === 'repair') return decision.roleId
-  if (decision.kind === 'pass' && decision.reason === 'canonical') return bridgedRoleIdOf(prompt)
+  if (decision.kind === 'pass' && decision.reason === 'canonical' && canonicalBridge) return bridgedRoleIdOf(prompt)
   return undefined
 }
 
@@ -1372,7 +1374,8 @@ function wrapSubagentsService(
     let gated = spec
     let carrier: SubagentActivationSpecView = spec
     let decision: RoleGateDecision
-    let bridgeEligible = false
+    let bridgeContext = false
+    let canonicalBridge = false
     try {
       // The child's EFFECTIVE start directory — an omitted/relative cwd
       // inherits the parent's CURRENT directory (the working-directory
@@ -1408,11 +1411,14 @@ function wrapSubagentsService(
         assignmentSource,
       })
       // Only a start the gate actually POLICED may receive the fallbacks
-      // bridge line. A canonical pass short-circuits ahead of the harness and
-      // provider exemptions, and `off` never refuses — so the verdict alone
-      // cannot tell an exempted start from a policed one.
+      // bridge line for a canonical declaration. A canonical pass
+      // short-circuits ahead of the harness and provider exemptions, and
+      // `off` never refuses — so the verdict alone cannot tell an exempted
+      // start from a policed one. A repaired role always bridges: the gate
+      // already rewrote that prompt, under `off` too.
       // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
-      bridgeEligible = harnessProject && providerKnown && mode !== 'off'
+      bridgeContext = harnessProject && providerKnown
+      canonicalBridge = bridgeContext && mode !== 'off'
     } catch {
       // Contained fail-open: an unreadable request/provider is a pathological
       // caller object, and the merge below reads the same fields under its
@@ -1450,12 +1456,12 @@ function wrapSubagentsService(
       log('warn', `role preset merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
     }
     // The optional fallbacks plugin reads its role from the body-label header,
-    // not from front matter — bridge the declaration it cannot see, but only
-    // when the gate itself confirmed or normalized that declaration (see
-    // {@link bridgeableRoleId}); every gate exemption stays untouched.
+    // not from front matter — bridge the declaration it cannot see; the
+    // verdict decides which declarations may bridge (see
+    // {@link bridgeableRoleId}).
     // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
-    if (fallbacksMounted(ctx) && bridgeEligible) {
-      const roleId = bridgeableRoleId(decision, promptText(merged))
+    if (fallbacksMounted(ctx) && bridgeContext) {
+      const roleId = bridgeableRoleId(decision, promptText(merged), canonicalBridge)
       if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }
     }
     return service.startActivation(merged)
