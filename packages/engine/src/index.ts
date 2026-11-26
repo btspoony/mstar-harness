@@ -1030,6 +1030,11 @@ export {
   registerCatalogEntity,
   updateCatalogEntity,
 } from "./catalog.js";
+// The `{HARNESS_DIR}/planboard.md` grammar and the findings `mstar planboard
+// check` reports. Pointers only: the planboard holds no state, and its read
+// touches the issue store without writing either side.
+export type { PlanboardFinding, PlanboardFindingCode, PlanboardFindings } from "./planboard.js";
+export { PLANBOARD_FINDING_CODES, PLANBOARD_FILE, PLANBOARD_SECTION_CAP, checkPlanboard, parsePlanboard } from "./planboard.js";
 // Catalog import/discovery/portability: discovery is a read-only proposal,
 // import applies a reviewed plan through the catalog domain verbs, export is
 // versioned transport. The CLI family

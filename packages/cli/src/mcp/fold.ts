@@ -66,6 +66,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   workflow: "Workflow lifecycle: register, evidence, phase, policy and branch anchors.",
   issue: "Issue store: capture, triage, closure and links.",
   milestone: "Project milestones: add, update, assign issues and read rollups.",
+  planboard: "Planboard drift: report stale, missing, overdue, malformed and unverified pointer lines without writing.",
   project: "Project-to-provider correspondence: bind a store project to the external project it mirrors, and read it back.",
   "issue-sync": "Import the bound external project's issues into this store, and push local issues out to it; import is read-only toward the provider, push records only confirmed writes and reconciles an unconfirmed create by correlation marker.",
   catalog: "Catalog rows: discover, import, register, link, reconcile and purge.",
