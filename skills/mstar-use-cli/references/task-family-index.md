@@ -34,10 +34,9 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` |
 | Resolve the harness / plan / SDD / workflow / project / specs / knowledge / adr dirs; check that resolved result paths are committable and process state stays in the control root | `mstar path resolve`, `mstar path check` |
 | Read/export or mutate issues in `{HARNESS_DIR}/store.db` (`add` / `list` / `show` / `occurrence` / `triage` / `close` / `move` / `waive` / `duplicate` / `supersede` / `link` / `export`) | `mstar issue …` |
-| Serve the read-only local dashboard (issues, execution/roadmap views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` |
+| Serve the read-only local dashboard (issues, execution views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` |
 | Discover, import, register, update, link, list, show, export, reconcile or purge a verified producer registration in the harness catalog | `mstar catalog …` |
-| Read a project's roadmap authority, preview/apply reviewed Markdown import, revision-guarded content replacement, or export the composed milestone roadmap (reporting transport) | `mstar roadmap show`, `mstar roadmap import`, `mstar roadmap replace`, `mstar roadmap export` |
-| Create, update, or assign project milestones (structured roadmap goals); read milestone rollups | the `milestone` group (`add` / `update` / `assign` / `list` / `status`) |
+| Create, update, or assign project milestones (structured project goals); read milestone rollups | the `milestone` group (`add` / `update` / `assign` / `list` / `status`) |
 | Detect the active host; resolve a loaded skill root | `mstar host detect`, `mstar host skill-root` |
 | Lint harness artifacts by content type | `mstar lint` |
 | Lint a skill's frontmatter and five-question body | `mstar skill lint` |

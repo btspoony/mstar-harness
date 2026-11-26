@@ -7,17 +7,17 @@ Scope: the `implemented → archived` lifecycle move of `skills/mstar-doc-corpus
 
 ## Problem
 
-The ADR contract states two rules that contradict each other.
+The ADR contract stated two rules that contradicted each other.
 
-- Archive admission requires that "the decision is fully superseded or its mechanism is gone".
-- Its own next section says the opposite: "`superseded` is not `archived`" — a superseded record "stays in its live bucket with both-way `Supersedes:` / `Superseded-by:` lines".
+- Archive admission required that "the decision is fully superseded or its mechanism is gone".
+- Its own next section said the opposite: "`superseded` is not `archived`" — a superseded record "stays in its live bucket with both-way `Supersedes:` / `Superseded-by:` lines".
 
-The second rule is the one the tree follows, so a record whose replacement is already implemented keeps sitting in `docs/adr/implemented/`:
+The second rule was the one the tree followed, so a record whose replacement was already implemented kept sitting in `docs/adr/implemented/`:
 
-- `docs/adr/implemented/architecture/2026-11-03-one-way-linear-push.md` carries `Superseded-by: 2026-11-19-host-owned-linear-io.md`. That replacement is implemented. The old record is still filed as a standing decision.
+- `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` — then still under `implemented/` — carried `Superseded-by: 2026-11-19-host-owned-linear-io.md`, whose replacement was implemented. The old record was still filed as a standing decision.
 - PR 851 added `Superseded-by: 2026-11-26-retire-project-roadmap.md` to `docs/adr/implemented/architecture/2026-10-02-roadmap-content-authority.md` while the replacement was only proposed. A reader of the implemented tree was told the roadmap authority was already replaced, and would have been told so even if the proposal had been rejected.
 
-The contract names `implemented/` as the bucket whose records are live statements a change must keep current. A reader or an agent that takes the bucket at its word gets a demoted record as current. A proposal can demote a live decision without anything having been decided. That is the defect: the bucket and the header disagree about what is current, and the validator does not look.
+The contract names `implemented/` as the bucket whose records are live statements a change must keep current. A reader or an agent that took the bucket at its word got a demoted record as current. A proposal could demote a live decision without anything having been decided. That was the defect: the bucket and the header disagreed about what was current, and the validator did not look.
 
 ## Decision
 
@@ -71,9 +71,8 @@ A record under `implemented/` that carries `Supersedes:` is unaffected: a replac
 
 ## Consequences
 
-- `lintAdrTree` refuses an implemented record that carries a `Superseded-by:` line with code `adr.implemented-superseded`, and the refusal names the file and the move to `docs/adr/archived/<class>/<same-filename>`. `checkAdrTree` passes on this repository's tree.
-- No record under `docs/adr/implemented/` carries a `Superseded-by:` line. `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` exists with its `Archived:` line and its `Superseded-by:` line, and no copy remains under `implemented/`; its inbound links resolve to the new path, and `2026-11-19-host-owned-linear-io.md` needed no edit because its `Supersedes:` is a bare filename.
-- `docs/adr/implemented/architecture/2026-10-02-roadmap-content-authority.md` moves only when the roadmap record is promoted, in that same change.
+- `lintAdrTree` refuses an implemented record that carries a `Superseded-by:` line with code `adr.implemented-superseded`, and the refusal names the file and the move to `docs/adr/archived/<class>/<same-filename>`. From that rule on, a demoted record can no longer rest in the live bucket unnoticed: any record left in `implemented/` with `Superseded-by:` fails the tree.
+- `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` exists with its `Archived:` line and its `Superseded-by:` line, and no copy remains under `implemented/`; its inbound links resolve to the new path, and `2026-11-19-host-owned-linear-io.md` needed no edit because its `Supersedes:` is a bare filename. Any other record that gains a `Superseded-by:` line is subject to the same move when its own replacement is promoted — the rule gives the shape, not the schedule.
 - **A reader can still grep `archived/`.** The directory is the boundary, not an access control. A search that does not exclude `archived/` returns records that are not authority; the `Archived:` line on each one says so at the top of the file.
 - **The lint cannot judge whether the replacement is really implemented.** It refuses the line, not the truth of it. A change that archives a record before its replacement is promoted passes the lint and is a review finding.
 - **Archived bodies are frozen.** A later correction to an archived record needs a new record, or an un-archive move that the contract does not define. That is the cost of every archived record, and it is the reason the move waits for the promotion.

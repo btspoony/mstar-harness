@@ -20,7 +20,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 |------|----------|
 | YAML frontmatter：`iteration_id`, `start_date`, `status` | 从文件名 / 正文提取；收口前 `status` 保持 `active` 或 `locked` |
 | `## Decisions` / `## Open Questions`（模板中紧跟 `## Scope`） | 从 general context / 正文迁移为本节，无内容则按模板补节；行处置 → `phase-1-prepare.md` §1.3 |
-| `## Roadmap Position` | 从 general context / roadmap prose 迁移为本节 |
+| `## Roadmap Position` | 从 general context 迁移为本节 |
 | `## Quality Gate Summary` | 按模板补占位，§3.4 填写 |
 | `## Corpus Promotion Summary` | 按模板补占位，§3.4 填写 |
 | `## Iteration Retrospective (minimal)` | 按模板补占位，§3.4 填写 |
@@ -33,7 +33,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 **STOP**: 打印下方 checklist，且全部为 `[x]` 后，才可进入 §3.2 Corpus promotion。
 
 - [ ] compass 登记的全部 plan 在 ACTIVE `execution_plans` 均为 `Done`（经 `mstar status validate` / `mstar plan show`）
-- [ ] 各 plan 经 `mstar status findings-cleanup <plan-id>` 对 store linked open issues 按 Assignment mode 收口；`allow-residual` 下已捕获且披露的非阻断 issue 可保持 open，`zero-residual` 仅允许 blocker-defer + roadmap；关闭经 `mstar issue close|waive|duplicate|supersede`，不改退役 project register；unresolved `critical` 阻断（规则 → `mstar-artifacts` Findings cleanup modes）
+- [ ] 各 plan 经 `mstar status findings-cleanup <plan-id>` 对 store linked open issues 按 Assignment mode 收口；`allow-residual` 下已捕获且披露的非阻断 issue 可保持 open，`zero-residual` 仅允许 blocker-defer + Durable Roadmap Gate；关闭经 `mstar issue close|waive|duplicate|supersede`，不改退役 project register；unresolved `critical` 阻断（规则 → `mstar-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态与当前权威执行行同步
 - [ ] 每个 plan 的 compound disposition（`created` / `updated` / reasoned `skipped`）已记录在该 plan 的 `## Review Gate Summary`（`Compound disposition`）
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
@@ -50,11 +50,11 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 - **ADR 提升**：判据是 `mstar-doc-corpus/references/adr.md` § When a record is required，不以「是否跨迭代」收窄；各 plan 已在 `ADR:` 行记录（durable summary）的不重复写，只核对 freshness 与 supersession（`Supersedes:` / `Superseded-by:`），未记录的在此补写到 `{ADR_DIR}/implemented/<class>/` 并完成 catalog 登记。无则记 `N/A`。
 - **记录面**：§3.4 填充 compass `## Corpus Promotion Summary`（specs/ADR 篇数、跳过及原因、各 plan compound disposition 指针）；每篇新 doc 完成 catalog 登记。**若无提升，仍须写明 `无 spec/ADR 提升` 及原因**，不得静默。
 
-## 3.3 记录 roadmap 投影候选
+## 3.3 记录 next iteration 投影候选
 
-1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：记录本迭代的交付投影候选（roadmap 正文候选、匹配 milestone 的状态候选及其关联 issue 证据）与 next iteration 即将开始的内容、触发条件和 owner；**不**在此写 `delivered`。compass 是执行叙事，不是项目 roadmap 内容权威。
-2. **交付投影只在整链证明之后写一次**：`delivered` 标记、store 项目 roadmap 正文与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先 `mstar roadmap show --project <id>` 读 store 当前正文与 project/roadmap revisions，再按 governance 规则做 revision-guarded replacement；先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 roadmap 行保持其 pre-delivery 状态；已知项目无记录时明确记录 absence，不走文件 fallback。
-3. 历史 `roadmap.md`、deferred-feature tracker 等文件若需保留只能是 import/export/历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
+1. 更新 compass **`## Roadmap Position`**（§3.0.5 已确保本节存在）：记录匹配 milestone 的状态候选及其关联 issue 证据，与 next iteration 即将开始的内容、触发条件和 owner；**不**在此写 `delivered`。compass 是执行叙事，不是项目目标权威。
+2. **交付投影只在整链证明之后写一次**：`delivered` 标记与 milestone 状态汇总经 **`mstar-project-governance`** 的唯一读写/校验规则写入，执行点是 **Workflow Close Out** 的「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）——先用 `mstar milestone list` 读项目目标、按 built verb help 把匹配 milestone 的 ID 传给 `mstar milestone status` 读关联 issue 证据，再用 `mstar milestone update` 按观察到的 store revision 显式更新，交付前提与「绝不隐式关闭 issue」→ governance 规则。整链证明之前 milestone 保持其 pre-delivery 状态。
+3. deferred-feature tracker 等历史文件若需保留只能是历史记录；不作为这轮 close 的项目内容读写面。若 `STRATEGY.md` 存在，重大架构决策可更新其 `## Decision Log`。
 
 At close, review the local ignored per-edit attribution record for this iteration against delivered edits and plan-QC references (`mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution). Record actual correction time for a missed row and disclose the unobserved prior edit; unknown model remains `unknown`. Do not paste real runtime provenance into tracked artifacts or turn this review into a machine completeness check.
 
@@ -72,7 +72,7 @@ PM 打印 **iteration-close exit checklist**；全部为 `[x]` 后方可 `git co
 
 - [ ] §3.1 前置 gate 已打印并满足
 - [ ] §3.2 specs/ADR promotion 完成；package specs 已盘点（提升 / 保留 / 跳过已记入 Summary）；新增 specs/ADR 均完成 store catalog 登记（或记明无提升原因）；各 plan compound disposition 已记录
-- [ ] §3.3 `## Roadmap Position` 已记录投影候选与 next iteration；STRATEGY 已按需更新；**未**写 `delivered`、**未**替换 roadmap 正文、**未**更新 milestone 汇总 —— 交付投影（`delivered`、roadmap 行、milestone 汇总）留到整链证明之后的 **Workflow Close Out**「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）
+- [ ] §3.3 `## Roadmap Position` 已记录投影候选与 next iteration；STRATEGY 已按需更新；**未**写 `delivered`、**未**更新 milestone 汇总 —— 交付投影（`delivered`、milestone 汇总）留到整链证明之后的 **Workflow Close Out**「Projection reconciliation」（`mstar-roles/references/project-manager/workflow-close.md`）
 - [ ] §3.4 frontmatter `status: completed` + `end_date`；Quality Gate Summary（含 open R# 披露：id + severity + 跟踪位置 + blocker-defer 标记；无 open 时 `N/A — none open`；unresolved `critical` 仍阻断）+ Corpus Promotion Summary + Retrospective 已填
 - [ ] 当前分支是 `spec_integration_branch`
 - [ ] 整链的 target 是记录在案的 `branch.target`（ACTIVE：执行行；与 compass 一致），不是未记录的 `main`
@@ -93,7 +93,7 @@ git add STRATEGY.md   # only if updated in §3.3 (tracked root file); skip line 
 git commit -m "chore(iteration): close <iteration-id> — specs/ADR promotion"   # no tracked change → seal the expected list, open no empty PR
 ```
 
-Staging 说明：`{SPECS_DIR}` 与 `{ADR_DIR}` 为解析后的实际语料目录（候选链见 `mstar-conventions`）；本轮更新过才加入。per-plan knowledge compound 的 tracked 写入已在各 plan `Done` 后提交到 integration 分支，本 commit 不重复提交。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
+Staging 说明：`{SPECS_DIR}` 与 `{ADR_DIR}` 为解析后的实际语料目录（候选链见 `mstar-conventions`）；本轮更新过才加入。per-plan knowledge compound 的 tracked 写入已在各 plan `Done` 后提交到 integration 分支，本 commit 不重复提交。Milestone 与 issue 变更是 store 权威，不以 `git add` Markdown 文件代替。
 
 **Promoted corpus 过大时按 owner group 构建**：按 owner group 分组 stage 推广语料，每组各 commit 一次（上文 commit 步骤按组重复），使每组成为其 commit 上的独立 layer ref；其尺寸由下文同步之后的单一 per-range sizing 步骤处理。
 

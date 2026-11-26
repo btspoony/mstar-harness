@@ -25,7 +25,7 @@ Without a decision the same divergence ships in 5.0: the collaboration cutover, 
 
 ## Proposal
 
-This record supersedes the [2026-10-02 record](../../implemented/architecture/2026-10-02-roadmap-content-authority.md) once it is promoted: the same change moves that record to `archived/architecture/` with an `Archived:` line, per the [superseded-records-archive record](../process/2026-11-26-superseded-records-archive.md). While this record is proposed, the 2026-10-02 record stays in `implemented/` untouched.
+This record supersedes the [2026-10-02 record](../../implemented/architecture/2026-10-02-roadmap-content-authority.md) once it is promoted: the same change moves that record to `archived/architecture/` with an `Archived:` line, per the [superseded-records-archive record](../../implemented/process/2026-11-26-superseded-records-archive.md). While this record is proposed, the 2026-10-02 record stays in `implemented/` untouched.
 
 ### Remove the roadmap domain
 

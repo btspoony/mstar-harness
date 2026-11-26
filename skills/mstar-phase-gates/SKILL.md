@@ -83,7 +83,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development pl
 3. 意图门禁是否满足（真实目标 / 成功判据 / 非目标已写明）？
 4. `plan` 是否完成并可引用？
 5. 若 plan 涉及 UI 工作：`DESIGN.md` 是否存在且满足声明的 completeness level（见 `mstar-design-md`）？
-6. 若分批/暂缓/临时绕行，Durable Roadmap Gate 是否落在 plan 中，而不是只在对话里？
+6. 若分批/暂缓/临时绕行，Durable Roadmap Gate 是否落在可追踪载体——plan、CreatePlan mirror、store issue、PM Task Board 或含关联证据的 milestone——而不是只在对话里？
 7. `tasks` 是否完成？
 8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？
