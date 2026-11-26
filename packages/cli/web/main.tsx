@@ -95,10 +95,13 @@ import {
   readProjects,
   projectMilestonesOutcome,
   milestoneWriteIds,
+  applyMilestoneFollowUp,
   milestoneWriteFollowUp,
+  milestoneWriteStarted,
   writeMilestone,
   type AssignableIssuesRead,
   type MilestoneMutationRequest,
+  type MilestonePageState,
   type MilestoneWriteSurface,
   type ProjectFeature,
   type ProjectMilestonesOutcome,
@@ -761,17 +764,17 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
    * write's re-read and a revision-conflict retry.
    */
   const [drafts] = useState(createMilestoneDraftStore);
-  const [writesState, setWritesState] = useState<{ busy: boolean; refusal: string | null; keepDraft: boolean | undefined }>({ busy: false, refusal: null, keepDraft: undefined });
+  const [pageState, setPageState] = useState<MilestonePageState>({
+    overviewReloadToken: 0,
+    issuesRefreshToken: 0,
+    writes: { busy: false, refusal: null, keepDraft: undefined },
+    operationPending: false,
+  });
   /** One operation id per logical write, retained across a transport-ambiguous retry. */
   const [operationIds] = useState(milestoneWriteIds);
-  const [reloadToken, setReloadToken] = useState(0);
-  /**
-   * The scoped Issues list and the assignable read both follow an assignment:
-   * an assigned issue leaves the offer set and its revision moves, so the picker
-   * and the list must re-read after an accepted assign/unassign (and after the
-   * revision-conflict re-read, whose store moved for the same reason).
-   */
-  const [issuesRefreshToken, setIssuesRefreshToken] = useState(0);
+  // The scoped Issues list and the assignable read both follow an assignment: the
+  // page state's `issuesRefreshToken` re-issues them (an assigned issue leaves the
+  // offer set and its revision moves).
   /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
@@ -781,7 +784,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const scopedIssues: IssuesOutcome = useIssues(
     { ...query, filters: { ...query.filters, project: projectId } },
     projectId !== "",
-    issuesRefreshToken,
+    pageState.issuesRefreshToken,
   );
   /**
    * The project's size for the tab and head: the default `open` read over the whole
@@ -823,7 +826,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       current = false;
       controller.abort();
     };
-  }, [projectId, reloadToken]);
+  }, [projectId, pageState.overviewReloadToken]);
 
   // The assign picker's options: the project's OPEN issues, read by its OWN query
   // (disposition only, every page) so the address bar's filters, search and page
@@ -848,9 +851,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
     outcome.kind !== "ready" || outcome.storeRevision === null
       ? undefined
       : {
-          busy: writesState.busy,
-          refusal: writesState.refusal,
-          keepDraft: writesState.keepDraft,
+          busy: pageState.writes.busy,
+          refusal: pageState.writes.refusal,
+          keepDraft: pageState.writes.keepDraft,
           create: (input) => runMilestoneWrite({ verb: "create", projectId, input }),
           update: (milestoneId, patch) => runMilestoneWrite({ verb: "update", projectId, milestoneId, patch }),
           assign: (issueId, issueRevision, milestoneId) =>
@@ -859,9 +862,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
         };
 
   function runMilestoneWrite(request: MilestoneMutationRequest): void {
-    if (outcome.kind !== "ready" || outcome.storeRevision === null || writesState.busy) return;
+    if (outcome.kind !== "ready" || outcome.storeRevision === null || pageState.writes.busy) return;
     const revision = outcome.storeRevision;
-    setWritesState({ busy: true, refusal: null, keepDraft: undefined });
+    setPageState(milestoneWriteStarted);
     const retained = operationIds.for(JSON.stringify(request), { expectedStoreRevision: revision });
     void writeMilestone(fetch, {
       ...request,
@@ -873,12 +876,9 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       // transport failure → retain the operation for a replay.
       const followUp = milestoneWriteFollowUp(request, result);
       if (!followUp.retainOperation) operationIds.settled();
-      setWritesState({ busy: false, refusal: followUp.refusal, keepDraft: followUp.keepDraft });
-      if (followUp.reloadOverview) setReloadToken((token) => token + 1);
-      // An assignment moves an issue's milestone and revision, so the scoped list and
-      // the picker both re-read — the assigned issue leaves the offer set, and an
-      // unassigned one comes back at its new revision.
-      if (followUp.refreshIssues) setIssuesRefreshToken((token) => token + 1);
+      // One pure transition: the reload/refresh tokens, the surface's verdict and the
+      // operation's fate are all its output — nothing here decides any of them.
+      setPageState((current) => applyMilestoneFollowUp(current, followUp));
     });
   }
 

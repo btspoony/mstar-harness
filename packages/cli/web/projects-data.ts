@@ -297,6 +297,42 @@ export function milestoneWriteFollowUp(
   };
 }
 
+/** The page state one settled milestone write can move. */
+export type MilestonePageState = {
+  /** The overview read's reload token (the forms' revision and the milestone body). */
+  readonly overviewReloadToken: number;
+  /** The scoped Issues list / assign picker refresh token. */
+  readonly issuesRefreshToken: number;
+  /** What the write surface renders: busy, the store's message, and the draft verdict. */
+  readonly writes: { readonly busy: boolean; readonly refusal: string | null; readonly keepDraft: boolean | undefined };
+  /** Whether the logical write's id/revision is retained (a replays-able ambiguous attempt). */
+  readonly operationPending: boolean;
+};
+
+/** The page state with one write in flight: busy, no verdict yet, its operation armed. */
+export function milestoneWriteStarted(state: MilestonePageState): MilestonePageState {
+  return { ...state, writes: { busy: true, refusal: null, keepDraft: undefined }, operationPending: true };
+}
+
+/**
+ * Apply one settled write's policy to the page state — the transition `main.tsx`
+ * performs, pure and asserted:
+ *
+ *  - `reloadOverview` bumps the overview token (accepted, or the conflict's re-read);
+ *  - `refreshIssues` bumps the issues/picker token;
+ *  - `writes.keepDraft` is the follow-up's verdict, with `busy` cleared and the
+ *    store's message surfaced verbatim;
+ *  - `retainOperation` keeps the logical write armed; a terminal answer settles it.
+ */
+export function applyMilestoneFollowUp(state: MilestonePageState, followUp: MilestoneWriteFollowUp): MilestonePageState {
+  return {
+    overviewReloadToken: state.overviewReloadToken + (followUp.reloadOverview ? 1 : 0),
+    issuesRefreshToken: state.issuesRefreshToken + (followUp.refreshIssues ? 1 : 0),
+    writes: { busy: false, refusal: followUp.refusal, keepDraft: followUp.keepDraft },
+    operationPending: followUp.retainOperation,
+  };
+}
+
 /** The project ids the filter bar offers, from the shared list read. */
 export function projectOptions(model: ProjectListModel): readonly string[] {
   return model.rows.kind === "populated" ? model.rows.value.map((row) => row.projectId) : [];

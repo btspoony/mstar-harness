@@ -24,7 +24,10 @@ import {
 
 import {
   MILESTONE_WRITE_PATH,
+  applyMilestoneFollowUp,
   milestoneWriteFollowUp,
+  milestoneWriteStarted,
+  type MilestonePageState,
   projectDetailCopy,
   projectOverviewPath,
   projectOptions,
@@ -472,14 +475,60 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     expect(ambiguous.keepDraft).toBe(true);
   });
 
-  test("the page FORWARDS the policy's keepDraft into the surface the screen reads", async () => {
-    // The wiring assertion (not just the function's return): the page must carry
-    // `followUp.keepDraft` into its writes state and hand that state's field to the
-    // screen. Delete either line — the accepted/conflict distinction the screen
-    // renders from — and this fails.
-    const source = await Bun.file(new URL("./main.tsx", import.meta.url)).text();
-    expect(source).toContain("keepDraft: followUp.keepDraft");
-    expect(source).toContain("keepDraft: writesState.keepDraft");
+  test("the page-state transition performs the follow-up: reload, refresh, verdict, operation", () => {
+    // The page calls this reducer with the policy's output; these cases are the
+    // transition itself, so the wiring cannot pass on a source-string match.
+    const start: MilestonePageState = {
+      overviewReloadToken: 3,
+      issuesRefreshToken: 1,
+      writes: { busy: false, refusal: null, keepDraft: undefined },
+      operationPending: false,
+    };
+    const inFlight = milestoneWriteStarted(start);
+    expect(inFlight).toMatchObject({ writes: { busy: true, refusal: null, keepDraft: undefined }, operationPending: true });
+
+    // Conflict: the overview re-reads, the draft verdict is "keep", the operation settles.
+    const conflict = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp(
+        { verb: "update" },
+        { status: "refused", code: "milestone.revision-conflict", message: "[milestone.revision-conflict] moved" },
+      ),
+    );
+    expect(conflict.overviewReloadToken).toBe(start.overviewReloadToken + 1);
+    expect(conflict.issuesRefreshToken).toBe(start.issuesRefreshToken);
+    expect(conflict.writes).toEqual({ busy: false, refusal: "[milestone.revision-conflict] moved", keepDraft: true });
+    expect(conflict.operationPending).toBe(false);
+
+    // Accepted: the overview re-reads, the draft verdict is "clear", the operation settles.
+    const accepted = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "update" }, { status: "ok", receipt: null }));
+    expect(accepted.overviewReloadToken).toBe(start.overviewReloadToken + 1);
+    expect(accepted.writes).toEqual({ busy: false, refusal: null, keepDraft: false });
+    expect(accepted.operationPending).toBe(false);
+
+    // Input refusal: nothing re-reads; the draft stays; the operation settles.
+    const refused = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "milestone.invalid-input", message: "bad name" }),
+    );
+    expect(refused.overviewReloadToken).toBe(start.overviewReloadToken);
+    expect(refused.issuesRefreshToken).toBe(start.issuesRefreshToken);
+    expect(refused.writes).toEqual({ busy: false, refusal: "bad name", keepDraft: true });
+    expect(refused.operationPending).toBe(false);
+
+    // Transport-ambiguous: nothing re-reads; the operation stays armed for the replay.
+    const ambiguous = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "transport-error", message: "unreachable" }),
+    );
+    expect(ambiguous.overviewReloadToken).toBe(start.overviewReloadToken);
+    expect(ambiguous.writes.keepDraft).toBe(true);
+    expect(ambiguous.operationPending).toBe(true);
+
+    // Accepted assign: BOTH reads re-read.
+    const assigned = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "assign" }, { status: "ok", receipt: null }));
+    expect(assigned.issuesRefreshToken).toBe(start.issuesRefreshToken + 1);
+    expect(assigned.overviewReloadToken).toBe(start.overviewReloadToken + 1);
   });
 
   test("only an assignment refreshes the scoped list/picker", () => {
