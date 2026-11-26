@@ -1,7 +1,7 @@
 ---
 module: collaboration store, execution store, repository identity, host write gates
 date: 2026-11-21
-last_updated: 2026-11-21
+last_updated: 2026-11-26
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
@@ -81,9 +81,24 @@ copy of the same authority, and a host write gate cannot protect only the execut
   lock is recoverable only from a dead PID, never by an elapsed-time takeover.
 - **Fence the source before publishing.** A reviewed activation requires an operator attestation bound to the exact
   repository, mode, control root, source store/epoch and stopped handles, plus an explicit `allHandlesStopped`
-  assertion. The fence transaction moves collaboration tables out of the live schema and advances the execution
-  schema so an old reader cannot reopen it. A rollback or commit whose outcome is unprovable reports
-  `collaboration.cutover-unconfirmed`; it never claims the source is unchanged or retries blindly.
+  assertion. The fence transaction moves collaboration tables out of the live schema so an old reader cannot reopen
+  what it removed. It does NOT advance the source schema: extraction copies the collaboration tables' exact current
+  columns, so the source floor IS this build's current schema, a source at it enters and leaves unchanged, and an
+  older one is refused with the `store upgrade` recovery instead of being silently brought forward inside the fence.
+  A rollback or commit whose outcome is unprovable reports `collaboration.cutover-unconfirmed`; it never claims the
+  source is unchanged or retries blindly.
+- **A shipped lane generation is immutable; a new one appends.** Each collaboration generation body is recorded in the
+  lane with its compiled checksum, and a mismatch refuses `store.corrupt` rather than re-running the body. So a new
+  generation is appended and the ladder proves the predecessor's shape before applying it — and a replacement of a
+  derived cache carries the settled ledgers forward (confined outbox rows with their receipts, and the cross-authority
+  move rows) instead of re-deriving them, with its own final comparison aborting the swap when the carried ledger
+  differs.
+- **A derived cache is replaced only when it holds nothing unsettled.** A pre-current cache whose outbox still holds an
+  `enqueued`, `unconfirmed` or `conflict` intent refuses `remote.effect-pending` and is left untouched: replacing those
+  bytes would leave the only copy of an effect that may already have landed at the provider. The recovery is to settle
+  the listed states through the one write lane that still admits a below-current cache, each by the verb its own state
+  names, and to rerun the same bind; only a row whose recorded state contradicts its recorded evidence, or a damaged
+  repair link, takes the retained-predecessor rebuild.
 - **Cross-domain effects use intents and receipts, not one transaction.** Reserve the execution facts and frozen
   payload first, commit the collaboration effect with one durable receipt, then finalize/release execution. Replay
   reads receipts before CAS. A failed acknowledgement or decline settlement is an explicit `operation-partial` with
