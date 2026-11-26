@@ -471,10 +471,10 @@ Do the thing. Quoted example must not trigger the gate:
 })
 
 /* ===========================================================================
- * 5a1-F2 — malformed front matter at the lease gate (the shared entries API)
+ * Malformed front matter at the lease gate (the shared entries API)
  * ========================================================================= */
 
-describe('dispatch gate — lease isolation shapes (5a1-F2)', () => {
+describe('dispatch gate — lease isolation shapes', () => {
   it('an indented nested plan_path never reads as the root plan identity — the lease check does not fire', async () => {
     const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
