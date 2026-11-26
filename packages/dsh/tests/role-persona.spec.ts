@@ -267,8 +267,25 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     expect(prompt.slice(1)).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
   })
 
-  const packagedRoles = subagentRoleIds(packagedAgentsDir() ?? '')
-  it.skipIf(!packagedRoles.includes(EXECUTE_AS))(
+  it('(c4) a gate exemption leaves the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    const request: RecordedRequest = { ...textPrompt(ASSIGNMENT_PROMPT), agentPreset: PRESET_ID }
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', request))
+
+    expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  const agentsRoot = packagedAgentsDir()
+  const realReaderSkip = agentsRoot === undefined
+    ? 'harness-agents mirror not synced — run `bun run --cwd packages/dsh bundle-assets`'
+    : !subagentRoleIds(agentsRoot).includes(EXECUTE_AS)
+      ? `the packaged agents mirror declares no '${EXECUTE_AS}' role`
+      : undefined
+  if (realReaderSkip !== undefined) console.warn(`(c3) skipped: ${realReaderSkip}`)
+  it.skipIf(realReaderSkip !== undefined)(
     '(c3) real dsh-llm-fallbacks resolves the bridged role from a front-matter Assignment',
     async () => {
       const { app, provider } = await bootWithProvider('fake-spawn', {}, {

@@ -1326,6 +1326,25 @@ function bridgedRoleIdOf(prompt: string): string | undefined {
  * (service value, preset mapping, registrant context) so repeated reads
  * agree and re-applies re-bind.
  */
+/**
+ * The role id the fallbacks bridge may deliver for one gate verdict: only a
+ * role this channel itself normalized (`repair`) or confirmed canonical
+ * (`pass`/`canonical`). Every exemption the gate grants — non-harness
+ * project, caller `agentPreset`, unknown provider, degraded read, `off` — is
+ * left EXACTLY as the caller wrote it, so a deployment the gate does not
+ * police never gets a rewritten prompt.
+ * see packages/dsh/README.md (Fallbacks dispatch-role bridge)
+ *
+ * @param decision - the gate verdict for this start.
+ * @param prompt - the resolved prompt text.
+ */
+function bridgeableRoleId(decision: RoleGateDecision, prompt: string): string | undefined {
+  if (decision.kind === 'repair') return decision.roleId
+  if (decision.kind === 'pass' && decision.reason === 'canonical') return bridgedRoleIdOf(prompt)
+  return undefined
+}
+
+
 function wrapSubagentsService(
   value: unknown,
   rolePresets: Config['rolePresets'],
@@ -1422,12 +1441,12 @@ function wrapSubagentsService(
       log('warn', `role preset merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
     }
     // The optional fallbacks plugin reads its role from the body-label header,
-    // not from front matter — bridge the declaration it cannot see (see
-    // {@link fallbacksRoleBridge}). The role comes from the RESOLVED spec, so
-    // a repaired or pointer-carried declaration is the one delivered.
+    // not from front matter — bridge the declaration it cannot see, but only
+    // when the gate itself confirmed or normalized that declaration (see
+    // {@link bridgeableRoleId}); every gate exemption stays untouched.
     // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
     if (fallbacksMounted(ctx)) {
-      const roleId = decision.kind === 'repair' ? decision.roleId : bridgedRoleIdOf(promptText(merged))
+      const roleId = bridgeableRoleId(decision, promptText(merged))
       if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }
     }
     return service.startActivation(merged)
