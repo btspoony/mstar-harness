@@ -3,7 +3,6 @@
 Status: implemented — front matter is the declaration layer for process documents
 Date: 2026-11-26
 Supersedes: —
-Superseded-by: —
 
 ## Problem
 
