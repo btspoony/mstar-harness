@@ -254,6 +254,7 @@ The task body quotes example header lines:
 `
 
 /** A two-track parallel list whose SECOND branch is `main` — the folded form
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  * keeps only `feature/a`, so only a gate reading every track refuses it. */
 const TWO_TRACKS_SECOND_MAIN = `---
 execute_as: fullstack-dev

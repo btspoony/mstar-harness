@@ -391,6 +391,7 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("c")!.value).toBe(`"hard'`);
     expect(entries.get("d")!.value).toBe(`'hard"`);
     // A mismatched pair whose outer quotes still match is stripped: the inner
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     // quote is the value's own text.
     expect(entries.get("e")!.value).toBe(`"hard`);
   });

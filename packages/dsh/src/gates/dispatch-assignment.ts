@@ -151,6 +151,7 @@ function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
   if (entry.kind !== 'scalar' && entry.kind !== 'block-scalar') return undefined
   if (typeof entry.value === 'string') return entry.value
   // A number/boolean is TYPED by the document profile; the written lexeme is
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   // the declaration, so `main_worktree_branch: 5.0` stays `5.0` (never `5`).
   if (typeof entry.value === 'number' || typeof entry.value === 'boolean') return entry.rawText.trim()
   if (entry.value === null) return ''

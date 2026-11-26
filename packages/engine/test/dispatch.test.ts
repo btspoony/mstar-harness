@@ -1431,6 +1431,7 @@ enforcement: hard
 
   test("a one-sided or mismatched quote spelling never activates hard enforcement", () => {
     // `enforcement: hard'` is the literal text `hard'`, not `hard`: a typo
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     // must not harden a dispatch. The flat compass profile and the document
     // profile agree on the pair rule.
     for (const value of ["hard'", "'hard", `"hard'`, `'hard"`]) {
@@ -2035,6 +2036,7 @@ describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recogniz
     const tilde = ["## Assignment", "", "~~~markdown", "**Execute as**: fullstack-dev", "**Delegation**: forbidden", "~~~", ""].join("\n");
     expect(legacyAssignmentShape(tilde)).toBe(false);
     // Unfenced labels outside the example still shape the document.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(legacyAssignmentShape(`${backtick}\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n`)).toBe(true);
   });
 

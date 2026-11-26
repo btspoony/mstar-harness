@@ -1388,6 +1388,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
       violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd, assignmentDir: opts.assignmentDir, fields, forms }));
     } else if (writable) {
       // EVERY declared branch is gated, not just the one `forms` folds to its
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       // first entry: a `working_branch` list is the parallel shape, and track
       // two on `main` is exactly what this gate exists to catch.
       const declared = declaredAssignmentBranches(fields, forms);

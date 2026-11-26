@@ -531,6 +531,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           }
           if (fields.writeDomain !== "control") {
             // EVERY declared branch is gated (a `working_branch` list is the
+            // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
             // parallel shape), so a second track on `main` is caught too.
             const declared = declaredAssignmentBranches(fields, forms);
             const branches = declared.length > 0 ? declared : branch?.trim() ? [branch] : [];

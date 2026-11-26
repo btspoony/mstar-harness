@@ -1302,6 +1302,7 @@ describe('dispatch-role gate — canonical front matter rewrite', () => {
     expect(fields.executeAs).toBe(EXECUTE_AS)
     expect(fields.delegation).toBe('forbidden')
     // The body is untouched: the spliced header is the only change.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
     expect(rewritten.endsWith(`---\n\n${body}`)).toBe(true)
   })
 

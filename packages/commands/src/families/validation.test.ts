@@ -249,11 +249,13 @@ describe("assignment files resolve through the ONE source resolver", () => {
 
       expect(duplicate.status).toBe("refused");
       // The repeated key blocks the read; reporting plan_id/review_range/
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       // diff_basis as missing would send the caller after the wrong defect.
       expect(duplicate).toMatchObject({ code: "qc.alignment.field.duplicate" });
       if (duplicate.status === "refused") expect(duplicate.message).toContain("duplicate");
 
       // A genuinely absent field still reports as missing.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       const absent = join(harness, "assignments", "absent.md");
       writeFileSync(absent, `---\nplan_id: 20261125-demo\n---\n\n## Task\n\nReview.\n`);
       const missing = await runVerb("worktree.qc-alignment", root, { files: [absent] }, harness);

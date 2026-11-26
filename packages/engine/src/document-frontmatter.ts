@@ -162,6 +162,7 @@ function decodeFlatScalar(raw: string): string {
     }
   }
   // Only a matching boundary PAIR is syntax. A one-sided or mismatched quote
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   // (`hard'`, `'hard`, `"hard'`) is literal text: stripping it would decode
   // `enforcement: hard'` to `hard` and activate hard enforcement on a typo.
   return unquote(raw);
