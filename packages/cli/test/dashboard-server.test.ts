@@ -545,6 +545,41 @@ describe("dashboard collaboration disclosure", () => {
   });
 });
 
+describe("dashboard --project selector", () => {
+  test("refuses an id that only an issue names, and accepts a catalog-backed project", async () => {
+    const { dir, context } = await workspace("project-selector-catalog-");
+    // note: An issue-only project id is listed by the `projects` view with a synthesized item, but no
+    // catalog row backs it.
+    await captureIssue(context, {
+      projectId: "issue-only-project",
+      title: "captured against an unregistered project",
+      severity: "low",
+      kind: "bug",
+      impact: "i",
+      acceptance: "a",
+      sourceIdentity: "dashboard/selector",
+      rootCauseKey: "dashboard.selector",
+      acceptanceKey: "dashboard.selector.accepted",
+      occurrenceKey: "dashboard-selector-occurrence",
+      sourceKind: "review",
+      location: "packages/cli/test/dashboard-server.test.ts",
+      observedBehavior: "the selector accepted an issue-only id",
+      evidence: ["fixture"],
+      discoveredAt: RECORDED_AT,
+    }, { actor: "project-manager", operationId: "capture-issue-only-project" });
+    await expect(start(dir, { project: "issue-only-project" })).rejects.toThrow(/no catalog project row exists/);
+
+    // invariant: A registered catalog project is the accepted selector.
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "registered-project", title: "Registered", rootKind: "projects", relativePath: "registered-project" },
+      { operationId: "dashboard-selector-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir, { project: "registered-project" });
+    await server.close();
+  });
+});
+
 describe("the retired roadmap route", () => {
   test("answers an unrouted /api/roadmap with the not-found envelope", async () => {
     const { dir } = await workspace("roadmap-route-retired-");

@@ -45,6 +45,7 @@ import {
   type CollaborationStoreHandle,
   type IssueRef,
 } from "./collaboration-store.js";
+import { DOCUMENT_KIND_NAMES, type CatalogDocumentKind } from "./catalog.js";
 import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, occurrenceColumns, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
   assertSelectionUnchanged,
@@ -180,7 +181,8 @@ export type RemoteCatalogEntity = Readonly<{
   id: string;
   title: string;
   description: string | null;
-  documentKind: string | null;
+  /** note: The catalog's own kind vocabulary, not arbitrary text: the retired value never reaches a DTO. */
+  documentKind: CatalogDocumentKind | null;
   lifecycle: "active" | "archived" | "superseded";
   revision: number;
 }>;
@@ -661,12 +663,18 @@ function catalogEntity(value: unknown, path: string): RemoteCatalogEntity {
   if (documentKind !== null && body.kind !== "document") {
     invalid(`${path}.documentKind`, "only a document entity carries a document kind");
   }
+  // invariant: The retired catalog kind is refused by path here, before any write: the project
+  // snapshot's catalog entries carry the same vocabulary the local catalog verbs enforce, so a
+  // retired value cannot re-enter through the remote surface.
+  if (documentKind !== null && !(DOCUMENT_KIND_NAMES as readonly string[]).includes(documentKind)) {
+    invalid(`${path}.documentKind`, `is not a document kind; expected one of ${DOCUMENT_KIND_NAMES.join(", ")}`);
+  }
   return {
     kind: oneOf(body.kind, CATALOG_KINDS, `${path}.kind`),
     id: text(body.id, `${path}.id`),
     title: text(body.title, `${path}.title`),
     description: optionalText(body.description, `${path}.description`),
-    documentKind,
+    documentKind: documentKind as CatalogDocumentKind | null,
     lifecycle: oneOf(body.lifecycle, ["active", "archived", "superseded"], `${path}.lifecycle`),
     revision: positiveInteger(body.revision, `${path}.revision`),
   };

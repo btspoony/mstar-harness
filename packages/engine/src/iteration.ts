@@ -37,9 +37,14 @@ const COMPASS_FILE = "delivery-compass.md";
  */
 export const PROJECT_MARKER_FILE = "roadmap.md";
 
-/** note: One project location's identity: `projects/<id>` and its retired marker spelling agree on the id. */
+/**
+ * note: One project location's identity: `projects/<id>` and its retired marker spelling agree on the id.
+ * The marker is compared LITERALLY (no pattern), so an ordinary document whose name merely resembles it
+ * keeps its own identity instead of collapsing onto the directory.
+ */
 export function projectLocationIdentity(relativePath: string): string {
-  return relativePath === PROJECT_MARKER_FILE ? "" : relativePath.replace(new RegExp(`/${PROJECT_MARKER_FILE}$`), "");
+  const suffix = `/${PROJECT_MARKER_FILE}`;
+  return relativePath.endsWith(suffix) ? relativePath.slice(0, -suffix.length) : relativePath;
 }
 
 /**
@@ -963,16 +968,20 @@ export async function readCatalogCompleteness(
     try {
       storeRevision = handle.authority.revision;
       catalogRevision = handle.authority.catalogRevision;
+      // note: The row KIND is read with the location: only a `project` row names a project. A retained
+      // document under the `projects` root (a reclassified roadmap body, say) is not a registration of
+      // the directory it happens to sit in.
       const rows = handle.db
-        .prepare("select root_kind, relative_path from catalog_entities")
-        .all() as Array<{ root_kind?: unknown; relative_path?: unknown }>;
+        .prepare("select kind, root_kind, relative_path from catalog_entities")
+        .all() as Array<{ kind?: unknown; root_kind?: unknown; relative_path?: unknown }>;
       for (const row of rows) {
         if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
-        // invariant: A project registered at the retired `roadmap.md` marker names the same project as
-        // its directory, so a row the store already holds never reads as an unregistered location.
-        if (row.root_kind === "projects") {
+        // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
+        // its directory, so the directory it names reads as registered. The alias is project-row only: a
+        // document retained under the `projects` root is not a project registration for its directory.
+        if (row.kind === "project" && row.root_kind === "projects") {
           registered.add(`${row.root_kind}\u0000${projectLocationIdentity(row.relative_path)}`);
         }
       }
@@ -988,8 +997,9 @@ export async function readCatalogCompleteness(
 
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
+    // note: A discovered project location is the directory entry itself; the alias registered above is
+    // what lets a row at the retired marker path cover it.
     if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
-    if (location.rootKind === "projects" && registered.has(`${location.rootKind}\u0000${projectLocationIdentity(location.relativePath)}`)) continue;
     const code = GAP_CODE[location.kind];
     gaps.push({
       rootKind: location.rootKind,

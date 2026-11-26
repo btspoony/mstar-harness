@@ -117,7 +117,11 @@ async function assertProjectExists(harnessDir: string, projectId: string): Promi
     params: {},
   });
   const projects = envelope.data as ProjectListDTO;
-  if (!projects.items.some((item) => item.project.id === projectId)) {
+  // invariant: The `projects` view also lists ids inferred from issues and synthesizes an item for them
+  // with `lifecycle: null`. Only a catalog-backed row satisfies `--project`: an issue-only id names no
+  // project the dashboard can read.
+  const found = projects.items.find((item) => item.project.id === projectId);
+  if (found === undefined || found.project.lifecycle === null) {
     throw new Error(`Unknown project ${JSON.stringify(projectId)}: no catalog project row exists. ` + "Check the id with `mstar catalog list` and retry.");
   }
 }

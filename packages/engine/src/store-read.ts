@@ -1634,7 +1634,7 @@ function remoteIdentity(row: RemoteCatalogRow): CatalogIdentityDTO {
     description: row.description,
     rootKind: null,
     relativePath: null,
-    documentKind: row.documentKind as CatalogDocumentKind | null,
+    documentKind: row.documentKind,
     lifecycle: row.lifecycle,
     revision: row.revision,
     registeredAt: null,

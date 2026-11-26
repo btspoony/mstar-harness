@@ -1796,6 +1796,38 @@ describe("remote read boundary", () => {
     });
   });
 
+  test("a remote catalog entry carrying the retired document kind is refused by path, and a surviving kind is accepted", async () => {
+    const { context, commit, check } = await boundScope("remote-catalog-kind-removal");
+    // note: The fixture's catalog carries no document row, so this case submits one: a document is the
+    // only entity kind that may carry a `documentKind`, and it is the shape the retired value rode in on.
+    const withDocument = (documentKind: string | null) => {
+      const document = JSON.parse(
+        JSON.stringify(submission(commit, check, completeSnapshot(check), 1)),
+      ) as { snapshot: { project: { catalogEntities: Array<Record<string, unknown>> } } };
+      document.snapshot.project.catalogEntities.push({
+        kind: "document",
+        id: "doc-catalog-kind",
+        title: "Catalog document",
+        description: null,
+        documentKind,
+        lifecycle: "active",
+        revision: 1,
+      });
+      return document as unknown as Record<string, unknown>;
+    };
+    const retiredIndex = 2;
+    const withRetired = withDocument("roadmap");
+    // invariant: The retired kind never re-enters through the nested catalog vocabulary, even though the
+    // top-level `project.roadmap` field is already gone.
+    expect(remoteObserveDocumentSchema.safeParse(withRetired).success).toBe(false);
+    await expect(ingestRemoteObservation(context, withRetired as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining(`submission.snapshot.project.catalogEntities[${retiredIndex}].documentKind`),
+    });
+    // invariant: A surviving kind is the accepted shape.
+    expect(remoteObserveDocumentSchema.safeParse(withDocument("spec")).success).toBe(true);
+  });
+
   test("a project.roadmap member is refused by path, and its absence is the only accepted shape", async () => {
     const { context, commit, check } = await boundScope("remote-roadmap-removal");
     const document = JSON.parse(

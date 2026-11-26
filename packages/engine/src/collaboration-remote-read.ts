@@ -42,6 +42,7 @@ import {
   type ProviderOnlyIssue,
   type Severity,
 } from "./issue.js";
+import type { CatalogDocumentKind } from "./catalog.js";
 import { MilestoneError, type MilestoneRead, type ProjectMilestoneDTO } from "./milestone-store.js";
 import { StoreError, type StoreContext } from "./store-db.js";
 
@@ -1010,7 +1011,8 @@ export type RemoteCatalogRow = Readonly<{
   id: string;
   title: string;
   description: string | null;
-  documentKind: string | null;
+  /** note: The catalog's own kind vocabulary: admission refuses a value outside it, so no cast remains. */
+  documentKind: CatalogDocumentKind | null;
   lifecycle: "active" | "archived" | "superseded";
   revision: number;
 }>;

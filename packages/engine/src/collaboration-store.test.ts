@@ -2028,7 +2028,17 @@ describe("collaboration remote schema ladder", () => {
           "insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at) " +
           "values ('p-one', '# Roadmap', 'hash', 2, '2026-11-22T00:00:00.000Z');" +
           "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id) " +
-          "values ('project', 'p-one', 'documents', 'document', 'doc-r');",
+          "values ('project', 'p-one', 'documents', 'document', 'doc-r');" +
+          // note: A populated milestone, and an issue that references it, so the v7 rebuild's FK staging
+          // and its deferred grandchild edge (issues.milestone_id -> project_milestones) are exercised,
+          // not merely the empty-table path.
+          "insert into project_milestones(milestone_id, project_id, project_kind, name, effort_sessions, status, " +
+          "ordinal, revision, created_at, updated_at) values ('m-one', 'p-one', 'project', 'Milestone One', 3, " +
+          "'active', 0, 2, '2026-09-03T00:00:00.000Z', '2026-11-21T00:00:00.000Z');" +
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+          "updated_at, identity_key, issue_ref, milestone_id) values ('I-000001', 'p-one', 'Linked finding', 'bug', " +
+          "'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', " +
+          "'reclassify-key', 'mstar:issue:00000000-0000-4000-8000-000000000r01', 'm-one');",
       );
     });
     activate(location.dbPath);
@@ -2047,6 +2057,14 @@ describe("collaboration remote schema ladder", () => {
         db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get(),
       ).toEqual({ document_kind: "other", revision: 7, registered_at: "2026-09-02T00:00:00.000Z" });
       expect(db.prepare("select count(*) as n from catalog_links").get()).toEqual({ n: 1 });
+      // invariant: The populated milestone and the issue referencing it cross the rebuild unchanged.
+      expect(
+        db.prepare("select name, effort_sessions, status, revision from project_milestones where milestone_id = 'm-one'").get(),
+      ).toEqual({ name: "Milestone One", effort_sessions: 3, status: "active", revision: 2 });
+      expect(db.prepare("select milestone_id, issue_ref from issues where id = 'I-000001'").get()).toEqual({
+        milestone_id: "m-one",
+        issue_ref: "mstar:issue:00000000-0000-4000-8000-000000000r01",
+      });
       expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
       // invariant: The CHECK that admitted the value is gone, so the retired value is refused.
       expect(() =>

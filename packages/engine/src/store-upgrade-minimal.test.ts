@@ -2962,7 +2962,7 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active", deliveryDeclarations: V1_STANDALONE_DECLARATION });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
   expect(result.dispositions).toContain(
-    "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+    "root metadata program_roadmap was not imported: the roadmap domain is retired and stores no document. status.json is preserved. Capture what the text still describes with `mstar issue add` (a piece of work) or `mstar milestone add` (a goal), put direction prose in STRATEGY.md, then leave the file as history; the 4.x export window is the only roadmap reader left",
   );
   expect(result.dispositions).toContain(
     "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",

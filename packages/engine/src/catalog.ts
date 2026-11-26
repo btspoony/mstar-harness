@@ -54,6 +54,14 @@ import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./stor
 export type CatalogEntityKind = "project" | "iteration" | "plan" | "document";
 export type CatalogRootKind = "repository" | "harness" | "plans" | "iterations" | "specs" | "knowledge" | "projects";
 export type CatalogDocumentKind = "spec" | "knowledge" | "guide" | "compass" | "plan" | "review" | "other";
+
+/**
+ * note: The ONE document-kind vocabulary, shared by the local catalog verbs and the remote contract:
+ * a wire shape that admits a value this list omits would let a retired kind re-enter through a
+ * surface that never learned it was retired.
+ */
+export const DOCUMENT_KIND_NAMES = ["spec", "knowledge", "guide", "compass", "plan", "review", "other"] as const;
+
 export type CatalogLifecycle = "active" | "archived" | "superseded";
 export type CatalogRelation =
   | "belongs-to"

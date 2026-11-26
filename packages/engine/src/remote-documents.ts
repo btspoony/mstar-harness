@@ -20,6 +20,7 @@ import {
   ISSUE_RELATIONS,
   ISSUE_SEVERITIES,
 } from "./issue.js";
+import { DOCUMENT_KIND_NAMES } from "./catalog.js";
 import { z } from "zod";
 
 const gitObjectId = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a Git object id");
@@ -243,7 +244,9 @@ const catalogEntityDocument = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string().nullable(),
-  documentKind: z.string().nullable(),
+  // invariant: The published shape carries the ONE surviving vocabulary, so a caller building from it
+  // cannot submit the retired kind and never learns a value the runtime would refuse.
+  documentKind: z.enum(DOCUMENT_KIND_NAMES).nullable(),
   lifecycle: z.enum(["active", "archived", "superseded"]),
   revision: z.number().int().positive(),
 }).strict();

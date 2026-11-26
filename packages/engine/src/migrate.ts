@@ -47,11 +47,12 @@
  * note; `metadata.updated_at` becomes the root `updated_at`; ALL other/
  * unknown root-metadata keys land in the active snapshot
  * `legacy_metadata` — nothing dropped silently.
- * - **Nothing else lifts.** Residual registers, roadmap seeds and note
- * ledgers have their own supported routes (`mstar store migrate` /
- * `mstar roadmap import` / the append log); this conversion only produces
- * execution authority, and the source bytes for every one of them stay on
- * disk untouched.
+ * - **Nothing else lifts.** Residual registers, roadmap text and note
+ * ledgers have their own supported routes (`mstar store migrate` / the
+ * append log; roadmap prose is history after 4.x and its remaining facts are
+ * captured as issues, milestones or `STRATEGY.md`); this conversion only
+ * produces execution authority, and the source bytes for every one of them
+ * stay on disk untouched.
  *
  * No fs writes happen anywhere in this module: every returned path is
  * harness-relative and derived, and each lifecycle id that becomes a path
@@ -826,7 +827,7 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
   }
   if (activeIterations.length === 0 && metadata.program_roadmap !== undefined) {
     dispositions.push(
-      "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+      "root metadata program_roadmap was not imported: the roadmap domain is retired and stores no document. status.json is preserved. Capture what the text still describes with `mstar issue add` (a piece of work) or `mstar milestone add` (a goal), put direction prose in STRATEGY.md, then leave the file as history; the 4.x export window is the only roadmap reader left",
     );
   }
   if (activeIterations.length === 0 && metadata.integration_merge_lease !== undefined) {

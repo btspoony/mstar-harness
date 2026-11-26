@@ -29,7 +29,7 @@ import {
 } from "./coordination.js";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { assertKnowledgeCatalogCompleteness } from "./compound.js";
-import { assertCatalogCompleteness, readCatalogCompleteness } from "./iteration.js";
+import { assertCatalogCompleteness, projectLocationIdentity, readCatalogCompleteness } from "./iteration.js";
 import { discoverCatalog, importCatalog, planCatalogImport, verifyCatalogImport } from "./catalog-import.js";
 import { scaffoldHarness } from "./path.js";
 import { createFsStore, setArtifactStore } from "./store.js";
@@ -460,6 +460,32 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(after.revision).toBe(beforeImport.revision);
     expect(after.registeredAt).toBe(beforeImport.registeredAt);
     expect((await listCatalog(context, { kind: "project" })).total).toBe(1);
+  });
+
+  test("a retained document under the projects root does not satisfy the project completeness check", async () => {
+    const { harness, context } = await withStore("document-not-a-project-");
+    // note: The retired roadmap body survives as a reclassified DOCUMENT at `projects/alpha/roadmap.md`.
+    // A document is not a project registration: the directory's project row is still missing and must be
+    // reported, or the gate would be satisfied by content that names no project.
+    mkdirSync(join(harness, "projects", "alpha"), { recursive: true });
+    writeFileSync(join(harness, "projects", "alpha", "roadmap.md"), "# Retained body\n");
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "document", id: "doc-alpha-roadmap", title: "Retained roadmap", rootKind: "projects",
+        relativePath: "alpha/roadmap.md", documentKind: "other",
+      },
+      op("alpha-document"),
+    );
+    const report = await readCatalogCompleteness(context, ["projects"]);
+    expect(report.ok).toBe(false);
+    expect(report.gaps.map((gap) => [gap.kind, gap.id, gap.code])).toEqual([["project", "alpha", "catalog.discovery.missing-project"]]);
+
+    // invariant: The marker alias is the LITERAL file name, so a look-alike document keeps its own identity
+    // and covers nothing.
+    expect(projectLocationIdentity("alpha/roadmapXmd")).toBe("alpha/roadmapXmd");
+    expect(projectLocationIdentity("alpha/roadmap.md")).toBe("alpha");
+    expect(projectLocationIdentity("roadmap.md")).toBe("roadmap.md");
   });
 
   test("a recorded source that changes evidence kind is reported as drift", async () => {
