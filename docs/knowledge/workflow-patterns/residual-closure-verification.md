@@ -28,7 +28,7 @@ The compass originally planned audit-004 as a **re-implementation** (5-command f
 
 ## Guidance
 1. **Grep before you plan**: when a residual claims "import-only / no CLI form yet", grep the CLI surface + docs + skill callouts *in the current checkout* first. Residuals register against the base revision at audit time; commits since then may have closed the gap. A plan that re-implements an existing command is wasted work — and a QC tri will catch it.
-2. **Re-scope, don't drop**: turn the re-implementation into a closure-verification plan (smoke the real dist build, verify exit semantics against `docs/cli.md`, check callouts, fill the changeset gap, close the residual in place). Keep the residual's AC but rewrite the wording to "verified runnable + closed", never "implemented".
+2. **Re-scope, don't drop**: turn the re-implementation into a closure-verification plan (smoke the real dist build, verify exit semantics against the CLI contract surface (`docs/cli.md` at the time; since retired — the live surface is the `mstar-use-cli` skill and `mstar schema --command <id>`), check callouts, fill the changeset gap, close the residual in place). Keep the residual's AC but rewrite the wording to "verified runnable + closed", never "implemented".
 3. **Smoke from the real artifact**: `node packages/cli/dist/mstar-harness.js …` after a fresh build — never a possibly-stale global bin (`mstar` in `~/.nvm` etc. may lack new commands). Document the exact invocation (`node packages/cli/dist/mstar-harness.js <command> …`, plus `--harness <absolute .mstar>` when the smoke runs outside Git) in the closure_note so the evidence is reproducible.
 4. **Closure evidence must be complete**: every report-table row (including negative-path probes that exit non-zero) needs a persisted output section with an explicit `EXIT=<n>`. A smoke file that omits the non-zero probe is incomplete — QC flagged this (Request Changes → evidence reconcile).
 5. **Close in place**: close the finding through the issue store's closure authority (`mstar issue close --disposition resolved` with the smoke evidence cited) — the legacy `projects/<id>/residuals.json` register is migration history with no live writer (`skills/mstar-conventions/references/artifact-storage-paths.md`).
@@ -38,7 +38,7 @@ Audits and residuals are snapshots at a point in time; the register is a lagging
 
 ## When to Apply
 - Any residual whose fix may have landed since registration (esp. "import-only CLI" claims).
-- Before allocating a plan to a "new command" whose command name already appears in `docs/cli.md`.
+- Before allocating a plan to a "new command" whose command name already appears in the CLI docs surface (`docs/cli.md` at the time; now the `mstar-use-cli` skill).
 - At iteration scope definition: grep the 5-command surface for the residual set before fixing the plan list.
 
 ## Examples
@@ -53,7 +53,7 @@ $ node packages/cli/dist/mstar-harness.js status tech-debt {HARNESS_DIR}/project
 total_open: 0
 EXIT=0
 $ node packages/cli/dist/mstar-harness.js worktree qc-alignment ...   # mismatch probe
-FAIL (2 violations) ... EXIT=1   # documented exit semantics per docs/cli.md
+FAIL (2 violations) ... EXIT=1   # documented exit semantics per docs/cli.md (since retired; now the mstar-use-cli skill)
 ```
 
 ## Result

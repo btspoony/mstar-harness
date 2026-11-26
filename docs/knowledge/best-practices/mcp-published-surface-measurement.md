@@ -1,7 +1,7 @@
 ---
 module: MCP published-surface measurement (mcp-fold ceiling)
 date: 2026-11-05
-problem_type: developer_experience
+problem_type: best_practice
 category: best-practices
 severity: low
 plan_id: <plan-id>

@@ -9,7 +9,14 @@ applies_when:
   - porting bash scripts to a typed language (TS) while keeping output identical
   - retiring legacy shell tooling after a port
   - replacing a shell "oracle" with frozen golden fixtures
-tags: [bash-port, byte-parity, golden-fixture, jq, awk, intentional-divergence, fail-closed]
+tags:
+  - bash-port
+  - byte-parity
+  - golden-fixture
+  - jq
+  - awk
+  - intentional-divergence
+  - fail-closed
 ---
 
 # Bash-to-TS porting: byte parity before deletion, golden fixtures after
