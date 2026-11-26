@@ -32,7 +32,7 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
 - **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
-  - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**）。
+  - **并行标签**：≥2 条实现轨同时分派 → Assignment front matter 的 `worktree_path` / `working_branch` 写 flat string list（每轨一项；`working_branch` 也可单值共用于所有轨）——≥2 条 `worktree_path` 就是 gate 读取的并行声明，没有 marker key。同仓可写并发在此声明之上还须 worktree 隔离，清单与 L2 自检 → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**。
 - **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `execution_mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
 ### 可验证编辑与上下文纪律
