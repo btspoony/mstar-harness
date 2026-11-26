@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { RemoteCollaborationFixture, REMOTE_PROJECT, TRACKED_BRANCH } from "./support/remote-collaboration-fixture";
-import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getCatalog, getIssue, initializeCollaborationStore, initializeStore, listCatalog, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getCatalog, getIssue, initializeCollaborationStore, initializeStore, listCatalog, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
   dashboardFilters,
@@ -125,7 +125,6 @@ describe("route table", () => {
     expect(resolveDashboardRoute("/api/issue-flow")).toEqual({ view: "issue-flow" });
     expect(resolveDashboardRoute("/api/workflows")).toEqual({ view: "workflows" });
     expect(resolveDashboardRoute("/api/iterations")).toEqual({ view: "iterations" });
-    expect(resolveDashboardRoute("/api/roadmap")).toEqual({ view: "roadmap" });
     expect(resolveDashboardRoute("/api/projects")).toEqual({ view: "projects" });
     // The aggregated read is a list-shaped route with a `project` filter: it has
     // no detail form, so its path takes no id decode.
@@ -165,7 +164,6 @@ describe("query-parameter refusals", () => {
     });
     expect(dashboardFilters("workflows", { project: "proj-a", limit: "2", offset: "0" })).toEqual({ projectId: "proj-a", limit: 2, offset: 0 });
     expect(dashboardFilters("iteration-detail", {}, "iter-read")).toEqual({ id: "iter-read" });
-    expect(dashboardFilters("roadmap", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
     expect(dashboardFilters("projects", {})).toEqual({});
     for (const params of [{ limit: "2" }, { offset: "0" }, { project: "p" }]) {
       expect(() => dashboardFilters("projects", params)).toThrow(/not a supported projects query parameter/);
@@ -186,8 +184,7 @@ describe("query-parameter refusals", () => {
       [() => dashboardFilters("issues", { unknown: "1" }), /not a supported issues query parameter/],
       [() => dashboardFilters("issues", { project: "../elsewhere" }), /single safe id/],
       [() => dashboardFilters("issue-detail"), /requires an id/],
-      [() => dashboardFilters("roadmap"), /requires a project query parameter/],
-      [() => dashboardFilters("roadmap", { disposition: "open" }), /not a supported roadmap query parameter/],
+      [() => dashboardFilters("projects", { project: "proj-a" }), /not a supported projects query parameter/],
     ];
     for (const [run, message] of cases) {
       expect(run).toThrow(message);
@@ -289,27 +286,14 @@ describe("dashboard views over a real store", () => {
     expect(other.buckets).toEqual([]);
   });
 
-  test("roadmap is read from authority and does not depend on a projection generation", async () => {
+  test("the retired roadmap view is an unknown dashboard view", async () => {
     const { context } = await workspace("roadmap-authority-");
-    const registration = await registerCatalogEntity(context, {
+    await registerCatalogEntity(context, {
       kind: "project", id: "proj-roadmap", title: "Roadmap", rootKind: "projects", relativePath: "proj-roadmap",
     }, { operationId: "register-roadmap", actor: "store-read-test" });
-    const contentMarkdown = "---\nproject_id: proj-roadmap\ntitle: Authority\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nStored independently.\n";
-    await replaceRoadmapAuthority(context, {
-      projectId: "proj-roadmap",
-      expectedProjectRevision: registration.revision,
-      expectedRoadmapRevision: "absent",
-      contentMarkdown,
-    }, { operationId: "create-roadmap" });
-
-    const result = await readDashboardView({ context, view: "roadmap", params: { project: "proj-roadmap" } });
-    const dto = result.data as RoadmapDTO;
-    expect(dto.authority.state).toBe("present");
-    expect(dto.content?.contentMarkdown).toBe(contentMarkdown);
-    expect(dto.content?.direction).toContain("Stored independently.");
-    expect(result.projection.freshness).toBe("unavailable");
-    const missing = await readDashboardView({ context, view: "roadmap", params: { project: "proj-unknown" } });
-    expect(missing.data).toBeNull();
+    await expect(readDashboardView({ context, view: "roadmap" as never, params: { project: "proj-roadmap" } })).rejects.toMatchObject({
+      exitCode: 2,
+    });
   });
 
   test("projection views answer the published generation and disclose it", async () => {
@@ -339,10 +323,8 @@ describe("dashboard views over a real store", () => {
     const iterations = await readDashboardView({ context, view: "iterations" });
     expect(iterations.data as IterationListDTO).toEqual({ items: [], total: 0, attribution: "absent" });
 
-    const roadmap = await readDashboardView({ context, view: "roadmap", params: { project: "proj-absent" } });
-    expect(roadmap.data as RoadmapDTO | null).toBeNull();
-    // note: Roadmap authority is the lane's, so this view has no execution projection.
-    expect(roadmap.projection.freshness).toBe("unavailable");
+    // note: The retired roadmap view is not a view any more: it refuses as an unknown view.
+    await expect(readDashboardView({ context, view: "roadmap" as never })).rejects.toMatchObject({ exitCode: 2 });
   });
 
   test("a missing or staged authority fails with a structured code, never an empty page", async () => {

@@ -237,7 +237,6 @@ const milestoneDocument = z.object({
   updatedAt: rfc3339,
 }).strict();
 
-const roadmapDocument = z.object({ contentMarkdown: z.string(), revision: z.number().int().positive(), updatedAt: rfc3339 }).strict();
 
 const catalogEntityDocument = z.object({
   kind: z.enum(["project", "iteration", "plan", "document"]),
@@ -261,7 +260,6 @@ const catalogLinkDocument = z.object({
 const projectDocument = z.object({
   projectId: z.string(),
   milestones: z.array(milestoneDocument),
-  roadmap: roadmapDocument.nullable(),
   catalogEntities: z.array(catalogEntityDocument),
   catalogLinks: z.array(catalogLinkDocument),
 }).strict();

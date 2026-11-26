@@ -1796,6 +1796,28 @@ describe("remote read boundary", () => {
     });
   });
 
+  test("a project.roadmap member is refused by path, and its absence is the only accepted shape", async () => {
+    const { context, commit, check } = await boundScope("remote-roadmap-removal");
+    const document = JSON.parse(
+      JSON.stringify(submission(commit, check, completeSnapshot(check), 1)),
+    ) as Record<string, unknown>;
+    // invariant: The retired member is refused by name at its own path, and the published
+    // descriptor refuses it too - the shape was revised in place, so `version` stays 1.
+    expect(document.version).toBe(1);
+    const withRoadmap = JSON.parse(JSON.stringify(document)) as {
+      snapshot: { project: Record<string, unknown> };
+    };
+    withRoadmap.snapshot.project.roadmap = { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: RECORDED_AT };
+    expect(remoteObserveDocumentSchema.safeParse(withRoadmap).success).toBe(false);
+    await expect(ingestRemoteObservation(context, withRoadmap as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining("submission.snapshot.project.roadmap: is not a contract field"),
+    });
+    // invariant: Without the member the same document is accepted.
+    expect(remoteObserveDocumentSchema.safeParse(document).success).toBe(true);
+    expect(await ingestRemoteObservation(context, document as never)).toBeDefined();
+  });
+
   test("a milestone document carrying target or an invalid effortSessions is refused, and a valid effortSessions is admitted", async () => {
     const { context, commit, check } = await boundScope("remote-milestone-effort");
     // note: The snapshot's milestone row is readonly, so a case that changes it submits a whole

@@ -701,7 +701,6 @@ describe("remote collaboration CLI", () => {
         head: ["1".repeat(64)],
         binding: scope,
         milestones: [],
-        roadmap: null,
         catalogEntities: [
           { kind: "project", id: remoteIds.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
         ],

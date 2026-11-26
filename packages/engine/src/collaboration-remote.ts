@@ -175,8 +175,6 @@ export type RemoteMilestone = Readonly<{
   updatedAt: string;
 }>;
 
-export type RemoteRoadmap = Readonly<{ contentMarkdown: string; revision: number; updatedAt: string }>;
-
 export type RemoteCatalogEntity = Readonly<{
   kind: "project" | "iteration" | "plan" | "document";
   id: string;
@@ -228,7 +226,6 @@ export type RemoteSnapshotProject = Readonly<{
   head: readonly string[] | null;
   binding: ProviderProjectScope;
   milestones: readonly RemoteMilestone[];
-  roadmap: RemoteRoadmap | null;
   catalogEntities: readonly RemoteCatalogEntity[];
   catalogLinks: readonly RemoteCatalogLink[];
 }>;
@@ -653,17 +650,6 @@ function milestone(value: unknown, path: string): RemoteMilestone {
   };
 }
 
-function roadmap(value: unknown, path: string): RemoteRoadmap | null {
-  if (value === null) return null;
-  const body = record(value, path);
-  if (typeof body.contentMarkdown !== "string") invalid(`${path}.contentMarkdown`, "must be a string");
-  return {
-    contentMarkdown: body.contentMarkdown,
-    revision: positiveInteger(body.revision, `${path}.revision`),
-    updatedAt: instant(body.updatedAt, `${path}.updatedAt`),
-  };
-}
-
 const CATALOG_KINDS = ["project", "iteration", "plan", "document"] as const;
 const CATALOG_RELATIONS = [
   "belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes",
@@ -1078,6 +1064,10 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
       `The snapshot describes project ${projectId}, but this submission addresses ${check.projectId}. Nothing was written.`,
     );
   }
+  // invariant: The project document's members are the contract's own. The retired `roadmap` member
+  // is refused by name at its path, and its absence is the only accepted shape - the shape was
+  // revised in place, so the submission stays `version: 1`.
+  allowOnly(project, "submission.snapshot.project", ["projectId", "head", "binding", "milestones", "catalogEntities", "catalogLinks"]);
   const binding = projectScope(project.binding, "submission.snapshot.project.binding");
   if (!sameScope(binding, check.scope)) {
     throw new StoreError(
@@ -1133,7 +1123,6 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
       head: project.head === null ? null : digestHead(project.head, "submission.snapshot.project.head"),
       binding,
       milestones,
-      roadmap: roadmap(project.roadmap, "submission.snapshot.project.roadmap"),
       catalogEntities,
       catalogLinks,
     },
@@ -2669,7 +2658,7 @@ function frozenProjectSubject(value: unknown, path: string, projectKey: string, 
   const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
-  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"], errors);
+  allowOnly(body, path, ["projectId", "milestones", "catalogEntities", "catalogLinks"], errors);
   const projectId = collected(errors, () => text(body.projectId, `${path}.projectId`), "");
   if (projectId !== "" && projectId !== projectKey) {
     const message = `${path}.projectId: must be the event's project`;
@@ -2706,7 +2695,6 @@ function frozenProjectSubject(value: unknown, path: string, projectKey: string, 
   return {
     projectId,
     milestones,
-    roadmap: collected(errors, () => roadmap(body.roadmap, `${path}.roadmap`), null),
     catalogEntities,
     catalogLinks: collected(errors, () => list(body.catalogLinks, `${path}.catalogLinks`), []).map((entry, index) =>
       collected(errors, () => catalogLink(entry, `${path}.catalogLinks[${index}]`), {} as unknown as RemoteCatalogLink),
@@ -6111,7 +6099,7 @@ export type RemoteProjectWrite = Readonly<{
 }>;
 
 /**
- * Freeze one ordinary PROJECT-JOURNAL change (milestones, roadmap, portable catalog) as a
+ * Freeze one ordinary PROJECT-JOURNAL change (milestones, portable catalog) as a
  * durable remote intent against the observed journal head. Never a local SQL effect.
  */
 export async function prepareRemoteProjectWrite(context: StoreContext, write: RemoteProjectWrite): Promise<RemoteIntent> {
@@ -6134,7 +6122,6 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
   const current = {
     projectId,
     milestones: scope.snapshot.project.milestones,
-    roadmap: scope.snapshot.project.roadmap,
     catalogEntities: scope.snapshot.project.catalogEntities,
     catalogLinks: scope.snapshot.project.catalogLinks,
   };

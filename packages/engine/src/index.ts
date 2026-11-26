@@ -132,7 +132,6 @@ export type {
   RemotePendingIntent,
   RemotePendingIntents,
   RemoteProjectStatus,
-  RemoteRoadmap,
   RemoteSnapshot,
   RemoteAdoptionRequest,
   RemoteDispatchPermit,
