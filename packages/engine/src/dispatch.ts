@@ -45,7 +45,7 @@
  * never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { assignmentSourceHomes, canonicalizeNearestExisting } from "./path.js";
 import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
@@ -69,6 +69,15 @@ export type AssignmentFields = {
   delegation?: string;
   taskCategory?: string;
   /** `execution_mode` — sdd / inline / targeted (presence captured here; the N mapping is {@link executionModeToN}). */
+  /**
+   * Parallel `working_branch` declarations (dsh parallel tracks): a string
+   * list accepted alongside the scalar form. The scalar `workingBranch`
+   * keeps the single value; when the key is a list the scalar is undefined
+   * and every branch lives here. Never set for scalar input.
+   */
+  workingBranches?: string[];
+  /** Parallel `worktree_path` declarations — same shape rule as {@link AssignmentFields.workingBranches}. */
+  worktreePaths?: string[];
   executionMode?: string;
   workingBranch?: string;
   worktreePath?: string;
@@ -100,7 +109,6 @@ export type AssignmentFields = {
    */
   taskBudget?: string;
 };
-
 export type ValidateAssignmentFieldsOptions = {
   /**
  * Whether the assignment produces repo diffs (default `true`). The
@@ -109,6 +117,21 @@ export type ValidateAssignmentFieldsOptions = {
  * branch fields per mstar-branch-worktree ("每个可写 Assignment…").
  */
   writable?: boolean;
+
+  /**
+   * True when the text came from a RESOLVED assignment file carrier (compass
+   * D14 pointer): an explicit pointer commits to the Assignment contract, so
+   * validation must run even when the document carries no recognizable core
+   * key — a silent non-Assignment pass is reserved for inline prompts.
+   */
+  fileCarrier?: boolean;
+  /**
+   * Already-parsed front matter entries of this document (map form of
+   * `parseDocumentFrontmatterEntries`; `null` for invalid YAML): reuse one
+   * parse per decision instead of reparsing. Public text-API behavior is
+   * unchanged when omitted.
+   */
+  entries?: Map<string, FrontmatterEntry> | null;
 };
 
 /** Options for {@link assertDefaultBranchProtected}. */
@@ -298,9 +321,9 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
  * consumers, host loaders). A document must go through {@link
  * parseAssignmentFields} so body text can never declare a field. Never
  * throws: invalid block YAML yields no fields. */
-export function parseAssignmentFieldsFromFrontmatter(frontmatter: string): AssignmentFields {
+export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<string, FrontmatterEntry> | null): AssignmentFields {
   const fields: AssignmentFields = {};
-  const entries = safeEntries(frontmatter);
+  const entries = typeof frontmatter === "string" ? safeEntries(frontmatter) : frontmatter;
   if (entries === null) return fields;
   const scalar = (key: string): string | undefined => {
     const entry = entries.get(key);
@@ -331,6 +354,18 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string): Assig
   fields.budget = scalar("budget");
   fields.returnShape = scalar("return_shape");
   fields.taskBudget = scalar("task_budget");
+  // Parallel-track declarations (dsh): a `working_branch` / `worktree_path`
+  // string list (flow array or `- item` block list) is the schema-owned
+  // parallel shape — the scalar field stays for the single value, the flat
+  // string list is projected here. Non-string items drop out.
+  const branchesEntry = entries.get("working_branch");
+  if (Array.isArray(branchesEntry?.value)) {
+    fields.workingBranches = branchesEntry.value.filter((item): item is string => typeof item === "string");
+  }
+  const worktreesEntry = entries.get("worktree_path");
+  if (Array.isArray(worktreesEntry?.value)) {
+    fields.worktreePaths = worktreesEntry.value.filter((item): item is string => typeof item === "string");
+  }
   return fields;
 }
 
@@ -391,13 +426,17 @@ export function parseEnforcementFlag(text: string): EnforcementFlag {
  * block read under the `flat` contract must not lose its flag to the
  * stricter `document` profile. Never throws.
  */
-export function parseEnforcementFlagFromFrontmatter(frontmatter: string, profile: FrontmatterProfile = "document"): EnforcementFlag {
-  const entries = safeEntries(frontmatter, profile);
+export function parseEnforcementFlagFromFrontmatter(frontmatter: string | Map<string, FrontmatterEntry> | null, profile: FrontmatterProfile = "document"): EnforcementFlag {
+  const entries = typeof frontmatter === "string" ? safeEntries(frontmatter, profile) : frontmatter;
   if (entries === null) return { hard: false, source: "none" };
   const entry = entries.get("enforcement");
   if (entry === undefined) return { hard: false, source: "none" };
   const value = scalarOf(entry.value) ?? "";
-  const source: EnforcementSource = ASSIGNMENT_FIELD_RE.test(frontmatter) ? "assignment" : "compass";
+  // The parsed entries are the single source of the source attribution:
+  // invalid YAML already returned above, so a key presence check is exactly
+  // the `ASSIGNMENT_FIELD_RE` line match without a second regex pass.
+  const source: EnforcementSource =
+    entries.has("execute_as") || entries.has("delegation") || entries.has("task_category") ? "assignment" : "compass";
   return { hard: value.toLowerCase() === "hard", source };
 }
 
@@ -479,17 +518,19 @@ function parseWorkingBranchValue(
 }
 
 /**
- * Parse an Assignment's branch forms via the engine's single parser
- * (`parseAssignmentFields` + {@link parseWorkingBranchValue}). Consumed by
- * the CLI `dispatch validate` gate-branch derivation and the opencode hook;
- * also the internal grammar behind `validateAssignmentFields`. Input may be
- * the whole dispatch — the header scope is inherited from
- * {@link parseAssignmentFields}. */
-export function parseAssignmentBranchForms(assignmentText: string): AssignmentBranchForms {
-  const fields = parseAssignmentFields(assignmentText);
+ * Branch forms derived from ALREADY-PARSED assignment fields — the shared
+ * grammar behind {@link parseAssignmentBranchForms} and every composed
+ * decision (one parse per decision: no text re-scan here).
+ */
+function branchFormsFromFields(fields: AssignmentFields): AssignmentBranchForms {
   const forms: AssignmentBranchForms = {};
-  if (fields.workingBranch !== undefined && fields.workingBranch !== "") {
-    const parsed = parseWorkingBranchValue(fields.workingBranch);
+  // Parallel tracks: the scalar field is undefined when the key is a list;
+  // the first list entry feeds the create-form/direct-on shape checks while
+  // presence validation reads `workingBranches` directly (the list is the
+  // schema-owned parallel shape, never a branch-multiple violation).
+  const branchValue = fields.workingBranch ?? (fields.workingBranches !== undefined && fields.workingBranches.length > 0 ? fields.workingBranches[0] : undefined);
+  if (branchValue !== undefined && branchValue !== "") {
+    const parsed = parseWorkingBranchValue(branchValue);
     if (parsed.createForm !== undefined) forms.createForm = parsed.createForm;
     else forms.workingBranch = parsed.workingBranch;
   }
@@ -505,6 +546,16 @@ export function parseAssignmentBranchForms(assignmentText: string): AssignmentBr
   return forms;
 }
 
+/**
+ * Parse an Assignment's branch forms via the engine's single parser
+ * (`parseAssignmentFields` + {@link parseWorkingBranchValue}). Consumed by
+ * the CLI `dispatch validate` gate-branch derivation and the opencode hook;
+ * also the internal grammar behind `validateAssignmentFields`. Input may be
+ * the whole dispatch — the header scope is inherited from
+ * {@link parseAssignmentFields}. */
+export function parseAssignmentBranchForms(assignmentText: string): AssignmentBranchForms {
+  return branchFormsFromFields(parseAssignmentFields(assignmentText));
+}
 /**
  * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
  * exception branch. Returns the branch ONLY for the well-formed direct-on
@@ -555,6 +606,24 @@ export function isReadOnlyAssignmentRole(roleId: string): boolean {
  * the `**Task**:` line's own prose), and a quoted front matter key in the
  * body must not satisfy a gate the Assignment front matter left open. */
 export function validateAssignmentFields(assignmentText: string, opts: ValidateAssignmentFieldsOptions = {}): GateResult {
+  // Pointer provenance: an explicit `Assignment file:` carrier commits to
+  // the Assignment contract — a readable but unshaped file is ONE invalid
+  // Assignment with the front matter recovery, never a silent non-Assignment
+  // pass and never a pile of field violations against a document that
+  // declared no field at all.
+  if (opts.fileCarrier === true && !isAssignmentShaped(assignmentText)) {
+    return {
+      ok: false,
+      violations: [
+        violation(
+          "high",
+          "dispatch.assignment.shape",
+          "the assignment file does not declare Assignment front matter \u2014 a file named by an `Assignment file:` pointer must be an Assignment document",
+          "rewrite the assignment file as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / delegation / task_category), or pass the assignment inline instead of a pointer",
+        ),
+      ],
+    };
+  }
   const violations: ValidationResult[] = [];
   // The document schema owns structural/declaration failures (unknown keys,
   // enum and type shape, duplicate keys, YAML parse refusals, the absent
@@ -562,12 +631,16 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // same front matter read. Schema `missing`/branch-declaration rows are
   // dropped — dispatch reports those exact conditions with its own codes
   // (requireField / the branch-form gates), so a merge would double-count.
+  // One parse per decision: when the caller passes already-parsed entries
+  // the schema layer reuses them (no second front-matter parse); invalid
+  // YAML (entries `null`) re-runs the schema parse so the refusal reports.
+  const extraction = extractFrontmatterAndBody(assignmentText);
   violations.push(
-    ...validateDocumentFrontmatterExtraction("assignment", extractFrontmatterAndBody(assignmentText), "assignment").violations.filter(
+    ...validateDocumentFrontmatterExtraction("assignment", extraction, "assignment", opts.entries === undefined ? {} : { entries: opts.entries }).violations.filter(
       (schemaViolation) => schemaViolation.code !== "document.frontmatter.missing" && !schemaViolation.message.includes("invalid branch declaration"),
     ),
   );
-  const fields = parseAssignmentFields(assignmentText);
+  const fields = opts.entries !== undefined ? parseAssignmentFieldsFromFrontmatter(opts.entries) : parseAssignmentFields(assignmentText);
   const writable = opts.writable !== false;
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
@@ -577,11 +650,11 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
       `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "write_domain: control" or "write_domain: work" in the Assignment front matter'));
   }
   if (fields.writeDomain === "control") {
-    if (describeAbsence(fields.worktreePath) !== undefined) {
+    if (describeAbsence(fields.worktreePath) !== undefined && !(fields.worktreePaths !== undefined && fields.worktreePaths.some((path) => path.trim() !== ""))) {
       violations.push(violation("high", "assignment.field.control-write-missing-worktree",
         "control-domain assignment requires Worktree path", 'add "worktree_path: <control checkout path>" to the Assignment front matter'));
     }
-    if (describeAbsence(fields.workingBranch) !== undefined && describeAbsence(fields.branchPolicy) !== undefined) {
+    if (describeAbsence(fields.workingBranch) !== undefined && !(fields.workingBranches !== undefined && fields.workingBranches.some((branch) => branch.trim() !== "")) && describeAbsence(fields.branchPolicy) !== undefined) {
       violations.push(violation("high", "assignment.field.control-write-missing-branch",
         "control-domain assignment requires a branch form", `add exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`));
     }
@@ -662,10 +735,14 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   }
 
   if (writable) {
-    const workingPresent = fields.workingBranch !== undefined && fields.workingBranch !== "";
+    // The schema-owned parallel shape: `working_branch` as a string list —
+    // presence comes from the projected list while the scalar stays the
+    // single value; the list is never a second branch form.
+    const listPresent = fields.workingBranches !== undefined && fields.workingBranches.some((branch) => branch.trim() !== "");
+    const workingPresent = (fields.workingBranch !== undefined && fields.workingBranch !== "") || listPresent;
     const policyPresent = fields.branchPolicy !== undefined && fields.branchPolicy !== "";
     const formCount = Number(workingPresent) + Number(policyPresent);
-    const forms = parseAssignmentBranchForms(assignmentText);
+    const forms = branchFormsFromFields(fields);
 
     if (formCount === 0) {
       violations.push(
@@ -731,7 +808,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 /** Verify control-domain writes against the Git-derived main checkout. */
 export function validateControlWriteAssignment(
   text: string,
-  opts: { cwd?: string; assignmentDir?: string; controlRoot?: string } = {},
+  opts: { cwd?: string; assignmentDir?: string; controlRoot?: string; fields?: AssignmentFields; forms?: AssignmentBranchForms } = {},
 ): ValidationResult[] {
   const cwd = opts.cwd ?? process.cwd();
   const unresolved = violation("high", "dispatch.control-write.control-root-unresolved",
@@ -742,8 +819,8 @@ export function validateControlWriteAssignment(
     if (main === null) return [unresolved];
     const controlRoot = canonicalizeNearestExisting(main.root);
     if (opts.controlRoot !== undefined && canonicalizeNearestExisting(opts.controlRoot) !== controlRoot) return [unresolved];
-    const fields = parseAssignmentFields(text);
-    const forms = parseAssignmentBranchForms(text);
+    const fields = opts.fields ?? parseAssignmentFields(text);
+    const forms = opts.forms ?? parseAssignmentBranchForms(text);
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
     const violations: ValidationResult[] = [];
     const worktree = fields.worktreePath && fields.worktreePath !== "N/A"
@@ -923,6 +1000,57 @@ function isAssignmentShaped(assignmentText: string): boolean {
 }
 
 /**
+ * Shape-guard match of a retired body-label core field in ANY of its three
+ * forms — a plain `Execute as:` line, a bold `**Execute as**:` line, or a
+ * list-prefixed `- **Execute as**:` line (indentation and a numeric or
+ * bullet list marker are formatting, never the field). Detection ONLY:
+ * it never reads a field value. The ONE engine-owned copy of the retired
+ * grammar (compass D16); hosts and the CLI call this instead of keeping
+ * their own regex copies.
+ */
+function legacyLabelKey(line: string): string | undefined {
+  const match = /^[ \t]*(?:(?:\d+[.)]|[-+*])[ \t]+)?(?:\*\*[ \t]*)?(Execute as|Delegation|Task category|Working branch|Branch policy|Execution mode|Write domain|Worktree path)[ \t]*(?:\*\*)?[ \t]*:/.exec(line);
+  return match?.[1];
+}
+
+/**
+ * D16 shape detection: true when the document carries its fields in the
+ * RETIRED body-label grammar — at least TWO distinct core labels, so a
+ * single bolded field line in ordinary prose never shapes a document as
+ * an Assignment; the `## Assignment` heading is irrelevant either way. A
+ * fenced front matter document is never legacy-shaped. The ONE engine
+ * export of this recognition — shape-only, prose-safe semantics; it never
+ * reads field values.
+ */
+export function legacyAssignmentShape(text: string): boolean {
+  if (/^---[ \t]*\r?\n/.test(text)) return false;
+  const found = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    const key = legacyLabelKey(line);
+    if (key !== undefined) found.add(key);
+    if (found.size >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * Build the ONE D16 legacy-format refusal violation (compass D16; front
+ * matter is the only field contract). The fix names BOTH recoveries — the
+ * front matter rewrite and the `Assignment file:` pointer — and the pointer
+ * must target a REWRITTEN front-matter assignment, not the same invalid
+ * bytes. Hosts and the CLI call this builder instead of formatting their
+ * own copies.
+ */
+export function legacyFormatViolation(): ValidationResult {
+  return violation(
+    "high",
+    "dispatch.assignment.legacy-format",
+    "the Assignment carries its fields as `**Label**` body lines \u2014 the retired format; front matter is the only field contract",
+    "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home pointing at the rewritten document",
+  );
+}
+
+/**
  * Options for {@link composeDispatchGate}.
  */
 export type ComposeDispatchGateOptions = {
@@ -952,6 +1080,15 @@ export type ComposeDispatchGateOptions = {
   writable?: boolean;
   /** Checkout from which to discover the control worktree. */
   cwd?: string;
+  /**
+   * Pointer provenance (compass D14): `true` when `text` is the content of
+   * a resolved `Assignment file:` carrier (`AssignmentSourceResult.path`
+   * was set). A file carrier commits to the Assignment contract — empty or
+   * unrelated file content validates as an invalid Assignment with the
+   * front matter recovery; the silent non-Assignment pass is reserved for
+   * genuinely unshaped inline prompts.
+   */
+  fileCarrier?: boolean;
 };
 
 /**
@@ -1003,18 +1140,30 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     enforcement: { hard: false, source: "none" },
   };
   try {
-    if (!isAssignmentShaped(text)) return silent;
+    const fileCarrier = opts.fileCarrier === true;
+    const shaped = isAssignmentShaped(text);
+    if (!shaped && !fileCarrier) return silent;
 
     const violations: ValidationResult[] = [];
     const writable = opts.writable !== false;
+
+    // One parse per decision: the document front matter is parsed ONCE here
+    // and the entries are reused by schema validation, field parsing, the
+    // enforcement read and every gate below — never reparsed per leg.
+    const { yaml } = assignmentFrontmatter(text);
+    const entries = safeEntries(yaml);
+    const fields = parseAssignmentFieldsFromFrontmatter(entries);
+    const forms = branchFormsFromFields(fields);
 
  // (2) Engine full field validation — read-only roles skip the branch-form gate.
     // Every field/branch read below (and in the validator) is front
     // matter-scoped by the parsers themselves (`parseAssignmentFields` /
     // `parseAssignmentBranchForms` slice the front matter), so passing the
     // whole dispatch here is safe by construction: a field quoted in the
-    // task body can neither satisfy nor disable a gate.
-    violations.push(...validateAssignmentFields(text, { writable }).violations);
+    // task body can neither satisfy nor disable a gate. `fileCarrier` marks
+    // a resolved `Assignment file:` carrier: its content must validate as an
+    // Assignment even when no core key is recognized.
+    violations.push(...validateAssignmentFields(text, { writable, fileCarrier, entries }).violations);
 
  // (3) Anti-recursion NEVER red line — CALLER identity vs the dispatch's
  // `Execute as` (issue #156: the spawn-target binding omp/opencode/cursor
@@ -1024,20 +1173,19 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
  // host contract makes that binding mandatory (`callerRequired`, dsh).
     const caller = opts.caller ?? "";
     if (caller.trim() !== "" || opts.callerRequired === true) {
-      violations.push(...antiRecursionPrecheck(caller, parseAssignmentFields(text).executeAs ?? "").violations);
+      violations.push(...antiRecursionPrecheck(caller, fields.executeAs ?? "").violations);
     }
 
  // (4) Default-branch gate for writable text — branch from the
  // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
  // shared by all adapters / ).
-    if (writable && parseAssignmentFields(text).writeDomain === "control") {
-      violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd }));
+    if (writable && fields.writeDomain === "control") {
+      violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd, fields, forms }));
     } else if (writable) {
-      const forms = parseAssignmentBranchForms(text);
       const branch =
         forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
       if (branch !== undefined && branch.trim() !== "") {
-        const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
+        const directOnException = forms.directOn !== undefined && forms.directOn.reason !== "" && forms.directOn.branch === branch.trim();
         violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
       }
     }
@@ -1056,12 +1204,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     }
 
  // (5) Front matter only: an example `enforcement: hard` key quoted in the
-     // task body must not harden the dispatch. The source attribution is
-     // assignment/compass-shaped by the document — the full text is passed so
-     // an Assignment-shaped document reports source "assignment".
-    const enforcement = parseEnforcementFlag(text);
+     // task body must not harden the dispatch. The enforcement read reuses
+     // the decision's single parse (entries) instead of reparsing the text.
+    const enforcement = parseEnforcementFlagFromFrontmatter(entries);
     const gate: GateResult = { ok: violations.length === 0, violations };
-    return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped: true, enforcement };
+    return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped, enforcement };
   } catch {
     return silent;
   }
@@ -1133,7 +1280,11 @@ const ASSIGNMENT_SOURCE_RECOVERY =
   "move the assignment file under an accepted assignment home (`<base>/<identity>/assignments` of the sdd, iteration or workflow base, or `{HARNESS_DIR}/assignments`), or pass the assignment inline as a front-matter document instead of a pointer";
 
 function assignmentSourceRefusal(code: string, message: string, fix: string): AssignmentSourceResult {
-  return { ok: false, severity: "critical", code, message, fix };
+  // Terminal by contract: a source-resolution refusal means there is no
+  // verified assignment to dispatch on, so it is a veto for every caller
+  // independent of enforcement settings — no enforcement hardening step is
+  // needed and none may soften it.
+  return { ok: false, severity: "critical", code, message, fix, terminal: true };
 }
 
 /**
@@ -1150,7 +1301,12 @@ function assignmentSourceRefusal(code: string, message: string, fix: string): As
 function assignmentHomeContains(file: string, home: { root: string; write: boolean }): boolean {
   const root = canonicalizeNearestExisting(home.root);
   const relativePath = relative(root, file);
-  if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) return false;
+  // Reader/writer agreement: only the exact parent segment escapes the home.
+  // The writer (`assertSafePathComponent`) accepts a one-segment identity
+  // beginning with two dots (`..draft`) as long as it is not the exact `..`
+  // segment, so the reader rejects only `..` itself or `..` followed by the
+  // platform separator — never an ordinary leading-dot child name.
+  if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return false;
   if (!home.write) return true;
   const segments = relativePath.split(sep);
   return segments.length >= 3 && segments[1] === "assignments";
@@ -1173,11 +1329,18 @@ function assignmentHomeContains(file: string, home: { root: string; write: boole
 export function readAssignmentSource(text: string, opts: { harnessDir: string | null }): AssignmentSourceResult {
   const pointerMatch = ASSIGNMENT_POINTER_RE.exec(text);
   if (pointerMatch === null) return { ok: true, text };
+  // Ambiguity narrowing: a body line starting with `Assignment file:` makes
+  // the input ambiguous ONLY when the input is itself that pointer form —
+  // the remainder must be whitespace or an Assignment-shaped inline body.
+  // A pointer line merely quoted inside ordinary inline content (prose, an
+  // example) never invokes the pointer semantics: the input passes through
+  // as the inline text it is.
   if (text.replace(pointerMatch[0], "").trim() !== "") {
+    if (!isAssignmentShaped(text.replace(pointerMatch[0], ""))) return { ok: true, text };
     return assignmentSourceRefusal(
       "dispatch.assignment.ambiguous",
-      `assignment source is ambiguous: an \`Assignment file:\` pointer appears alongside inline content`,
-      "choose ONE source form \u2014 drop the inline body and keep the pointer, or drop the pointer and pass the assignment inline",
+      `assignment source is ambiguous: an \`Assignment file:\` pointer appears alongside an inline assignment document`,
+      "choose ONE source form \u2014 drop the inline body and keep the pointer, or drop the pointer and pass the assignment inline (a pointer line quoted inside ordinary inline content is inert and needs no action)",
     );
   }
   const pointer = pointerMatch[1];
@@ -1203,15 +1366,37 @@ export function readAssignmentSource(text: string, opts: { harnessDir: string | 
       ASSIGNMENT_SOURCE_RECOVERY,
     );
   }
+  // Regular-file guard before any byte read (check-then-use closure): open
+  // the canonical path once with O_NOFOLLOW — a FIFO would otherwise block
+  // the synchronous dispatch path forever and a post-containment symlink
+  // swap would escape the check. fstat the OPEN descriptor (the same inode
+  // the bytes come from): a non-regular target refuses with the path
+  // recovery; the descriptor is closed on every outcome.
   let content: string;
+  let fd: number | undefined;
   try {
-    content = readFileSync(file, "utf8");
+    // O_NONBLOCK matters for the guard itself: a plain O_RDONLY open of a
+    // FIFO blocks waiting for a writer, so the type check would never run.
+    // O_NOFOLLOW is POSIX-only; on Windows the canonical path already
+    // resolved every link, and non-regular targets still fail fstat.
+    const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(file, flags);
+    if (!fstatSync(fd).isFile()) {
+      return assignmentSourceRefusal(
+        "dispatch.assignment.path",
+        `assignment pointer ${pointer} does not resolve to a regular file \u2014 got ${file}`,
+        ASSIGNMENT_SOURCE_RECOVERY,
+      );
+    }
+    content = readFileSync(fd, "utf8");
   } catch (error) {
     return assignmentSourceRefusal(
       "dispatch.assignment.path",
       `assignment file ${file} cannot be read (${(error as NodeJS.ErrnoException).code ?? "unknown error"})`,
       ASSIGNMENT_SOURCE_RECOVERY,
     );
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
   return { ok: true, text: content, path: file };
 }

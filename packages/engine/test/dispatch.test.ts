@@ -62,10 +62,14 @@ import {
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   parseEnforcementFlagFromFrontmatter,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   validateAssignmentFields,
   readAssignmentSource,
 } from "../src/dispatch.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
+import { parseDocumentFrontmatterEntries } from "../src/document-frontmatter.js";
+import { resolveAssignmentDir } from "../src/path.js";
 
 /** snake_case keys the fixture builder emits; arrays become YAML block lists. */
 type FixtureValue = string | string[] | undefined;
@@ -1846,5 +1850,279 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
     expect(loose.ok).toBe(false);
     if (loose.ok) throw new Error("unreachable");
     expect(loose.message).toContain("outside every accepted assignment home");
+  });
+});
+
+describe("composeDispatchGate — pointer provenance (resolved file carrier)", () => {
+  const cwd = gateFixture({ prefix: "dispatch-file-carrier-", harness: true });
+  afterAll(() => rmSync(cwd, { recursive: true, force: true }));
+
+  test("an empty pointed file refuses as an invalid Assignment, never a silent non-Assignment", () => {
+    const result = composeDispatchGate("", { cwd, fileCarrier: true });
+    expect(result.ok).toBe(false);
+    expect(result.shaped).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["dispatch.assignment.shape"]);
+    const shape = result.violations[0]!;
+    expect(shape.severity).toBe("high");
+    expect(shape.fix).toContain("front-matter");
+    expect(shape.fix).toContain("pointer");
+  });
+
+  test("a pointed file of unrelated prose refuses with the same front-matter recovery", () => {
+    const prose = "please refactor the parser and send a summary\n";
+    const result = composeDispatchGate(prose, { cwd, fileCarrier: true });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toEqual(["dispatch.assignment.shape"]);
+  });
+
+  test("the same prose WITHOUT the carrier flag stays a silent inline non-Assignment", () => {
+    const result = composeDispatchGate("please refactor the parser and send a summary\n", { cwd });
+    expect(result).toMatchObject({ ok: true, shaped: false, violations: [] });
+  });
+
+  test("a pointed valid Assignment validates normally (no shape refusal, one parse)", () => {
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { cwd, fileCarrier: true });
+    expect(result.shaped).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("a pointed legacy body-label file refuses legacy-format, not a silent pass", () => {
+    const legacy = "**Execute as**: fullstack-dev\n**Delegation**: forbidden\n";
+    const result = composeDispatchGate(legacy, { cwd, fileCarrier: true });
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((v) => v.code)).toContain("dispatch.assignment.shape");
+  });
+});
+
+describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recognizer", () => {
+  test("two distinct core labels are the retired shape", () => {
+    expect(legacyAssignmentShape("**Execute as**: fullstack-dev\n**Delegation**: forbidden\n")).toBe(true);
+  });
+
+  test("one core label in prose is not the retired shape", () => {
+    expect(legacyAssignmentShape("please note the Execute as: field below\n")).toBe(false);
+  });
+
+  test("a fenced front matter document is never legacy-shaped", () => {
+    expect(legacyAssignmentShape(`${VALID_ASSIGNMENT}\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n`)).toBe(false);
+  });
+
+  test("the violation names both recoveries and the rewritten-target rule", () => {
+    const v = legacyFormatViolation();
+    expect(v.code).toBe("dispatch.assignment.legacy-format");
+    expect(v.severity).toBe("high");
+    expect(v.fix).toContain("front-matter");
+    expect(v.fix).toContain("Assignment file:");
+    expect(v.fix).toContain("rewritten");
+  });
+});
+
+describe("parallel track declarations — schema-owned list shape", () => {
+  test("a two-branch list passes the branch-form gate with neither missing nor multiple", () => {
+    const text = assignment({ working_branch: ["feature/a", "feature/b"] });
+    const fields = parseAssignmentFields(text);
+    expect(fields.workingBranches).toEqual(["feature/a", "feature/b"]);
+    expect(fields.workingBranch).toBeUndefined();
+    const result = validateAssignmentFields(text);
+    expect(result.violations.some((v) => v.code.startsWith("assignment.field.branch"))).toBe(false);
+    expect(result.violations.some((v) => v.code.includes("document.frontmatter.invalid"))).toBe(false);
+  });
+
+  test("a worktree_path list is accepted by the schema and projects into worktreePaths", () => {
+    const text = assignment({ worktree_path: ["/repo/wt-a", "/repo/wt-b"], task_budget: "S" });
+    expect(parseAssignmentFields(text).worktreePaths).toEqual(["/repo/wt-a", "/repo/wt-b"]);
+    expect(validateDocumentFrontmatter("assignment", text, "assignment").violations).toEqual([]);
+  });
+
+  test("a blank list item is refused as an invalid parallel declaration, not read as a branch", () => {
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch:
+- feature/a
+- ""
+task_budget: S
+---
+
+## Assignment
+`;
+    const messages = validateDocumentFrontmatter("assignment", text, "assignment").violations.map((v) => v.message);
+    expect(messages.some((m) => m.includes("invalid working_branch"))).toBe(true);
+    // One defect, one row: the blank item must not also read as "no declaration".
+    expect(messages.some((m) => m.includes("carries one non-empty declaration"))).toBe(false);
+  });
+
+  test("dispatch_mode is not a schema key — the list shape is the only parallel representation", () => {
+    const text = assignment({ dispatch_mode: "parallel independent tracks" } as never);
+    const codes = validateDocumentFrontmatter("assignment", text, "assignment").violations.map((v) => v.code);
+    expect(codes).toContain("document.frontmatter.unknown");
+  });
+
+  test("compose passes a list-branch assignment cleanly (no branch-field violations)", () => {
+    const cwd = gateFixture({ prefix: "dispatch-parallel-", harness: true });
+    try {
+      const result = composeDispatchGate(assignment({ working_branch: ["feature/a", "feature/b"] }), { cwd });
+      expect(result.violations.filter((v) => v.code.startsWith("assignment.field.branch"))).toEqual([]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("a valid hard-mode two-track dispatch is not blocked (no branch-field violations)", () => {
+    const cwd = gateFixture({ prefix: "dispatch-parallel-hard-", harness: true });
+    try {
+      const text = assignment({ working_branch: ["feature/a", "feature/b"], enforcement: "hard", task_budget: "S" });
+      const result = composeDispatchGate(text, { cwd });
+      expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
+      expect(result.violations.filter((v) => v.code.startsWith("assignment.field.branch"))).toEqual([]);
+      expect(result.hardBlocked).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("one parse per decision", () => {
+  test("caller-supplied entries are the parse every stage reads", () => {
+    // The document carries NO branch form; the supplied entries do. Reuse
+    // wins (no branch-missing), proving the validator consumed the caller's
+    // parse instead of reparsing the text.
+    const text = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S
+---
+
+## Assignment
+`;
+    const entries = parseDocumentFrontmatterEntries(
+      "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\ntask_budget: S\nworking_branch: feature/from-entries\n",
+      "test",
+    );
+    expect(validateAssignmentFields(text).violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
+    expect(validateAssignmentFields(text, { entries }).violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(false);
+  });
+
+  test("enforcement source attribution reads the same parsed entries", () => {
+    const hard = parseEnforcementFlagFromFrontmatter("execute_as: fullstack-dev\nenforcement: hard\n");
+    expect(hard).toEqual({ hard: true, source: "assignment" });
+    const compass = parseEnforcementFlagFromFrontmatter("enforcement: hard\n");
+    expect(compass).toEqual({ hard: true, source: "compass" });
+  });
+});
+
+describe("readAssignmentSource — provenance, terminal refusals, file-type guard", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-source-guard-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  const harnessDir = join(root, ".mstar");
+  const FILE_ASSIGNMENT = VALID_ASSIGNMENT;
+
+  function homeFile(segments: string[], name = "assignment.md"): string {
+    const dir = join(root, ...segments);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, name);
+    writeFileSync(file, FILE_ASSIGNMENT);
+    return file;
+  }
+
+  test("a resolved pointer reports its path so callers can carry the provenance", () => {
+    const file = homeFile([".mstar", "sdd", "plan-p", "assignments"]);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.path).toBe(file);
+  });
+
+  test("a source refusal is terminal — no enforcement step can soften it", () => {
+    const result = readAssignmentSource("Assignment file: /etc/hostname\n", { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.severity).toBe("critical");
+    expect(result.terminal).toBe(true);
+  });
+
+  test("a leading-dot identity written by the resolver stays readable (..draft round-trip)", () => {
+    // `assertSafePathComponent` accepts `..draft` (not the exact `..`
+    // segment), so the writer's own output must round-trip through the
+    // reader: resolve the write home, place the file there, read the pointer.
+    const planned = resolveAssignmentDir({ harnessDir, planId: "..draft" })!;
+    mkdirSync(planned, { recursive: true });
+    const file = join(planned, "assignment.md");
+    writeFileSync(file, FILE_ASSIGNMENT);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(FILE_ASSIGNMENT);
+  });
+
+  test("an in-home symlink to an in-home file still reads (O_NOFOLLOW guards the swap, not the link)", () => {
+    const target = homeFile([".mstar", "sdd", "plan-s", "assignments"], "target.md");
+    const link = join(root, ".mstar", "sdd", "plan-s", "assignments", "link.md");
+    symlinkSync(target, link);
+    const result = readAssignmentSource(`Assignment file: ${link}\n`, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(FILE_ASSIGNMENT);
+  });
+
+  test("an exact parent segment still refuses", () => {
+    const dir = join(root, ".mstar", "sdd", "plan-q", "assignments");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "..", "..", "outside.md");
+    writeFileSync(join(root, ".mstar", "sdd", "outside.md"), FILE_ASSIGNMENT);
+    const result = readAssignmentSource(`Assignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+  });
+
+  test("a directory target refuses as a non-regular file instead of being read", () => {
+    // Three segments deep so containment passes; the leaf is a directory.
+    const dir = join(root, ".mstar", "sdd", "plan-dir", "assignments", "leaf.md");
+    mkdirSync(dir, { recursive: true });
+    const result = readAssignmentSource(`Assignment file: ${dir}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.path");
+    expect(result.message).toContain("regular file");
+  });
+
+  test("a FIFO target refuses without blocking the hook", () => {
+    if (process.platform === "win32") return;
+    const dir = join(root, ".mstar", "sdd", "plan-fifo", "assignments");
+    mkdirSync(dir, { recursive: true });
+    const fifo = join(dir, "pipe.md");
+    try {
+      execFileSync("mkfifo", [fifo]);
+    } catch {
+      return; // no mkfifo on this host — the directory case above covers the guard
+    }
+    // A blocking open would hang here forever; the O_NONBLOCK guard refuses.
+    const result = readAssignmentSource(`Assignment file: ${fifo}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.message).toContain("regular file");
+  });
+
+  test("a pointer line quoted inside ordinary inline prose is inert, not ambiguous", () => {
+    const file = homeFile([".mstar", "sdd", "plan-prose", "assignments"]);
+    const prose = `please review this note before dispatching\n\nAssignment file: ${file}\n`;
+    const result = readAssignmentSource(prose, { harnessDir });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.text).toBe(prose);
+    expect(result.path).toBeUndefined();
+  });
+
+  test("a pointer alongside a real inline Assignment document stays ambiguous", () => {
+    const file = homeFile([".mstar", "sdd", "plan-both", "assignments"]);
+    const result = readAssignmentSource(`${VALID_ASSIGNMENT}\nAssignment file: ${file}\n`, { harnessDir });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("dispatch.assignment.ambiguous");
+    expect(result.fix).toContain("inert");
   });
 });

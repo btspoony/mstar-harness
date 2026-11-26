@@ -617,6 +617,28 @@ export function resolveAssignmentDir(opts: {
 }
 
 /**
+ * The three write-home bases of one harness dir, derived from ONE `.mstarc`
+ * snapshot: the per-key declaration (`sdd_dir` / `iteration_dir` /
+ * `workflow_dir`, resolved against the config file's directory) or the
+ * `{HARNESS_DIR}/<fallback>` default. A containment decision that loaded the
+ * config once cannot mix declarations from two snapshots, and a configured
+ * checkout pays one config read per decision instead of one per base.
+ */
+function assignmentWriteBases(harnessDir: string): Array<{ name: AssignmentSourceHome["name"]; root: string }> {
+  const base = resolve(harnessDir);
+  const rc = loadMstarc(base, dirname(base));
+  const declared = (key: MstarcStringKey, fallback: string): string => {
+    const value = rc?.config[key];
+    return value ? resolve(rc!.dir, value) : join(base, fallback);
+  };
+  return [
+    { name: "sdd", root: declared("sddDir", "sdd") },
+    { name: "iteration", root: declared("iterationDir", "iterations") },
+    { name: "workflow", root: declared("workflowDir", "workflows") },
+  ];
+}
+
+/**
  * Every assignment source home (compass D14): the three write homes plus
  * `{HARNESS_DIR}/assignments` as the read-only fourth source. Containment
  * checks compare against these resolved roots, never a `harnessDir`
@@ -624,9 +646,7 @@ export function resolveAssignmentDir(opts: {
  */
 export function assignmentSourceHomes(harnessDir: string): AssignmentSourceHome[] {
   return [
-    { name: "sdd", root: sddBaseDir(harnessDir), write: true },
-    { name: "iteration", root: resolveIterationDir(harnessDir), write: true },
-    { name: "workflow", root: resolveWorkflowDir(harnessDir, { harnessDir }), write: true },
+    ...assignmentWriteBases(harnessDir).map((home) => ({ name: home.name, root: home.root, write: true })),
     { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
   ];
 }

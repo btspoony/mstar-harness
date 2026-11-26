@@ -1981,5 +1981,15 @@ describe("assignmentSourceHomes (compass D14)", () => {
       { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
     ]);
   });
+
+  test("the write homes agree with the per-key resolvers for the same harness dir", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    const homes = assignmentSourceHomes(harnessDir);
+    expect(homes[1]!.root).toBe(resolveIterationDir(harnessDir));
+    expect(homes[2]!.root).toBe(resolveWorkflowDir(harnessDir, { harnessDir }));
+    expect(homes[0]!.root).toBe(join(resolve(harnessDir), "sdd"));
+  });
 });
 

@@ -378,6 +378,8 @@ export {
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseAssignmentFieldsFromFrontmatter,

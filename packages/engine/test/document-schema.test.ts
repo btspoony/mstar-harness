@@ -362,6 +362,28 @@ describe("documentSchema — the field table", () => {
     expect(names).toContain("workflow_id");
   });
 
+  test("parallel tracks are declared as branch/worktree lists, never a dispatch_mode key", () => {
+    const schema = documentSchema("assignment");
+    const names = [...schema.required, ...schema.optional].map((f) => f.name);
+    expect(names).toContain("working_branch");
+    expect(names).toContain("worktree_path");
+    expect(names).not.toContain("dispatch_mode");
+    const parallel = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch:
+- feature/a
+- feature/b
+worktree_path: [/repo/wt-a, /repo/wt-b]
+task_budget: S
+---
+
+## Assignment
+`;
+    expect(validateDocumentFrontmatter("assignment", parallel, "assignment").violations).toEqual([]);
+  });
+
   test("sdd-brief and pm-acceptance schemas", () => {
     expect(documentSchema("sdd-brief").required.map((f) => f.name)).toEqual(["plan_id", "task"]);
     const acceptance = documentSchema("pm-acceptance");
