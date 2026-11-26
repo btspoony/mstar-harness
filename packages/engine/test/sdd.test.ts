@@ -545,18 +545,37 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
 });
 
 describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CLI)", () => {
+  /** The fixture plan body behind a valid front matter fence (a brief without
+   * `plan_id` is refused, so every extraction case needs one). */
+  function samplePlan(dir: string): string {
+    const plan = join(dir, "sample-plan.md");
+    writeFileSync(plan, planFrontMatter("sample-plan", readFileSync(SAMPLE_PLAN, "utf8")));
+    return plan;
+  }
+
   test("extracts from the matching '## Task N' heading; fenced headings and number boundaries ignored", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const source = readFileSync(SAMPLE_PLAN, "utf8");
+      const plan = samplePlan(out);
       const file = join(out, "task-2-brief.md");
-      const written = taskBrief(SAMPLE_PLAN, 2, file);
+      const written = taskBrief(plan, 2, file);
       expect(written).toBe(file);
       const content = readFileSync(file, "utf8");
-      expect(content).toContain("---\ntask: 2\n---\n### Task 2: second task\n");
+      const header = "---\nplan_id: sample-plan\ntask: 2\n---\n";
+      expect(content.startsWith(header)).toBe(true);
+      // The bytes after the header are the fixture's own Task 2 slice, fence
+      // and heading boundaries included — no arbitrary prefix or suffix.
+      const start = source.indexOf("### Task 2: second task\n");
+      const end = source.indexOf("### Task 3: third task\n");
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const slice = source.slice(start, end);
+      expect(content.slice(header.length)).toBe(slice);
       expect(content).not.toContain("hidden behind a fence");
       expect(content).not.toContain("Task 1: first task");
       const task10 = join(out, "task-10-brief.md");
-      taskBrief(SAMPLE_PLAN, 10, task10);
+      taskBrief(plan, 10, task10);
       expect(readFileSync(task10, "utf8")).toContain("### Task 10: tenth task");
     } finally {
       rmSync(out, { recursive: true, force: true });
@@ -599,14 +618,15 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
   test("default out path uses SDD_DIR/task-N-brief.md and creates SDD_DIR", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const plan = samplePlan(out);
       const sddDir = join(out, "sdd", "sub");
       withEnv(SDD_DIR, sddDir, () => {
-        const file = taskBrief(SAMPLE_PLAN, 1);
+        const file = taskBrief(plan, 1);
         expect(file).toBe(join(sddDir, "task-1-brief.md"));
         expect(existsSync(file)).toBe(true);
       });
       withEnv(SDD_DIR, undefined, () => {
-        const err = errOf(() => taskBrief(SAMPLE_PLAN, 1));
+        const err = errOf(() => taskBrief(plan, 1));
         expect(err.exitCode).toBe(2);
         expect(err.message).toMatch(/set SDD_DIR or pass OUTFILE/);
       });
@@ -617,36 +637,40 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
 });
 
 describe("taskBrief — brief front matter (plan_id / task / files)", () => {
-  const PLAN = [
-    "---",
-    "plan_id: plan-brief-fixture",
-    "execution: sdd",
-    "working_branch: main",
-    "main_worktree_branch: main",
-    "delivery_kind: development",
-    "status: InProgress",
-    "---",
-    "",
+  const BODY = [
     "### Task 1: first",
     "",
-    "No file entries in this task.",
+    "**Files:**",
+    "- Create: `src/one.ts`",
     "",
     "### Task 2: second",
     "",
     "**Files:**",
     "- Create: `src/b.ts`",
-    "- Modify: `src/a.ts`",
+    "- Modify: `src/a.ts` (only `taskBrief`)",
     "- Create: `src/b.ts`",
     "- Check: `not-a-file.md`",
     "",
+    "A fenced example is not an ownership entry:",
+    "",
+    "```text",
+    "- Create: `other-task.ts`",
+    "- Modify: `src/b.ts`",
+    "```",
+    "",
     "Body of task two.",
     "",
+    "### Task 3: third",
+    "",
+    "No file entries in this task.",
+    "",
   ].join("\n");
+  const PLAN = planFrontMatter("plan-brief-fixture", BODY);
 
-  function writePlan(): { dir: string; plan: string } {
+  function writePlan(content = PLAN): { dir: string; plan: string } {
     const dir = tmpRoot("sdd-brief-fm-");
     const plan = join(dir, "plan.md");
-    writeFileSync(plan, PLAN);
+    writeFileSync(plan, content);
     return { dir, plan };
   }
 
@@ -657,9 +681,13 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
       taskBrief(plan, 2, file);
       const content = readFileSync(file, "utf8");
       const header = content.slice(0, content.indexOf("---\n", 4) + 4);
+      // A described entry (`- Modify: `src/a.ts` (only `taskBrief`)`) yields the
+      // path alone; a fenced example is not an entry; another task's file is
+      // not this task's file.
       expect(header).toBe("---\nplan_id: plan-brief-fixture\ntask: 2\nfiles:\n- src/b.ts\n- src/a.ts\n---\n");
       expect(header).not.toContain("not-a-file.md");
-      expect(header).not.toContain("src/a.test.ts");
+      expect(header).not.toContain("other-task.ts");
+      expect(header).not.toContain("src/one.ts");
       expect(validateDocumentFrontmatter("sdd-brief", content, "task-2-brief").ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -673,20 +701,14 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
       taskBrief(plan, 2, file);
       const content = readFileSync(file, "utf8");
       const body = content.slice(content.indexOf("---\n", 4) + 4);
-      expect(body).toBe(
-        [
-          "### Task 2: second",
-          "",
-          "**Files:**",
-          "- Create: `src/b.ts`",
-          "- Modify: `src/a.ts`",
-          "- Create: `src/b.ts`",
-          "- Check: `not-a-file.md`",
-          "",
-          "Body of task two.",
-          "",
-        ].join("\n"),
+      // The slice runs from the task heading up to the next Task heading,
+      // fence and heading boundaries included; bytes are unchanged.
+      const slice = BODY.slice(
+        BODY.indexOf("### Task 2: second\n"),
+        BODY.indexOf("### Task 3: third\n"),
       );
+      expect(slice.startsWith("### Task 2: second\n")).toBe(true);
+      expect(body).toBe(slice);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -695,11 +717,38 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
   test("a task without Files entries writes no files key", () => {
     const { dir, plan } = writePlan();
     try {
-      const file = join(dir, "task-1-brief.md");
-      taskBrief(plan, 1, file);
+      const file = join(dir, "task-3-brief.md");
+      taskBrief(plan, 3, file);
       const content = readFileSync(file, "utf8");
-      expect(content.startsWith("---\nplan_id: plan-brief-fixture\ntask: 1\n---\n")).toBe(true);
+      expect(content.startsWith("---\nplan_id: plan-brief-fixture\ntask: 3\n---\n")).toBe(true);
       expect(content).not.toContain("files:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan without a declared plan_id is refused before any write", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("plan_id");
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan without a declared plan_id does not create the default SDD directory", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const sddDir = join(dir, "missing", "sdd");
+      withEnv(SDD_DIR, sddDir, () => {
+        const err = errOf(() => taskBrief(plan, 1));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(sddDir)).toBe(false);
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
