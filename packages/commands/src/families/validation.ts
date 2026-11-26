@@ -795,7 +795,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               ? first!.message
               : `${failures.length} assignment files declare unreadable front matter \u2014 ${first!.message}`,
             { failures: failures.map(({ code, message }) => ({ code, message })), assignments },
-            first!.fix,
+            "Fix the front matter of the named assignment file (a `---`-fenced block with plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file>.",
           );
         }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
