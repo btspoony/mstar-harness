@@ -44,8 +44,8 @@ Align only the projections the selected route actually has to the ACTIVE DB term
 
 1. the `{PLAN_DIR}` authored plan — every route
 2. compass `## Plans` — an iteration route only; the iteration README is prose only, with no status registration rows
-3. the store project roadmap content and issue rollup — where the project has them; the project register is migration history only and is not updated
-4. **Iteration only:** the compass `delivered` marker with its `## Roadmap Position` row, the roadmap row and the milestone rollup — written only here, because whole-chain proof is recorded (`mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」), through the existing `mstar-project-governance` operations
+3. the store issue rollup — where the project has issues; the project register is migration history only and is not updated
+4. **Iteration only:** the compass `delivered` marker with its `## Roadmap Position` row and the milestone rollup — written only here, because whole-chain proof is recorded (`mstar-iteration/references/pr-stack.md`「Whole-chain proof and close」), through the existing `mstar-project-governance` operations
 
 - **Never** forge a `Done` row or close an open residual to match, never relax `zero-residual` (under `allow-residual` a registered, disclosed non-blocking open R# **stays open**; a real remaining finding blocks `zero-residual` delivery instead of being silently closed), and never slip new tracked product or documentation commits into the close (any step) — a newly found product fix opens its own authorized workflow.
 

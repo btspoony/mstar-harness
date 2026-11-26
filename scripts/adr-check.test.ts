@@ -152,11 +152,16 @@ describe("checkAdrTree — implemented-superseded", () => {
     expect(result.failures.map((f) => f.code)).toEqual(["adr.implemented-superseded"]);
     const [failure] = result.failures;
     expect(failure.message).toContain(`${ADR_ROOT}/implemented/architecture/2026-01-14-demoted.md`);
-    expect(failure.message).toContain("archived/architecture/2026-01-14-demoted.md");
+    // The recovery names both valid operations: the archived move when the
+    // replacement is promoted, and removing the premature header while the
+    // replacement is still proposed. The destination is tree-relative — the
+    // engine does not know the repository's ADR root.
     expect(failure.recovery).toContain("archived/architecture/2026-01-14-demoted.md");
+    expect(failure.recovery).not.toContain("docs/adr/archived");
     expect(failure.recovery).toContain("Archived:");
     expect(failure.recovery).toContain("2026-02-01-replacement.md");
     expect(failure.recovery).toContain("Superseded-by:");
+    expect(failure.recovery).toContain("remove the Superseded-by: line");
   });
 
   test("an archived record with Archived: and Superseded-by passes", () => {
