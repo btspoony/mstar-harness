@@ -5641,6 +5641,72 @@ describe("remote outbox lifecycle", () => {
     });
   });
 
+  test("a project-replace freezes from a pre-fix cache with the retired catalog kind normalized to other", async () => {
+    const cache = await outboxCache("outbox-retired-catalog-kind");
+    const project = SELECTED_PROJECT.localProjectId;
+    // note: The v6-era cache holds this evidence already, so the fixture writes the stored snapshot
+    // directly: the ingest that once admitted the value now refuses it.
+    const stored = completeSnapshot() as unknown as { project: { catalogEntities: Array<Record<string, unknown>> } };
+    stored.project.catalogEntities.push({
+      kind: "document",
+      id: "doc-legacy-catalog",
+      title: "Legacy catalog document",
+      description: null,
+      documentKind: "roadmap",
+      lifecycle: "active",
+      revision: 4,
+    });
+    const lane = new DatabaseSync(cache.dbPath);
+    try {
+      lane.prepare("update remote_observations set snapshot_json = ? where project_key = ?").run(
+        JSON.stringify(stored),
+        project,
+      );
+    } finally {
+      lane.close();
+    }
+
+    // invariant: The write path parses the same evidence as the read path, so its base is the normalized
+    // one: the process no longer refuses its own project-replace over a kind it has retired.
+    const operationId = "00000000-0000-4000-8000-000000000ad1";
+    const frozen = await addMilestone(
+      cache.context,
+      { projectId: project, name: "Frozen from an old cache", effortSessions: null, ordinal: 1 },
+      { operationId, expectedStoreRevision: observationRevision(cache.dbPath) },
+    ).then(
+      () => null,
+      (error: unknown) => error as { code?: string; message?: string },
+    );
+    // note: A remote write enqueues an intent, so the verb refuses with the pending state; what matters
+    // here is that it got far enough to freeze a base, i.e. the retired kind did not abort it.
+    expect(frozen).toMatchObject({ code: "remote.effect-pending" });
+
+    // invariant: The frozen project document carries `other`, never the retired value, and the row keeps
+    // its identity, revision and lifecycle. The frozen request is read from the outbox row itself: it is
+    // the exact bytes the host will send.
+    const outbox = new DatabaseSync(cache.dbPath);
+    let frozenEntities: Array<Record<string, unknown>>;
+    try {
+      const row = outbox.prepare("select request_json from remote_outbox where operation_id = ?").get(operationId) as {
+        request_json?: string;
+      };
+      if (typeof row?.request_json !== "string") throw new Error("fixture: the intent recorded no frozen request");
+      const request = JSON.parse(row.request_json) as {
+        event?: { change?: { project?: { catalogEntities?: Array<Record<string, unknown>> } } };
+      };
+      frozenEntities = request.event?.change?.project?.catalogEntities ?? [];
+    } finally {
+      outbox.close();
+    }
+    expect(frozenEntities.find((entity) => entity.id === "doc-legacy-catalog")).toMatchObject({
+      documentKind: "other",
+      kind: "document",
+      revision: 4,
+      lifecycle: "active",
+    });
+    expect(JSON.stringify(frozenEntities)).not.toContain('"roadmap"');
+  });
+
   test("a journal document carrying project.roadmap is refused at that field path, and one without it is accepted", async () => {
     // invariant: The frozen project document is a `version: 1` shape revised in place. The observe
     // submission and the journal event are separate boundaries, so this exercises the event: the

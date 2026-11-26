@@ -232,6 +232,21 @@ export type RemoteSnapshotProject = Readonly<{
   catalogLinks: readonly RemoteCatalogLink[];
 }>;
 
+/**
+ * invariant: The ONE place a retired catalog kind is removed from admitted evidence. It runs on the parsed
+ * document - never the stored bytes - so both the read boundary and the write/freeze boundary speak the
+ * surviving vocabulary while the admitted evidence stays exactly what the predecessor wrote. Identity,
+ * revision and registration are untouched; only the retired value changes.
+ */
+export function normalizeRetiredDocumentKind(snapshot: RemoteSnapshot): RemoteSnapshot {
+  const project = snapshot.project as unknown as { catalogEntities?: Array<Record<string, unknown>> } | undefined;
+  if (project === undefined || !Array.isArray(project.catalogEntities)) return snapshot;
+  for (const entity of project.catalogEntities) {
+    if (entity.documentKind === "roadmap") entity.documentKind = "other";
+  }
+  return snapshot;
+}
+
 /** note: A complete traversal, or the one known gap that makes this a partial observation. */
 export type SnapshotCoverage =
   | Readonly<{ kind: "complete" }>
@@ -4551,7 +4566,7 @@ function assertDispatchBase(
   let snapshot: RemoteSnapshot | null = null;
   if (scope !== undefined && typeof scope.snapshot_json === "string") {
     try {
-      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+      snapshot = normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
     } catch {
       return refuse(`The stored observation of ${row.projectKey} is unreadable.`);
     }
@@ -4803,7 +4818,7 @@ function storedSnapshot(db: StoreDb, generation: number, projectKey: string): Re
   const scope = scopeRow(db, generation, projectKey);
   if (scope === undefined || typeof scope.snapshot_json !== "string") return null;
   try {
-    return JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+    return normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
   } catch {
     return null;
   }
@@ -5438,7 +5453,10 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
     }
     let snapshot: RemoteSnapshot;
     try {
-      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+      // invariant: The write path parses the SAME admitted evidence the read path does, so it takes the
+      // same normalization: a cache admitted before the retirement must not make this process refuse its
+      // own project-replace over a kind it no longer knows.
+      snapshot = normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
     } catch {
       throw new StoreError(
         "collaboration.unreadable",

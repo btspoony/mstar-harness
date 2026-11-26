@@ -26,6 +26,7 @@ import {
 import { resolveCollaborationLocation, assertSelectionUnchanged, type CollaborationLocation } from "./collaboration-identity.js";
 import {
   conflictMerged,
+  normalizeRetiredDocumentKind,
   REMOTE_SCOPE_TTL_MS,
   type ProviderProjectScope,
   type RemoteIssue,
@@ -361,20 +362,6 @@ function snapshotOf(raw: string | null, projectId: string): RemoteSnapshot | nul
   // surface serves the retired value, and the read is not refused over history the store cannot rewrite
   // (a remote cache is derived observation state, re-bootstrapped rather than migrated in place).
   return normalizeRetiredDocumentKind(parsed as RemoteSnapshot);
-}
-
-/**
- * invariant: The one place a retired catalog kind is removed from admitted evidence on READ. It mutates a
- * freshly parsed document only, never the stored bytes, and returns the same object when there is nothing
- * to normalize.
- */
-function normalizeRetiredDocumentKind(snapshot: RemoteSnapshot): RemoteSnapshot {
-  const project = snapshot.project as unknown as { catalogEntities?: Array<Record<string, unknown>> } | undefined;
-  if (project === undefined || !Array.isArray(project.catalogEntities)) return snapshot;
-  for (const entity of project.catalogEntities) {
-    if (entity.documentKind === "roadmap") entity.documentKind = "other";
-  }
-  return snapshot;
 }
 
 // ---------------------------------------------------------------------------
