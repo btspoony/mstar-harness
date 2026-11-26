@@ -30,6 +30,7 @@ import {
 import { getCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { assertKnowledgeCatalogCompleteness } from "./compound.js";
 import { assertCatalogCompleteness, readCatalogCompleteness } from "./iteration.js";
+import { discoverCatalog, planCatalogImport } from "./catalog-import.js";
 import { scaffoldHarness } from "./path.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
@@ -420,6 +421,46 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(existing.entity.relativePath).toBe("_default/roadmap.md");
     expect(existing.entity.title).toBe("Existing project");
     
+  });
+
+  test("catalog discovery: a project registered at the retired marker path is not a completeness gap, and its re-import is not a relocation", async () => {
+    const { root, harness, context } = await withStore("legacy-marker-location-");
+    // invariant: An older lane registered the project at `projects/<id>/roadmap.md`. The marker is
+    // history now, but the row still names this project: completeness matches on the project
+    // identity, so the directory is covered without relocating the row.
+    mkdirSync(join(harness, "projects", "legacy"), { recursive: true });
+    writeFileSync(join(harness, "projects", "legacy", "roadmap.md"), "# Legacy authority\n");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "legacy", title: "Legacy project", rootKind: "projects", relativePath: "legacy/roadmap.md" },
+      op("legacy-project"),
+    );
+    const report = await readCatalogCompleteness(context, ["projects"]);
+    expect(report.gaps).toEqual([]);
+    expect(report.ok).toBe(true);
+    // invariant: The reviewed import of the directory does not conflict with that row, and the row
+    // is not moved: the identity it registered still answers.
+    const planned = await planCatalogImport(context, [
+      { rootKind: "projects", relativePath: "legacy", mapping: { kind: "project", id: "legacy", title: "Legacy project" } },
+    ]);
+    expect(planned.conflicts).toEqual([]);
+    expect(planned.unknowns).toEqual([]);
+    expect(planned.entities.map((entity) => [entity.kind, entity.id, entity.relativePath, entity.sourceHash])).toEqual([
+      ["project", "legacy", "legacy", null],
+    ]);
+    expect((await getCatalog(context, { kind: "project", id: "legacy" })).entity.relativePath).toBe("legacy/roadmap.md");
+    expect(root).toBeTruthy();
+  });
+
+  test("catalog discovery: a directory-located project proposes as identity with no body digest", async () => {
+    const { harness, context } = await withStore("directory-identity-");
+    mkdirSync(join(harness, "projects", "plain"), { recursive: true });
+    const plan = await discoverCatalog(context);
+    const proposal = plan.entities.find((entity) => entity.kind === "project" && entity.id === "plain");
+    expect(proposal).toMatchObject({ relativePath: "plain", documentKind: null, sourceHash: null, title: "plain" });
+    // invariant: Directory identity is not a source refusal: the location itself is the fact.
+    expect(plan.unknowns.filter((unknown) => unknown.code === "source-refused")).toEqual([]);
+    expect(plan.sourceDigests.some((digest) => digest.relativePath === "plain")).toBe(false);
   });
 
   test("catalog discovery: scaffold leaves catalog registration to the store lifecycle when no store exists", async () => {

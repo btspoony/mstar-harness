@@ -49,7 +49,7 @@ import {
   type CatalogRelation,
   type CatalogRootKind,
 } from "./catalog.js";
-import { parseCompassFrontmatterText } from "./iteration.js";
+import { parseCompassFrontmatterText, projectLocationIdentity } from "./iteration.js";
 import type { StoreContext } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -385,6 +385,12 @@ function sourcePath(context: StoreContext, rootKind: CatalogRootKind, relativePa
 
 type SourceRead =
   | { state: "ok"; text: string; sha256: string }
+  /**
+   * note: A project package IS its directory: no marker file, no body, no digest. Recognized
+   * separately from `refused` so an ordinary project location is never reported as an
+   * unreadable source.
+   */
+  | { state: "directory" }
   | { state: "missing" | "refused"; detail: string };
 
 /**
@@ -403,6 +409,7 @@ function readSourceFile(context: StoreContext, rootKind: CatalogRootKind, relati
     return { state: "refused", detail: `${rootKind}:${relativePath} is not readable (${code ?? "unknown error"})` };
   }
   if (info.isSymbolicLink()) return { state: "refused", detail: `${rootKind}:${relativePath} is a symlink (not followed)` };
+  if (info.isDirectory()) return rootKind === "projects" ? { state: "directory" } : { state: "refused", detail: `${rootKind}:${relativePath} is not a regular file` };
   if (!info.isFile()) return { state: "refused", detail: `${rootKind}:${relativePath} is not a regular file` };
   try {
     const text = readFileSync(absolute, "utf8");
@@ -578,6 +585,8 @@ function readForEvidence(acc: Accumulator, context: StoreContext, rootKind: Cata
     recordDigest(acc, rootKind, relativePath, read.sha256);
     return { text: read.text, sourceKey };
   }
+  // note: A directory identity contributes no body evidence: the location itself is the fact.
+  if (read.state === "directory") return null;
   acc.unknowns.push({
     code: read.state === "missing" ? "source-missing" : "source-refused",
     key: sourceKey,
@@ -1471,7 +1480,15 @@ export async function planCatalogImport(context: StoreContext, inputs: CatalogIm
     }
 
     const existing = local.get(entityKey(kind, mapping.id.trim()));
-    if (existing !== undefined && (existing.rootKind !== proposal.rootKind || existing.relativePath !== proposal.relativePath)) {
+    // invariant: A project row registered at the retired marker path and one at its directory are the
+    // SAME project: re-registering it is not a relocation, so the reviewed import never conflicts with
+    // the row the store already holds.
+    const sameLocation =
+      existing !== undefined &&
+      existing.rootKind === proposal.rootKind &&
+      (existing.relativePath === proposal.relativePath ||
+        (proposal.kind === "project" && projectLocationIdentity(existing.relativePath) === projectLocationIdentity(proposal.relativePath)));
+    if (existing !== undefined && !sameLocation) {
       acc.conflicts.push({
         field: "path",
         key: entityKey(kind, proposal.id),
@@ -1597,6 +1614,8 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
   for (const digest of plan.sourceDigests) {
     const read = readSourceFile(context, digest.rootKind, digest.relativePath);
     if (read.state === "ok" && read.sha256 === digest.sha256) continue;
+    // note: A directory identity carries no digest, so it can never drift.
+    if (read.state === "directory") continue;
     drift.push({
       sourceKey: digest.sourceKey,
       rootKind: digest.rootKind,

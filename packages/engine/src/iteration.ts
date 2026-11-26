@@ -29,6 +29,20 @@ const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
 
 /**
+ * note: The marker file a project package used to carry. A catalog row registered at
+ * `projects/<id>/roadmap.md` and one registered at the directory `projects/<id>` name the same
+ * project: the roadmap authority is gone, so the marker is history, and a completeness or import
+ * comparison treats the two spellings as that one project instead of reporting a gap or a conflict
+ * against a row the store already holds.
+ */
+export const PROJECT_MARKER_FILE = "roadmap.md";
+
+/** note: One project location's identity: `projects/<id>` and its retired marker spelling agree on the id. */
+export function projectLocationIdentity(relativePath: string): string {
+  return relativePath === PROJECT_MARKER_FILE ? "" : relativePath.replace(new RegExp(`/${PROJECT_MARKER_FILE}$`), "");
+}
+
+/**
  * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
  * All fields are `unknown` because documents come from JSON at runtime;
  * validators narrow them. `plans[]` rows are the legacy PlanRow shape
@@ -956,6 +970,11 @@ export async function readCatalogCompleteness(
         if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
+        // invariant: A project registered at the retired `roadmap.md` marker names the same project as
+        // its directory, so a row the store already holds never reads as an unregistered location.
+        if (row.root_kind === "projects") {
+          registered.add(`${row.root_kind}\u0000${projectLocationIdentity(row.relative_path)}`);
+        }
       }
     } finally {
       handle.close();
@@ -970,6 +989,7 @@ export async function readCatalogCompleteness(
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
     if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
+    if (location.rootKind === "projects" && registered.has(`${location.rootKind}\u0000${projectLocationIdentity(location.relativePath)}`)) continue;
     const code = GAP_CODE[location.kind];
     gaps.push({
       rootKind: location.rootKind,
