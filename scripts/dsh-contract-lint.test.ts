@@ -48,9 +48,14 @@ function carrierMap(): Record<string, string> {
   return parsed.map;
 }
 
-/** An `## Assignment` fence: heading + header fields (+ optional prompt text). */
-function payload(header: readonly string[], body = "Operator: keep this body."): string {
-  return ["# Example", "", "```ts", "## Assignment", "", ...header, "", body, "```", ""].join("\n");
+/** A fenced seat prompt: its front matter fence plus an optional body. */
+function payload(frontMatter: readonly string[], body = "Operator: keep this body."): string {
+  return ["# Example", "", "```markdown", "---", ...frontMatter, "---", "", body, "```", ""].join("\n");
+}
+
+/** A fence carrying the RETIRED body-label seat shape (the D16 refusal case). */
+function legacyPayload(header: readonly string[], body = "Operator: keep this body."): string {
+  return ["# Example", "", "```markdown", "## Assignment", "", ...header, "", body, "```", ""].join("\n");
 }
 
 /** The 1-based line of the first line matching `pattern` in `text`. */
@@ -58,18 +63,18 @@ function lineOf(text: string, pattern: RegExp): number {
   return text.split("\n").findIndex((line) => pattern.test(line)) + 1;
 }
 
-describe("checkSeatBounding — seat header blocks carry the bounding labels", () => {
+describe("checkSeatBounding — seat front matter carries the bounding fields", () => {
   const seat = REVIEW_SEAT_ROLES[0]!;
   const nonSeat = "zz-not-a-review-seat";
   const boundingLabels = (label: string): string => (label === "Budget" ? BUDGET_LABELS[0]! : RETURN_SHAPE_LABELS[0]!);
 
-  test("a review-seat payload without the labels yields one row per label", () => {
-    const text = payload([`Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit"]);
+  test("a review-seat payload without the fields yields one row per field", () => {
+    const text = payload([`execute_as: ${seat}`, "delegation: forbidden", "task_category: audit"]);
     const doc: Doc = { rel: "fixture.md", text };
     const { rows, blocks } = checkSeatBounding([doc]);
     expect(blocks).toBe(1);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toStartWith(`fixture.md:${lineOf(text, /^Execute as:/)} `);
+    expect(rows[0]).toStartWith(`fixture.md:${lineOf(text, /^execute_as:/)} `);
     expect(rows[0]).toContain(`Execute as: ${seat}`);
     expect(rows[0]).toContain(boundingLabels("Budget"));
     expect(rows[0]).toContain("assignment.field.budget-missing");
@@ -77,56 +82,52 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(rows[1]).toContain("assignment.field.return-shape-missing");
   });
 
-  test("F1: the header extent is the engine's, so a blank line between fields does not skip the gate", () => {
-    // Would pass silently under a "header ends at the first blank line" reading,
-    // yet the dispatch gate refuses it: the engine scans the whole region.
-    const text = payload(["Delegation: forbidden", "", `Execute as: ${seat}`, "Task category: audit"]);
-    // The engine finds the role across the blank line; the rows below prove the
-    // checker inherited that extent instead of closing the header early.
-    expect(parseAssignmentFields(["## Assignment", "Delegation: forbidden", "", `Execute as: ${seat}`].join("\n")).executeAs).toBe(seat);
+  test("F1: the front matter block is one region, so a blank line between keys does not skip the gate", () => {
+    // Would pass silently under a "declaration ends at the first blank line"
+    // reading, yet the dispatch gate reads the whole block.
+    const text = payload(["delegation: forbidden", "", `execute_as: ${seat}`, "task_category: audit"]);
+    expect(parseAssignmentFields(["---", "delegation: forbidden", "", `execute_as: ${seat}`, "---"].join("\n")).executeAs).toBe(seat);
     const { rows } = checkSeatBounding([{ rel: "fixture.md", text }]);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toContain("assignment.field.budget-missing");
     expect(rows[1]).toContain("assignment.field.return-shape-missing");
   });
 
-  test("the same payload with both labels passes, whichever accepted label form is used", () => {
-    // The bare labels parse in the plain form; the parenthesized ones need bold
-    // (the engine's own grammar — never widened here).
-    const header = [`Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit"];
-    for (const labels of [
-      [BUDGET_LABELS[1]!, RETURN_SHAPE_LABELS[1]!],
-      [`**${BUDGET_LABELS[0]}**`, `**${RETURN_SHAPE_LABELS[0]}**`],
-    ]) {
-      const text = payload([...header, `${labels[0]}: /1 round`, `${labels[1]}: verdict and findings`]);
-      // Guard the assumption: the engine parser is what decides, not this test.
-      const fields = parseAssignmentFields(
-        ["## Assignment", ...header, `${labels[0]}: x`, `${labels[1]}: y`].join("\n"),
-      );
-      expect(fields.budget).toBe("x");
-      expect(fields.returnShape).toBe("y");
-      expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toEqual([]);
-    }
+  test("the same payload with both fields passes", () => {
+    const text = payload([
+      `execute_as: ${seat}`,
+      "delegation: forbidden",
+      "task_category: audit",
+      "budget: /1 round",
+      "return_shape: verdict and findings",
+    ]);
+    // Guard the assumption: the engine parser is what decides, not this test.
+    const fields = parseAssignmentFields(
+      ["---", `execute_as: ${seat}`, "budget: x", "return_shape: y", "---"].join("\n"),
+    );
+    expect(fields.budget).toBe("x");
+    expect(fields.returnShape).toBe("y");
+    expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toEqual([]);
   });
 
   test("every engine review-seat role is gated (the seat list stays the engine's)", () => {
     for (const role of REVIEW_SEAT_ROLES) {
-      const text = payload([`Execute as: ${role}`, "Delegation: forbidden", "Task category: review"]);
+      const text = payload([`execute_as: ${role}`, "delegation: forbidden", "task_category: review"]);
       expect(checkSeatBounding([{ rel: "fixture.md", text }]).rows).toHaveLength(2);
     }
   });
 
   test("F6: an audit round on a non-seat role is gated too, exactly as the engine does", () => {
-    const audit = payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: audit"]);
+    const audit = payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: audit"]);
     const rows = checkSeatBounding([{ rel: "fixture.md", text: audit }]).rows;
     expect(rows).toHaveLength(2);
-    // ... while the same role on a normal round needs no bounding labels.
-    const normal = payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]);
+    // ... while the same role on a normal round needs no bounding fields.
+    const normal = payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]);
     expect(checkSeatBounding([{ rel: "fixture.md", text: normal }]).rows).toEqual([]);
   });
 
-  test("b2: a review-seat header inside a tilde fence yields both bounding rows", () => {
-    const text = ["~~~markdown", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", "~~~", ""].join("\n");
+  test("b2: a review-seat declaration inside a tilde fence yields both bounding rows", () => {
+    const text = ["~~~markdown", "---", `execute_as: ${seat}`, "delegation: forbidden", "task_category: audit", "---", "~~~", ""].join("\n");
     const result = checkSeatBounding([{ rel: "fixture.md", text }]);
     expect(result.blocks).toBe(1);
     expect(result.rows).toHaveLength(2);
@@ -134,98 +135,112 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(result.rows[1]).toContain("assignment.field.return-shape-missing");
   });
 
-  test("a fence that ends at its own header is still gated (no shape is skipped)", () => {
-    const text = ["```markdown", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", "```", ""].join("\n");
+  test("a fence that ends at its own declaration is still gated (no shape is skipped)", () => {
+    const text = ["```markdown", "---", `execute_as: ${seat}`, "delegation: forbidden", "task_category: audit", "---", "```", ""].join("\n");
     const result = checkSeatBounding([{ rel: "fixture.md", text }]);
     expect(result.blocks).toBe(1);
     expect(result.rows).toHaveLength(2);
   });
 
-  test("F-1: a marker that owns a line but is not fenced yields the per-document coverage row", () => {
-    // Both shapes the review named: the fence removed, and the marker re-indented
-    // into a 4-space code block (which is not a fence at all).
+  test("D16: a seat written with the retired body labels is refused, never read as clean", () => {
+    const text = legacyPayload([`Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit"]);
+    const result = checkSeatBounding([{ rel: "fixture.md", text }]);
+    expect(result.blocks).toBe(1);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toStartWith(`fixture.md:${lineOf(text, /^Execute as:/)} `);
+    expect(result.rows[0]).toContain("dispatch.assignment.legacy-format");
+    expect(result.rows[0]).toContain("front matter is the only field contract");
+  });
+
+  test("F-1: a declaration that owns a line but is not fenced yields the per-document coverage row", () => {
+    // Both shapes the review named: the fence removed, and the declaration
+    // re-indented into a 4-space code block (which is not a fence at all).
     for (const lines of [
-      ["# Example", "", "## Assignment", "", `Execute as: ${seat}`, "Delegation: forbidden", "Task category: audit", ""],
-      ["# Example", "", "    ## Assignment", `    Execute as: ${seat}`, "    Delegation: forbidden", "    Task category: audit", ""],
+      ["# Example", "", "---", `execute_as: ${seat}`, "delegation: forbidden", "task_category: audit", "---", ""],
+      ["# Example", "", "    ---", `    execute_as: ${seat}`, "    delegation: forbidden", "    task_category: audit", "    ---", ""],
     ]) {
       const text = lines.join("\n");
       const result = checkSeatBounding([{ rel: "fixture.md", text }]);
       expect(result.blocks).toBe(0);
-      const coverage = result.rows.filter((row) => row.includes("marker line(s) in the text but"));
+      const coverage = result.rows.filter((row) => row.includes("seat declaration line(s) in the text but"));
       expect(coverage).toHaveLength(1);
-      expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^\s*## Assignment/)} `);
-      expect(coverage[0]).toContain("1 `## Assignment` marker line(s) in the text but 0 fenced segment(s) scanned");
+      expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^\s*execute_as:/)} `);
+      expect(coverage[0]).toContain("1 seat declaration line(s) in the text but 0 fenced segment(s) scanned");
       // ... and the run-level row also fires, because nothing was scanned at all.
       expect(result.rows.some((row) => row.includes("the seat-bounding gate scanned nothing"))).toBe(true);
     }
   });
 
   test("F-1a: a PARTIAL loss (one fence pair dropped, other templates still scan) is a row", () => {
-    // The round-2 survivor: three bare markers plus one still-fenced template.
+    // The round-2 survivor: two bare declarations plus one still-fenced template.
     // The old floor compared "zero segments from this document" and stayed green.
     const text = [
       "# Doc",
       "",
-      "## Assignment",
-      `Execute as: ${seat}`,
-      "Delegation: forbidden",
+      "---",
+      `execute_as: ${seat}`,
+      "delegation: forbidden",
+      "---",
       "",
-      "## Assignment",
-      `Execute as: ${seat}`,
-      "Delegation: forbidden",
+      "---",
+      `execute_as: ${seat}`,
+      "delegation: forbidden",
+      "---",
       "",
-      "```js",
-      "## Assignment",
+      "~~~js",
+      "---",
       // A non-seat role, so the fenced segment itself adds no bounding row and
       // the coverage row is the only one asserted here.
-      `Execute as: ${nonSeat}`,
-      "Delegation: forbidden",
-      "```",
+      `execute_as: ${nonSeat}`,
+      "delegation: forbidden",
+      "---",
+      "",
+      "~~~",
       "",
     ].join("\n");
     const result = checkSeatBounding([{ rel: "fixture.md", text }]);
     expect(result.blocks).toBe(1);
     expect(result.rows).toHaveLength(1);
-    const coverage = result.rows.filter((row) => row.includes("marker line(s) in the text but"));
+    const coverage = result.rows.filter((row) => row.includes("seat declaration line(s) in the text but"));
     expect(coverage).toHaveLength(1);
-    expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^## Assignment/)} `);
-    expect(coverage[0]).toContain("3 `## Assignment` marker line(s) in the text but 1 fenced segment(s) scanned");
+    expect(coverage[0]).toStartWith(`fixture.md:${lineOf(text, /^execute_as:/)} `);
+    expect(coverage[0]).toContain("3 seat declaration line(s) in the text but 1 fenced segment(s) scanned");
   });
 
   test("F-1b: the seat-template document yielding no segment is its own row", () => {
-    // A marker rename confined to that file drops markers AND segments together,
-    // so the per-document comparison alone cannot see it.
+    // A declaration rename confined to that file drops declarations AND segments
+    // together, so the per-document comparison alone cannot see it.
     const docs: Doc[] = [
-      { rel: SEAT_TEMPLATE_DOC, text: "# Templates\n\n## Brief\n\nExecute as: x\n" },
-      { rel: "other.md", text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+      { rel: SEAT_TEMPLATE_DOC, text: "# Templates\n\n## Brief\n\nno seat declared here\n" },
+      { rel: "other.md", text: payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]) },
     ];
     const result = checkSeatBounding(docs);
     expect(result.blocks).toBe(1);
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]).toStartWith(`${SEAT_TEMPLATE_DOC}:1 `);
-    expect(result.rows[0]).toContain("the seat-template document yielded no fenced `## Assignment` segment");
+    expect(result.rows[0]).toContain("the seat-template document yielded no fenced seat declaration");
     // The same corpus with a real template there is clean.
     const healthy: Doc[] = [
-      { rel: SEAT_TEMPLATE_DOC, text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+      { rel: SEAT_TEMPLATE_DOC, text: payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]) },
       docs[1]!,
     ];
     expect(checkSeatBounding(healthy).rows).toEqual([]);
   });
 
-  test("F-1: a corpus with no marker at all yields the zero-coverage row", () => {
+  test("F-1: a corpus with no declaration at all yields the zero-coverage row", () => {
     const result = checkSeatBounding([{ rel: "fixture.md", text: "# Empty\n\nnothing about dispatches here\n" }]);
     expect(result.blocks).toBe(0);
     expect(result.rows).toHaveLength(1);
-    expect(result.rows[0]).toContain("no fenced `## Assignment` segment was found in any gated document");
+    expect(result.rows[0]).toContain("no fenced seat declaration");
     expect(result.rows[0]).toContain("the seat-bounding gate scanned nothing");
   });
 
-  test("F-1: an inline marker mention is prose, not a coverage hole", () => {
-    // The doc mentions the marker mid-line and carries no segment; a sibling doc
+  test("F-1: an inline declaration mention is prose, not a coverage hole", () => {
+    // The doc mentions the key mid-line and carries no segment; a sibling doc
     // does, so neither the per-document nor the run-level floor may fire.
     const docs: Doc[] = [
-      { rel: "inline.md", text: "# Doc\n\nThe `## Assignment` header region is parsed by the engine.\n" },
-      { rel: "real.md", text: payload([`Execute as: ${nonSeat}`, "Delegation: forbidden", "Task category: logic"]) },
+      { rel: "inline.md", text: "# Doc\n\nThe `execute_as` key names the seat.\n" },
+      { rel: "real.md", text: payload([`execute_as: ${nonSeat}`, "delegation: forbidden", "task_category: logic", "task_budget: one round"]) },
     ];
     const result = checkSeatBounding(docs);
     expect(result.blocks).toBe(1);
@@ -240,20 +255,20 @@ describe("checkSeatBounding — seat header blocks carry the bounding labels", (
     expect(result.rows).toEqual([]);
   });
 
-  test("several Assignment segments in one fence are each checked", () => {
+  test("several seat declarations in one fence are each checked", () => {
     const text = [
-      "```ts",
-      "## Assignment",
-      "",
-      `Execute as: ${seat}`,
-      "Delegation: forbidden",
-      "Task category: audit",
+      "```markdown",
+      "---",
+      `execute_as: ${seat}`,
+      "delegation: forbidden",
+      "task_category: audit",
+      "---",
       "body one",
-      "## Assignment",
-      "",
-      `Execute as: ${seat}`,
-      "Delegation: forbidden",
-      "Task category: audit",
+      "---",
+      `execute_as: ${seat}`,
+      "delegation: forbidden",
+      "task_category: audit",
+      "---",
       "body two",
       "```",
       "",

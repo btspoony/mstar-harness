@@ -288,10 +288,13 @@ describe("validateRoadmap — frontmatter schema ()", () => {
       );
       expectViolations(validateRoadmap(scalar), "project.roadmap.invalid-milestones");
 
+      // A quoted empty item reaches the semantic layer (a bare `- ` is a
+      // structural list-item refusal before the milestone rules run), so the
+      // non-empty-item rule is exercised through the reachable shape.
       const emptyItem = writeRoadmap(
         root,
         "empty-item-milestones.md",
-        "---\nproject_id: p\ntitle: t\nstatus: active\ncreated_at: 2026-08-19\nmilestones:\n- \n---\n",
+        '---\nproject_id: p\ntitle: t\nstatus: active\ncreated_at: 2026-08-19\nmilestones:\n- ""\n---\n',
       );
       expectViolations(validateRoadmap(emptyItem), "project.roadmap.invalid-milestones");
     } finally {

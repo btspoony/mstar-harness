@@ -309,8 +309,8 @@ plans: ["hello, world"]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("ambiguous flow-style array");
-      expect(message(result)).toContain("quoted item containing comma");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify(`plans: ["hello, world"]`));
       // The quote-aware guard must fire before the naive split — the gate
       // never runs, so no plan lookups for a misparsed ["hello","world"].
       expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
@@ -334,8 +334,8 @@ plans: ["a, b", "c"]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("ambiguous flow-style array");
-      expect(message(result)).toContain("quoted item containing comma");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify(`plans: ["a, b", "c"]`));
       expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
@@ -356,8 +356,8 @@ plans: ['a, b']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("ambiguous flow-style array");
-      expect(message(result)).toContain("quoted item containing comma");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify(`plans: ['a, b']`));
       // The quote-aware guard must fire before the naive split — the gate
       // never runs, so no plan lookups for a misparsed ["a", "b"].
       expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
@@ -381,7 +381,8 @@ plans: ['a, b', 'c']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify("plans: ['a, b', 'c']"));
       expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
@@ -402,7 +403,8 @@ plans: ['a", b']
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("ambiguous flow-style array");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify(`plans: ['a", b']`));
       expect(violationCodes(result)).not.toContain("PLAN_NOT_IN_STATUS");
     });
   });
@@ -449,7 +451,8 @@ plans: ['unterminated]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("unterminated ' quote in flow-style array");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify("plans: ['unterminated]"));
     });
   });
 
@@ -469,7 +472,8 @@ plans: [[a]]
       );
       const result = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", dir, "--compass", compassPath]);
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("nested flow-style array");
+      expect(message(result)).toContain("unsupported flow array");
+      expect(message(result)).toContain(JSON.stringify("plans: [[a]]"));
     });
   });
 

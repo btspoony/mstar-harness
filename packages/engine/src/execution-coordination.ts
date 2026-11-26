@@ -154,7 +154,7 @@ import {
   type CompositeIntent,
   type CompositeKey,
 } from "./collaboration-operations.js";
-import { parseAssignmentBranchForms } from "./dispatch.js";
+import { parseWorkingBranchValue } from "./dispatch.js";
 import { assertPlanFindingsCurrent, findingsCleanupGate, type FindingsObservation } from "./project.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
@@ -708,11 +708,8 @@ type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "acceptanceGate
  * `metadata.working_branch` (and therefore every `source_branch` derived from
  * it) is a real ref. Any other multi-word value is refused instead of being
  * stored as the scope. The create-form grammar is the engine's single one
- * (`dispatch.ts`), not a second copy.
- *
- * A claim is ONE line. That grammar reads the value as an Assignment header and
- * keeps the LAST `Working branch:` line, so a claim carrying a line break could
- * name a branch the caller never wrote; it is refused before the grammar runs.
+ * (`dispatch.ts`), read at the VALUE level: a claim is not a document, so the
+ * front matter scope the Assignment reader applies cannot apply here.
  */
 function branchOfClaim(value: string): string {
   if (/[\r\n]/.test(value)) {
@@ -721,12 +718,14 @@ function branchOfClaim(value: string): string {
       { field: "workingBranch", value },
     );
   }
-  const form = parseAssignmentBranchForms(`Working branch: ${value}`).createForm;
-  if (form !== undefined) {
+  const parsed = parseWorkingBranchValue(value);
+  if (parsed.createForm !== undefined) {
     // The documented create form carries BOTH tokens; an incomplete one names no
     // usable branch and no base, so it is refused rather than half-applied.
-    if (form.name !== "" && form.base !== undefined && form.base !== "") return form.name;
-  } else if (!/\s/.test(value)) {
+    if (parsed.createForm.name !== "" && parsed.createForm.base !== undefined && parsed.createForm.base !== "") {
+      return parsed.createForm.name;
+    }
+  } else if (parsed.workingBranch !== undefined && !/\s/.test(value)) {
     // A branch name never carries whitespace, so whitespace is what distinguishes
     // a claim string from a branch.
     return value;

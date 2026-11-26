@@ -544,15 +544,17 @@ export type AssignmentBranchForms = {
 };
 
 /**
- * Parse one `Working branch` value into its form. Create-form token match is
- * case-insensitive (`CREATE <new> from <base>`); values that do not match the
- * exact form (e.g. "created", "create/foo", "create-user-flow") are
- * existing-branch names. Dangling create-form typos — `create <new> from`
- * (trailing `from`, no base) and `create from <base>` (name missing) — are
- * recognized as create-forms so `validateAssignmentFields` can flag them
- * (fail-open fixed).
+ * Parse one `Working branch` VALUE (not a document) into its form — the
+ * Assignment reader's own grammar, exported for callers that hold the value
+ * alone and have no front matter to scope (the prepare claim). Create-form
+ * token match is case-insensitive (`CREATE <new> from <base>`); values that
+ * do not match the exact form (e.g. "created", "create/foo",
+ * "create-user-flow") are existing-branch names. Dangling create-form typos —
+ * `create <new> from` (trailing `from`, no base) and `create from <base>`
+ * (name missing) — are recognized as create-forms so
+ * `validateAssignmentFields` can flag them (fail-open fixed).
  */
-function parseWorkingBranchValue(
+export function parseWorkingBranchValue(
   value: string,
 ): { workingBranch?: string; createForm?: { name: string; base?: string } } {
   if (value === "") return {};
