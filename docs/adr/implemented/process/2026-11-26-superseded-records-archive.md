@@ -1,6 +1,6 @@
 # ADR: A fully superseded record is archived, never left in implemented
 
-Status: proposed — recorded before implementation: `adr.md` still says "`superseded` is not `archived`", `lintAdrTree` has no `implemented-superseded` rule, and no record moves until the implementing change lands.
+Status: implemented — `adr.md` states the one rule, `lintAdrTree` refuses `adr.implemented-superseded`, and `2026-11-03-one-way-linear-push.md` is archived with its `Archived:` and `Superseded-by:` lines.
 Date: 2026-11-26
 
 Scope: the `implemented → archived` lifecycle move of `skills/mstar-doc-corpus/references/adr.md` when the reason is a supersession, the `lintAdrTree` ADR rules in `packages/engine/src/lint.ts`, and the two existing records that already carry a `Superseded-by:` line.
@@ -19,9 +19,7 @@ The second rule is the one the tree follows, so a record whose replacement is al
 
 The contract names `implemented/` as the bucket whose records are live statements a change must keep current. A reader or an agent that takes the bucket at its word gets a demoted record as current. A proposal can demote a live decision without anything having been decided. That is the defect: the bucket and the header disagree about what is current, and the validator does not look.
 
-## Proposal
-
-This record is not in force until it is implemented. Until then the contract text, the validator and the two records named above stay as they are.
+## Decision
 
 **A fully superseded implemented record moves to `archived/<class>/`. It never stays in `implemented/`.**
 
@@ -33,9 +31,7 @@ When a replacement is promoted to `implemented/`, the same change does all of th
 2. adds one bare line `Archived: YYYY-MM-DD — superseded by <replacement-file>` immediately below its Status line, which stays `Status: implemented — …` unchanged;
 3. keeps its `Superseded-by: <replacement-file>` line.
 
-The replacement carries `Supersedes: <replaced-file>`. Both lines stay after the move, so a supersession search over the whole tree still finds either record from the other.
-
-This is the existing `implemented → archived` move with its reason fixed to the supersession. It adds no fourth transition and no new header key.
+The replacement carries `Supersedes: <replaced-file>`. Both lines stay after the move, so a supersession search over the whole tree still finds either record from the other. This is the existing `implemented → archived` move with its reason fixed to the supersession; it adds no fourth transition and no new header key.
 
 ### Reader boundary
 
@@ -62,19 +58,9 @@ The demotion happens once, in the change that promotes the replacement. A propos
 
 A record under `implemented/` that carries `Supersedes:` is unaffected: a replacement stays in `implemented/` for as long as it is current.
 
-### Contract edit
+### Contract
 
-In `skills/mstar-doc-corpus/references/adr.md`:
-
-- the section `## \`superseded\` is not \`archived\`` is removed.
-- the lifecycle gains one sentence: a fully superseded record is archived with the supersession reason; `superseded` is not a bucket.
-
-The remainder of that section is already stated elsewhere in the contract or in this record: archived records are frozen and linked only to cite history, and a change that alters what a live record states updates the record. No bucket is added and no status mapping changes.
-
-### Migration of the existing tree
-
-- `docs/adr/implemented/architecture/2026-11-03-one-way-linear-push.md` moves to `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` in the implementing change: `2026-11-19-host-owned-linear-io.md` is already implemented and supersedes it. It gains `Archived: <date> — superseded by 2026-11-19-host-owned-linear-io.md` and keeps its `Superseded-by:`.
-- `docs/adr/implemented/architecture/2026-10-02-roadmap-content-authority.md` does not move in the implementing change. It moves only when the roadmap record is promoted, in that same change.
+`skills/mstar-doc-corpus/references/adr.md` states one rule: a fully superseded record is archived with the supersession reason, and `superseded` is not a bucket. The section "`superseded` is not `archived`" is removed. Archived records are frozen and linked only to cite history, and a change that alters what a live record states updates the record. No bucket is added and no status mapping changes.
 
 ## Alternatives considered
 
@@ -83,21 +69,11 @@ The remainder of that section is already stated elsewhere in the contract or in 
 - **Delete the superseded body and keep a stub.** The archive exists to keep history. A stub loses the decision and the alternatives it beat, so a later contributor can reintroduce the bypass the record was written to stop, and the frozen `rejected/` bucket is already the home for proposals that never shipped.
 - **Demote the record's Status line in place.** The status must match the bucket, and the validator enforces it: a `Status: superseded` record under `implemented/` is `lint.adr.status-mismatch`. Making the status legal would make `superseded` a state without a bucket, and the directory — not a header a reader can miss — is the reader boundary.
 
-## Acceptance criteria
+## Consequences
 
-A future implementation must demonstrate the following.
-
-- `lintAdrTree` refuses an implemented record that carries a `Superseded-by:` line with code `adr.implemented-superseded`, and the refusal names the file and the move to `docs/adr/archived/<class>/<same-filename>`.
-- No record under `docs/adr/implemented/` carries a `Superseded-by:` line.
-- `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` exists with its `Archived:` line and its `Superseded-by:` line, and no copy remains under `implemented/`.
-- The roadmap record is promoted and `docs/adr/archived/architecture/2026-10-02-roadmap-content-authority.md` exists, both in the same change.
-- `skills/mstar-doc-corpus/references/adr.md` states one rule: a fully superseded record is archived with the supersession reason, and `superseded` is not a bucket. The section "`superseded` is not `archived`" is gone.
-- Links that pointed at `docs/adr/implemented/architecture/2026-11-03-one-way-linear-push.md` resolve to its new path; the body of `2026-11-19-host-owned-linear-io.md` needs no edit, because an archived record's inbound links are the ones that move.
-- `checkAdrTree` passes.
-
-## Risks
-
+- `lintAdrTree` refuses an implemented record that carries a `Superseded-by:` line with code `adr.implemented-superseded`, and the refusal names the file and the move to `docs/adr/archived/<class>/<same-filename>`. `checkAdrTree` passes on this repository's tree.
+- No record under `docs/adr/implemented/` carries a `Superseded-by:` line. `docs/adr/archived/architecture/2026-11-03-one-way-linear-push.md` exists with its `Archived:` line and its `Superseded-by:` line, and no copy remains under `implemented/`; its inbound links resolve to the new path, and `2026-11-19-host-owned-linear-io.md` needed no edit because its `Supersedes:` is a bare filename.
+- `docs/adr/implemented/architecture/2026-10-02-roadmap-content-authority.md` moves only when the roadmap record is promoted, in that same change.
 - **A reader can still grep `archived/`.** The directory is the boundary, not an access control. A search that does not exclude `archived/` returns records that are not authority; the `Archived:` line on each one says so at the top of the file.
 - **The lint cannot judge whether the replacement is really implemented.** It refuses the line, not the truth of it. A change that archives a record before its replacement is promoted passes the lint and is a review finding.
 - **Archived bodies are frozen.** A later correction to an archived record needs a new record, or an un-archive move that the contract does not define. That is the cost of every archived record, and it is the reason the move waits for the promotion.
-- **The migration touches links from `2026-11-19`.** `2026-11-19-host-owned-linear-io.md` carries `Supersedes: 2026-11-03-one-way-linear-push.md` as a bare filename, so it needs no edit; the proposal that links to the one-way mirror's path does, and the implementing change must find every such link with a search for the old path.
